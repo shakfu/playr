@@ -85,6 +85,11 @@ pub struct AudioStream {
     duration: Option<Duration>,
     /// Scratch for the interleaved f32 conversion, reused across packets.
     buf: Vec<f32>,
+    /// Decoded frames still to drop after a seek.
+    ///
+    /// An accurate seek lands on a packet at or before the target, and the
+    /// caller must discard up to the target itself.
+    discard: usize,
 }
 
 impl AudioStream {
@@ -144,6 +149,7 @@ impl AudioStream {
             spec,
             duration,
             buf: Vec::new(),
+            discard: 0,
         })
     }
 
@@ -193,7 +199,13 @@ impl AudioStream {
                     // them. AAC has no gapless support upstream and decodes
                     // ~1900 frames long; that is a known limitation.
                     decoded.copy_to_vec_interleaved(&mut self.buf);
-                    return Ok(Some(&self.buf));
+                    let ch = decoded.spec().channels().count().max(1);
+                    let drop = self.discard.min(decoded.frames());
+                    self.discard -= drop;
+                    if drop == decoded.frames() {
+                        continue;
+                    }
+                    return Ok(Some(&self.buf[drop * ch..]));
                 }
                 // Recoverable per the Symphonia contract: skip and keep going.
                 Err(SymphError::DecodeError(_)) => continue,
@@ -206,7 +218,7 @@ impl AudioStream {
     pub fn seek(&mut self, pos: Duration) -> Result<(), DecodeError> {
         let time = Time::try_new(pos.as_secs() as i64, pos.subsec_nanos())
             .ok_or_else(|| DecodeError::Other("seek position out of range".into()))?;
-        self.reader.seek(
+        let seeked = self.reader.seek(
             SeekMode::Accurate,
             SeekTo::Time {
                 time,
@@ -216,11 +228,17 @@ impl AudioStream {
         // The decoder holds state from before the seek; discarding it prevents
         // a burst of garbage frames at the new position.
         self.decoder.reset();
+        let secs = |ts| {
+            self.time_base
+                .and_then(|tb| tb.calc_time(ts))
+                .map(|t| t.as_secs_f64())
+        };
+        self.discard = match (secs(seeked.required_ts), secs(seeked.actual_ts)) {
+            (Some(req), Some(act)) => {
+                ((req - act).max(0.0) * self.spec.rate as f64).round() as usize
+            }
+            _ => 0,
+        };
         Ok(())
-    }
-
-    /// Whether this stream can seek. Streams from non-seekable sources cannot.
-    pub fn time_base(&self) -> Option<TimeBase> {
-        self.time_base
     }
 }

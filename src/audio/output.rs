@@ -5,10 +5,11 @@
 //! track reaches the device without passing through a resampler at all.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, StreamConfig, SupportedStreamConfigRange};
+use cpal::{Device, SampleFormat, StreamConfig, SupportedStreamConfig, SupportedStreamConfigRange};
 
 use super::decode::Spec;
 
@@ -50,80 +51,90 @@ impl Plan {
     }
 }
 
-/// Chooses an output format for `src`, preferring the source's own sample rate.
-///
-/// Preference order: exact rate and channel count, then exact rate with a
-/// different channel count, then the device default. Sample rate is ranked
-/// above channel count because resampling colours the signal while channel
-/// remapping does not.
+/// Chooses an output format for `src` on `device`. See [`choose`].
 pub fn negotiate(device: &Device, src: Spec) -> Result<Plan, OutputError> {
     let ranges: Vec<SupportedStreamConfigRange> = device
         .supported_output_configs()
         .map_err(|_| OutputError::NoConfig)?
         .collect();
+    choose(&ranges, device.default_output_config().ok(), src).ok_or(OutputError::NoConfig)
+}
 
+/// Chooses an output format for `src`, preferring the source's own sample rate.
+///
+/// Preference order: exact rate and channel count, then exact rate with a
+/// different channel count, then the device default. Sample rate is ranked
+/// above channel count because resampling colours the signal while channel
+/// remapping does not. Returns `None` when no offered format can be written.
+pub fn choose(
+    ranges: &[SupportedStreamConfigRange],
+    default: Option<SupportedStreamConfig>,
+    src: Spec,
+) -> Option<Plan> {
     let want_ch = if src.channels == 0 { 2 } else { src.channels };
     let supports = |r: &SupportedStreamConfigRange, rate: u32| {
         r.min_sample_rate() <= rate && rate <= r.max_sample_rate()
     };
-    let usable = |r: &SupportedStreamConfigRange| {
-        matches!(
-            r.sample_format(),
-            SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
-        )
+    let usable: Vec<_> = ranges
+        .iter()
+        .filter_map(|r| format_rank(r.sample_format()).map(|rank| (rank, r)))
+        .collect();
+    let plan = |r: &SupportedStreamConfigRange, rate| Plan {
+        rate,
+        channels: r.channels(),
+        format: r.sample_format(),
     };
 
     if src.rate != 0 {
         // Exact rate, exact channels.
-        let exact = ranges
+        let exact = usable
             .iter()
-            .filter(|r| usable(r) && r.channels() == want_ch && supports(r, src.rate))
-            .min_by_key(|r| format_rank(r.sample_format()));
-        if let Some(r) = exact {
-            return Ok(Plan {
-                rate: src.rate,
-                channels: r.channels(),
-                format: r.sample_format(),
-            });
+            .filter(|(_, r)| r.channels() == want_ch && supports(r, src.rate))
+            .min_by_key(|(rank, _)| *rank);
+        if let Some((_, r)) = exact {
+            return Some(plan(r, src.rate));
         }
 
         // Exact rate, any channel count. Remapping channels is lossless enough
         // to be preferable to resampling.
-        let by_rate = ranges
+        let by_rate = usable
             .iter()
-            .filter(|r| usable(r) && supports(r, src.rate))
-            .min_by_key(|r| {
-                (
-                    format_rank(r.sample_format()),
-                    r.channels().abs_diff(want_ch),
-                )
-            });
-        if let Some(r) = by_rate {
-            return Ok(Plan {
-                rate: src.rate,
-                channels: r.channels(),
-                format: r.sample_format(),
-            });
+            .filter(|(_, r)| supports(r, src.rate))
+            .min_by_key(|(rank, r)| (*rank, r.channels().abs_diff(want_ch)));
+        if let Some((_, r)) = by_rate {
+            return Some(plan(r, src.rate));
         }
     }
 
-    let default = device
-        .default_output_config()
-        .map_err(|_| OutputError::NoConfig)?;
-    Ok(Plan {
-        rate: default.sample_rate(),
-        channels: default.channels(),
-        format: default.sample_format(),
-    })
+    let default = default?;
+    if format_rank(default.sample_format()).is_some() {
+        return Some(Plan {
+            rate: default.sample_rate(),
+            channels: default.channels(),
+            format: default.sample_format(),
+        });
+    }
+    // The default format cannot be written; keep its rate in one that can.
+    usable
+        .iter()
+        .filter(|(_, r)| supports(r, default.sample_rate()))
+        .min_by_key(|(rank, r)| (*rank, r.channels().abs_diff(default.channels())))
+        .map(|(_, r)| plan(r, default.sample_rate()))
 }
 
-/// f32 first: it is what the decoder produces, so it avoids a quantisation step.
-fn format_rank(f: SampleFormat) -> u8 {
+/// Rank of a format the output can write, best first; `None` if it cannot.
+///
+/// Floats first: the decoder produces f32, so they need no quantisation.
+/// Integers follow by width, widest first.
+fn format_rank(f: SampleFormat) -> Option<u8> {
     match f {
-        SampleFormat::F32 => 0,
-        SampleFormat::I16 => 1,
-        SampleFormat::U16 => 2,
-        _ => 3,
+        SampleFormat::F32 => Some(0),
+        SampleFormat::F64 => Some(1),
+        SampleFormat::I32 => Some(2),
+        SampleFormat::I24 => Some(3),
+        SampleFormat::I16 => Some(4),
+        SampleFormat::U16 => Some(5),
+        _ => None,
     }
 }
 
@@ -142,8 +153,6 @@ pub struct Shared {
     pub frames_out: AtomicU64,
     /// Playback gain, as f32 bits.
     volume: AtomicU32,
-    /// Set by the callback when it had to emit silence because the ring was empty.
-    pub starved: AtomicBool,
     /// When set, the callback emits silence and consumes nothing.
     ///
     /// Pausing is done here rather than with `Stream::pause` because ALSA
@@ -170,7 +179,6 @@ impl Shared {
         Shared {
             frames_out: AtomicU64::new(0),
             volume: AtomicU32::new(1.0f32.to_bits()),
-            starved: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             position_rate: AtomicU32::new(0),
             track_start: AtomicU64::new(0),
@@ -215,7 +223,13 @@ pub struct Output {
 
 impl Output {
     /// Opens `device` per `plan` and starts the stream paused.
-    pub fn open(device: &Device, plan: Plan, shared: Arc<Shared>) -> Result<Self, OutputError> {
+    /// Stream errors, which arrive on the device's thread, are sent to `errors`.
+    pub fn open(
+        device: &Device,
+        plan: Plan,
+        shared: Arc<Shared>,
+        errors: Sender<String>,
+    ) -> Result<Self, OutputError> {
         let capacity = (plan.rate * BUFFER_SECONDS) as usize * plan.channels as usize;
         let (producer, consumer) = rtrb::RingBuffer::<f32>::new(capacity);
 
@@ -227,19 +241,61 @@ impl Output {
 
         let channels = plan.channels as u64;
         let stream = match plan.format {
-            SampleFormat::F32 => {
-                build::<f32>(device, &config, consumer, shared.clone(), channels, |v| v)
-            }
-            SampleFormat::I16 => {
-                build::<i16>(device, &config, consumer, shared.clone(), channels, |v| {
-                    (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
-                })
-            }
-            SampleFormat::U16 => {
-                build::<u16>(device, &config, consumer, shared.clone(), channels, |v| {
-                    ((v.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16
-                })
-            }
+            SampleFormat::F32 => build::<f32>(
+                device,
+                &config,
+                consumer,
+                shared.clone(),
+                errors,
+                channels,
+                |v| v,
+            ),
+            SampleFormat::F64 => build::<f64>(
+                device,
+                &config,
+                consumer,
+                shared.clone(),
+                errors,
+                channels,
+                |v| v as f64,
+            ),
+            // Scaled in f64 by the positive maximum, so full scale cannot wrap.
+            SampleFormat::I32 => build::<i32>(
+                device,
+                &config,
+                consumer,
+                shared.clone(),
+                errors,
+                channels,
+                |v| (v.clamp(-1.0, 1.0) as f64 * i32::MAX as f64) as i32,
+            ),
+            SampleFormat::I24 => build::<cpal::I24>(
+                device,
+                &config,
+                consumer,
+                shared.clone(),
+                errors,
+                channels,
+                |v| cpal::I24::new_unchecked((v.clamp(-1.0, 1.0) as f64 * 8_388_607.0) as i32),
+            ),
+            SampleFormat::I16 => build::<i16>(
+                device,
+                &config,
+                consumer,
+                shared.clone(),
+                errors,
+                channels,
+                |v| (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16,
+            ),
+            SampleFormat::U16 => build::<u16>(
+                device,
+                &config,
+                consumer,
+                shared.clone(),
+                errors,
+                channels,
+                |v| ((v.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16,
+            ),
             other => {
                 return Err(OutputError::Build(format!(
                     "unsupported sample format {other:?}"
@@ -285,6 +341,7 @@ fn build<T>(
     config: &StreamConfig,
     mut consumer: rtrb::Consumer<f32>,
     shared: Arc<Shared>,
+    errors: Sender<String>,
     channels: u64,
     conv: fn(f32) -> T,
 ) -> Result<cpal::Stream, OutputError>
@@ -314,14 +371,14 @@ where
                         Err(_) => *slot = conv(0.0),
                     }
                 }
-                if filled < out.len() {
-                    shared.starved.store(true, Ordering::Relaxed);
-                }
                 shared
                     .frames_out
                     .fetch_add(filled as u64 / channels, Ordering::Relaxed);
             },
-            |e| eprintln!("audio stream error: {e}"),
+            // Printing here would draw over the interface.
+            move |e| {
+                let _ = errors.send(e.to_string());
+            },
             None,
         )
         .map_err(|e| OutputError::Build(e.to_string()))

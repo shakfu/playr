@@ -63,8 +63,9 @@ fn fts_query(input: &str) -> Option<String> {
 
 /// Full-text search over title, artist, album and album artist.
 ///
-/// Results are ranked by FTS5 `bm25`. Empty or whitespace-only input returns
-/// an empty vector rather than every track.
+/// Results come in library order, so a matching album plays in track order.
+/// Empty or whitespace-only input returns an empty vector rather than every
+/// track.
 pub fn search(conn: &Connection, input: &str) -> Result<Vec<Track>> {
     let Some(q) = fts_query(input) else {
         return Ok(Vec::new());
@@ -123,6 +124,21 @@ pub fn playlists(conn: &Connection) -> Result<Vec<Playlist>> {
         })
     })?;
     rows.collect()
+}
+
+/// The playlist called `name`: an exact match, else the only case-insensitive one.
+///
+/// Names are unique case-sensitively, so `Late` and `late` can both exist;
+/// matching case-insensitively first would always pick one of them.
+pub fn find_playlist<'a>(lists: &'a [Playlist], name: &str) -> Option<&'a Playlist> {
+    if let Some(p) = lists.iter().find(|p| p.name == name) {
+        return Some(p);
+    }
+    let mut folded = lists.iter().filter(|p| p.name.eq_ignore_ascii_case(name));
+    match (folded.next(), folded.next()) {
+        (Some(p), None) => Some(p),
+        _ => None,
+    }
 }
 
 /// Creates or replaces the playlist `name` with `track_ids`, in order.

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   sample_rate  INTEGER,
   channels     INTEGER,
   bit_depth    INTEGER,
-  mtime        INTEGER NOT NULL,
+  mtime        INTEGER NOT NULL,  -- nanoseconds since the Unix epoch
   size         INTEGER NOT NULL
 );
 

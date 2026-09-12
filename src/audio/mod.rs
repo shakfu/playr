@@ -102,7 +102,8 @@ pub enum Cmd {
 #[derive(Debug, Clone, Default)]
 pub struct Status {
     pub state: State,
-    pub queue: Vec<PathBuf>,
+    /// Shared with the engine, so publishing a status does not copy the paths.
+    pub queue: Arc<[PathBuf]>,
     pub index: usize,
     pub duration: Option<Duration>,
     pub source: Option<Spec>,
@@ -218,13 +219,15 @@ struct Engine {
     rx: Receiver<Cmd>,
     status: Arc<Mutex<Status>>,
     shared: Arc<Shared>,
+    /// Errors the device reports from its own thread, surfaced through `fail`.
+    device_errors: (Sender<String>, Receiver<String>),
 
     out: Option<Output>,
     stream: Option<AudioStream>,
     resampler: Option<Resample>,
     src: Spec,
 
-    queue: Vec<PathBuf>,
+    queue: Arc<[PathBuf]>,
     index: usize,
     state: State,
     /// Playback speed shift in semitones; 0 is normal speed.
@@ -253,6 +256,7 @@ impl Engine {
             rx,
             status,
             shared,
+            device_errors: std::sync::mpsc::channel(),
             out: None,
             stream: None,
             resampler: None,
@@ -260,7 +264,7 @@ impl Engine {
                 rate: 0,
                 channels: 0,
             },
-            queue: Vec::new(),
+            queue: Arc::default(),
             index: 0,
             state: State::Stopped,
             semitones: 0,
@@ -296,6 +300,9 @@ impl Engine {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
 
+            while let Ok(e) = self.device_errors.1.try_recv() {
+                self.fail(format!("audio device: {e}"));
+            }
             if self.state == State::Playing {
                 self.pump();
             }
@@ -307,7 +314,7 @@ impl Engine {
     fn handle(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::Play(paths, index) => {
-                self.queue = paths;
+                self.queue = paths.into();
                 self.index = index.min(self.queue.len().saturating_sub(1));
                 self.teardown();
                 if !self.queue.is_empty() {
@@ -315,11 +322,14 @@ impl Engine {
                 }
             }
             Cmd::Enqueue(paths) => {
-                let was_empty = self.queue.is_empty();
-                self.queue.extend(paths);
-                if was_empty && self.state == State::Stopped {
-                    self.index = 0;
-                    self.start(0);
+                let first_new = self.queue.len();
+                self.queue = self.queue.iter().cloned().chain(paths).collect();
+                if self.state == State::Stopped {
+                    self.start(first_new);
+                } else if self.stream.is_none() && self.staged.is_none() {
+                    // The last track already decoded to its end, and `pump`
+                    // stages nothing once the queue has run out.
+                    self.stage_from(first_new);
                 }
             }
             Cmd::TogglePause => match self.state {
@@ -404,37 +414,23 @@ impl Engine {
         self.shared.position_offset.store(0, Ordering::Relaxed);
     }
 
-    /// Opens track `i` and (re)builds the output stream to match it.
-    fn start(&mut self, i: usize) {
-        let Some(path) = self.queue.get(i).cloned() else {
-            self.state = State::Stopped;
-            return;
-        };
-
-        let mut stream = match AudioStream::open(&path) {
-            Ok(s) => s,
-            Err(e) => {
-                self.fail(format!("{}: {e}", short(&path)));
+    /// Opens track `i`, or the first playable track after it, and (re)builds
+    /// the output stream to match.
+    ///
+    /// Bad files are skipped in a loop, not by recursion: a run of thousands,
+    /// such as an Opus library in a build without Opus, overflowed the stack.
+    fn start(&mut self, mut i: usize) {
+        let (stream, first, spec) = loop {
+            let Some(path) = self.queue.get(i).cloned() else {
+                self.state = State::Stopped;
+                return;
+            };
+            match self.open_track(&path) {
+                Some(opened) => break opened,
                 // A bad file must not stall the queue.
-                return self.skip_forward(i);
+                None => i += 1,
             }
         };
-
-        // The sample rate is not always in the container header, so decode one
-        // chunk before negotiating the device format.
-        let first = match stream.next_chunk() {
-            Ok(Some(c)) => c.to_vec(),
-            Ok(None) => Vec::new(),
-            Err(e) => {
-                self.fail(format!("{}: {e}", short(&path)));
-                return self.skip_forward(i);
-            }
-        };
-        let spec = stream.spec();
-        if spec.rate == 0 || spec.channels == 0 {
-            self.fail(format!("{}: unknown stream format", path.display()));
-            return self.skip_forward(i);
-        }
 
         let plan = match output::negotiate(&self.device, spec) {
             Ok(p) => p,
@@ -453,11 +449,7 @@ impl Engine {
 
         self.index = i;
         self.src = spec;
-        self.resampler = if plan.needs_resample(spec) {
-            Resample::new(spec.rate, plan.rate, plan.channels, self.speed())
-        } else {
-            None
-        };
+        self.resampler = self.make_resampler(spec, plan);
         let duration = stream.duration();
         self.stream = Some(stream);
         self.marks.clear();
@@ -474,13 +466,41 @@ impl Engine {
         self.pump();
     }
 
-    /// Moves past a track that would not open.
-    fn skip_forward(&mut self, failed: usize) {
-        if failed + 1 < self.queue.len() {
-            self.start(failed + 1);
-        } else {
-            self.state = State::Stopped;
+    /// Opens `path` and decodes its first chunk, reporting any failure.
+    ///
+    /// The sample rate is not always in the container header, so one chunk is
+    /// decoded before the device format can be negotiated.
+    fn open_track(&mut self, path: &std::path::Path) -> Option<(AudioStream, Vec<f32>, Spec)> {
+        let mut stream = match AudioStream::open(path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.fail(format!("{}: {e}", short(path)));
+                return None;
+            }
+        };
+        let first = match stream.next_chunk() {
+            Ok(Some(c)) => c.to_vec(),
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                self.fail(format!("{}: {e}", short(path)));
+                return None;
+            }
+        };
+        let spec = stream.spec();
+        if spec.rate == 0 || spec.channels == 0 {
+            self.fail(format!("{}: unknown stream format", short(path)));
+            return None;
         }
+        Some((stream, first, spec))
+    }
+
+    fn open_output(&self, plan: Plan) -> Result<Output, output::OutputError> {
+        Output::open(
+            &self.device,
+            plan,
+            self.shared.clone(),
+            self.device_errors.0.clone(),
+        )
     }
 
     fn fail(&mut self, msg: String) {
@@ -495,7 +515,7 @@ impl Engine {
             return Ok(());
         }
         self.out = None;
-        let out = Output::open(&self.device, plan, self.shared.clone())?;
+        let out = self.open_output(plan)?;
         self.written = 0;
         self.shared.frames_out.store(0, Ordering::Relaxed);
         self.shared
@@ -558,10 +578,20 @@ impl Engine {
         let plan = self.out.as_ref().map(|o| o.plan);
         if let Some(plan) = plan {
             self.out = None;
-            if let Ok(o) = Output::open(&self.device, plan, self.shared.clone()) {
-                self.out = Some(o);
-                if self.state == State::Playing {
-                    self.out.as_ref().unwrap().play();
+            match self.open_output(plan) {
+                Ok(o) => {
+                    if self.state == State::Playing {
+                        o.play();
+                    }
+                    self.out = Some(o);
+                }
+                // Without an output nothing can play; staying `Playing`
+                // would freeze the position with no message.
+                Err(e) => {
+                    self.fail(e.to_string());
+                    self.teardown();
+                    self.state = State::Stopped;
+                    return;
                 }
             }
         }
@@ -666,7 +696,11 @@ impl Engine {
                         return;
                     }
                 }
-                Err(_) => {
+                Err(e) => {
+                    let playing = self.marks.back().map(|(_, i, _)| *i).unwrap_or(self.index);
+                    if let Some(path) = self.queue.get(playing).cloned() {
+                        self.fail(format!("{}: {e}", short(&path)));
+                    }
                     self.stream = None;
                     self.stage_next();
                     if self.staged.is_some() {
@@ -679,42 +713,41 @@ impl Engine {
 
     /// Opens the next track. If its format matches the open stream, decoding
     /// continues into the same ring, which is what makes playback gapless.
+    ///
+    /// Bad files are skipped in a loop; see [`Engine::start`].
     fn stage_next(&mut self) {
-        let next = self.index + self.marks.len().max(1);
-        let next = self.marks.back().map(|(_, i, _)| i + 1).unwrap_or(next);
-        let Some(path) = self.queue.get(next).cloned() else {
-            return;
-        };
+        let next = self
+            .marks
+            .back()
+            .map(|(_, i, _)| i + 1)
+            .unwrap_or(self.index + 1);
+        self.stage_from(next);
+    }
 
-        let mut stream = match AudioStream::open(&path) {
-            Ok(s) => s,
-            Err(e) => {
-                self.fail(format!("{}: {e}", short(&path)));
-                return self.stage_after(next);
+    /// Stages the first playable track at or after `next`.
+    fn stage_from(&mut self, mut next: usize) {
+        let (stream, first, spec) = loop {
+            let Some(path) = self.queue.get(next).cloned() else {
+                return;
+            };
+            match self.open_track(&path) {
+                Some(opened) => break opened,
+                None => next += 1,
             }
         };
-        let first = match stream.next_chunk() {
-            Ok(Some(c)) => c.to_vec(),
-            Ok(None) => Vec::new(),
-            Err(_) => return self.stage_after(next),
-        };
-        let spec = stream.spec();
-        if spec.rate == 0 || spec.channels == 0 {
-            return self.stage_after(next);
-        }
-        let Ok(plan) = output::negotiate(&self.device, spec) else {
-            return;
+        let plan = match output::negotiate(&self.device, spec) {
+            Ok(p) => p,
+            Err(e) => {
+                self.fail(e.to_string());
+                return;
+            }
         };
         let duration = stream.duration();
 
         if self.out.as_ref().map(|o| o.plan) == Some(plan) {
             // Same output format: continue seamlessly.
             self.src = spec;
-            self.resampler = if plan.needs_resample(spec) {
-                Resample::new(spec.rate, plan.rate, plan.channels, self.speed())
-            } else {
-                None
-            };
+            self.resampler = self.make_resampler(spec, plan);
             self.marks.push_back((self.written, next, duration));
             self.stream = Some(stream);
             self.convert_and_carry(&first);
@@ -729,35 +762,17 @@ impl Engine {
         }
     }
 
-    /// Skips a track that failed to open while staging.
-    fn stage_after(&mut self, failed: usize) {
-        if failed + 1 < self.queue.len() {
-            if let Some((f, _, d)) = self.marks.pop_back() {
-                self.marks.push_back((f, failed, d));
-            }
-            self.stage_next();
-        }
-    }
-
     fn promote_staged(&mut self) {
         let Some(staged) = self.staged.take() else {
             return;
         };
-        if self.rebuild_output(staged.plan).is_err() {
+        if let Err(e) = self.rebuild_output(staged.plan) {
+            self.fail(e.to_string());
             self.state = State::Stopped;
             return;
         }
         self.src = staged.spec;
-        self.resampler = if staged.plan.needs_resample(staged.spec) {
-            Resample::new(
-                staged.spec.rate,
-                staged.plan.rate,
-                staged.plan.channels,
-                self.speed(),
-            )
-        } else {
-            None
-        };
+        self.resampler = self.make_resampler(staged.spec, staged.plan);
         let duration = staged.stream.duration();
         self.index = staged.index;
         self.stream = Some(staged.stream);

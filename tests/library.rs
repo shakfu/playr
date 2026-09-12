@@ -164,3 +164,34 @@ fn under_path_escapes_like_wildcards() {
     );
     assert_eq!(hits[0].path, "/m/100%/a.flac");
 }
+
+#[test]
+fn a_new_library_records_its_schema_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.db");
+    let version = |conn: &rusqlite::Connection| -> i64 {
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(version(&db::open(&path).unwrap()), db::SCHEMA_VERSION);
+    // Reopening must not reset it.
+    assert_eq!(version(&db::open(&path).unwrap()), db::SCHEMA_VERSION);
+}
+
+#[test]
+fn a_playlist_is_found_by_exact_name_before_case_folding() {
+    let pl = |id, name: &str| query::Playlist {
+        id,
+        name: name.into(),
+        len: 0,
+    };
+    let lists = [pl(1, "Late"), pl(2, "late"), pl(3, "Morning")];
+    assert_eq!(query::find_playlist(&lists, "late").unwrap().id, 2);
+    assert_eq!(query::find_playlist(&lists, "Late").unwrap().id, 1);
+    assert_eq!(query::find_playlist(&lists, "morning").unwrap().id, 3);
+    assert!(
+        query::find_playlist(&lists, "LATE").is_none(),
+        "an ambiguous name must not pick one"
+    );
+    assert!(query::find_playlist(&lists, "noon").is_none());
+}

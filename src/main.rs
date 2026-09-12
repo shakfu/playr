@@ -61,7 +61,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    let mut conn = db::open(&db_path)?;
+    // Only `scan` creates the library. Without one, everything else runs on an
+    // empty in-memory library, so playing a file leaves nothing behind.
+    let mut conn = if args.first().map(String::as_str) == Some("scan") || db_path.try_exists()? {
+        db::open(&db_path)?
+    } else {
+        db::open_memory()?
+    };
 
     match args.first().map(String::as_str) {
         Some("scan") => {
@@ -97,10 +103,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Some("playlist") => {
             let name = args[1..].join(" ");
             let lists = db::query::playlists(&conn)?;
-            let pl = lists
-                .iter()
-                .find(|p| p.name.eq_ignore_ascii_case(name.trim()))
-                .ok_or_else(|| format!("no playlist named {name:?}"))?;
+            let pl = db::query::find_playlist(&lists, name.trim())
+                .ok_or_else(|| format!("no single playlist named {name:?}"))?;
             db::query::playlist_tracks(&conn, pl.id)?
         }
         Some(first) if !first.starts_with('-') => collect_paths(&conn, &args)?,
@@ -131,6 +135,7 @@ fn cmd_scan(
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut total = scan::ScanStats::default();
     let multi = dirs.len() > 1;
+    let mut removed = 0;
     for dir in dirs {
         let path = Path::new(dir);
         if !path.is_dir() {
@@ -158,6 +163,7 @@ fn cmd_scan(
         total.added += stats.added;
         total.skipped += stats.skipped;
         total.failed += stats.failed;
+        removed += db::prune_missing(conn, path)?;
     }
     if multi {
         println!(
@@ -165,7 +171,6 @@ fn cmd_scan(
             total.seen, total.added, total.skipped, total.failed
         );
     }
-    let removed = db::prune_missing(conn)?;
     if removed > 0 {
         println!("removed {removed} tracks whose files are gone");
     }
@@ -184,7 +189,12 @@ fn collect_paths(
 ) -> Result<Vec<Track>, Box<dyn std::error::Error>> {
     let mut files: Vec<PathBuf> = Vec::new();
     for arg in args {
-        let path = Path::new(arg);
+        // Canonical, to match the library's keys: `playr .` must find the
+        // rows `playr scan ~/music` wrote.
+        let Ok(path) = Path::new(arg).canonicalize() else {
+            eprintln!("playr: no such file: {arg}");
+            continue;
+        };
         if path.is_dir() {
             let mut found: Vec<PathBuf> = walkdir::WalkDir::new(path)
                 .follow_links(false)
@@ -196,11 +206,19 @@ fn collect_paths(
             found.sort();
             files.extend(found);
         } else if path.is_file() {
-            files.push(path.to_path_buf());
+            files.push(path);
         } else {
             eprintln!("playr: no such file: {arg}");
         }
     }
+    // The queue carries paths as text, so a lossy name would open nothing.
+    files.retain(|p| {
+        let ok = p.to_str().is_some();
+        if !ok {
+            eprintln!("playr: skipping a path that is not UTF-8: {}", p.display());
+        }
+        ok
+    });
     if files.is_empty() {
         return Err("nothing playable in those paths".into());
     }

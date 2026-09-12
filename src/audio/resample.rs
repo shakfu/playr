@@ -1,6 +1,7 @@
-//! Sample rate conversion, used only when the device cannot open the source rate.
+//! Sample rate conversion, used when the device cannot open the source rate and
+//! for varispeed.
 //!
-//! An FFT resampler is used rather than linear interpolation: linear resampling
+//! A sinc resampler is used rather than linear interpolation: linear resampling
 //! folds audible aliasing into the passband, which defeats the point of
 //! decoding losslessly in the first place.
 
@@ -8,7 +9,7 @@ use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters, WindowFunction};
 
 /// Frames of input consumed per resampler call. 1024 keeps latency near 23ms at
-/// 44.1kHz while staying large enough for the FFT to be efficient.
+/// 44.1kHz while keeping the per-call overhead small.
 const CHUNK: usize = 1024;
 
 /// Widest ratio change the resampler is built to accept, relative to its
@@ -132,9 +133,5 @@ impl Resample {
             *delay_left -= skip;
             sink.extend_from_slice(&out_buf[skip * channels..out_frames * channels]);
         }
-    }
-
-    pub fn output_frames_max(&self) -> usize {
-        self.out_max
     }
 }

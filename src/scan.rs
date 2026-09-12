@@ -11,8 +11,8 @@ use rusqlite::Connection;
 use std::path::Path;
 use walkdir::WalkDir;
 
-/// Extensions offered to the decoder. A superset of what is guaranteed to play;
-/// unplayable files are reported at playback time, not hidden at scan time.
+/// Extensions offered to the decoder. A superset of what is guaranteed to play:
+/// a file that parses but will not decode is reported at playback time.
 pub const AUDIO_EXTS: &[&str] = &[
     "flac", "mp3", "m4a", "mp4", "aac", "alac", "ogg", "oga", "opus", "wav", "wave", "aif", "aiff",
     "aifc", "caf", "mka", "webm", "mp1", "mp2", "mpa",
@@ -42,21 +42,28 @@ pub struct ScanStats {
 /// failure: an untagged file still yields a row, so it remains playable.
 pub fn read_track(path: &Path) -> Option<Track> {
     let meta = std::fs::metadata(path).ok()?;
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let (mtime, size) = stat(&meta);
 
     let mut t = Track {
         path: path.to_string_lossy().into_owned(),
         mtime,
-        size: meta.len() as i64,
+        size,
         ..Default::default()
     };
 
-    let tagged = Probe::open(path).ok()?.read().ok()?;
+    let Some(tagged) = Probe::open(path).ok().and_then(|p| p.read().ok()) else {
+        // lofty has no reader for some containers Symphonia plays, such as CAF
+        // and Matroska. Index those untagged rather than hide them.
+        let mut stream = crate::audio::decode::AudioStream::open(path).ok()?;
+        if stream.spec().rate == 0 {
+            stream.next_chunk().ok()?;
+        }
+        let spec = stream.spec();
+        t.sample_rate = Some(spec.rate).filter(|r| *r != 0);
+        t.channels = Some(spec.channels).filter(|c| *c != 0);
+        t.duration_ms = stream.duration().map(|d| d.as_millis() as i64);
+        return Some(t);
+    };
 
     let props = tagged.properties();
     t.duration_ms = Some(props.duration().as_millis() as i64);
@@ -84,6 +91,19 @@ pub fn read_track(path: &Path) -> Option<Track> {
     Some(t)
 }
 
+/// `(mtime, size)` as stored in the library, with mtime in nanoseconds.
+///
+/// Whole seconds missed a same-size rewrite within one second.
+fn stat(meta: &std::fs::Metadata) -> (i64, i64) {
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0);
+    (mtime, meta.len() as i64)
+}
+
 /// Parses the leading integer of a tag like `"3"` or `"3/12"`.
 fn parse_leading_num(s: &str) -> Option<u32> {
     let digits: String = s
@@ -94,12 +114,22 @@ fn parse_leading_num(s: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// Files committed per transaction during a scan.
+pub const SCAN_BATCH: usize = 500;
+
 /// Scans `root` recursively into the library, calling `progress` per file seen.
+///
+/// Rows are keyed by canonical path. A relative root would store paths that
+/// resolve only from the directory the scan ran in. A root that does not
+/// resolve scans nothing.
 pub fn scan_dir<F>(conn: &mut Connection, root: &Path, mut progress: F) -> db::Result<ScanStats>
 where
     F: FnMut(&ScanStats, &Path),
 {
     let mut stats = ScanStats::default();
+    let Ok(root) = root.canonicalize() else {
+        return Ok(stats);
+    };
     let files: Vec<_> = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -107,41 +137,42 @@ where
         .filter(|e| e.file_type().is_file() && is_audio(e.path()))
         .collect();
 
-    // One transaction for the whole scan: an insert-per-commit is orders of
-    // magnitude slower on a library of any size.
-    let tx = conn.transaction()?;
-    for entry in files {
-        let path = entry.path();
-        stats.seen += 1;
-        let path_str = path.to_string_lossy();
-
-        let disk = std::fs::metadata(path).ok().map(|m| {
-            let mtime = m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            (mtime, m.len() as i64)
-        });
-
-        if let (Some(d), Ok(Some(known))) = (disk, db::stat_of(&tx, &path_str)) {
-            if d == known {
-                stats.skipped += 1;
+    // Transactions of `SCAN_BATCH` files: a commit per insert is orders of
+    // magnitude slower, and one commit for the whole scan loses every row
+    // when the scan is interrupted.
+    for batch in files.chunks(SCAN_BATCH) {
+        let tx = conn.transaction()?;
+        for entry in batch {
+            let path = entry.path();
+            stats.seen += 1;
+            // Rows hold paths as text. A lossy conversion would store a path
+            // that opens nothing, so such a file is counted as unreadable.
+            let Some(path_str) = path.to_str() else {
+                stats.failed += 1;
                 progress(&stats, path);
                 continue;
-            }
-        }
+            };
 
-        match read_track(path) {
-            Some(t) => {
-                db::upsert(&tx, &t)?;
-                stats.added += 1;
+            let disk = std::fs::metadata(path).ok().map(|m| stat(&m));
+
+            if let (Some(d), Ok(Some(known))) = (disk, db::stat_of(&tx, path_str)) {
+                if d == known {
+                    stats.skipped += 1;
+                    progress(&stats, path);
+                    continue;
+                }
             }
-            None => stats.failed += 1,
+
+            match read_track(path) {
+                Some(t) => {
+                    db::upsert(&tx, &t)?;
+                    stats.added += 1;
+                }
+                None => stats.failed += 1,
+            }
+            progress(&stats, path);
         }
-        progress(&stats, path);
+        tx.commit()?;
     }
-    tx.commit()?;
     Ok(stats)
 }

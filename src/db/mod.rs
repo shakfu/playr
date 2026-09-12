@@ -78,15 +78,27 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-/// In-memory library, for tests.
+/// Empty in-memory library, used when no library file exists yet.
 pub fn open_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     init(&conn)?;
     Ok(conn)
 }
 
+/// Schema version, kept in `PRAGMA user_version`.
+///
+/// 0: playr 0.1.0, `mtime` in seconds. 1: `mtime` in nanoseconds. A version 0
+/// row never matches a nanosecond mtime, so its file is re-read on the next
+/// scan; no migration is needed.
+pub const SCHEMA_VERSION: i64 = 1;
+
 fn init(conn: &Connection) -> Result<()> {
-    conn.execute_batch(include_str!("schema.sql"))
+    conn.execute_batch(include_str!("schema.sql"))?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < SCHEMA_VERSION {
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    }
+    Ok(())
 }
 
 /// Returns the `(mtime, size)` recorded for `path`, if the file is known.
@@ -136,16 +148,23 @@ pub fn upsert(conn: &Connection, t: &Track) -> Result<i64> {
     })
 }
 
-/// Removes rows whose file no longer exists on disk. Returns the count removed.
-pub fn prune_missing(conn: &Connection) -> Result<usize> {
-    let gone: Vec<i64> = {
-        let mut stmt = conn.prepare("SELECT id, path FROM tracks")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-        rows.filter_map(|r| r.ok())
-            .filter(|(_, p)| !Path::new(p).exists())
-            .map(|(id, _)| id)
-            .collect()
+/// Removes rows under `root` whose file is gone. Returns the count removed.
+///
+/// Only `root` is checked: an unmounted drive elsewhere looks exactly like
+/// deleted files, and deleting its rows also empties its playlists. For the
+/// same reason a `root` that does not resolve prunes nothing, and a file whose
+/// existence cannot be checked is kept.
+pub fn prune_missing(conn: &Connection, root: &Path) -> Result<usize> {
+    let Ok(root) = root.canonicalize() else {
+        return Ok(0);
     };
+    // The trailing separator keeps `/music` from matching `/music2`.
+    let prefix = root.join("");
+    let gone: Vec<i64> = query::under_path(conn, &prefix.to_string_lossy())?
+        .into_iter()
+        .filter(|t| matches!(Path::new(&t.path).try_exists(), Ok(false)))
+        .map(|t| t.id)
+        .collect();
     for id in &gone {
         conn.execute("DELETE FROM tracks WHERE id = ?1", [id])?;
     }

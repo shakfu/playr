@@ -3,8 +3,9 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Tabs};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthChar;
 
 use super::{fmt_time, state_glyph, Input, Screen, View};
 use crate::audio::State;
@@ -79,6 +80,25 @@ fn columns(width: u16) -> (usize, usize, usize) {
     (artist, album, title)
 }
 
+/// `s` cut and padded to exactly `width` terminal cells.
+///
+/// `format!` pads by character count, so a row of CJK text, two cells a
+/// character, came out twice its column width and pushed the duration off.
+fn fit(s: &str, width: usize) -> String {
+    let mut out = String::with_capacity(width);
+    let mut used = 0;
+    for c in s.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.extend(std::iter::repeat_n(' ', width - used));
+    out
+}
+
 fn track_line(t: &Track, width: u16, playing: bool, selected: bool) -> ListItem<'static> {
     let (aw, alw, tw) = columns(width);
     let dim = if selected { DIM_SELECTED } else { DIM };
@@ -90,14 +110,14 @@ fn track_line(t: &Track, width: u16, playing: bool, selected: bool) -> ListItem<
     let line = Line::from(vec![
         Span::styled(format!("{marker} "), Style::default().fg(ACCENT)),
         Span::styled(
-            format!("{:<w$.w$} ", t.display_artist(), w = aw),
+            format!("{} ", fit(t.display_artist(), aw)),
             Style::default().fg(Color::Green),
         ),
         Span::styled(
-            format!("{:<w$.w$} ", t.display_album(), w = alw),
+            format!("{} ", fit(t.display_album(), alw)),
             Style::default().fg(dim),
         ),
-        Span::raw(format!("{:<w$.w$} ", t.display_title(), w = tw)),
+        Span::raw(format!("{} ", fit(&t.display_title(), tw))),
         Span::styled(format!("{dur:>6}"), Style::default().fg(dim)),
     ]);
     ListItem::new(line)
@@ -113,21 +133,66 @@ fn list_block(title: &str) -> Block<'_> {
         ))
 }
 
-fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
-    let current = app.snapshot.status.current().cloned();
-    let tracks = app.visible().to_vec();
-    let selected = app.library_state.selected();
-    let items: Vec<ListItem> = tracks
+/// First row to show so that `selected` is on screen, moving as little as
+/// possible from `offset`.
+///
+/// A list that shrank below the current offset is pulled back, so a short
+/// search result is not scrolled out of view.
+pub fn scroll_offset(offset: usize, selected: Option<usize>, rows: usize, len: usize) -> usize {
+    if rows == 0 || len == 0 {
+        return 0;
+    }
+    let mut offset = offset.min(len.saturating_sub(rows));
+    if let Some(s) = selected {
+        if s < offset {
+            offset = s;
+        } else if s >= offset + rows {
+            offset = s + 1 - rows;
+        }
+    }
+    offset
+}
+
+/// Draws the rows of `tracks` that fit in `area`.
+///
+/// Only those rows are formatted. Handing `List` every track would format the
+/// whole library on every frame, which is 200,000 strings at 50,000 tracks.
+fn draw_tracks(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    tracks: &[Track],
+    state: &mut ListState,
+    playing: impl Fn(usize, &Track) -> bool,
+) {
+    let len = tracks.len();
+    let selected = state.selected().map(|s| s.min(len.saturating_sub(1)));
+    let rows = area.height.saturating_sub(2) as usize;
+    let offset = scroll_offset(state.offset(), selected, rows, len);
+    state.select(if len == 0 { None } else { selected });
+    *state.offset_mut() = offset;
+
+    let end = (offset + rows).min(len);
+    let items: Vec<ListItem> = tracks[offset..end]
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let playing = current
-                .as_ref()
-                .map(|p| p.as_os_str() == t.path.as_str())
-                .unwrap_or(false);
-            track_line(t, area.width, playing, selected == Some(i))
+            let i = offset + i;
+            track_line(t, area.width, playing(i, t), selected == Some(i))
         })
         .collect();
+    let list = List::new(items).block(list_block(title)).highlight_style(
+        Style::default()
+            .bg(SELECTED_BG)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut window = ListState::default().with_selected(selected.map(|s| s - offset));
+    f.render_stateful_widget(list, area, &mut window);
+}
+
+fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
+    let current = app.snapshot.status.current();
+    let tracks = app.results.unwrap_or(app.all);
 
     let title = match app.input {
         Input::Search(q) => format!("Search: {q}_"),
@@ -137,15 +202,11 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
         },
     };
 
-    let empty = items.is_empty();
-    let list = List::new(items).block(list_block(&title)).highlight_style(
-        Style::default()
-            .bg(SELECTED_BG)
-            .add_modifier(Modifier::BOLD),
-    );
-    f.render_stateful_widget(list, area, app.library_state);
+    draw_tracks(f, area, &title, tracks, app.library_state, |_, t| {
+        current.is_some_and(|p| p.as_os_str() == t.path.as_str())
+    });
 
-    if empty {
+    if tracks.is_empty() {
         let hint = if app.results.is_some() {
             "No matches. Esc clears the search."
         } else {
@@ -160,31 +221,13 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
 }
 
 fn draw_queue(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
-    let status = app.snapshot.status.clone();
-    let selected = app.queue_state.selected();
-    let items: Vec<ListItem> = app
-        .queue
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            track_line(
-                t,
-                area.width,
-                i == status.index && status.state != State::Stopped,
-                selected == Some(i),
-            )
-        })
-        .collect();
-    let empty = items.is_empty();
+    let status = &app.snapshot.status;
     let title = format!("Queue ({})", app.queue.len());
-    let list = List::new(items).block(list_block(&title)).highlight_style(
-        Style::default()
-            .bg(SELECTED_BG)
-            .add_modifier(Modifier::BOLD),
-    );
-    f.render_stateful_widget(list, area, app.queue_state);
+    draw_tracks(f, area, &title, app.queue, app.queue_state, |i, _| {
+        i == status.index && status.state != State::Stopped
+    });
 
-    if empty {
+    if app.queue.is_empty() {
         let inner = area.inner(ratatui::layout::Margin {
             horizontal: 2,
             vertical: 1,
@@ -211,10 +254,7 @@ fn draw_playlists(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
             };
             ListItem::new(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(
-                    format!("{:<40.40}", p.name),
-                    Style::default().fg(Color::Green),
-                ),
+                Span::styled(fit(&p.name, 40), Style::default().fg(Color::Green)),
                 Span::styled(format!("{:>4} tracks", p.len), Style::default().fg(dim)),
             ]))
         })
@@ -319,6 +359,10 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         (Input::SavePlaylist(name), _) => {
             Line::from(vec![Span::styled("save playlist as: ", Style::default().fg(ACCENT)), Span::raw(format!("{name}_"))])
         }
+        (Input::Confirm(c), _) => Line::from(Span::styled(
+            c.prompt(),
+            Style::default().fg(Color::Yellow),
+        )),
         (_, Some(msg)) => Line::from(Span::styled(msg.to_string(), Style::default().fg(Color::Yellow))),
         _ => Line::from(Span::styled(
             "tab views  / search  enter play  a queue  s save  space pause  n/p track  arrows seek  [ ] speed  +/- vol  q quit",

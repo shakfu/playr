@@ -46,6 +46,26 @@ pub enum Input {
     None,
     Search(String),
     SavePlaylist(String),
+    /// Waiting for `y` before an action that cannot be undone.
+    Confirm(Confirm),
+}
+
+/// A destructive action held until the listener confirms it.
+pub enum Confirm {
+    DeletePlaylist(Playlist),
+    /// Overwrite the playlist of this name with the queue.
+    ReplacePlaylist(String),
+}
+
+impl Confirm {
+    pub fn prompt(&self) -> String {
+        match self {
+            Confirm::DeletePlaylist(p) => format!("delete playlist \"{}\"? (y/n)", p.name),
+            Confirm::ReplacePlaylist(name) => {
+                format!("replace playlist \"{name}\" with the queue? (y/n)")
+            }
+        }
+    }
 }
 
 pub struct App {
@@ -236,9 +256,22 @@ impl App {
         self.message = Some((msg.into(), Instant::now()));
     }
 
-    fn on_key(&mut self, key: KeyEvent) {
+    /// Handles one key press.
+    pub fn on_key(&mut self, key: KeyEvent) {
         // Text entry swallows most keys.
         match &self.input {
+            Input::Confirm(_) => {
+                let Input::Confirm(action) = std::mem::replace(&mut self.input, Input::None) else {
+                    unreachable!()
+                };
+                // Anything but `y` cancels, so a stray key cannot confirm.
+                if key.code == KeyCode::Char('y') {
+                    self.confirm(action);
+                } else {
+                    self.notify("cancelled");
+                }
+                return;
+            }
             Input::Search(buf) => {
                 let buf = buf.clone();
                 return self.search_key(key, buf);
@@ -293,6 +326,9 @@ impl App {
             KeyCode::Char('s') => {
                 if self.queue.is_empty() {
                     self.notify("queue is empty");
+                } else if self.conn.path().is_none_or(str::is_empty) {
+                    // In memory, the playlist would be lost on exit.
+                    self.notify("no library to save to; `playr scan <dir>` creates one");
                 } else {
                     self.input = Input::SavePlaylist(String::new());
                 }
@@ -350,20 +386,10 @@ impl App {
                 let name = buf.trim().to_string();
                 if name.is_empty() {
                     self.notify("playlist name cannot be empty");
-                    return;
-                }
-                let ids: Vec<i64> = self
-                    .queue
-                    .iter()
-                    .map(|t| t.id)
-                    .filter(|id| *id != 0)
-                    .collect();
-                match query::save_playlist(&mut self.conn, &name, &ids) {
-                    Ok(_) => {
-                        self.notify(format!("saved \"{name}\" ({} tracks)", ids.len()));
-                        self.playlists = query::playlists(&self.conn).unwrap_or_default();
-                    }
-                    Err(e) => self.notify(format!("could not save: {e}")),
+                } else if self.playlists.iter().any(|p| p.name == name) {
+                    self.input = Input::Confirm(Confirm::ReplacePlaylist(name));
+                } else {
+                    self.save_queue(&name);
                 }
             }
             KeyCode::Backspace => {
@@ -375,6 +401,36 @@ impl App {
                 self.input = Input::SavePlaylist(buf);
             }
             _ => self.input = Input::SavePlaylist(buf),
+        }
+    }
+
+    fn save_queue(&mut self, name: &str) {
+        let ids: Vec<i64> = self
+            .queue
+            .iter()
+            .map(|t| t.id)
+            .filter(|id| *id != 0)
+            .collect();
+        match query::save_playlist(&mut self.conn, name, &ids) {
+            Ok(_) => {
+                self.notify(format!("saved \"{name}\" ({} tracks)", ids.len()));
+                self.playlists = query::playlists(&self.conn).unwrap_or_default();
+            }
+            Err(e) => self.notify(format!("could not save: {e}")),
+        }
+    }
+
+    fn confirm(&mut self, action: Confirm) {
+        match action {
+            Confirm::ReplacePlaylist(name) => self.save_queue(&name),
+            Confirm::DeletePlaylist(pl) => {
+                if query::delete_playlist(&self.conn, pl.id).is_ok() {
+                    self.playlists = query::playlists(&self.conn).unwrap_or_default();
+                    self.view = View::Playlists;
+                    self.select(self.playlist_state.selected().unwrap_or(0));
+                    self.notify(format!("deleted \"{}\"", pl.name));
+                }
+            }
         }
     }
 
@@ -497,11 +553,7 @@ impl App {
         let Some(pl) = self.playlists.get(i).cloned() else {
             return;
         };
-        if query::delete_playlist(&self.conn, pl.id).is_ok() {
-            self.playlists = query::playlists(&self.conn).unwrap_or_default();
-            self.select(i);
-            self.notify(format!("deleted \"{}\"", pl.name));
-        }
+        self.input = Input::Confirm(Confirm::DeletePlaylist(pl));
     }
 
     fn nudge_volume(&mut self, delta: f32) {

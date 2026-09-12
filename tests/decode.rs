@@ -268,6 +268,52 @@ fn seeking_moves_the_read_position() {
     );
 }
 
+/// Decodes every sample of `s` from its current position.
+fn samples(s: &mut AudioStream) -> Vec<f32> {
+    let mut out = Vec::new();
+    while let Ok(Some(c)) = s.next_chunk() {
+        out.extend_from_slice(c);
+    }
+    out
+}
+
+#[test]
+fn a_seek_resumes_on_the_exact_sample() {
+    if !have_ffmpeg() {
+        eprintln!("skipping: ffmpeg not available");
+        return;
+    }
+    // Noise, so a misaligned comparison cannot match by accident.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("n.flac");
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-v", "error", "-f", "lavfi", "-i"])
+        .arg("anoisesrc=d=3:c=white:r=44100:seed=7")
+        .args(["-ac", "2", "-c:a", "flac"])
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let whole = samples(&mut AudioStream::open(&path).unwrap());
+    for secs in [0.5, 1.0, 1.7] {
+        let mut s = AudioStream::open(&path).unwrap();
+        s.seek(std::time::Duration::from_secs_f64(secs)).unwrap();
+        let after = samples(&mut s);
+        let at = (secs * 44100.0).round() as usize * 2;
+        assert_eq!(
+            after.len(),
+            whole.len() - at,
+            "seek to {secs}s resumed {} frames early",
+            (after.len() as i64 - (whole.len() - at) as i64) / 2
+        );
+        assert!(
+            after[..4096] == whole[at..at + 4096],
+            "samples differ after seek to {secs}s"
+        );
+    }
+}
+
 #[test]
 fn duration_is_reported_from_the_container() {
     if !have_ffmpeg() {

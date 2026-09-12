@@ -3,7 +3,8 @@
 use playr::audio::{Spec, State, Status};
 use playr::db::query::Playlist;
 use playr::db::Track;
-use playr::ui::{render, Input, Screen, Snapshot, View};
+use playr::ui::render::{self, scroll_offset};
+use playr::ui::{Input, Screen, Snapshot, View};
 use ratatui::backend::TestBackend;
 use ratatui::widgets::ListState;
 use ratatui::Terminal;
@@ -32,6 +33,8 @@ struct Case<'a> {
     message: Option<&'a str>,
     width: u16,
     height: u16,
+    /// Cursor row in the library and queue views; the first row when unset.
+    selected: Option<usize>,
 }
 
 impl<'a> Case<'a> {
@@ -46,6 +49,7 @@ impl<'a> Case<'a> {
             message: None,
             width: 100,
             height: 20,
+            selected: None,
         }
     }
 
@@ -74,6 +78,11 @@ impl<'a> Case<'a> {
         self
     }
 
+    fn selected(mut self, i: usize) -> Self {
+        self.selected = Some(i);
+        self
+    }
+
     fn size(mut self, width: u16, height: u16) -> Self {
         self.width = width;
         self.height = height;
@@ -82,11 +91,34 @@ impl<'a> Case<'a> {
 
     /// Draws one frame and returns it as plain text lines.
     fn render(self) -> Vec<String> {
+        let buf = self.buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// Draws one frame and returns the cells.
+    fn buffer(self) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(self.width, self.height)).unwrap();
         let mut ls = ListState::default();
-        ls.select(if self.all.is_empty() { None } else { Some(0) });
+        let cursor = self.selected.unwrap_or(0);
+        ls.select(if self.all.is_empty() {
+            None
+        } else {
+            Some(cursor)
+        });
         let mut qs = ListState::default();
-        qs.select(if self.queue.is_empty() { None } else { Some(0) });
+        qs.select(if self.queue.is_empty() {
+            None
+        } else {
+            Some(cursor)
+        });
         let mut ps = ListState::default();
         ps.select(if self.playlists.is_empty() {
             None
@@ -113,16 +145,7 @@ impl<'a> Case<'a> {
             })
             .unwrap();
 
-        let buf = terminal.backend().buffer().clone();
-        (0..buf.area.height)
-            .map(|y| {
-                (0..buf.area.width)
-                    .map(|x| buf[(x, y)].symbol())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
+        terminal.backend().buffer().clone()
     }
 
     /// Draws one frame and joins it for substring assertions.
@@ -250,7 +273,7 @@ fn now_playing_shows_title_position_and_source_format() {
     let snapshot = Snapshot {
         status: Status {
             state: State::Playing,
-            queue: vec![std::path::PathBuf::from("/m/So What.flac")],
+            queue: vec![std::path::PathBuf::from("/m/So What.flac")].into(),
             index: 0,
             duration: Some(Duration::from_secs(545)),
             source: Some(Spec {
@@ -461,4 +484,90 @@ fn normal_speed_is_not_announced() {
         !joined.contains(" st)"),
         "speed shown when normal:\n{joined}"
     );
+}
+
+// --- scrolling long lists ---
+
+#[test]
+fn a_cursor_far_down_a_long_library_is_on_screen() {
+    let all: Vec<Track> = (0..10_000)
+        .map(|i| track(&format!("Song {i:05}"), "A", "B", 60))
+        .collect();
+    let snapshot = stopped();
+    for view in [View::Library, View::Queue] {
+        let joined = Case::new(view, &snapshot)
+            .all(&all)
+            .queue(&all)
+            .selected(9_500)
+            .text();
+        assert!(
+            joined.contains("Song 09500"),
+            "cursor row not drawn:\n{joined}"
+        );
+        // Not row 0: the now-playing bar names the first queue entry.
+        assert!(
+            !joined.contains("Song 00001"),
+            "list did not scroll:\n{joined}"
+        );
+    }
+}
+
+#[test]
+fn moving_within_the_view_does_not_scroll() {
+    assert_eq!(scroll_offset(100, Some(105), 10, 1_000), 100);
+    assert_eq!(scroll_offset(100, Some(100), 10, 1_000), 100);
+    assert_eq!(scroll_offset(100, Some(109), 10, 1_000), 100);
+}
+
+#[test]
+fn leaving_the_view_scrolls_by_the_least_amount() {
+    assert_eq!(scroll_offset(100, Some(110), 10, 1_000), 101);
+    assert_eq!(scroll_offset(100, Some(99), 10, 1_000), 99);
+}
+
+#[test]
+fn a_list_that_shrank_is_pulled_back_into_view() {
+    // Scrolled to 500 in the library, then a search leaves 3 results.
+    assert_eq!(scroll_offset(500, Some(0), 10, 3), 0);
+    assert_eq!(scroll_offset(500, None, 10, 30), 20);
+}
+
+#[test]
+fn an_empty_list_or_area_scrolls_nowhere() {
+    assert_eq!(scroll_offset(7, Some(3), 0, 100), 0);
+    assert_eq!(scroll_offset(7, None, 10, 0), 0);
+}
+
+#[test]
+fn a_pending_confirmation_is_shown_in_place_of_the_hints() {
+    use playr::ui::Confirm;
+    let input = Input::Confirm(Confirm::ReplacePlaylist("late".into()));
+    let joined = Case::new(View::Queue, &stopped()).input(&input).text();
+    assert!(
+        joined.contains("replace playlist \"late\" with the queue? (y/n)"),
+        "prompt not shown:\n{joined}"
+    );
+}
+
+#[test]
+fn wide_characters_do_not_push_the_duration_off_the_row() {
+    // CJK characters take two cells each. Padding by character count made
+    // such a row twice as wide as its columns.
+    let all = [
+        track("Plain", "Artist", "Album", 599),
+        track(
+            "\u{6771}\u{4eac}\u{306e}\u{591c}".repeat(12).as_str(),
+            "\u{5742}\u{672c}\u{9f8d}\u{4e00}".repeat(4).as_str(),
+            "\u{97f3}\u{697d}\u{56f3}\u{9451}".repeat(4).as_str(),
+            599,
+        ),
+    ];
+    let width = 100;
+    let buf = Case::new(View::Library, &stopped()).all(&all).buffer();
+    for y in [2, 3] {
+        let tail: String = (width - 5..width - 1)
+            .map(|x| buf[(x, y)].symbol())
+            .collect();
+        assert_eq!(tail, "9:59", "row {y} lost its duration");
+    }
 }
