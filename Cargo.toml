@@ -1,0 +1,39 @@
+[package]
+name = "playr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT"
+description = "A minimal TUI music player that plays local files and contacts nothing"
+repository = "https://github.com/shakfu/playr"
+homepage = "https://github.com/shakfu/playr"
+readme = "README.md"
+keywords = ["music", "player", "tui", "audio", "flac"]
+categories = ["multimedia::audio", "command-line-utilities"]
+exclude = ["docs/dev/"]
+
+[features]
+default = []
+# Opus playback, via libopus. Off by default because building libopus needs
+# cmake, which nothing else here requires. Without it playr reports Opus files
+# as undecodable and moves on, exactly as it does for WMA or DSD.
+# Enable with: cargo build --features opus
+opus = ["dep:opus"]
+
+[dependencies]
+symphonia = { version = "0.6.1", features = ["all"] }
+cpal = "0.18.2"
+rubato = "5.0.0"
+opus = { version = "0.4.0", optional = true }
+rtrb = "0.4.0"
+ratatui = "0.30.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+lofty = "0.25.1"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
