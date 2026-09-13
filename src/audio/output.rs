@@ -4,12 +4,16 @@
 //! at the file's own sample rate whenever the device offers it, so a 44.1kHz
 //! track reaches the device without passing through a resampler at all.
 
+use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, StreamConfig, SupportedStreamConfig, SupportedStreamConfigRange};
+use cpal::{
+    Device, ErrorKind, SampleFormat, StreamConfig, SupportedStreamConfig,
+    SupportedStreamConfigRange,
+};
 
 use super::decode::Spec;
 
@@ -35,6 +39,105 @@ impl std::fmt::Display for OutputError {
 }
 
 impl std::error::Error for OutputError {}
+
+/// What a device reports while its stream runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceEvent {
+    /// The stream cannot continue: the device is gone, or the stream must be rebuilt.
+    Lost(String),
+    /// The system moved the stream to another device, and it keeps playing.
+    Rerouted,
+    /// Any other error; the stream may still be playing.
+    Error(String),
+}
+
+impl From<cpal::Error> for DeviceEvent {
+    fn from(e: cpal::Error) -> Self {
+        match e.kind() {
+            ErrorKind::DeviceChanged => DeviceEvent::Rerouted,
+            ErrorKind::DeviceNotAvailable
+            | ErrorKind::HostUnavailable
+            | ErrorKind::StreamInvalidated => DeviceEvent::Lost(e.to_string()),
+            _ => DeviceEvent::Error(e.to_string()),
+        }
+    }
+}
+
+/// An output device the engine plays to.
+///
+/// The engine owns the ring buffer and the pause state; a backend only chooses
+/// a format and runs a stream that drains the ring. [`Cpal`] is the real one.
+/// Tests supply a fake, which can fail on demand.
+pub trait Backend: Send + 'static {
+    /// Chooses an output format for `src`.
+    fn negotiate(&self, src: Spec) -> Result<Plan, OutputError>;
+
+    /// Starts a stream per `plan` that plays `consumer` through [`render`],
+    /// sending device events to `events`. Dropping the result stops it.
+    fn start(
+        &self,
+        plan: Plan,
+        consumer: rtrb::Consumer<f32>,
+        shared: Arc<Shared>,
+        events: Sender<DeviceEvent>,
+    ) -> Result<Box<dyn Any>, OutputError>;
+}
+
+/// A cpal output device.
+pub struct Cpal(pub Device);
+
+impl Backend for Cpal {
+    fn negotiate(&self, src: Spec) -> Result<Plan, OutputError> {
+        negotiate(&self.0, src)
+    }
+
+    fn start(
+        &self,
+        plan: Plan,
+        consumer: rtrb::Consumer<f32>,
+        shared: Arc<Shared>,
+        events: Sender<DeviceEvent>,
+    ) -> Result<Box<dyn Any>, OutputError> {
+        let config = StreamConfig {
+            channels: plan.channels,
+            sample_rate: plan.rate,
+            buffer_size: cpal::BufferSize::Default,
+        };
+        let device = &self.0;
+        let stream = match plan.format {
+            SampleFormat::F32 => build::<f32>(device, &config, consumer, shared, events, |v| v),
+            SampleFormat::F64 => {
+                build::<f64>(device, &config, consumer, shared, events, |v| v as f64)
+            }
+            // Scaled in f64 by the positive maximum, so full scale cannot wrap.
+            SampleFormat::I32 => build::<i32>(device, &config, consumer, shared, events, |v| {
+                (v.clamp(-1.0, 1.0) as f64 * i32::MAX as f64) as i32
+            }),
+            SampleFormat::I24 => {
+                build::<cpal::I24>(device, &config, consumer, shared, events, |v| {
+                    cpal::I24::new_unchecked((v.clamp(-1.0, 1.0) as f64 * 8_388_607.0) as i32)
+                })
+            }
+            SampleFormat::I16 => build::<i16>(device, &config, consumer, shared, events, |v| {
+                (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+            }),
+            SampleFormat::U16 => build::<u16>(device, &config, consumer, shared, events, |v| {
+                ((v.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16
+            }),
+            other => {
+                return Err(OutputError::Build(format!(
+                    "unsupported sample format {other:?}"
+                )))
+            }
+        }?;
+        // The device runs continuously; silence is produced in the callback
+        // when paused. See `Shared::paused`.
+        stream
+            .play()
+            .map_err(|e| OutputError::Build(e.to_string()))?;
+        Ok(Box::new(stream))
+    }
+}
 
 /// The format the device will actually be opened in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,13 +268,17 @@ pub struct Shared {
     pub track_start: AtomicU64,
     /// Frames to add to the position, set when seeking.
     ///
-    /// A seek restarts the output stream, so `frames_out` returns to zero while
-    /// playback is actually partway into the track. This carries the difference.
+    /// A seek resets `frames_out` to zero while playback is actually partway
+    /// into the track. This carries the difference.
     /// It is an addition rather than a negative `track_start` because these are
     /// unsigned: a wrapped subtraction reads back as a clamp to zero.
     pub position_offset: AtomicU64,
     /// Playback speed, as f32 bits, for turning device time into track time.
     speed_bits: AtomicU32,
+    /// Raised by the engine to have the callback discard everything buffered.
+    pub flush_requested: AtomicU64,
+    /// The last `flush_requested` value the callback has acted on.
+    pub flush_done: AtomicU64,
 }
 
 impl Shared {
@@ -184,6 +291,8 @@ impl Shared {
             track_start: AtomicU64::new(0),
             position_offset: AtomicU64::new(0),
             speed_bits: AtomicU32::new(1.0f32.to_bits()),
+            flush_requested: AtomicU64::new(0),
+            flush_done: AtomicU64::new(0),
         }
     }
 
@@ -214,7 +323,7 @@ impl Default for Shared {
 
 /// An open output stream and the producer end of its ring buffer.
 pub struct Output {
-    _stream: cpal::Stream,
+    _stream: Box<dyn Any>,
     pub producer: rtrb::Producer<f32>,
     pub plan: Plan,
     pub capacity: usize,
@@ -222,92 +331,18 @@ pub struct Output {
 }
 
 impl Output {
-    /// Opens `device` per `plan` and starts the stream paused.
-    /// Stream errors, which arrive on the device's thread, are sent to `errors`.
+    /// Opens a stream on `backend` per `plan`, with a two second ring.
+    ///
+    /// It plays or stays silent as `shared.paused` already says.
     pub fn open(
-        device: &Device,
+        backend: &dyn Backend,
         plan: Plan,
         shared: Arc<Shared>,
-        errors: Sender<String>,
+        events: Sender<DeviceEvent>,
     ) -> Result<Self, OutputError> {
         let capacity = (plan.rate * BUFFER_SECONDS) as usize * plan.channels as usize;
         let (producer, consumer) = rtrb::RingBuffer::<f32>::new(capacity);
-
-        let config = StreamConfig {
-            channels: plan.channels,
-            sample_rate: plan.rate,
-            buffer_size: cpal::BufferSize::Default,
-        };
-
-        let channels = plan.channels as u64;
-        let stream = match plan.format {
-            SampleFormat::F32 => build::<f32>(
-                device,
-                &config,
-                consumer,
-                shared.clone(),
-                errors,
-                channels,
-                |v| v,
-            ),
-            SampleFormat::F64 => build::<f64>(
-                device,
-                &config,
-                consumer,
-                shared.clone(),
-                errors,
-                channels,
-                |v| v as f64,
-            ),
-            // Scaled in f64 by the positive maximum, so full scale cannot wrap.
-            SampleFormat::I32 => build::<i32>(
-                device,
-                &config,
-                consumer,
-                shared.clone(),
-                errors,
-                channels,
-                |v| (v.clamp(-1.0, 1.0) as f64 * i32::MAX as f64) as i32,
-            ),
-            SampleFormat::I24 => build::<cpal::I24>(
-                device,
-                &config,
-                consumer,
-                shared.clone(),
-                errors,
-                channels,
-                |v| cpal::I24::new_unchecked((v.clamp(-1.0, 1.0) as f64 * 8_388_607.0) as i32),
-            ),
-            SampleFormat::I16 => build::<i16>(
-                device,
-                &config,
-                consumer,
-                shared.clone(),
-                errors,
-                channels,
-                |v| (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16,
-            ),
-            SampleFormat::U16 => build::<u16>(
-                device,
-                &config,
-                consumer,
-                shared.clone(),
-                errors,
-                channels,
-                |v| ((v.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16,
-            ),
-            other => {
-                return Err(OutputError::Build(format!(
-                    "unsupported sample format {other:?}"
-                )))
-            }
-        }?;
-
-        // The device runs continuously; silence is produced in the callback
-        // when paused. See `Shared::paused`.
-        stream
-            .play()
-            .map_err(|e| OutputError::Build(e.to_string()))?;
+        let stream = backend.start(plan, consumer, shared.clone(), events)?;
         Ok(Output {
             _stream: stream,
             producer,
@@ -335,53 +370,72 @@ impl Output {
     }
 }
 
-/// Builds the stream. `conv` maps a gain-applied f32 sample to the device type.
+/// Builds a cpal stream. `conv` maps a gain-applied f32 sample to the device type.
 fn build<T>(
     device: &Device,
     config: &StreamConfig,
     mut consumer: rtrb::Consumer<f32>,
     shared: Arc<Shared>,
-    errors: Sender<String>,
-    channels: u64,
+    events: Sender<DeviceEvent>,
     conv: fn(f32) -> T,
 ) -> Result<cpal::Stream, OutputError>
 where
     T: cpal::SizedSample + Send + 'static,
 {
+    let channels = config.channels as u64;
     device
         .build_output_stream::<T, _, _>(
             *config,
-            move |out: &mut [T], _| {
-                if shared.paused.load(Ordering::Relaxed) {
-                    for slot in out.iter_mut() {
-                        *slot = conv(0.0);
-                    }
-                    return;
-                }
-                let gain = shared.volume();
-                let mut filled = 0usize;
-                for slot in out.iter_mut() {
-                    match consumer.pop() {
-                        Ok(s) => {
-                            *slot = conv(s * gain);
-                            filled += 1;
-                        }
-                        // Underrun: emit silence rather than repeating stale
-                        // samples, which would be audible as a click.
-                        Err(_) => *slot = conv(0.0),
-                    }
-                }
-                shared
-                    .frames_out
-                    .fetch_add(filled as u64 / channels, Ordering::Relaxed);
-            },
+            move |out: &mut [T], _| render(out, &mut consumer, &shared, channels, conv),
             // Printing here would draw over the interface.
             move |e| {
-                let _ = errors.send(e.to_string());
+                let _ = events.send(e.into());
             },
             None,
         )
         .map_err(|e| OutputError::Build(e.to_string()))
+}
+
+/// Fills `out` from the ring, and counts the frames played.
+///
+/// The body of every output callback, so it must not lock or allocate. It
+/// emits silence while paused, and on underrun rather than repeating stale
+/// samples, which would click.
+pub fn render<T>(
+    out: &mut [T],
+    consumer: &mut rtrb::Consumer<f32>,
+    shared: &Shared,
+    channels: u64,
+    conv: fn(f32) -> T,
+) {
+    // Before the pause check, so a seek while paused still discards.
+    let requested = shared.flush_requested.load(Ordering::Relaxed);
+    if requested != shared.flush_done.load(Ordering::Relaxed) {
+        if let Ok(chunk) = consumer.read_chunk(consumer.slots()) {
+            chunk.commit_all();
+        }
+        shared.flush_done.store(requested, Ordering::Relaxed);
+    }
+    if shared.paused.load(Ordering::Relaxed) {
+        for slot in out.iter_mut() {
+            *slot = conv(0.0);
+        }
+        return;
+    }
+    let gain = shared.volume();
+    let mut filled = 0usize;
+    for slot in out.iter_mut() {
+        match consumer.pop() {
+            Ok(s) => {
+                *slot = conv(s * gain);
+                filled += 1;
+            }
+            Err(_) => *slot = conv(0.0),
+        }
+    }
+    shared
+        .frames_out
+        .fetch_add(filled as u64 / channels, Ordering::Relaxed);
 }
 
 /// Maps interleaved audio from `src_ch` channels to `dst_ch`, appending to `out`.

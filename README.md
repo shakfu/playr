@@ -17,7 +17,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Play, pause, next, previous, stop
 
-- Seek by 5 seconds in either direction, resuming on the exact sample
+- Seek by 5 seconds in either direction, or 30 with shift, resuming on the exact sample
 
 - Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
 
@@ -70,6 +70,8 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 - Skipped files and audio device errors shown in the status line
 
 - Vim and arrow key navigation
+
+- `?` lists every key; the bottom line shows speed, a volume meter and messages
 
 ## Install
 
@@ -124,9 +126,11 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 | `n` `p`                  | next or previous track                      |
 | `x`                      | stop                                        |
 | left/right               | seek back or forward 5 seconds              |
+| shift left/right         | seek back or forward 30 seconds             |
 | `[` `]`                  | varispeed down or up, one semitone a press  |
 | `\`                      | back to normal speed                        |
 | `+` `-`                  | volume                                      |
+| `?`                      | list every key                              |
 | `q`                      | quit                                        |
 
 Searching filters as you type, across title, artist, album and album artist. Pressing enter on the results plays them as an ad-hoc queue.
@@ -167,7 +171,7 @@ Volume is a float gain applied before quantisation.
 make test
 ```
 
-`make test` runs the suite twice, with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, so they need no audio device. The engine and key-handling tests need an output device and skip without one. They set the volume to zero, so nothing is heard.
+`make test` runs the suite twice, with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, so they need no audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
 
 Opus output was checked against `ffmpeg` by decoding the same file both ways: identical frame counts and 138.7 dB SNR, with no alignment offset.
 

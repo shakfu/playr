@@ -14,8 +14,6 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 - [ ] **Crossfade.** Needs two decoders and a mixer stage.
 
-- [ ] **Seek without reopening the device.** Each seek and speed change closes and reopens the output stream to discard buffered audio, which can click. A flush counter in `Shared`, checked by the callback, could discard the ring instead; `rtrb` can drop a chunk without allocating.
-
 ## Output
 
 - [ ] **Bit-perfect output.** Select a `hw:` ALSA device so PipeWire cannot resample behind us. Today the `default` device accepts every rate and may convert internally, so "no resampling" means playr does not resample, not that nothing does. Negotiation already accepts the 32-bit and 24-bit integer formats such devices offer; choosing the device is what remains.
@@ -36,11 +34,13 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 - [ ] **Opus in WebM end padding.** 648 frames of padding survive because Matroska does not report it as a packet trim. **upstream**.
 
+- [ ] **Opus in WebM seek precision.** Seeks land 1.5 ms early. Matroska timestamps are whole milliseconds, and Symphonia subtracts the 6.5 ms codec delay in those units. The Opus header gives the delay in samples, which would recover part of it.
+
 - [ ] **Tags and duration for CAF, MKV and WebM.** lofty cannot parse these, so they are indexed under their file names, and Symphonia's Matroska reader reports no duration. Symphonia's own metadata might supply the tags; untested. Duration would otherwise mean decoding each file at scan time.
 
 ## Library
 
-- [ ] **Edit the queue.** No way to remove a track or reorder. Needs `d` in the queue view and a move binding. The queue exists twice, as `Vec<Track>` in `App` and as paths in the engine, kept in step by convention; editing it should first make the engine the one owner.
+- [ ] **Edit the queue.** No way to remove a track or reorder. Needs `d` in the queue view and a move binding. `Status::queue` is the only queue: an edit is a `Cmd` that `Player::send` applies to it, and the engine then moves `index`, its marks and any staged track to match.
 
 - [ ] **Edit playlists.** Playlists can be saved, loaded and deleted, but not changed after the fact except by replacing them wholesale.
 
@@ -60,16 +60,12 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 - [ ] **Configuration file.** Nothing is configurable: not keys, not colours, not the seek step, not the default volume.
 
-- [ ] **Help view.** The key hints are one line at the bottom and already do not fit a narrow terminal.
-
 - [ ] **Album art.** Terminal image protocols exist (kitty, sixel). Embedded art is already parsed by Symphonia. Out of scope until the rest is settled.
 
 - [ ] **Mouse.** No mouse support.
 
 ## Testing and packaging
 
-- [ ] **Engine failure paths.** `tests/engine.rs` drives a real `Player` and covers skipping, varispeed across track changes and enqueueing. It cannot make a device fail, so these paths are untested: an output that will not reopen on seek, a stream error from the device, and a track that opens but fails its first packet. `Output` behind a trait, with a fake that can fail on demand, would reach them.
-
-- [ ] **CI.** No workflow. Should run `make test` on both feature settings, with and without ffmpeg present, to prove the format tests really do skip. A runner has no audio device, so the engine and key-handling tests will skip there too. A null ALSA device may let them run; untested.
+- [ ] **CI.** No workflow. Should run `make test` on both feature settings with `PLAYR_REQUIRE_FFMPEG=1`, so missing ffmpeg fails the run. A runner has no audio device, so only the real-device smoke test skips there.
 
 - [ ] **Packaging.** No release binaries, no crates.io publish, no man page.

@@ -166,6 +166,27 @@ fn under_path_escapes_like_wildcards() {
 }
 
 #[test]
+fn under_path_matches_case_exactly() {
+    let conn = db::open_memory().unwrap();
+    db::upsert(&conn, &track("/mnt/music/a.flac", "A", "X", "Y")).unwrap();
+    db::upsert(&conn, &track("/mnt/Music/b.flac", "B", "X", "Y")).unwrap();
+    let hits = query::under_path(&conn, "/mnt/music/").unwrap();
+    let paths: Vec<&str> = hits.iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(paths, ["/mnt/music/a.flac"]);
+}
+
+#[test]
+fn under_path_matches_non_ascii_prefixes() {
+    // `substr` and `length` count characters, not bytes; both sides must agree.
+    let conn = db::open_memory().unwrap();
+    db::upsert(&conn, &track("/m/Bj\u{f6}rk/a.flac", "A", "X", "Y")).unwrap();
+    db::upsert(&conn, &track("/m/Bj\u{f6}rn/b.flac", "B", "X", "Y")).unwrap();
+    let hits = query::under_path(&conn, "/m/Bj\u{f6}rk/").unwrap();
+    let paths: Vec<&str> = hits.iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(paths, ["/m/Bj\u{f6}rk/a.flac"]);
+}
+
+#[test]
 fn a_new_library_records_its_schema_version() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lib.db");
@@ -194,4 +215,17 @@ fn a_playlist_is_found_by_exact_name_before_case_folding() {
         "an ambiguous name must not pick one"
     );
     assert!(query::find_playlist(&lists, "noon").is_none());
+}
+
+#[test]
+fn a_library_from_a_newer_playr_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let conn = db::open(&path).unwrap();
+    conn.pragma_update(None, "user_version", db::SCHEMA_VERSION + 1)
+        .unwrap();
+    drop(conn);
+
+    let err = db::open(&path).expect_err("a newer library was opened");
+    assert!(err.to_string().contains("newer"), "error was {err}");
 }

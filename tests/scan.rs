@@ -1,17 +1,12 @@
 //! Scanner tests. Fixtures are generated with ffmpeg when it is available.
 
+mod common;
+
+use common::have_ffmpeg;
 use playr::db::{self, query, Track};
 use playr::scan;
 use std::path::Path;
 use std::process::Command;
-
-fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
 
 /// Writes a 1 second tagged FLAC at `path`.
 fn make_flac(path: &Path, title: &str, artist: &str, album: &str, track_no: u32) {
@@ -56,7 +51,6 @@ fn extension_filter_accepts_audio_and_rejects_the_rest() {
 #[test]
 fn scan_reads_tags_recursively_and_skips_unchanged_files() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -113,7 +107,6 @@ fn scan_reads_tags_recursively_and_skips_unchanged_files() {
 #[test]
 fn a_changed_file_is_picked_up_again() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -157,7 +150,6 @@ fn unreadable_files_are_counted_not_fatal() {
 #[test]
 fn prune_removes_rows_for_deleted_files() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -181,7 +173,6 @@ fn prune_removes_rows_for_deleted_files() {
 #[test]
 fn a_relative_root_is_stored_as_absolute_paths() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     // Cargo runs tests from the package root, so `target/` is under the cwd.
@@ -237,6 +228,25 @@ fn prune_leaves_rows_outside_the_scanned_root() {
 }
 
 #[test]
+fn prune_leaves_rows_under_a_root_that_differs_only_in_case() {
+    // On a case-sensitive file system `Music` is another directory, such as
+    // the empty mount point of an unplugged drive.
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    let music = base.join("music");
+    std::fs::create_dir(&music).unwrap();
+
+    let mut conn = db::open_memory().unwrap();
+    db::upsert(&conn, &untagged(&music.join("gone.flac"))).unwrap();
+    let id = db::upsert(&conn, &untagged(&base.join("Music/b.flac"))).unwrap();
+    query::save_playlist(&mut conn, "keep", &[id]).unwrap();
+
+    assert_eq!(db::prune_missing(&conn, &music).unwrap(), 1);
+    assert_eq!(query::count(&conn).unwrap(), 1);
+    assert_eq!(query::playlists(&conn).unwrap()[0].len, 1);
+}
+
+#[test]
 fn prune_of_a_missing_root_removes_nothing() {
     // An unmounted drive looks like a root whose every file is gone.
     let dir = tempfile::tempdir().unwrap();
@@ -254,7 +264,6 @@ fn prune_of_a_missing_root_removes_nothing() {
 #[test]
 fn an_interrupted_scan_keeps_the_batches_it_finished() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -304,7 +313,6 @@ fn a_path_that_is_not_utf8_is_counted_unreadable() {
 #[test]
 fn a_playable_file_without_readable_tags_is_still_indexed() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     // Symphonia plays these containers; the tag reader does not parse them.
@@ -348,7 +356,6 @@ fn set_mtime(path: &Path, secs: u64, nanos: u32) {
 #[test]
 fn a_same_size_rewrite_within_one_second_is_picked_up() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -374,4 +381,25 @@ fn a_same_size_rewrite_within_one_second_is_picked_up() {
     let stats = scan::scan_dir(&mut conn, dir.path(), |_, _| {}).unwrap();
     assert_eq!(stats.added, 1, "the rewrite was skipped as unchanged");
     assert_eq!(query::search(&conn, "Behind").unwrap().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_that_cannot_be_listed_is_counted_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it anyway, so there is nothing to test.
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipping: permissions do not restrict this user");
+        return;
+    }
+
+    let mut conn = db::open_memory().unwrap();
+    let stats = scan::scan_dir(&mut conn, dir.path(), |_, _| {}).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(stats.failed, 1, "{stats:?}");
 }

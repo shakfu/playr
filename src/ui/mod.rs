@@ -5,7 +5,9 @@
 
 pub mod render;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -48,6 +50,8 @@ pub enum Input {
     SavePlaylist(String),
     /// Waiting for `y` before an action that cannot be undone.
     Confirm(Confirm),
+    /// The key list is open; the next key closes it.
+    Help,
 }
 
 /// A destructive action held until the listener confirms it.
@@ -79,7 +83,10 @@ pub struct App {
     results: Option<Vec<Track>>,
     library_state: ListState,
 
+    /// Rows for the player's queue, which is the only queue.
     queue: Vec<Track>,
+    /// The player queue `queue` was built from, compared by identity.
+    queue_source: Arc<[PathBuf]>,
     queue_state: ListState,
 
     playlists: Vec<Playlist>,
@@ -140,7 +147,7 @@ impl App {
         Self::with_queue(conn, player, Vec::new())
     }
 
-    /// Builds the app with an initial queue, as handed over by the CLI.
+    /// Builds the app and starts playing `queue`, as handed over by the CLI.
     pub fn with_queue(conn: Connection, player: Player, queue: Vec<Track>) -> Self {
         let mut app = App {
             conn,
@@ -149,7 +156,8 @@ impl App {
             all: Vec::new(),
             results: None,
             library_state: ListState::default(),
-            queue,
+            queue: Vec::new(),
+            queue_source: Arc::default(),
             queue_state: ListState::default(),
             playlists: Vec::new(),
             playlist_state: ListState::default(),
@@ -160,12 +168,42 @@ impl App {
             followed: None,
             snapshot: Snapshot::default(),
         };
-        if !app.queue.is_empty() {
-            app.queue_state.select(Some(0));
+        if !queue.is_empty() {
+            app.play(queue, 0);
             app.view = View::Queue;
         }
         app.reload();
         app
+    }
+
+    /// Rebuilds `queue` if the player's queue is no longer the one it shows.
+    ///
+    /// Changes made here update `queue` directly; this catches any other.
+    fn follow_player_queue(&mut self) {
+        let current = self.player.queue();
+        if Arc::ptr_eq(&current, &self.queue_source) {
+            return;
+        }
+        let known: HashMap<&str, &Track> = self
+            .queue
+            .iter()
+            .chain(&self.all)
+            .map(|t| (t.path.as_str(), t))
+            .collect();
+        self.queue = current
+            .iter()
+            .map(|p| {
+                let path = p.to_string_lossy();
+                known
+                    .get(path.as_ref())
+                    .map(|t| (*t).clone())
+                    .unwrap_or(Track {
+                        path: path.into_owned(),
+                        ..Default::default()
+                    })
+            })
+            .collect();
+        self.queue_source = current;
     }
 
     fn reload(&mut self) {
@@ -203,18 +241,7 @@ impl App {
 
     pub fn run(mut self, terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
         while !self.quit {
-            self.snapshot = Snapshot {
-                status: self.player.status(),
-                position: self.player.position(),
-                volume: self.player.volume(),
-            };
-            // Show a skipped or unplayable track once, then let it expire.
-            if self.snapshot.status.error_seq > self.seen_error {
-                self.seen_error = self.snapshot.status.error_seq;
-                if let Some(e) = self.snapshot.status.error.clone() {
-                    self.notify(e);
-                }
-            }
+            self.refresh();
             terminal.draw(|f| render::draw(&mut self.screen(), f))?;
 
             // A short poll keeps the progress bar moving without busy-waiting.
@@ -235,10 +262,34 @@ impl App {
         Ok(())
     }
 
+    /// Samples the player for the next frame, and shows any new error once.
+    pub fn refresh(&mut self) {
+        self.follow_player_queue();
+        self.snapshot = Snapshot {
+            status: self.player.status(),
+            position: self.player.position(),
+            volume: self.player.volume(),
+        };
+        let seq = self.snapshot.status.error_seq;
+        if seq > self.seen_error {
+            let missed = seq - self.seen_error - 1;
+            self.seen_error = seq;
+            if let Some(e) = self.snapshot.status.error.clone() {
+                // Only the latest error is kept, so a run of bad files would
+                // otherwise show one name and hide the rest.
+                if missed > 0 {
+                    self.notify(format!("{e} (and {missed} more)"));
+                } else {
+                    self.notify(e);
+                }
+            }
+        }
+    }
+
     /// Keeps the displayed queue aligned with the engine's.
     fn sync_queue(&mut self) {
         let status = &self.snapshot.status;
-        if status.queue.len() != self.queue.len() || self.queue.is_empty() {
+        if self.queue.is_empty() {
             return;
         }
         let playing = match status.state {
@@ -256,8 +307,20 @@ impl App {
         self.message = Some((msg.into(), Instant::now()));
     }
 
+    /// Whether a key has asked the interface to exit.
+    pub fn quitting(&self) -> bool {
+        self.quit
+    }
+
     /// Handles one key press.
     pub fn on_key(&mut self, key: KeyEvent) {
+        self.follow_player_queue();
+        // Before text entry, which would otherwise type it as `c`.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            self.quit = true;
+            return;
+        }
+
         // Text entry swallows most keys.
         match &self.input {
             Input::Confirm(_) => {
@@ -265,11 +328,15 @@ impl App {
                     unreachable!()
                 };
                 // Anything but `y` cancels, so a stray key cannot confirm.
-                if key.code == KeyCode::Char('y') {
+                if typed(&key) == Some('y') {
                     self.confirm(action);
                 } else {
                     self.notify("cancelled");
                 }
+                return;
+            }
+            Input::Help => {
+                self.input = Input::None;
                 return;
             }
             Input::Search(buf) => {
@@ -283,13 +350,9 @@ impl App {
             Input::None => {}
         }
 
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.quit = true;
-            return;
-        }
-
         match key.code {
             KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('?') => self.input = Input::Help,
             KeyCode::Tab => self.view = self.view.next(),
             KeyCode::Char('1') => self.view = View::Library,
             KeyCode::Char('2') => self.view = View::Queue,
@@ -308,8 +371,8 @@ impl App {
             KeyCode::Char('x') => self.player.send(Cmd::Stop),
             KeyCode::Char('+') | KeyCode::Char('=') => self.nudge_volume(0.05),
             KeyCode::Char('-') | KeyCode::Char('_') => self.nudge_volume(-0.05),
-            KeyCode::Right => self.player.send(Cmd::SeekBy(5)),
-            KeyCode::Left => self.player.send(Cmd::SeekBy(-5)),
+            KeyCode::Right => self.player.send(Cmd::SeekBy(seek_step(&key))),
+            KeyCode::Left => self.player.send(Cmd::SeekBy(-seek_step(&key))),
             // Varispeed: one semitone per press, pitch moving with tempo.
             KeyCode::Char(']') => self.player.send(Cmd::SpeedBy(1)),
             KeyCode::Char('[') => self.player.send(Cmd::SpeedBy(-1)),
@@ -355,7 +418,7 @@ impl App {
                 self.apply_search(&buf);
                 self.input = Input::Search(buf);
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c) if typed(&key).is_some() => {
                 buf.push(c);
                 self.apply_search(&buf);
                 self.input = Input::Search(buf);
@@ -396,7 +459,7 @@ impl App {
                 buf.pop();
                 self.input = Input::SavePlaylist(buf);
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c) if typed(&key).is_some() => {
                 buf.push(c);
                 self.input = Input::SavePlaylist(buf);
             }
@@ -413,7 +476,14 @@ impl App {
             .collect();
         match query::save_playlist(&mut self.conn, name, &ids) {
             Ok(_) => {
-                self.notify(format!("saved \"{name}\" ({} tracks)", ids.len()));
+                // A playlist can only hold library tracks; `playr <path>` queues others.
+                let left_out = self.queue.len() - ids.len();
+                let note = if left_out > 0 {
+                    format!(", {left_out} not in the library left out")
+                } else {
+                    String::new()
+                };
+                self.notify(format!("saved \"{name}\" ({} tracks{note})", ids.len()));
                 self.playlists = query::playlists(&self.conn).unwrap_or_default();
             }
             Err(e) => self.notify(format!("could not save: {e}")),
@@ -484,8 +554,7 @@ impl App {
             }
             View::Queue => {
                 if let Some(i) = self.queue_state.selected() {
-                    let paths = self.queue_paths();
-                    self.player.send(Cmd::Play(paths, i));
+                    self.player.send(Cmd::Jump(i));
                 }
             }
             View::Playlists => {
@@ -508,14 +577,11 @@ impl App {
     }
 
     fn play(&mut self, tracks: Vec<Track>, index: usize) {
-        self.queue = tracks;
-        self.queue_state.select(Some(index));
-        let paths = self.queue_paths();
+        let paths = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
         self.player.send(Cmd::Play(paths, index));
-    }
-
-    fn queue_paths(&self) -> Vec<PathBuf> {
-        self.queue.iter().map(|t| PathBuf::from(&t.path)).collect()
+        self.queue = tracks;
+        self.queue_source = self.player.queue();
+        self.queue_state.select(Some(index));
     }
 
     fn append_selection(&mut self) {
@@ -537,10 +603,12 @@ impl App {
         if added.is_empty() {
             return;
         }
-        let paths: Vec<PathBuf> = added.iter().map(|t| PathBuf::from(&t.path)).collect();
+        let count = added.len();
+        let paths = added.iter().map(|t| PathBuf::from(&t.path)).collect();
+        self.player.send(Cmd::Enqueue(paths));
         self.queue.extend(added);
-        self.player.send(Cmd::Enqueue(paths.clone()));
-        self.notify(format!("queued {} track(s)", paths.len()));
+        self.queue_source = self.player.queue();
+        self.notify(format!("queued {count} track(s)"));
     }
 
     fn delete_playlist(&mut self) {
@@ -559,6 +627,56 @@ impl App {
     fn nudge_volume(&mut self, delta: f32) {
         let v = (self.snapshot.volume + delta).clamp(0.0, 1.0);
         self.player.send(Cmd::SetVolume(v));
+    }
+}
+
+/// Seconds an arrow key seeks, or a shift-arrow.
+const SEEK_STEP: i64 = 5;
+const SEEK_JUMP: i64 = 30;
+
+fn seek_step(key: &KeyEvent) -> i64 {
+    if key.modifiers.contains(KeyModifiers::SHIFT) {
+        SEEK_JUMP
+    } else {
+        SEEK_STEP
+    }
+}
+
+/// Every key binding, as `(keys, action)`, for the help view.
+pub const KEYS: &[(&str, &str)] = &[
+    ("tab  1 2 3", "switch between library, queue and playlists"),
+    ("j k  up down", "move"),
+    ("g G  home end", "jump to first or last"),
+    ("page up/down", "move by ten"),
+    ("enter", "play from here; in playlists, load it"),
+    ("a", "queue the selection; plays if stopped"),
+    ("/", "search; esc clears"),
+    ("s", "save the queue as a playlist"),
+    ("d", "delete the selected playlist"),
+    ("space", "play or pause"),
+    ("n p", "next or previous track"),
+    ("x", "stop"),
+    ("left right", "seek back or forward 5 seconds"),
+    ("shift left right", "seek back or forward 30 seconds"),
+    ("[ ]", "varispeed down or up a semitone"),
+    ("\\", "back to normal speed"),
+    ("+ -", "volume"),
+    ("?", "show this list"),
+    ("q  ctrl-c", "quit"),
+];
+
+/// The character `key` types, or `None` for any other key and for a Ctrl or
+/// Alt chord, which is a command rather than text.
+fn typed(key: &KeyEvent) -> Option<char> {
+    match key.code {
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(c)
+        }
+        _ => None,
     }
 }
 

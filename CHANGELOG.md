@@ -1,10 +1,70 @@
 # Changelog
 
-Notable changes to playr. Format follows [Keep a Changelog][kac], versioning follows [Semantic Versioning][semver].
+Notable changes to playr. Format follows [Keep a Changelog][https://keepachangelog.com/en/1.1.0/], versioning follows [Semantic Versioning][https://semver.org/spec/v2.0.0.html].
 
-[kac]: https://keepachangelog.com/en/1.1.0/ [semver]: https://semver.org/spec/v2.0.0.html
+## [0.3.0]
 
-## [0.2.0] - 2026-09-13
+### Added
+
+- Shift with the left or right arrow seeks 30 seconds; the arrows alone still seek 5.
+
+- `?` opens a list of every key. The bottom line, which held key hints cut off at about 80 columns, now shows messages on the left, and the speed, a volume meter and `? help` on the right. Volume and speed moved there from the now-playing line.
+
+- `PLAYR_REQUIRE_FFMPEG=1` and `PLAYR_REQUIRE_DEVICE=1` make a test fail where it would skip for want of ffmpeg or an audio device. The engine and key-handling tests now play to a fake device, so they run without one.
+
+### Changed
+
+- Seeking and changing speed no longer close and reopen the audio device, which left a gap and could click. The output callback discards the buffered audio instead, and the device is reopened only if it has not done so within a second, as when it has stopped calling back.
+
+- The queue exists once. The interface kept its own list of tracks beside the engine's and checked only that the lengths matched. `Status::queue` is now the queue: `Player::send` writes it before the engine acts, and the interface builds its rows from it. Library API: `Cmd::Jump` plays a queued track without replacing the queue, `Player::queue` returns it, and `App::with_queue` starts playback itself.
+
+- Under varispeed, or on a device that refuses the source rate, consecutive tracks that share a source format now run through one resampler. Each track change used to start a new one. The join then differed from continuous resampling by up to -10 dB peak relative to the signal, over about 2 ms, and shifted the next track by up to a frame.
+
+- A stopped player reports no source format.
+
+- Library API: `audio::convert::Converter` is public, and `App::quitting` reports a quit key. The engine plays to an `output::Backend`, the trait a device implements, and `Player::with_backend` accepts one; `Player::new` uses `output::Cpal` on the default device. Device errors arrive as `output::DeviceEvent`, and `Output::open` takes the backend and a `Sender<DeviceEvent>`. `output::render` is the output callback's body. Tests use these to play to a fake device that fails on demand.
+
+### Removed
+
+- The `examples/` programs `devices`, `playtest` and `probe`. Nothing documented or used them, and the tests now cover what `playtest` and `probe` checked by hand.
+
+### Fixed
+
+- Seeking in an Opus file landed 312 frames (6.5 ms) early, and the audio after it was wrong for about 200 ms: -6 dB relative to the signal in the first 10 ms. OGG timestamps include the Opus pre-skip, which the decoder removes, and a decoder reset at the target needs time to settle. Seeks now correct for the pre-skip and decode 320 ms before the target, and match decoding from the start. The 80 ms that RFC 7845 gives as a minimum still left the start 26 dB off. Opus in WebM still lands 1.5 ms early, because Matroska timestamps are whole milliseconds.
+
+- The first 10 ms after seeking in an AAC file were 20 dB off, because the first frame after a reset overlaps the one before it. Seeks now decode one frame early.
+
+- A lost audio device left playback `Playing` with the position frozen, because device errors were only reported. It now stops with a message. A reroute to another device, which cpal reports as an error, is no longer shown. This follows cpal's error kinds; it was not checked by unplugging a device.
+
+- A source whose channel count differed from the device's, such as a mono file on a stereo device, was resampled as if it had the device's channel count. Adjacent samples were treated as one frame, which distorted everything above a few kHz: at +1 semitone, an 8 kHz tone came out with an error of -14 dB. Playback at the file's own rate and normal speed was unaffected.
+
+- A long run of unplayable files held every command until it ended, so quitting could wait seconds, or minutes on a slow disk. Stop, play, next, previous and quit now interrupt it.
+
+- `p` could not step back past an unplayable track: it skipped forward onto the current track again. It now steps back to the nearest playable track, and restarts the current one if there is none.
+
+- A failed format change between tracks left the previous track's state, so play restarted that track. The engine now stops cleanly at the track that failed.
+
+- An unknown option such as `--verbose` opened the interface. It is now an error.
+
+- A library from a newer playr opened as if it were current, and the older schema was applied to it. It is now refused.
+
+- A directory the scan could not list was skipped without a count. It now counts as unreadable, and `playr <path>` warns about it.
+
+- Saving a queue as a playlist dropped tracks that are not in the library, and reported only the smaller count. The message now says how many were left out.
+
+- When several playback errors arrived between frames, only the last was shown. It now says how many more there were.
+
+- Playing an empty queue left the engine `Playing`. Nothing in the interface sends one; the library API could.
+
+- Ctrl-C in the search or save prompt typed `c` instead of quitting. Other Ctrl and Alt chords were typed too, and Ctrl-Y confirmed a deletion.
+
+- A seek or speed change in the last second or two of a track acted on the next track. The decoder reads ahead and had already opened it, so the next track played from the current track's position under its title, then again from its start. In the last track of the queue the seek was ignored. A seek now reopens the track being heard.
+
+- A resampled track, under varispeed or on a device that refused its rate, ended on the wrong frame. Depending on its length it lost up to 6 ms of its end, which was still inside the filter, or gained up to 40 ms of padding silence, which a gapless change played as a dropout. It now ends at exactly its length times the ratio.
+
+- Pruning matched the scanned directory ignoring ASCII case, through SQL `LIKE`. On a case-sensitive file system, scanning `/mnt/music` could delete the rows and playlist entries of an unplugged drive mounted at `/mnt/Music`. The match is now exact.
+
+## [0.2.0]
 
 ### Changed
 
@@ -60,7 +120,7 @@ Notable changes to playr. Format follows [Keep a Changelog][kac], versioning fol
 
 - `make install` printed an empty path, and created a file named `bin` when `~/.local/bin` did not exist.
 
-## [0.1.0] - 2026-09-12
+## [0.1.0]
 
 First release.
 
@@ -106,4 +166,3 @@ First release.
 
 - Opus in WebM keeps 648 frames of end padding, because Matroska does not report it and Symphonia does not expose the block duration that would.
 
-[0.2.0]: https://github.com/shakfu/playr/releases/tag/v0.2.0 [0.1.0]: https://github.com/shakfu/playr/releases/tag/v0.1.0

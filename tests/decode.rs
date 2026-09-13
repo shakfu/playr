@@ -3,22 +3,19 @@
 //! The format cases generate real files with ffmpeg, so they check what this
 //! build can actually decode rather than what the dependency claims.
 
+mod common;
+
+use common::{have_ffmpeg, skip};
 use playr::audio::decode::AudioStream;
 use playr::audio::output::remap_channels;
 use std::path::Path;
 use std::process::Command;
 
-fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 /// Encodes a 2 second 440Hz stereo tone with the given codec arguments.
-fn encode(path: &Path, rate: u32, args: &[&str]) -> bool {
-    Command::new("ffmpeg")
+///
+/// On failure, returns ffmpeg's own message, such as a missing encoder.
+fn encode(path: &Path, rate: u32, args: &[&str]) -> Result<(), String> {
+    let out = Command::new("ffmpeg")
         .args([
             "-y",
             "-v",
@@ -32,9 +29,13 @@ fn encode(path: &Path, rate: u32, args: &[&str]) -> bool {
         ])
         .args(args)
         .arg(path)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Err(stderr.lines().next().unwrap_or("ffmpeg failed").to_string())
 }
 
 /// Decodes the whole file, returning `(rate, channels, frames, peak)`.
@@ -62,7 +63,6 @@ fn decode_all(path: &Path) -> Result<(u32, u16, usize, f32), String> {
 #[test]
 fn decodes_the_formats_this_build_claims_to_support() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -72,7 +72,15 @@ fn decodes_the_formats_this_build_claims_to_support() {
         ("t.flac", 44100, &["-c:a", "flac"], 0),
         ("hi.flac", 96000, &["-c:a", "flac"], 0),
         ("t.aiff", 44100, &["-c:a", "pcm_s16be"], 0),
-        ("t.ogg", 44100, &["-c:a", "libvorbis", "-b:a", "192k"], 0),
+        // The built-in encoder: libvorbis is optional, and some ffmpeg builds
+        // lack it. It marks some padding as audio: 56 frames here, which
+        // ffmpeg's own decoder counts too.
+        (
+            "t.ogg",
+            44100,
+            &["-c:a", "vorbis", "-strict", "experimental"],
+            128,
+        ),
         ("t.mp3", 44100, &["-c:a", "libmp3lame", "-b:a", "192k"], 0),
         // AAC has no gapless support upstream, so encoder delay and padding
         // survive into the decoded output.
@@ -86,7 +94,12 @@ fn decodes_the_formats_this_build_claims_to_support() {
             &["-c:a", "libopus", "-b:a", "128k"],
             648,
         ),
-        ("vorbis.webm", 48000, &["-c:a", "libvorbis"], 1024),
+        (
+            "vorbis.webm",
+            48000,
+            &["-c:a", "vorbis", "-strict", "experimental"],
+            1024,
+        ),
     ];
 
     for (name, rate, args, tolerance) in cases {
@@ -95,8 +108,11 @@ fn decodes_the_formats_this_build_claims_to_support() {
             continue;
         }
         let path = dir.path().join(name);
-        if !encode(&path, *rate, args) {
-            eprintln!("skipping {name}: this ffmpeg cannot encode it");
+        if let Err(why) = encode(&path, *rate, args) {
+            skip(
+                "PLAYR_REQUIRE_FFMPEG",
+                &format!("cannot encode {name}: {why}"),
+            );
             continue;
         }
         let (got_rate, ch, frames, peak) =
@@ -122,13 +138,15 @@ fn decodes_the_formats_this_build_claims_to_support() {
 #[test]
 fn opus_pre_skip_is_removed() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.opus");
-    if !encode(&path, 48000, &["-c:a", "libopus", "-b:a", "128k"]) {
-        eprintln!("skipping: this ffmpeg cannot encode Opus");
+    if let Err(why) = encode(&path, 48000, &["-c:a", "libopus", "-b:a", "128k"]) {
+        skip(
+            "PLAYR_REQUIRE_FFMPEG",
+            &format!("cannot encode Opus: {why}"),
+        );
         return;
     }
     // No container reports the OpusHead pre-skip as a packet trim, so the
@@ -147,7 +165,6 @@ fn opus_pre_skip_is_removed() {
 #[test]
 fn mono_opus_decodes() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -169,11 +186,13 @@ fn mono_opus_decodes() {
             "96k",
         ])
         .arg(&path)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+        .output()
+        .is_ok_and(|o| o.status.success());
     if !ok {
-        eprintln!("skipping: this ffmpeg cannot encode mono Opus");
+        skip(
+            "PLAYR_REQUIRE_FFMPEG",
+            "this ffmpeg cannot encode mono Opus",
+        );
         return;
     }
     let (rate, ch, frames, peak) = decode_all(&path).expect("mono Opus failed to decode");
@@ -190,13 +209,15 @@ fn mono_opus_decodes() {
 #[test]
 fn seeking_an_opus_stream_does_not_reapply_pre_skip() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.opus");
-    if !encode(&path, 48000, &["-c:a", "libopus", "-b:a", "128k"]) {
-        eprintln!("skipping: this ffmpeg cannot encode Opus");
+    if let Err(why) = encode(&path, 48000, &["-c:a", "libopus", "-b:a", "128k"]) {
+        skip(
+            "PLAYR_REQUIRE_FFMPEG",
+            &format!("cannot encode Opus: {why}"),
+        );
         return;
     }
     let mut s = AudioStream::open(&path).unwrap();
@@ -216,13 +237,12 @@ fn a_codec_with_no_decoder_reports_rather_than_panics() {
     // WMA has no decoder in this build. The failure must stay a clean error so
     // the player skips the track rather than stopping.
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.wma");
-    if !encode(&path, 44100, &["-c:a", "wmav2", "-b:a", "128k"]) {
-        eprintln!("skipping: this ffmpeg cannot encode WMA");
+    if let Err(why) = encode(&path, 44100, &["-c:a", "wmav2", "-b:a", "128k"]) {
+        skip("PLAYR_REQUIRE_FFMPEG", &format!("cannot encode WMA: {why}"));
         return;
     }
     let err = decode_all(&path).expect_err("WMA unexpectedly decoded; update the docs");
@@ -248,12 +268,11 @@ fn a_missing_file_is_rejected() {
 #[test]
 fn seeking_moves_the_read_position() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.flac");
-    assert!(encode(&path, 44100, &["-c:a", "flac"]));
+    encode(&path, 44100, &["-c:a", "flac"]).unwrap();
 
     let mut s = AudioStream::open(&path).unwrap();
     s.seek(std::time::Duration::from_secs(1)).unwrap();
@@ -280,7 +299,6 @@ fn samples(s: &mut AudioStream) -> Vec<f32> {
 #[test]
 fn a_seek_resumes_on_the_exact_sample() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     // Noise, so a misaligned comparison cannot match by accident.
@@ -317,12 +335,11 @@ fn a_seek_resumes_on_the_exact_sample() {
 #[test]
 fn duration_is_reported_from_the_container() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.flac");
-    assert!(encode(&path, 44100, &["-c:a", "flac"]));
+    encode(&path, 44100, &["-c:a", "flac"]).unwrap();
     let s = AudioStream::open(&path).unwrap();
     let d = s.duration().expect("no duration reported");
     assert!(
@@ -397,17 +414,82 @@ fn a_zero_channel_count_produces_nothing_instead_of_dividing_by_zero() {
 #[test]
 fn opus_reports_cleanly_when_the_feature_is_off() {
     if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.opus");
-    if !encode(&path, 48000, &["-c:a", "libopus", "-b:a", "128k"]) {
-        eprintln!("skipping: this ffmpeg cannot encode Opus");
+    if let Err(why) = encode(&path, 48000, &["-c:a", "libopus", "-b:a", "128k"]) {
+        skip(
+            "PLAYR_REQUIRE_FFMPEG",
+            &format!("cannot encode Opus: {why}"),
+        );
         return;
     }
     // Built without libopus, an Opus file must be skipped with a clear message
     // rather than crashing or playing silence.
     let err = decode_all(&path).expect_err("Opus decoded without the opus feature");
     assert!(err.contains("no decoder"), "unhelpful error: {err}");
+}
+
+/// Largest difference, relative to the signal, between `after` and the
+/// uninterrupted decode `whole` from frame `at`, over `frames` stereo frames.
+fn error_db(after: &[f32], whole: &[f32], at: usize, frames: usize) -> f64 {
+    let (mut err, mut sig) = (0f64, 0f64);
+    for i in 0..frames * 2 {
+        let x = whole[at * 2 + i] as f64;
+        err += (after[i] as f64 - x).powi(2);
+        sig += x * x;
+    }
+    10.0 * (err / sig).log10()
+}
+
+/// Seeks into white noise encoded with `codec`, and checks that the first
+/// `frames` after each seek match decoding from the start.
+fn assert_seeks_match_a_full_decode(ext: &str, rate: u32, codec: &[&str], frames: usize) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("n.{ext}"));
+    let ok = Command::new("ffmpeg")
+        .args(["-y", "-v", "error", "-f", "lavfi", "-i"])
+        .arg(format!("anoisesrc=d=3:c=white:r={rate}:seed=7"))
+        .args(["-ac", "2"])
+        .args(codec)
+        .arg(&path)
+        .status()
+        .is_ok_and(|s| s.success());
+    if !ok {
+        return skip(
+            "PLAYR_REQUIRE_FFMPEG",
+            &format!("this ffmpeg cannot encode {ext}"),
+        );
+    }
+    let whole = samples(&mut AudioStream::open(&path).unwrap());
+    for secs in [0.5, 1.7] {
+        let mut s = AudioStream::open(&path).unwrap();
+        s.seek(std::time::Duration::from_secs_f64(secs)).unwrap();
+        let after = samples(&mut s);
+        let at = (secs * rate as f64).round() as usize;
+        let db = error_db(&after, &whole, at, frames);
+        assert!(db < -60.0, "{ext}: seek to {secs}s is off by {db:.1} dB");
+    }
+}
+
+#[cfg(feature = "opus")]
+#[test]
+fn an_opus_seek_matches_a_full_decode() {
+    // OGG timestamps include the pre-skip, which put every seek 6.5 ms early,
+    // and a decoder reset at the target took about 200 ms to settle.
+    if !have_ffmpeg() {
+        return;
+    }
+    assert_seeks_match_a_full_decode("opus", 48000, &["-c:a", "libopus", "-b:a", "256k"], 4800);
+}
+
+#[test]
+fn an_aac_seek_matches_a_full_decode() {
+    // A reset at the target left the first AAC frame, which overlaps the one
+    // before it, 20 dB off.
+    if !have_ffmpeg() {
+        return;
+    }
+    assert_seeks_match_a_full_decode("m4a", 44100, &["-c:a", "aac", "-b:a", "256k"], 4410);
 }

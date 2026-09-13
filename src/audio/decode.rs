@@ -8,6 +8,7 @@ use std::fs::File;
 use std::path::Path;
 use std::time::Duration;
 
+use symphonia::core::codecs::audio::well_known::{CODEC_ID_AAC, CODEC_ID_OPUS};
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::codecs::CodecParameters;
@@ -90,6 +91,24 @@ pub struct AudioStream {
     /// An accurate seek lands on a packet at or before the target, and the
     /// caller must discard up to the target itself.
     discard: usize,
+    /// Added to a seek target to reach the container's timestamps.
+    seek_offset: Duration,
+    /// How far before a seek target decoding starts, so the decoder has
+    /// settled by the target. See `pre_roll`.
+    pre_roll: Duration,
+}
+
+/// Decoding time a codec needs after a reset before its output is exact.
+///
+/// Measured against decoding from the start. Opus is still 26 dB off 80 ms
+/// in, the minimum RFC 7845 section 4.6 gives, and 98 dB off after 320 ms.
+/// AAC is off for its first frame, which overlaps the one before it.
+fn pre_roll(codec: symphonia::core::codecs::audio::AudioCodecId, rate: u32) -> Duration {
+    match codec {
+        CODEC_ID_OPUS => Duration::from_millis(320),
+        CODEC_ID_AAC if rate > 0 => Duration::from_secs_f64(2048.0 / rate as f64),
+        _ => Duration::ZERO,
+    }
 }
 
 impl AudioStream {
@@ -130,6 +149,15 @@ impl AudioStream {
 
         let decoder = codecs().make_audio_decoder(&params, &AudioDecoderOptions::default())?;
 
+        // OGG timestamps count Opus pre-skip, which the decoder trims, not
+        // the demuxer. Matroska subtracts it already and reports no delay.
+        let seek_offset = match (params.codec, track.delay) {
+            // Pre-skip is counted in 48 kHz samples whatever the output rate.
+            (CODEC_ID_OPUS, Some(delay)) => Duration::from_secs_f64(delay as f64 / 48_000.0),
+            _ => Duration::ZERO,
+        };
+        let pre_roll = pre_roll(params.codec, params.sample_rate.unwrap_or(0));
+
         // Rate and channels are not always in the container header; when absent
         // they are filled in from the first decoded buffer.
         let spec = Spec {
@@ -150,6 +178,8 @@ impl AudioStream {
             duration,
             buf: Vec::new(),
             discard: 0,
+            seek_offset,
+            pre_roll,
         })
     }
 
@@ -216,7 +246,9 @@ impl AudioStream {
 
     /// Seeks to `pos` from the start of the track.
     pub fn seek(&mut self, pos: Duration) -> Result<(), DecodeError> {
-        let time = Time::try_new(pos.as_secs() as i64, pos.subsec_nanos())
+        let target = pos + self.seek_offset;
+        let from = target.saturating_sub(self.pre_roll);
+        let time = Time::try_new(from.as_secs() as i64, from.subsec_nanos())
             .ok_or_else(|| DecodeError::Other("seek position out of range".into()))?;
         let seeked = self.reader.seek(
             SeekMode::Accurate,
@@ -233,11 +265,12 @@ impl AudioStream {
                 .and_then(|tb| tb.calc_time(ts))
                 .map(|t| t.as_secs_f64())
         };
-        self.discard = match (secs(seeked.required_ts), secs(seeked.actual_ts)) {
-            (Some(req), Some(act)) => {
-                ((req - act).max(0.0) * self.spec.rate as f64).round() as usize
+        // Up to the target, which covers the pre-roll as well as the packet.
+        self.discard = match secs(seeked.actual_ts) {
+            Some(act) => {
+                ((target.as_secs_f64() - act).max(0.0) * self.spec.rate as f64).round() as usize
             }
-            _ => 0,
+            None => 0,
         };
         Ok(())
     }

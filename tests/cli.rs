@@ -43,3 +43,21 @@ fn only_scan_creates_the_library() {
     playr(&db, &["scan", dir.path().to_str().unwrap()]);
     assert!(db.exists(), "`playr scan` did not create the library");
 }
+
+#[test]
+fn an_unknown_option_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_playr"))
+        .arg("--db")
+        .arg(dir.path().join("library.db"))
+        .arg("--bogus")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown option --bogus"),
+        "stderr was {stderr:?}"
+    );
+}

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use playr::audio::{Cmd, Player};
+use playr::audio::Player;
 use playr::db::{self, Track};
 use playr::{scan, ui};
 
@@ -107,17 +107,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 .ok_or_else(|| format!("no single playlist named {name:?}"))?;
             db::query::playlist_tracks(&conn, pl.id)?
         }
-        Some(first) if !first.starts_with('-') => collect_paths(&conn, &args)?,
-        _ => Vec::new(),
+        Some(flag) if flag.starts_with('-') => {
+            return Err(format!("unknown option {flag} (see playr --help)").into())
+        }
+        Some(_) => collect_paths(&conn, &args)?,
+        None => Vec::new(),
     };
 
     let player = Player::new()?;
-    if !start.is_empty() {
-        player.send(Cmd::Play(
-            start.iter().map(|t| PathBuf::from(&t.path)).collect(),
-            0,
-        ));
-    }
 
     // `ratatui::init` panics without a terminal; report it instead, since
     // running playr from a pipe or a service is an easy mistake to make.
@@ -196,13 +193,16 @@ fn collect_paths(
             continue;
         };
         if path.is_dir() {
-            let mut found: Vec<PathBuf> = walkdir::WalkDir::new(path)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file() && scan::is_audio(e.path()))
-                .map(|e| e.into_path())
-                .collect();
+            let mut found: Vec<PathBuf> = Vec::new();
+            for entry in walkdir::WalkDir::new(path).follow_links(false) {
+                match entry {
+                    Ok(e) if e.file_type().is_file() && scan::is_audio(e.path()) => {
+                        found.push(e.into_path())
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("playr: cannot read {e}"),
+                }
+            }
             found.sort();
             files.extend(found);
         } else if path.is_file() {

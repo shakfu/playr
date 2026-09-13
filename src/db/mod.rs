@@ -93,8 +93,18 @@ pub fn open_memory() -> Result<Connection> {
 pub const SCHEMA_VERSION: i64 = 1;
 
 fn init(conn: &Connection) -> Result<()> {
-    conn.execute_batch(include_str!("schema.sql"))?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // Checked before the schema runs, which could otherwise add tables and
+    // triggers this version knows to a library it does not understand.
+    if version > SCHEMA_VERSION {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
+            Some(format!(
+                "library schema version {version} is newer than this playr supports ({SCHEMA_VERSION})"
+            )),
+        ));
+    }
+    conn.execute_batch(include_str!("schema.sql"))?;
     if version < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }

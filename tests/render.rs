@@ -571,3 +571,47 @@ fn wide_characters_do_not_push_the_duration_off_the_row() {
         assert_eq!(tail, "9:59", "row {y} lost its duration");
     }
 }
+
+// --- bottom line and help ---
+
+#[test]
+fn the_bottom_line_shows_a_volume_meter_and_the_help_key() {
+    let joined = Case::new(View::Library, &stopped()).text();
+    assert!(
+        joined.contains("vol [########--]  80%"),
+        "no volume meter:\n{joined}"
+    );
+    assert!(joined.contains("? help"), "no help key:\n{joined}");
+}
+
+#[test]
+fn a_message_shares_the_bottom_line_with_the_indicators() {
+    let joined = Case::new(View::Library, &stopped())
+        .message("queued 3 track(s)")
+        .text();
+    let last = joined
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    assert!(
+        last.contains("queued 3 track(s)"),
+        "message missing: {last:?}"
+    );
+    assert!(last.contains("? help"), "indicators missing: {last:?}");
+}
+
+#[test]
+fn help_lists_every_key() {
+    let input = Input::Help;
+    let joined = Case::new(View::Library, &stopped())
+        .input(&input)
+        .size(100, 30)
+        .text();
+    for (keys, action) in playr::ui::KEYS {
+        assert!(
+            joined.contains(action),
+            "{keys:?} missing from help:\n{joined}"
+        );
+    }
+}

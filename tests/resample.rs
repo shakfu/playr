@@ -188,6 +188,42 @@ fn duration_scales_inversely_with_speed() {
     }
 }
 
+/// The resampler takes input in chunks of 1024 frames, so these lengths leave
+/// a final partial chunk of 0, 1, 784 and 1023 frames, and one shorter than
+/// the filter delay.
+const CLIP_LENGTHS: [usize; 5] = [10_240, 10_241, 10_000, 10_239, 50];
+
+#[test]
+fn a_flushed_clip_is_exactly_as_long_as_the_ratio_and_ends_on_signal() {
+    let cases = [
+        (44100u32, 48000u32, 1.0f64),
+        (48000, 44100, 1.0),
+        (44100, 44100, 2f64.powf(1.0 / 12.0)),
+        (44100, 44100, 2.0),
+        (44100, 44100, 0.5),
+    ];
+    for (rate_in, rate_out, speed) in cases {
+        for frames in CLIP_LENGTHS {
+            let mut r = Resample::new(rate_in, rate_out, 2, speed).unwrap();
+            let mut out = Vec::new();
+            r.push(&vec![0.5; frames * 2], &mut out);
+            r.flush(&mut out);
+
+            let case = format!("{rate_in}->{rate_out} at {speed:.3}x, {frames} frames");
+            let want = frames as f64 * rate_out as f64 / (rate_in as f64 * speed);
+            let got = out.len() / 2;
+            assert!(
+                (got as f64 - want).abs() <= 1.0,
+                "{case}: got {got} frames, want {want:.1}"
+            );
+            // Padding shows up as silence at the end, which a gapless boundary
+            // carries as a dropout. The last frame may fall on the step to zero.
+            let silent = out.iter().rev().take_while(|v| v.abs() < 0.1).count() / 2;
+            assert!(silent <= 1, "{case}: ends in {silent} silent frames");
+        }
+    }
+}
+
 #[test]
 fn normal_speed_is_unchanged() {
     let input = sine(44100, 440.0, 44100);

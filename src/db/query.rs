@@ -86,18 +86,12 @@ pub fn by_path(conn: &Connection, path: &str) -> Result<Option<Track>> {
     conn.query_row(&sql, [path], row_to_track).optional()
 }
 
-/// Tracks whose path is under `prefix`, in library order.
+/// Tracks whose path starts with `prefix`, compared case-sensitively, in library order.
 pub fn under_path(conn: &Connection, prefix: &str) -> Result<Vec<Track>> {
-    let like = format!(
-        "{}%",
-        prefix
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-    );
-    let sql = format!("SELECT {COLS} FROM tracks WHERE path LIKE ?1 ESCAPE '\\' {ORDER}");
+    // Not `LIKE`: it ignores ASCII case, so `/mnt/music/` also matched `/mnt/Music/`.
+    let sql = format!("SELECT {COLS} FROM tracks WHERE substr(path, 1, length(?1)) = ?1 {ORDER}");
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([&like], row_to_track)?;
+    let rows = stmt.query_map([prefix], row_to_track)?;
     rows.collect()
 }
 

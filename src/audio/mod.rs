@@ -5,6 +5,7 @@
 //! The cpal callback drains that ring on the realtime thread and touches
 //! nothing but atomics.
 
+pub mod convert;
 pub mod decode;
 #[cfg(feature = "opus")]
 pub mod opus;
@@ -14,11 +15,9 @@ pub mod resample;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-use cpal::Device;
 
 use decode::AudioStream;
 pub use decode::Spec;
@@ -29,8 +28,8 @@ fn short(path: &std::path::Path) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
 }
-use output::{Output, Plan, Shared};
-use resample::Resample;
+use convert::Converter;
+use output::{Backend, DeviceEvent, Output, Plan, Shared};
 
 /// Furthest the playback speed may be shifted, in semitones.
 ///
@@ -82,6 +81,8 @@ pub enum Cmd {
     Play(Vec<PathBuf>, usize),
     /// Append to the queue, starting playback if stopped.
     Enqueue(Vec<PathBuf>),
+    /// Play the queued track at `index`, keeping the queue.
+    Jump(usize),
     TogglePause,
     Next,
     Prev,
@@ -102,7 +103,11 @@ pub enum Cmd {
 #[derive(Debug, Clone, Default)]
 pub struct Status {
     pub state: State,
-    /// Shared with the engine, so publishing a status does not copy the paths.
+    /// The one queue, which the engine plays from.
+    ///
+    /// Only [`Player::send`] changes it, before the engine sees the command, so
+    /// it is current as soon as `send` returns. `index` and `state` follow once
+    /// the engine has acted.
     pub queue: Arc<[PathBuf]>,
     pub index: usize,
     pub duration: Option<Duration>,
@@ -127,18 +132,31 @@ impl Status {
     }
 }
 
+/// What the engine receives. A queue change carries the new queue itself, so
+/// the engine plays exactly the list [`Status::queue`] shows.
+enum Msg {
+    Play(Arc<[PathBuf]>, usize),
+    Enqueue(Arc<[PathBuf]>),
+    Cmd(Cmd),
+}
+
 /// Handle to the engine thread.
 pub struct Player {
-    tx: Sender<Cmd>,
+    tx: Sender<Msg>,
     status: Arc<Mutex<Status>>,
     shared: Arc<Shared>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Player {
-    /// Starts the engine thread. Fails only if no output device exists.
+    /// Starts the engine thread on the default output device. Fails only if
+    /// no output device exists.
     pub fn new() -> Result<Self, output::OutputError> {
-        let device = output::default_device()?;
+        Self::with_backend(output::Cpal(output::default_device()?))
+    }
+
+    /// Starts the engine thread, playing to `backend`.
+    pub fn with_backend(backend: impl Backend) -> Result<Self, output::OutputError> {
         let (tx, rx) = std::sync::mpsc::channel();
         let status = Arc::new(Mutex::new(Status::default()));
         let shared = Arc::new(Shared::new());
@@ -148,7 +166,7 @@ impl Player {
             let shared = shared.clone();
             std::thread::Builder::new()
                 .name("playr-audio".into())
-                .spawn(move || Engine::new(device, rx, status, shared).run())
+                .spawn(move || Engine::new(Box::new(backend), rx, status, shared).run())
                 .map_err(|e| output::OutputError::Build(e.to_string()))?
         };
 
@@ -161,7 +179,30 @@ impl Player {
     }
 
     pub fn send(&self, cmd: Cmd) {
-        let _ = self.tx.send(cmd);
+        let Ok(mut status) = self.status.lock() else {
+            return;
+        };
+        let msg = match cmd {
+            Cmd::Play(paths, index) => {
+                status.queue = paths.into();
+                Msg::Play(status.queue.clone(), index)
+            }
+            Cmd::Enqueue(paths) => {
+                status.queue = status.queue.iter().cloned().chain(paths).collect();
+                Msg::Enqueue(status.queue.clone())
+            }
+            cmd => Msg::Cmd(cmd),
+        };
+        // Under the lock, so the engine receives changes in the order they were made.
+        let _ = self.tx.send(msg);
+    }
+
+    /// The queue. See [`Status::queue`].
+    pub fn queue(&self) -> Arc<[PathBuf]> {
+        self.status
+            .lock()
+            .map(|s| s.queue.clone())
+            .unwrap_or_default()
     }
 
     pub fn status(&self) -> Status {
@@ -186,7 +227,7 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
-        let _ = self.tx.send(Cmd::Quit);
+        let _ = self.tx.send(Msg::Cmd(Cmd::Quit));
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
@@ -205,6 +246,23 @@ const REFILL_BELOW: f64 = 0.5;
 /// slower than FLAC and is what made this visible.
 const PUMP_BUDGET: Duration = Duration::from_millis(8);
 
+/// Longest a seek waits for the device to discard buffered audio before
+/// reopening the device instead. A device that has stopped calling back never
+/// discards.
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// A seek waiting for the device to discard what was buffered before it.
+#[derive(Clone, Copy)]
+struct Flush {
+    /// The `flush_requested` value the device must reach.
+    generation: u64,
+    deadline: std::time::Instant,
+    /// Where in the track playback resumes.
+    at: Duration,
+    /// `at` in output frames.
+    offset: u64,
+}
+
 /// A track queued behind the current one whose format needs a new stream.
 struct Staged {
     stream: AudioStream,
@@ -215,17 +273,20 @@ struct Staged {
 }
 
 struct Engine {
-    device: Device,
-    rx: Receiver<Cmd>,
+    backend: Box<dyn Backend>,
+    rx: Receiver<Msg>,
     status: Arc<Mutex<Status>>,
     shared: Arc<Shared>,
-    /// Errors the device reports from its own thread, surfaced through `fail`.
-    device_errors: (Sender<String>, Receiver<String>),
+    /// Events the device reports from its own thread.
+    device_events: (Sender<DeviceEvent>, Receiver<DeviceEvent>),
+
+    /// Commands taken off the channel while searching for a playable track,
+    /// handled before anything newer.
+    deferred: VecDeque<Msg>,
 
     out: Option<Output>,
     stream: Option<AudioStream>,
-    resampler: Option<Resample>,
-    src: Spec,
+    conv: Option<Converter>,
 
     queue: Arc<[PathBuf]>,
     index: usize,
@@ -239,31 +300,29 @@ struct Engine {
     marks: VecDeque<(u64, usize, Option<Duration>)>,
     /// Next track, held back because it needs a different output format.
     staged: Option<Staged>,
+    /// A seek whose pre-seek audio the device has not yet discarded.
+    flush: Option<Flush>,
     /// Samples converted but not yet accepted by the ring.
     carry: Vec<f32>,
-    scratch: Vec<f32>,
 }
 
 impl Engine {
     fn new(
-        device: Device,
-        rx: Receiver<Cmd>,
+        backend: Box<dyn Backend>,
+        rx: Receiver<Msg>,
         status: Arc<Mutex<Status>>,
         shared: Arc<Shared>,
     ) -> Self {
         Engine {
-            device,
+            backend,
             rx,
             status,
             shared,
-            device_errors: std::sync::mpsc::channel(),
+            device_events: std::sync::mpsc::channel(),
+            deferred: VecDeque::new(),
             out: None,
             stream: None,
-            resampler: None,
-            src: Spec {
-                rate: 0,
-                channels: 0,
-            },
+            conv: None,
             queue: Arc::default(),
             index: 0,
             state: State::Stopped,
@@ -271,8 +330,8 @@ impl Engine {
             written: 0,
             marks: VecDeque::new(),
             staged: None,
+            flush: None,
             carry: Vec::new(),
-            scratch: Vec::new(),
         }
     }
 
@@ -285,12 +344,20 @@ impl Engine {
             } else {
                 Duration::from_millis(100)
             };
-            match self.rx.recv_timeout(wait) {
-                Ok(Cmd::Quit) => break,
-                Ok(cmd) => {
-                    self.handle(cmd);
-                    while let Ok(next) = self.rx.try_recv() {
-                        if matches!(next, Cmd::Quit) {
+            let first = match self.deferred.pop_front() {
+                Some(cmd) => Ok(cmd),
+                None => self.rx.recv_timeout(wait),
+            };
+            match first {
+                Ok(Msg::Cmd(Cmd::Quit)) => break,
+                Ok(msg) => {
+                    self.handle(msg);
+                    while let Some(next) = self
+                        .deferred
+                        .pop_front()
+                        .or_else(|| self.rx.try_recv().ok())
+                    {
+                        if matches!(next, Msg::Cmd(Cmd::Quit)) {
                             return;
                         }
                         self.handle(next);
@@ -300,9 +367,10 @@ impl Engine {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
 
-            while let Ok(e) = self.device_errors.1.try_recv() {
-                self.fail(format!("audio device: {e}"));
+            while let Ok(event) = self.device_events.1.try_recv() {
+                self.device_event(event);
             }
+            self.poll_flush();
             if self.state == State::Playing {
                 self.pump();
             }
@@ -311,27 +379,23 @@ impl Engine {
         }
     }
 
-    fn handle(&mut self, cmd: Cmd) {
-        match cmd {
-            Cmd::Play(paths, index) => {
-                self.queue = paths.into();
-                self.index = index.min(self.queue.len().saturating_sub(1));
-                self.teardown();
-                if !self.queue.is_empty() {
-                    self.start(self.index);
-                }
+    fn handle(&mut self, msg: Msg) {
+        let cmd = match msg {
+            Msg::Play(queue, index) => {
+                self.queue = queue;
+                return self.jump(index);
             }
-            Cmd::Enqueue(paths) => {
+            Msg::Enqueue(queue) => {
                 let first_new = self.queue.len();
-                self.queue = self.queue.iter().cloned().chain(paths).collect();
-                if self.state == State::Stopped {
-                    self.start(first_new);
-                } else if self.stream.is_none() && self.staged.is_none() {
-                    // The last track already decoded to its end, and `pump`
-                    // stages nothing once the queue has run out.
-                    self.stage_from(first_new);
-                }
+                self.queue = queue;
+                return self.enqueued(first_new);
             }
+            Msg::Cmd(cmd) => cmd,
+        };
+        match cmd {
+            // `Player::send` delivers these as `Msg::Play` and `Msg::Enqueue`.
+            Cmd::Play(..) | Cmd::Enqueue(..) => {}
+            Cmd::Jump(index) => self.jump(index),
             Cmd::TogglePause => match self.state {
                 State::Playing => {
                     if let Some(o) = &self.out {
@@ -347,7 +411,7 @@ impl Engine {
                 }
                 State::Stopped => {
                     if !self.queue.is_empty() {
-                        self.start(self.index);
+                        self.start(self.index, false);
                     }
                 }
             },
@@ -356,7 +420,7 @@ impl Engine {
                 if next < self.queue.len() {
                     self.teardown();
                     self.index = next;
-                    self.start(next);
+                    self.start(next, false);
                 } else {
                     self.teardown();
                     self.state = State::Stopped;
@@ -365,11 +429,13 @@ impl Engine {
             Cmd::Prev => {
                 // Restart the track if we are past the start of it, which is
                 // what a double-press of "previous" expects.
-                let restart = self.elapsed() > Duration::from_secs(3) || self.index == 0;
-                let target = if restart { self.index } else { self.index - 1 };
+                let current = self.index;
+                let restart = self.elapsed() > Duration::from_secs(3) || current == 0;
                 self.teardown();
-                self.index = target;
-                self.start(target);
+                // Step back over unplayable tracks; with none before, restart.
+                if restart || !self.start(current - 1, true) {
+                    self.start(current, false);
+                }
             }
             Cmd::Stop => {
                 self.teardown();
@@ -388,8 +454,49 @@ impl Engine {
         }
     }
 
+    fn device_event(&mut self, event: DeviceEvent) {
+        match event {
+            // Playback continues on the new device; nothing went wrong.
+            DeviceEvent::Rerouted => {}
+            // The ring would never drain, freezing the position while `Playing`.
+            DeviceEvent::Lost(e) => {
+                self.fail(format!("audio device lost: {e}"));
+                self.teardown();
+                self.state = State::Stopped;
+            }
+            DeviceEvent::Error(e) => self.fail(format!("audio device: {e}")),
+        }
+    }
+
+    /// Plays the queued track at `index`, or stops if the queue is empty.
+    fn jump(&mut self, index: usize) {
+        self.index = index.min(self.queue.len().saturating_sub(1));
+        self.teardown();
+        if self.queue.is_empty() {
+            self.state = State::Stopped;
+        } else {
+            self.start(self.index, false);
+        }
+    }
+
+    /// Continues into tracks appended from `first_new`.
+    fn enqueued(&mut self, first_new: usize) {
+        if self.state == State::Stopped {
+            self.start(first_new, false);
+        } else if self.stream.is_none() && self.staged.is_none() {
+            // The last track already decoded to its end, and `pump`
+            // stages nothing once the queue has run out.
+            self.stage_from(first_new);
+        }
+    }
+
     /// Audible position within the current track.
     fn elapsed(&self) -> Duration {
+        // Until the device discards, the counters still describe the audio
+        // before the seek; a second quick seek must start from the first.
+        if let Some(flush) = self.flush {
+            return flush.at;
+        }
         track_position(
             self.shared.frames_out.load(Ordering::Relaxed),
             self.shared.track_start.load(Ordering::Relaxed),
@@ -401,8 +508,9 @@ impl Engine {
 
     fn teardown(&mut self) {
         self.stream = None;
-        self.resampler = None;
+        self.conv = None;
         self.staged = None;
+        self.flush = None;
         self.carry.clear();
         self.marks.clear();
         self.written = 0;
@@ -414,42 +522,33 @@ impl Engine {
         self.shared.position_offset.store(0, Ordering::Relaxed);
     }
 
-    /// Opens track `i`, or the first playable track after it, and (re)builds
-    /// the output stream to match.
+    /// Opens track `i`, or the first playable track after it (before it, when
+    /// `back` is set), and (re)builds the output stream to match.
     ///
-    /// Bad files are skipped in a loop, not by recursion: a run of thousands,
-    /// such as an Opus library in a build without Opus, overflowed the stack.
-    fn start(&mut self, mut i: usize) {
-        let (stream, first, spec) = loop {
-            let Some(path) = self.queue.get(i).cloned() else {
-                self.state = State::Stopped;
-                return;
-            };
-            match self.open_track(&path) {
-                Some(opened) => break opened,
-                // A bad file must not stall the queue.
-                None => i += 1,
-            }
+    /// Returns false if no playable track was found.
+    fn start(&mut self, i: usize, back: bool) -> bool {
+        let Some((i, stream, first, spec)) = self.open_from(i, back) else {
+            self.state = State::Stopped;
+            return false;
         };
 
-        let plan = match output::negotiate(&self.device, spec) {
+        let plan = match self.backend.negotiate(spec) {
             Ok(p) => p,
             Err(e) => {
                 self.fail(e.to_string());
                 self.state = State::Stopped;
-                return;
+                return true;
             }
         };
 
         if let Err(e) = self.rebuild_output(plan) {
             self.fail(e.to_string());
             self.state = State::Stopped;
-            return;
+            return true;
         }
 
         self.index = i;
-        self.src = spec;
-        self.resampler = self.make_resampler(spec, plan);
+        self.conv = Some(Converter::new(spec, plan, self.speed()));
         let duration = stream.duration();
         self.stream = Some(stream);
         self.marks.clear();
@@ -464,6 +563,53 @@ impl Engine {
             o.play();
         }
         self.pump();
+        true
+    }
+
+    /// Opens the first playable track from `i`, stepping forward, or back when
+    /// `back` is set. `None` when the queue runs out or a command interrupts.
+    ///
+    /// Bad files are skipped in a loop, not by recursion: a run of thousands,
+    /// such as an Opus library in a build without Opus, overflowed the stack.
+    fn open_from(
+        &mut self,
+        mut i: usize,
+        back: bool,
+    ) -> Option<(usize, AudioStream, Vec<f32>, Spec)> {
+        loop {
+            let path = self.queue.get(i)?.clone();
+            if let Some((stream, first, spec)) = self.open_track(&path) {
+                return Some((i, stream, first, spec));
+            }
+            if self.interrupted() {
+                return None;
+            }
+            i = if back { i.checked_sub(1)? } else { i + 1 };
+        }
+    }
+
+    /// Moves waiting commands to `deferred`, and reports whether one of them
+    /// replaces the search for a playable track.
+    ///
+    /// Without this, a long run of bad files held every command, quit included.
+    fn interrupted(&mut self) -> bool {
+        let mut stop = false;
+        loop {
+            match self.rx.try_recv() {
+                Ok(msg) => {
+                    stop |= matches!(
+                        msg,
+                        Msg::Play(..)
+                            | Msg::Cmd(
+                                Cmd::Quit | Cmd::Stop | Cmd::Jump(_) | Cmd::Next | Cmd::Prev
+                            )
+                    );
+                    self.deferred.push_back(msg);
+                }
+                Err(TryRecvError::Empty) => return stop,
+                Err(TryRecvError::Disconnected) => return true,
+            }
+        }
     }
 
     /// Opens `path` and decodes its first chunk, reporting any failure.
@@ -496,10 +642,10 @@ impl Engine {
 
     fn open_output(&self, plan: Plan) -> Result<Output, output::OutputError> {
         Output::open(
-            &self.device,
+            self.backend.as_ref(),
             plan,
             self.shared.clone(),
-            self.device_errors.0.clone(),
+            self.device_events.0.clone(),
         )
     }
 
@@ -529,18 +675,6 @@ impl Engine {
         speed_for(self.semitones)
     }
 
-    /// The resampler this track needs, if any.
-    ///
-    /// One is required whenever the device cannot take the source rate, and
-    /// also at any speed other than normal, since varispeed is a change of
-    /// resampling ratio.
-    fn make_resampler(&self, spec: Spec, plan: Plan) -> Option<Resample> {
-        if !plan.needs_resample(spec) && self.semitones == 0 {
-            return None;
-        }
-        Resample::new(spec.rate, plan.rate, plan.channels, self.speed())
-    }
-
     /// Applies a speed change by re-seeking to the current position.
     ///
     /// The ring already holds up to two seconds resampled at the old ratio.
@@ -554,29 +688,84 @@ impl Engine {
         let at = self.elapsed();
         self.semitones = want;
         self.shared.set_speed(self.speed());
-        if self.stream.is_some() {
+        if !self.marks.is_empty() {
             self.seek(at);
         }
     }
 
+    /// Seeks within the audible track, which is `marks[0]`.
+    ///
+    /// The decoder reads 1-2 s ahead, so near a track's end it has already
+    /// finished it: `stream` is the next track, or `None`. Seeking `stream`
+    /// then played the next track from this one's position, under this one's
+    /// title, and played it again from the start afterwards.
     fn seek(&mut self, pos: Duration) {
-        let Some(stream) = self.stream.as_mut() else {
+        let Some(&(_, audible, _)) = self.marks.front() else {
             return;
         };
-        if stream.seek(pos).is_err() {
-            return;
-        }
+        let src = if self.marks.len() > 1 || self.stream.is_none() {
+            let Some(path) = self.queue.get(audible).cloned() else {
+                return;
+            };
+            let Some((mut stream, _, spec)) = self.open_track(&path) else {
+                return;
+            };
+            // Seek before replacing anything, so a failed seek changes nothing.
+            if stream.seek(pos).is_err() {
+                return;
+            }
+            self.stream = Some(stream);
+            self.index = audible;
+            spec
+        } else {
+            let (Some(stream), Some(conv)) = (self.stream.as_mut(), self.conv.as_ref()) else {
+                return;
+            };
+            if stream.seek(pos).is_err() {
+                return;
+            }
+            conv.src()
+        };
         // Rebuilt rather than reused: it carries filter state from before the
         // seek, and its ratio may have changed with the playback speed.
         if let Some(plan) = self.out.as_ref().map(|o| o.plan) {
-            self.resampler = self.make_resampler(self.src, plan);
+            self.conv = Some(Converter::new(src, plan, self.speed()));
         }
         self.carry.clear();
         self.staged = None;
 
-        // Rebuild the ring so buffered pre-seek audio is not played.
-        let plan = self.out.as_ref().map(|o| o.plan);
-        if let Some(plan) = plan {
+        let dur = self.stream.as_ref().and_then(|s| s.duration());
+        let idx = self.index;
+        self.written = 0;
+        self.marks.clear();
+        self.marks.push_back((0, idx, dur));
+
+        // The device discards the pre-seek audio in its callback; nothing is
+        // pushed until it has. Reopening the device instead cost a gap and
+        // could click. Positions are reset once the discard is done.
+        let rate = self.shared.position_rate.load(Ordering::Relaxed) as f64;
+        let generation = self.shared.flush_requested.fetch_add(1, Ordering::Relaxed) + 1;
+        self.flush = Some(Flush {
+            generation,
+            deadline: std::time::Instant::now() + FLUSH_TIMEOUT,
+            at: pos,
+            offset: (pos.as_secs_f64() * rate).max(0.0) as u64,
+        });
+        self.poll_flush();
+    }
+
+    /// Finishes a pending seek once the device has discarded its buffer, or
+    /// reopens the device if it has not within `FLUSH_TIMEOUT`.
+    fn poll_flush(&mut self) {
+        let Some(flush) = self.flush else { return };
+        if self.shared.flush_done.load(Ordering::Relaxed) != flush.generation {
+            if std::time::Instant::now() < flush.deadline {
+                return;
+            }
+            let Some(plan) = self.out.as_ref().map(|o| o.plan) else {
+                self.flush = None;
+                return;
+            };
             self.out = None;
             match self.open_output(plan) {
                 Ok(o) => {
@@ -595,42 +784,37 @@ impl Engine {
                 }
             }
         }
-
-        let dur = self.stream.as_ref().and_then(|s| s.duration());
-        let idx = self.index;
-        self.written = 0;
-        self.marks.clear();
-        self.marks.push_back((0, idx, dur));
+        self.flush = None;
         // Playback resumes partway into the track while the device count
         // restarts at zero, so the difference is carried as an offset.
-        let rate = self.shared.position_rate.load(Ordering::Relaxed) as f64;
-        let offset = (pos.as_secs_f64() * rate).max(0.0) as u64;
         self.shared.frames_out.store(0, Ordering::Relaxed);
         self.shared.track_start.store(0, Ordering::Relaxed);
-        self.shared.position_offset.store(offset, Ordering::Relaxed);
+        self.shared
+            .position_offset
+            .store(flush.offset, Ordering::Relaxed);
     }
 
     /// Converts decoded source samples to the output layout and appends to `carry`.
     fn convert_and_carry(&mut self, decoded: &[f32]) {
-        let Some(out) = &self.out else { return };
-        let dst_ch = out.plan.channels as usize;
-        let src_ch = self.src.channels as usize;
+        if let Some(conv) = self.conv.as_mut() {
+            conv.push(decoded, &mut self.carry);
+        }
+    }
 
-        if let Some(r) = self.resampler.as_mut() {
-            // Resample in the source channel count, then remap.
-            self.scratch.clear();
-            r.push(decoded, &mut self.scratch);
-            let resampled = std::mem::take(&mut self.scratch);
-            output::remap_channels(&resampled, src_ch, dst_ch, &mut self.carry);
-            self.scratch = resampled;
-        } else {
-            output::remap_channels(decoded, src_ch, dst_ch, &mut self.carry);
+    /// Appends the rest of the current track's conversion to `carry`.
+    fn finish_track(&mut self) {
+        if let Some(conv) = self.conv.as_mut() {
+            conv.finish(&mut self.carry);
         }
     }
 
     /// Decodes and pushes until the ring is comfortably full, or the time
     /// budget runs out and the run loop gets a turn.
     fn pump(&mut self) {
+        // Pushing before the device has discarded would lose the new audio too.
+        if self.flush.is_some() {
+            return;
+        }
         let deadline = std::time::Instant::now() + PUMP_BUDGET;
         // A format change waits for the ring to empty, then opens a new stream.
         if self.staged.is_some() {
@@ -675,21 +859,7 @@ impl Engine {
                     self.convert_and_carry(&chunk);
                 }
                 Ok(None) => {
-                    // Flush the resampler tail, then move to the next track.
-                    if let Some(r) = self.resampler.as_mut() {
-                        let mut tail = Vec::new();
-                        r.flush(&mut tail);
-                        if !tail.is_empty() {
-                            let (src_ch, dst_ch) = (
-                                self.src.channels as usize,
-                                self.out
-                                    .as_ref()
-                                    .map(|o| o.plan.channels as usize)
-                                    .unwrap_or(2),
-                            );
-                            output::remap_channels(&tail, src_ch, dst_ch, &mut self.carry);
-                        }
-                    }
+                    // `stage_from` ends the conversion, unless the next track continues it.
                     self.stream = None;
                     self.stage_next();
                     if self.staged.is_some() {
@@ -714,7 +884,7 @@ impl Engine {
     /// Opens the next track. If its format matches the open stream, decoding
     /// continues into the same ring, which is what makes playback gapless.
     ///
-    /// Bad files are skipped in a loop; see [`Engine::start`].
+    /// Bad files are skipped in a loop; see [`Engine::open_from`].
     fn stage_next(&mut self) {
         let next = self
             .marks
@@ -725,20 +895,20 @@ impl Engine {
     }
 
     /// Stages the first playable track at or after `next`.
-    fn stage_from(&mut self, mut next: usize) {
-        let (stream, first, spec) = loop {
-            let Some(path) = self.queue.get(next).cloned() else {
-                return;
-            };
-            match self.open_track(&path) {
-                Some(opened) => break opened,
-                None => next += 1,
-            }
+    ///
+    /// The current track's conversion is finished first, except when the next
+    /// track shares its source format and output: then it runs on through the
+    /// same resampler, so a resampled join matches one continuous stream.
+    fn stage_from(&mut self, next: usize) {
+        let Some((next, stream, first, spec)) = self.open_from(next, false) else {
+            self.finish_track();
+            return;
         };
-        let plan = match output::negotiate(&self.device, spec) {
+        let plan = match self.backend.negotiate(spec) {
             Ok(p) => p,
             Err(e) => {
                 self.fail(e.to_string());
+                self.finish_track();
                 return;
             }
         };
@@ -746,12 +916,20 @@ impl Engine {
 
         if self.out.as_ref().map(|o| o.plan) == Some(plan) {
             // Same output format: continue seamlessly.
-            self.src = spec;
-            self.resampler = self.make_resampler(spec, plan);
+            let speed = self.speed();
+            if !self
+                .conv
+                .as_ref()
+                .is_some_and(|c| c.continues(spec, plan, speed))
+            {
+                self.finish_track();
+                self.conv = Some(Converter::new(spec, plan, speed));
+            }
             self.marks.push_back((self.written, next, duration));
             self.stream = Some(stream);
             self.convert_and_carry(&first);
         } else {
+            self.finish_track();
             self.staged = Some(Staged {
                 stream,
                 spec,
@@ -768,11 +946,13 @@ impl Engine {
         };
         if let Err(e) = self.rebuild_output(staged.plan) {
             self.fail(e.to_string());
+            // Otherwise the previous track's state stays, and play restarts it.
+            self.teardown();
+            self.index = staged.index;
             self.state = State::Stopped;
             return;
         }
-        self.src = staged.spec;
-        self.resampler = self.make_resampler(staged.spec, staged.plan);
+        self.conv = Some(Converter::new(staged.spec, staged.plan, self.speed()));
         let duration = staged.stream.duration();
         self.index = staged.index;
         self.stream = Some(staged.stream);
@@ -824,16 +1004,12 @@ impl Engine {
             return;
         };
         s.state = self.state;
-        s.queue = self.queue.clone();
+        // `queue` is written by `Player::send`; the engine's may be older.
         s.index = self.index;
         s.duration = self.marks.front().and_then(|(_, _, d)| *d);
-        s.source = if self.src.rate == 0 {
-            None
-        } else {
-            Some(self.src)
-        };
+        s.source = self.conv.as_ref().map(Converter::src);
         s.output_rate = self.out.as_ref().map(|o| o.plan.rate).unwrap_or(0);
-        s.resampling = self.resampler.is_some();
+        s.resampling = self.conv.as_ref().is_some_and(Converter::resampling);
         s.semitones = self.semitones;
         // `error` and `error_seq` are owned by `fail`; publish must not touch them.
     }

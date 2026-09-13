@@ -33,6 +33,7 @@ pub struct ScanStats {
     pub seen: usize,
     pub added: usize,
     pub skipped: usize,
+    /// Files that could not be read, and directories that could not be listed.
     pub failed: usize,
 }
 
@@ -130,12 +131,15 @@ where
     let Ok(root) = root.canonicalize() else {
         return Ok(stats);
     };
-    let files: Vec<_> = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file() && is_audio(e.path()))
-        .collect();
+    let mut files = Vec::new();
+    for entry in WalkDir::new(root).follow_links(false) {
+        match entry {
+            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => files.push(e),
+            Ok(_) => {}
+            // A directory without read permission, for one; its files are never seen.
+            Err(_) => stats.failed += 1,
+        }
+    }
 
     // Transactions of `SCAN_BATCH` files: a commit per insert is orders of
     // magnitude slower, and one commit for the whole scan loses every row

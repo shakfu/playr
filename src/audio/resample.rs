@@ -31,6 +31,9 @@ pub struct Resample {
     /// through would push every track late by that much and desynchronise the
     /// reported position from what is audible.
     delay_left: usize,
+    /// Input frames consumed and output frames emitted, for `flush` to end on.
+    frames_in: u64,
+    frames_out: u64,
 }
 
 impl Resample {
@@ -64,6 +67,8 @@ impl Resample {
             out_buf: vec![0.0; out_max * channels],
             out_max,
             delay_left,
+            frames_in: 0,
+            frames_out: 0,
         })
     }
 
@@ -79,25 +84,38 @@ impl Resample {
                 return;
             }
             self.run(need, None, sink);
+            self.frames_in += need as u64;
             self.pending.drain(..need * self.channels);
         }
     }
 
-    /// Flushes the held partial chunk, padding it with silence.
-    ///
-    /// Called at end of stream so the tail of the track is not dropped.
+    /// Emits the rest of the output at end of stream, `input * ratio` frames in all.
     pub fn flush(&mut self, sink: &mut Vec<f32>) {
         let have = self.pending.len() / self.channels;
-        if have == 0 {
-            return;
+        self.frames_in += have as u64;
+        let want = (self.frames_in as f64 * self.inner.resample_ratio()).round() as u64;
+        let start = sink.len();
+        let already = self.frames_out;
+
+        // The filter still holds `output_delay` frames of input, so feed
+        // silence until they are out, then cut the padding off.
+        let mut partial = have;
+        while self.frames_out < want {
+            let need = self.inner.input_frames_next();
+            self.pending.resize(need * self.channels, 0.0);
+            if self.run(need, Some(partial), sink) == 0 {
+                break;
+            }
+            partial = 0;
+            self.pending.clear();
         }
-        let need = self.inner.input_frames_next();
-        self.pending.resize(need * self.channels, 0.0);
-        self.run(need, Some(have), sink);
         self.pending.clear();
+        sink.truncate(start + (want.saturating_sub(already) as usize) * self.channels);
+        self.frames_out = self.frames_out.min(want);
     }
 
-    fn run(&mut self, need: usize, partial: Option<usize>, sink: &mut Vec<f32>) {
+    /// Resamples one chunk into `sink`, returning the frames emitted.
+    fn run(&mut self, need: usize, partial: Option<usize>, sink: &mut Vec<f32>) -> usize {
         // Split the borrow: `process_into_buffer` needs `&mut inner` alongside
         // `&pending` and `&mut out_buf`.
         let Resample {
@@ -107,11 +125,13 @@ impl Resample {
             out_buf,
             out_max,
             delay_left,
+            frames_out,
+            ..
         } = self;
         let channels = *channels;
 
         let Ok(input) = InterleavedSlice::new(&pending[..need * channels], channels, need) else {
-            return;
+            return 0;
         };
         let indexing = Indexing {
             input_offset: 0,
@@ -122,16 +142,19 @@ impl Resample {
         let produced = {
             let Ok(mut output) = InterleavedSlice::new_mut(&mut out_buf[..], channels, *out_max)
             else {
-                return;
+                return 0;
             };
             inner
                 .process_into_buffer(&input, &mut output, Some(&indexing))
                 .map(|(_, out)| out)
         };
-        if let Ok(out_frames) = produced {
-            let skip = (*delay_left).min(out_frames);
-            *delay_left -= skip;
-            sink.extend_from_slice(&out_buf[skip * channels..out_frames * channels]);
-        }
+        let Ok(out_frames) = produced else {
+            return 0;
+        };
+        let skip = (*delay_left).min(out_frames);
+        *delay_left -= skip;
+        sink.extend_from_slice(&out_buf[skip * channels..out_frames * channels]);
+        *frames_out += (out_frames - skip) as u64;
+        out_frames - skip
     }
 }

@@ -3,11 +3,11 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Tabs};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use super::{fmt_time, state_glyph, Input, Screen, View};
+use super::{fmt_time, state_glyph, Input, Screen, View, KEYS};
 use crate::audio::State;
 use crate::db::Track;
 
@@ -37,6 +37,41 @@ pub fn draw(app: &mut Screen<'_>, f: &mut Frame) {
         View::Playlists => draw_playlists(app, f, body),
     }
     draw_bar(app, f, bar);
+    if matches!(app.input, Input::Help) {
+        draw_help(f, f.area());
+    }
+}
+
+/// The key list, centred over everything else.
+fn draw_help(f: &mut Frame, area: Rect) {
+    let key_width = KEYS.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    let action_width = KEYS.iter().map(|(_, a)| a.len()).max().unwrap_or(0);
+    let lines: Vec<Line> = KEYS
+        .iter()
+        .map(|(keys, action)| {
+            Line::from(vec![
+                Span::styled(
+                    format!(" {keys:<key_width$}  "),
+                    Style::default().fg(ACCENT),
+                ),
+                Span::raw(*action),
+            ])
+        })
+        .collect();
+    // Keys, two spaces, the action, a space either side, and the borders.
+    let width = ((key_width + action_width + 6) as u16).min(area.width);
+    let height = (KEYS.len() as u16 + 2).min(area.height);
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Paragraph::new(lines).block(list_block("Keys: any key closes")),
+        popup,
+    );
 }
 
 fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
@@ -329,18 +364,6 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         }
         spans.push(Span::styled(fmt, Style::default().fg(DIM)));
     }
-    spans.push(Span::styled(
-        format!("  vol {:.0}%", app.snapshot.volume * 100.0),
-        Style::default().fg(DIM),
-    ));
-    // Only shown when it is not normal, so the usual case stays uncluttered.
-    if status.semitones != 0 {
-        let speed = crate::audio::speed_for(status.semitones);
-        spans.push(Span::styled(
-            format!("  {speed:.2}x ({:+} st)", status.semitones),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
     f.render_widget(Paragraph::new(Line::from(spans)), now);
 
     let total = status.duration.unwrap_or_default();
@@ -355,19 +378,59 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         .label(format!("{} / {}", fmt_time(pos), fmt_time(total)));
     f.render_widget(gauge, progress);
 
-    let text = match (app.input, app.message) {
-        (Input::SavePlaylist(name), _) => {
-            Line::from(vec![Span::styled("save playlist as: ", Style::default().fg(ACCENT)), Span::raw(format!("{name}_"))])
-        }
-        (Input::Confirm(c), _) => Line::from(Span::styled(
+    // A prompt needs the whole line; anything else shares it with the indicators.
+    let prompt = match app.input {
+        Input::SavePlaylist(name) => Some(Line::from(vec![
+            Span::styled("save playlist as: ", Style::default().fg(ACCENT)),
+            Span::raw(format!("{name}_")),
+        ])),
+        Input::Confirm(c) => Some(Line::from(Span::styled(
             c.prompt(),
             Style::default().fg(Color::Yellow),
-        )),
-        (_, Some(msg)) => Line::from(Span::styled(msg.to_string(), Style::default().fg(Color::Yellow))),
-        _ => Line::from(Span::styled(
-            "tab views  / search  enter play  a queue  s save  space pause  n/p track  arrows seek  [ ] speed  +/- vol  q quit",
-            Style::default().fg(DIM),
-        )),
+        ))),
+        _ => None,
     };
-    f.render_widget(Paragraph::new(text), hints);
+    if let Some(prompt) = prompt {
+        f.render_widget(Paragraph::new(prompt), hints);
+        return;
+    }
+
+    let indicators = indicators(status.semitones, app.snapshot.volume);
+    let [left, right] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(indicators.width() as u16),
+    ])
+    .areas(hints);
+    if let Some(msg) = app.message {
+        f.render_widget(
+            Paragraph::new(Span::styled(msg, Style::default().fg(Color::Yellow))),
+            left,
+        );
+    }
+    f.render_widget(Paragraph::new(indicators), right);
+}
+
+/// Speed when it is not normal, a volume meter, and the help key.
+fn indicators(semitones: i32, volume: f32) -> Line<'static> {
+    let mut spans = Vec::new();
+    // Only shown when it is not normal, so the usual case stays uncluttered.
+    if semitones != 0 {
+        let speed = crate::audio::speed_for(semitones);
+        spans.push(Span::styled(
+            format!("{speed:.2}x ({semitones:+} st)  "),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    let filled = (volume.clamp(0.0, 1.0) * 10.0).round() as usize;
+    spans.push(Span::styled(
+        format!(
+            "vol [{}{}] {:>3.0}%",
+            "#".repeat(filled),
+            "-".repeat(10 - filled),
+            volume * 100.0
+        ),
+        Style::default().fg(DIM),
+    ));
+    spans.push(Span::styled("  ? help", Style::default().fg(ACCENT)));
+    Line::from(spans)
 }
