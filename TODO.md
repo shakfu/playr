@@ -4,8 +4,6 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 ## Playback
 
-- [ ] **Shuffle and repeat.** Repeat-one, repeat-all, shuffle. The engine owns play order in `src/audio/mod.rs`, so this is a play-order change there and two keys.
-
 - [ ] **Resume on start.** Remember the last track and position, offer to resume. Needs a small state table, added as schema version 2 (`PRAGMA user_version`).
 
 - [ ] **Gapless across a sample-rate change.** A rate change rebuilds the output stream and leaves a gap. Fixing it means resampling both sides to a common rate, which trades a gap for a conversion. Worth a flag, not a default.

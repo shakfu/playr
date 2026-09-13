@@ -10,6 +10,7 @@ pub mod decode;
 pub mod meter;
 #[cfg(feature = "opus")]
 pub mod opus;
+pub mod order;
 pub mod output;
 pub mod resample;
 
@@ -30,6 +31,8 @@ fn short(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 use convert::Converter;
+pub use order::Mode;
+use order::Order;
 use output::{Backend, DeviceEvent, Output, Plan, Shared};
 
 /// Furthest the playback speed may be shifted, in semitones.
@@ -97,6 +100,8 @@ pub enum Cmd {
     SpeedBy(i32),
     /// Return to normal speed.
     SpeedReset,
+    /// Change how playback moves through the list. See [`Mode`].
+    SetMode(Mode),
     Quit,
 }
 
@@ -125,6 +130,9 @@ pub struct Status {
     pub error_seq: u64,
     /// Playback speed shift in semitones; 0 is normal speed.
     pub semitones: i32,
+    /// How playback moves through the list. Like `queue`, only
+    /// [`Player::send`] writes it, so it is current as soon as `send` returns.
+    pub mode: Mode,
 }
 
 impl Status {
@@ -194,10 +202,19 @@ impl Player {
             }
             // Set here, so the next `volume` call sees it even before the engine runs.
             Cmd::SetVolume(v) => return self.shared.set_volume(v),
+            Cmd::SetMode(mode) => {
+                status.mode = mode;
+                Msg::Cmd(Cmd::SetMode(mode))
+            }
             cmd => Msg::Cmd(cmd),
         };
         // Under the lock, so the engine receives changes in the order they were made.
         let _ = self.tx.send(msg);
+    }
+
+    /// The playback mode. See [`Status::mode`].
+    pub fn mode(&self) -> Mode {
+        self.status.lock().map(|s| s.mode).unwrap_or_default()
     }
 
     /// The queue. See [`Status::queue`].
@@ -302,6 +319,8 @@ struct Engine {
     conv: Option<Converter>,
 
     queue: Arc<[PathBuf]>,
+    /// Which track follows which, for the current mode.
+    order: Order,
     index: usize,
     state: State,
     /// Playback speed shift in semitones; 0 is normal speed.
@@ -337,6 +356,7 @@ impl Engine {
             stream: None,
             conv: None,
             queue: Arc::default(),
+            order: Order::new(0, Mode::Normal, 0, order::random_seed()),
             index: 0,
             state: State::Stopped,
             semitones: 0,
@@ -428,25 +448,29 @@ impl Engine {
                     }
                 }
             },
-            Cmd::Next => {
-                let next = self.index + 1;
-                if next < self.queue.len() {
+            Cmd::Next => match self.order.successor(self.index, true) {
+                Some(next) => {
                     self.teardown();
                     self.index = next;
                     self.start(next, false);
-                } else {
+                }
+                None => {
                     self.teardown();
                     self.state = State::Stopped;
                 }
-            }
+            },
             Cmd::Prev => {
                 // Restart the track if we are past the start of it, which is
                 // what a double-press of "previous" expects.
                 let current = self.index;
-                let restart = self.elapsed() > Duration::from_secs(3) || current == 0;
+                let before = if self.elapsed() > Duration::from_secs(3) {
+                    None
+                } else {
+                    self.order.predecessor(current)
+                };
                 self.teardown();
                 // Step back over unplayable tracks; with none before, restart.
-                if restart || !self.start(current - 1, true) {
+                if !before.is_some_and(|b| self.start(b, true)) {
                     self.start(current, false);
                 }
             }
@@ -464,6 +488,7 @@ impl Engine {
             Cmd::SetVolume(_) => {}
             Cmd::SpeedBy(delta) => self.set_semitones(self.semitones + delta),
             Cmd::SpeedReset => self.set_semitones(0),
+            Cmd::SetMode(mode) => self.set_mode(mode),
             Cmd::Quit => {}
         }
     }
@@ -485,6 +510,12 @@ impl Engine {
     /// Plays the queued track at `index`, or stops if the queue is empty.
     fn jump(&mut self, index: usize) {
         self.index = index.min(self.queue.len().saturating_sub(1));
+        self.order = Order::new(
+            self.queue.len(),
+            self.order.mode(),
+            self.index,
+            order::random_seed(),
+        );
         self.teardown();
         if self.queue.is_empty() {
             self.state = State::Stopped;
@@ -495,6 +526,7 @@ impl Engine {
 
     /// Continues into tracks appended from `first_new`.
     fn enqueued(&mut self, first_new: usize) {
+        self.order.extend(self.queue.len());
         if self.state == State::Stopped {
             self.start(first_new, false);
         } else if self.stream.is_none() && self.staged.is_none() {
@@ -580,17 +612,19 @@ impl Engine {
         true
     }
 
-    /// Opens the first playable track from `i`, stepping forward, or back when
-    /// `back` is set. `None` when the queue runs out or a command interrupts.
+    /// Opens the first playable track from `i`, stepping on in play order, or
+    /// back when `back` is set. `None` when the order runs out, a command
+    /// interrupts, or a whole list's worth of tracks has failed.
     ///
     /// Bad files are skipped in a loop, not by recursion: a run of thousands,
     /// such as an Opus library in a build without Opus, overflowed the stack.
+    /// The limit matters under repeat, whose order never runs out.
     fn open_from(
         &mut self,
         mut i: usize,
         back: bool,
     ) -> Option<(usize, AudioStream, Vec<f32>, Spec)> {
-        loop {
+        for _ in 0..self.queue.len() {
             let path = self.queue.get(i)?.clone();
             if let Some((stream, first, spec)) = self.open_track(&path) {
                 return Some((i, stream, first, spec));
@@ -598,8 +632,13 @@ impl Engine {
             if self.interrupted() {
                 return None;
             }
-            i = if back { i.checked_sub(1)? } else { i + 1 };
+            i = if back {
+                self.order.predecessor(i)?
+            } else {
+                self.order.successor(i, true)?
+            };
         }
+        None
     }
 
     /// Moves waiting commands to `deferred`, and reports whether one of them
@@ -687,6 +726,23 @@ impl Engine {
 
     fn speed(&self) -> f64 {
         speed_for(self.semitones)
+    }
+
+    /// Changes the playback mode.
+    ///
+    /// A next track already chosen, whether decoding into the ring or staged,
+    /// was chosen under the old mode. Seeking to the current position discards
+    /// it, so the new mode applies from the next track rather than the one after.
+    fn set_mode(&mut self, mode: Mode) {
+        if mode == self.order.mode() {
+            return;
+        }
+        let current = self.marks.front().map_or(self.index, |(_, i, _)| *i);
+        self.order.set_mode(mode, current);
+        let chosen = self.marks.len() > 1 || self.staged.is_some() || self.stream.is_none();
+        if chosen && !self.marks.is_empty() {
+            self.seek(self.elapsed());
+        }
     }
 
     /// Applies a speed change by re-seeking to the current position.
@@ -900,12 +956,11 @@ impl Engine {
     ///
     /// Bad files are skipped in a loop; see [`Engine::open_from`].
     fn stage_next(&mut self) {
-        let next = self
-            .marks
-            .back()
-            .map(|(_, i, _)| i + 1)
-            .unwrap_or(self.index + 1);
-        self.stage_from(next);
+        let last = self.marks.back().map_or(self.index, |(_, i, _)| *i);
+        match self.order.successor(last, false) {
+            Some(next) => self.stage_from(next),
+            None => self.finish_track(),
+        }
     }
 
     /// Stages the first playable track at or after `next`.

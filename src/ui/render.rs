@@ -527,7 +527,14 @@ fn indicators(semitones: i32, snapshot: &Snapshot, playing: bool) -> Line<'stati
     if playing {
         spans.extend(level_readout(snapshot.loudness, snapshot.peak));
     }
-    // Only shown when it is not normal, so the usual case stays uncluttered.
+    // Mode and speed show only when not normal, so the usual case stays uncluttered.
+    let mode = snapshot.status.mode;
+    if mode != crate::audio::Mode::Normal {
+        spans.push(Span::styled(
+            format!("{}  ", mode.name()),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
     if semitones != 0 {
         let speed = crate::audio::speed_for(semitones);
         spans.push(Span::styled(

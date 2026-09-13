@@ -2,6 +2,12 @@
 
 Notable changes to playr. Format follows [Keep a Changelog][https://keepachangelog.com/en/1.1.0/], versioning follows [Semantic Versioning][https://semver.org/spec/v2.0.0.html].
 
+## [Unreleased]
+
+### Added
+
+- Playback modes, stepped through with `m` and back with `M`: normal, shuffle, repeat, and repeat one. Shuffle plays every track once per pass in random order, reshuffles at the end of each pass, and never opens a pass with the track that closed the last. It keeps a play order beside the list rather than reordering it, so the list on screen keeps its order and `p` steps back through what played. A mode applies to whatever list is playing. Changing mode rebuilds a next track that has already started loading, so the change takes effect from that track. Under repeat, a list of files that will not play stops after one pass instead of retrying them forever.
+
 ## [0.3.3]
 
 ### Changed

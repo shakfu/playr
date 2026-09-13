@@ -447,3 +447,24 @@ fn a_toggles_a_track_and_moves_the_cursor_down() {
     press(&mut app, 'a');
     assert_eq!(selection_paths(&mut app), ["/m/b.flac"]);
 }
+
+#[test]
+fn m_cycles_the_playback_mode_and_says_which() {
+    use playr::audio::Mode;
+    let (mut app, _dir) = app();
+    let mode = |app: &mut App| {
+        app.refresh();
+        app.screen().snapshot.status.mode
+    };
+    // Quick presses, with no refresh between, must each take a step.
+    press(&mut app, 'm');
+    press(&mut app, 'm');
+    // Before `refresh`, which reports the missing test files' errors over it.
+    assert_eq!(app.screen().message, Some("mode: repeat"));
+    assert_eq!(mode(&mut app), Mode::Repeat);
+    press(&mut app, 'm');
+    press(&mut app, 'm');
+    assert_eq!(mode(&mut app), Mode::Normal, "the cycle does not wrap");
+    press(&mut app, 'M');
+    assert_eq!(mode(&mut app), Mode::RepeatOne);
+}

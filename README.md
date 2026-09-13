@@ -17,6 +17,8 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Play, pause, next, previous, stop
 
+- Four playback modes on one key: normal, shuffle, repeat, repeat one
+
 - Seek by 5 seconds in either direction, or 30 with shift, resuming on the exact sample
 
 - Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
@@ -131,6 +133,7 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 | `space`                  | play or pause                               |
 | `n` `p`                  | next or previous track                      |
 | `x`                      | stop                                        |
+| `m` `M`                  | next or previous playback mode              |
 | left/right               | seek back or forward 5 seconds              |
 | shift left/right         | seek back or forward 30 seconds             |
 | `[` `]`                  | varispeed down or up, one semitone a press  |
@@ -142,6 +145,19 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 Searching filters as you type, across title, artist, album and album artist. Pressing enter on the results plays them.
 
 Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
+
+### Playback modes
+
+`m` steps through four modes and `M` steps back. The bottom line names the mode unless it is normal.
+
+| mode       | order                                              | after the last track |
+|------------|----------------------------------------------------|----------------------|
+| normal     | list order                                         | stop                 |
+| shuffle    | every track once per pass, in random order         | reshuffle, go on     |
+| repeat     | list order                                         | start again          |
+| repeat one | the current track only                             | play it again        |
+
+A mode applies to whatever list is playing: the library, search results, the selection, or a playlist. To shuffle across several playlists, add them to the selection with `a` and play the selection. Shuffle keeps the list on screen in its own order, and `p` goes back through the tracks it has played. Under repeat one, `n` moves on to the next track, which then repeats. Changing mode takes effect from the next track, even if it has already started loading.
 
 ### Varispeed
 

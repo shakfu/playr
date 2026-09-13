@@ -302,6 +302,7 @@ fn now_playing_shows_title_position_and_source_format() {
             error: None,
             error_seq: 0,
             semitones: 0,
+            mode: Default::default(),
         },
         position: Duration::from_secs(151),
         volume: 0.75,
@@ -853,6 +854,25 @@ fn selected_tracks_are_marked_in_the_library_but_not_in_the_selection() {
             !lines[row].contains('+'),
             "marked in the selection: {:?}",
             lines[row]
+        );
+    }
+}
+
+#[test]
+fn the_mode_shows_on_the_bottom_line_unless_normal() {
+    use playr::audio::Mode;
+    let normal = Case::new(View::Library, &stopped()).text();
+    assert!(
+        !normal.contains("normal"),
+        "normal mode announced:\n{normal}"
+    );
+    for mode in [Mode::Shuffle, Mode::Repeat, Mode::RepeatOne] {
+        let mut snapshot = stopped();
+        snapshot.status.mode = mode;
+        let joined = Case::new(View::Library, &snapshot).text();
+        assert!(
+            joined.contains(mode.name()),
+            "{mode:?} not shown:\n{joined}"
         );
     }
 }

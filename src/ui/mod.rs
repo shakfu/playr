@@ -382,6 +382,8 @@ impl App {
             KeyCode::Char('n') => self.player.send(Cmd::Next),
             KeyCode::Char('p') => self.player.send(Cmd::Prev),
             KeyCode::Char('x') => self.player.send(Cmd::Stop),
+            KeyCode::Char('m') => self.cycle_mode(true),
+            KeyCode::Char('M') => self.cycle_mode(false),
             KeyCode::Char('+') | KeyCode::Char('=') => self.nudge_volume(0.05),
             KeyCode::Char('-') | KeyCode::Char('_') => self.nudge_volume(-0.05),
             KeyCode::Right => self.player.send(Cmd::SeekBy(seek_step(&key))),
@@ -718,6 +720,19 @@ impl App {
         self.input = Input::Confirm(Confirm::DeletePlaylist(pl));
     }
 
+    /// Moves to the next playback mode, or the previous one.
+    fn cycle_mode(&mut self, forward: bool) {
+        // Not the snapshot: it is a frame old, so quick presses would repeat a step.
+        let current = self.player.mode();
+        let mode = if forward {
+            current.next()
+        } else {
+            current.prev()
+        };
+        self.player.send(Cmd::SetMode(mode));
+        self.notify(format!("mode: {}", mode.name()));
+    }
+
     fn nudge_volume(&mut self, delta: f32) {
         // Not the snapshot: it is a frame old, so quick presses would repeat a step.
         let v = (self.player.volume() + delta).clamp(0.0, 1.0);
@@ -763,6 +778,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ("space", "play or pause"),
     ("n p", "next or previous track"),
     ("x", "stop"),
+    (
+        "m M",
+        "next or previous mode: normal, shuffle, repeat, repeat one",
+    ),
     ("left right", "seek back or forward 5 seconds"),
     ("shift left right", "seek back or forward 30 seconds"),
     ("[ ]", "varispeed down or up a semitone"),
