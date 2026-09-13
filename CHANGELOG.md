@@ -2,7 +2,7 @@
 
 Notable changes to playr. Format follows [Keep a Changelog][https://keepachangelog.com/en/1.1.0/], versioning follows [Semantic Versioning][https://semver.org/spec/v2.0.0.html].
 
-## [Unreleased]
+## [0.3.2]
 
 ### Changed
 
