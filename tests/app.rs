@@ -423,7 +423,7 @@ fn quick_volume_presses_all_count() {
 }
 
 #[test]
-fn a_moves_the_cursor_down_so_a_run_takes_one_key_each() {
+fn a_toggles_a_track_and_moves_the_cursor_down() {
     let (mut app, _dir) = app();
     press(&mut app, '2');
     press(&mut app, 'c');
@@ -434,8 +434,16 @@ fn a_moves_the_cursor_down_so_a_run_takes_one_key_each() {
     assert_eq!(app.screen().message, Some("added to selection"));
     press(&mut app, 'a');
     assert_eq!(selection_paths(&mut app), ["/m/a.flac", "/m/b.flac"]);
-    // On the last row the cursor stays; the track is already selected.
+
+    // On the last row the cursor stays, so a second press unselects b.
     press(&mut app, 'a');
-    assert_eq!(app.screen().message, Some("already in selection"));
-    assert_eq!(selection_paths(&mut app), ["/m/a.flac", "/m/b.flac"]);
+    assert_eq!(app.screen().message, Some("removed from selection"));
+    assert_eq!(selection_paths(&mut app), ["/m/a.flac"]);
+
+    // Back on a: unselect it, and the cursor moves on to b, which is selected again.
+    press(&mut app, 'k');
+    press(&mut app, 'a');
+    assert!(selection_paths(&mut app).is_empty());
+    press(&mut app, 'a');
+    assert_eq!(selection_paths(&mut app), ["/m/b.flac"]);
 }

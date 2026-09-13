@@ -606,21 +606,20 @@ impl App {
         self.playing_source = self.player.queue();
     }
 
+    /// `a`: in the library, selects the track or unselects it if it was
+    /// selected; on a playlist, adds its tracks. Either way the cursor moves on.
     fn append_selection(&mut self) {
+        if self.view == View::Library {
+            return self.toggle_selected_track();
+        }
         let added: Vec<Track> = match self.view {
-            View::Library => self
-                .library_state
-                .selected()
-                .and_then(|i| self.visible().get(i).cloned())
-                .into_iter()
-                .collect(),
             View::Playlists => self
                 .playlist_state
                 .selected()
                 .and_then(|i| self.playlists.get(i))
                 .map(|pl| query::playlist_tracks(&self.conn, pl.id).unwrap_or_default())
                 .unwrap_or_default(),
-            View::Selection => return,
+            View::Library | View::Selection => return,
         };
         if added.is_empty() {
             return;
@@ -644,6 +643,36 @@ impl App {
         }
         // The tab already shows the total.
         self.notify("added to selection");
+    }
+
+    fn toggle_selected_track(&mut self) {
+        let Some(track) = self
+            .library_state
+            .selected()
+            .and_then(|i| self.visible().get(i).cloned())
+        else {
+            return;
+        };
+        if self.selection.iter().any(|t| t.path == track.path) {
+            // Every copy, so the track's marker goes with it.
+            self.selection.retain(|t| t.path != track.path);
+            let len = self.selection.len();
+            let cursor = self
+                .selection_state
+                .selected()
+                .map(|i| i.min(len.saturating_sub(1)));
+            self.selection_state
+                .select(if len == 0 { None } else { cursor });
+            self.notify("removed from selection");
+        } else {
+            self.selection.push(track);
+            if self.selection_state.selected().is_none() {
+                self.selection_state.select(Some(0));
+            }
+            self.notify("added to selection");
+        }
+        // On to the next row, so a run of tracks takes one key each.
+        self.move_selection(1);
     }
 
     fn remove_from_selection(&mut self) {
@@ -724,7 +753,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("enter", "play from here; in playlists, play it"),
     (
         "a",
-        "add to the selection: a track, or a whole playlist; move down",
+        "select or unselect a track, or add a playlist; move down",
     ),
     ("/", "search; esc clears"),
     ("s", "save the selection as a playlist"),

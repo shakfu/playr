@@ -2,6 +2,12 @@
 
 Notable changes to playr. Format follows [Keep a Changelog][https://keepachangelog.com/en/1.1.0/], versioning follows [Semantic Versioning][https://semver.org/spec/v2.0.0.html].
 
+## [0.3.3]
+
+### Changed
+
+- Library rows mark tracks in the selection with `+`, beside the `>` for the playing track, so the selection is visible without leaving the library. The mark uses the existing two-character gutter, so no column loses width. `a` on a marked track now unselects it; before, it reported the track as already selected, and removing it meant switching to the selection tab. `a` on a playlist still only adds.
+
 ## [0.3.2]
 
 ### Changed

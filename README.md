@@ -61,7 +61,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Search filters as you type
 
-- A selection to collect tracks into, edit and save as a playlist; it does not change what plays
+- A selection to collect tracks into, edit and save as a playlist; it does not change what plays, and its tracks are marked `+` in the library
 
 - Now playing shows title, artist, source rate and channels
 
@@ -122,7 +122,7 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 | `g` `G`, home/end        | jump to first or last                       |
 | page up/down             | move by ten                                 |
 | `enter`                  | play from here; in playlists, play it       |
-| `a`                      | add to the selection, then move down        |
+| `a`                      | select or unselect, then move down          |
 | `/`                      | search; `esc` clears                        |
 | `s`                      | save the selection; asks before overwriting |
 | `d`                      | remove from selection; delete a playlist    |
@@ -141,7 +141,7 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 
 Searching filters as you type, across title, artist, album and album artist. Pressing enter on the results plays them.
 
-Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty, `a` adds to it without interrupting playback, and `s` saves it as a playlist. A track already in the selection is not added again, though a playlist's own repeats are kept. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
+Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
 
 ### Varispeed
 

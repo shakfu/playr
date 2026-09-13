@@ -96,8 +96,8 @@ fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
     f.render_widget(tabs, area);
 }
 
-/// Fixed cost of a track row: 2 for the play marker, 1 space after each of the
-/// three text columns, 6 for the duration, 2 for the block borders.
+/// Fixed cost of a track row: 2 for the play and selection markers, 1 space
+/// after each of the three text columns, 6 for the duration, 2 for the borders.
 const ROW_OVERHEAD: usize = 13;
 
 /// Column widths, sized from the available space rather than fixed, so the
@@ -134,16 +134,27 @@ fn fit(s: &str, width: usize) -> String {
     out
 }
 
-fn track_line(t: &Track, width: u16, playing: bool, selected: bool) -> ListItem<'static> {
+/// One track row. `playing` marks it `>`, `marked` (in the selection) `+`, and
+/// `cursor` gives it the cursor row's dimmed colours.
+fn track_line(
+    t: &Track,
+    width: u16,
+    playing: bool,
+    marked: bool,
+    cursor: bool,
+) -> ListItem<'static> {
     let (aw, alw, tw) = columns(width);
-    let dim = if selected { DIM_SELECTED } else { DIM };
+    let dim = if cursor { DIM_SELECTED } else { DIM };
     let dur = t
         .duration_ms
         .map(|ms| fmt_time(std::time::Duration::from_millis(ms.max(0) as u64)))
         .unwrap_or_else(|| "-".into());
-    let marker = if playing { ">" } else { " " };
     let line = Line::from(vec![
-        Span::styled(format!("{marker} "), Style::default().fg(ACCENT)),
+        Span::styled(if playing { ">" } else { " " }, Style::default().fg(ACCENT)),
+        Span::styled(
+            if marked { "+" } else { " " },
+            Style::default().fg(Color::Yellow),
+        ),
         Span::styled(
             format!("{} ", fit(t.display_artist(), aw)),
             Style::default().fg(Color::Green),
@@ -203,6 +214,7 @@ fn draw_tracks(
     tracks: &[Track],
     state: &mut ListState,
     playing: impl Fn(usize, &Track) -> bool,
+    marked: impl Fn(&Track) -> bool,
 ) {
     let len = tracks.len();
     let selected = state.selected().map(|s| s.min(len.saturating_sub(1)));
@@ -217,7 +229,7 @@ fn draw_tracks(
         .enumerate()
         .map(|(i, t)| {
             let i = offset + i;
-            track_line(t, area.width, playing(i, t), selected == Some(i))
+            track_line(t, area.width, playing(i, t), marked(t), selected == Some(i))
         })
         .collect();
     let list = List::new(items).block(list_block(title)).highlight_style(
@@ -243,9 +255,17 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
         },
     };
 
-    draw_tracks(f, area, &title, tracks, app.library_state, |_, t| {
-        current.is_some_and(|p| p.as_os_str() == t.path.as_str())
-    });
+    let selected: std::collections::HashSet<&str> =
+        app.selection.iter().map(|t| t.path.as_str()).collect();
+    draw_tracks(
+        f,
+        area,
+        &title,
+        tracks,
+        app.library_state,
+        |_, t| current.is_some_and(|p| p.as_os_str() == t.path.as_str()),
+        |t| selected.contains(t.path.as_str()),
+    );
 
     if tracks.is_empty() {
         let hint = if app.results.is_some() {
@@ -264,9 +284,16 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
 fn draw_selection(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
     let status = &app.snapshot.status;
     let current = status.current();
-    draw_tracks(f, area, "", app.selection, app.selection_state, |_, t| {
-        current.is_some_and(|p| p.as_os_str() == t.path.as_str())
-    });
+    // Every row here is selected, so no row is marked.
+    draw_tracks(
+        f,
+        area,
+        "",
+        app.selection,
+        app.selection_state,
+        |_, t| current.is_some_and(|p| p.as_os_str() == t.path.as_str()),
+        |_| false,
+    );
 
     if app.selection.is_empty() {
         let inner = area.inner(ratatui::layout::Margin {

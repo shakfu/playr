@@ -820,3 +820,39 @@ fn a_quiet_signal_stays_green() {
         }
     }
 }
+
+// --- selection marker ---
+
+#[test]
+fn selected_tracks_are_marked_in_the_library_but_not_in_the_selection() {
+    let all = vec![
+        track("Alpha", "A", "X", 60),
+        track("Bravo", "A", "X", 60),
+        track("Charlie", "A", "X", 60),
+    ];
+    let selection = vec![all[0].clone(), all[2].clone()];
+    let mut snapshot = stopped();
+    snapshot.status.state = State::Playing;
+    snapshot.status.queue = vec![std::path::PathBuf::from(&all[0].path)].into();
+
+    let lines = Case::new(View::Library, &snapshot)
+        .all(&all)
+        .selection(&selection)
+        .render();
+    // Row 2 onwards are the tracks; the gutter is the two cells after the border.
+    let gutter = |row: usize| lines[row].chars().skip(1).take(2).collect::<String>();
+    assert_eq!(gutter(2), ">+", "playing and selected: {:?}", lines[2]);
+    assert_eq!(gutter(3), "  ", "neither: {:?}", lines[3]);
+    assert_eq!(gutter(4), " +", "selected: {:?}", lines[4]);
+
+    let lines = Case::new(View::Selection, &snapshot)
+        .selection(&selection)
+        .render();
+    for row in [2, 3] {
+        assert!(
+            !lines[row].contains('+'),
+            "marked in the selection: {:?}",
+            lines[row]
+        );
+    }
+}
