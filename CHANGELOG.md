@@ -2,6 +2,20 @@
 
 Notable changes to playr. Format follows [Keep a Changelog][https://keepachangelog.com/en/1.1.0/], versioning follows [Semantic Versioning][https://semver.org/spec/v2.0.0.html].
 
+## [0.3.1]
+
+### Added
+
+- A level meter on the bottom line, while playing: momentary loudness in LUFS per ITU-R BS.1770-4, over 400 ms, with the sample peak held for 1.5 s on the same bar. The bar takes the free width of the line, and a message borrows it while it shows. It is measured as audio leaves playr, so it matches what is heard rather than the decoder, which runs ahead. It reads the recording before the volume setting. On a 1 kHz test tone it agrees with ffmpeg's `ebur128` filter to 0.1 LU.
+
+### Changed
+
+- Panes no longer repeat the view name and count that the tabs show. The library pane has a title only while searching: the prompt as you type, then a reminder that `esc` clears the results.
+
+### Fixed
+
+- Pressing `+` or `-` quickly changed the volume by one step, however many times the key was pressed. Each press added to the volume shown in the last frame, which updates five times a second.
+
 ## [0.3.0]
 
 ### Added

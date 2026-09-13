@@ -16,6 +16,7 @@ use cpal::{
 };
 
 use super::decode::Spec;
+use super::meter::Meter;
 
 /// How much audio the ring holds. Two seconds is enough to ride out scheduler
 /// jitter and a slow disk without making seek feel laggy.
@@ -279,6 +280,10 @@ pub struct Shared {
     pub flush_requested: AtomicU64,
     /// The last `flush_requested` value the callback has acted on.
     pub flush_done: AtomicU64,
+    /// Momentary loudness of what was last played, in LUFS, as f32 bits.
+    momentary_bits: AtomicU32,
+    /// Largest sample magnitude played since it was last taken, as f32 bits.
+    peak_bits: AtomicU32,
 }
 
 impl Shared {
@@ -293,7 +298,20 @@ impl Shared {
             speed_bits: AtomicU32::new(1.0f32.to_bits()),
             flush_requested: AtomicU64::new(0),
             flush_done: AtomicU64::new(0),
+            momentary_bits: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
+            peak_bits: AtomicU32::new(0),
         }
+    }
+
+    /// Momentary loudness in LUFS, or `None` below [`meter::SILENCE_LUFS`](super::meter::SILENCE_LUFS).
+    pub fn loudness(&self) -> Option<f32> {
+        let lufs = f32::from_bits(self.momentary_bits.load(Ordering::Relaxed));
+        (lufs >= super::meter::SILENCE_LUFS).then_some(lufs)
+    }
+
+    /// The largest sample magnitude played since the last call, which resets it.
+    pub fn take_peak(&self) -> f32 {
+        f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed))
     }
 
     pub fn volume(&self) -> f32 {
@@ -383,10 +401,11 @@ where
     T: cpal::SizedSample + Send + 'static,
 {
     let channels = config.channels as u64;
+    let mut meter = Meter::new(config.sample_rate, config.channels);
     device
         .build_output_stream::<T, _, _>(
             *config,
-            move |out: &mut [T], _| render(out, &mut consumer, &shared, channels, conv),
+            move |out: &mut [T], _| render(out, &mut consumer, &shared, &mut meter, channels, conv),
             // Printing here would draw over the interface.
             move |e| {
                 let _ = events.send(e.into());
@@ -396,15 +415,17 @@ where
         .map_err(|e| OutputError::Build(e.to_string()))
 }
 
-/// Fills `out` from the ring, and counts the frames played.
+/// Fills `out` from the ring, meters it, and counts the frames played.
 ///
 /// The body of every output callback, so it must not lock or allocate. It
 /// emits silence while paused, and on underrun rather than repeating stale
-/// samples, which would click.
+/// samples, which would click. Metering is before the volume, so it describes
+/// the recording rather than the volume setting.
 pub fn render<T>(
     out: &mut [T],
     consumer: &mut rtrb::Consumer<f32>,
     shared: &Shared,
+    meter: &mut Meter,
     channels: u64,
     conv: fn(f32) -> T,
 ) {
@@ -425,14 +446,27 @@ pub fn render<T>(
     let gain = shared.volume();
     let mut filled = 0usize;
     for slot in out.iter_mut() {
-        match consumer.pop() {
+        let s = match consumer.pop() {
             Ok(s) => {
-                *slot = conv(s * gain);
                 filled += 1;
+                s
             }
-            Err(_) => *slot = conv(0.0),
+            Err(_) => 0.0,
+        };
+        if let Some(lufs) = meter.sample(s) {
+            shared
+                .momentary_bits
+                .store(lufs.to_bits(), Ordering::Relaxed);
         }
+        *slot = conv(s * gain);
     }
+    let peak = meter.take_peak();
+    // The reader resets it to zero, so a plain store could undo a higher peak.
+    let _ = shared
+        .peak_bits
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
+            (peak > f32::from_bits(bits)).then_some(peak.to_bits())
+        });
     shared
         .frames_out
         .fetch_add(filled as u64 / channels, Ordering::Relaxed);

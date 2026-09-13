@@ -100,6 +100,8 @@ pub struct App {
     seen_error: u64,
     /// Playing index the queue cursor was last moved to.
     followed: Option<usize>,
+    /// The peak shown, as a sample magnitude, and when it was reached.
+    peak_hold: Option<(f32, Instant)>,
 
     /// One snapshot of the player per frame.
     ///
@@ -140,6 +142,10 @@ pub struct Snapshot {
     pub status: Status,
     pub position: Duration,
     pub volume: f32,
+    /// Momentary loudness in LUFS; `None` for silence.
+    pub loudness: Option<f32>,
+    /// The highest recent sample peak in dBFS, held for [`PEAK_HOLD`].
+    pub peak: Option<f32>,
 }
 
 impl App {
@@ -166,6 +172,7 @@ impl App {
             quit: false,
             seen_error: 0,
             followed: None,
+            peak_hold: None,
             snapshot: Snapshot::default(),
         };
         if !queue.is_empty() {
@@ -265,10 +272,13 @@ impl App {
     /// Samples the player for the next frame, and shows any new error once.
     pub fn refresh(&mut self) {
         self.follow_player_queue();
+        self.peak_hold = hold_peak(self.peak_hold, self.player.take_peak(), Instant::now());
         self.snapshot = Snapshot {
             status: self.player.status(),
             position: self.player.position(),
             volume: self.player.volume(),
+            loudness: self.player.loudness(),
+            peak: self.peak_hold.map(|(p, _)| 20.0 * p.log10()),
         };
         let seq = self.snapshot.status.error_seq;
         if seq > self.seen_error {
@@ -625,7 +635,8 @@ impl App {
     }
 
     fn nudge_volume(&mut self, delta: f32) {
-        let v = (self.snapshot.volume + delta).clamp(0.0, 1.0);
+        // Not the snapshot: it is a frame old, so quick presses would repeat a step.
+        let v = (self.player.volume() + delta).clamp(0.0, 1.0);
         self.player.send(Cmd::SetVolume(v));
     }
 }
@@ -677,6 +688,23 @@ fn typed(key: &KeyEvent) -> Option<char> {
             Some(c)
         }
         _ => None,
+    }
+}
+
+/// How long the meter keeps showing a peak after it passes.
+pub const PEAK_HOLD: Duration = Duration::from_millis(1500);
+
+/// The peak to show, given the one `held` and a new `reading`, both as sample
+/// magnitudes. A higher reading replaces the held peak at once; a lower one
+/// only once the held peak is [`PEAK_HOLD`] old.
+pub fn hold_peak(
+    held: Option<(f32, Instant)>,
+    reading: f32,
+    now: Instant,
+) -> Option<(f32, Instant)> {
+    match held {
+        Some((level, at)) if level >= reading && now.duration_since(at) < PEAK_HOLD => held,
+        _ => (reading > 0.0).then_some((reading, now)),
     }
 }
 

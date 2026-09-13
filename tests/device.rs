@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::{fake_player as player, levels, silence, Control};
+use common::{fake_player as player, levels, silence, tone, Control};
 use playr::audio::output::DeviceEvent;
 use playr::audio::{Cmd, Player, State, Status};
 
@@ -217,4 +217,30 @@ fn quick_seeks_add_up() {
         pos > Duration::from_millis(6000) && pos < Duration::from_millis(7000),
         "position {pos:?} after three 2 s seeks"
     );
+}
+
+#[test]
+fn the_meter_reads_the_recording_not_the_volume() {
+    let (player, _control) = player();
+    let dir = tempfile::tempdir().unwrap();
+    let track = dir.path().join("tone.wav");
+    tone(&track, 44100, 5.0, -23.0);
+    // A quarter volume is 12 dB down; the meter must not see it.
+    player.send(Cmd::SetVolume(0.25));
+    player.send(Cmd::Play(vec![track], 0));
+    wait_for(&player, |_| player.position() > Duration::from_millis(800));
+
+    let lufs = player.loudness().expect("no loudness while playing");
+    assert!((lufs + 23.0).abs() < 0.2, "read {lufs} LUFS");
+    let peak = 20.0 * player.take_peak().log10();
+    assert!((peak + 23.0).abs() < 0.2, "peak {peak} dBFS");
+    assert_eq!(player.take_peak(), 0.0, "taking the peak did not reset it");
+}
+
+#[test]
+fn silence_has_no_loudness() {
+    let (player, _control, _dir) = playing();
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(player.loudness(), None);
+    assert_eq!(player.take_peak(), 0.0);
 }

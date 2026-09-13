@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{fake_player, silence, skip};
+use common::{fake_player, levels, silence, skip};
 use playr::audio::{Cmd, Player, State, Status};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -193,11 +193,24 @@ fn near_the_end_of_a_track(secs: &[f32]) -> (Player, tempfile::TempDir) {
 
 #[test]
 fn a_seek_near_the_end_of_a_track_stays_in_that_track() {
-    let (player, _dir) = near_the_end_of_a_track(&[2.0, 6.0]);
-    let sought = Instant::now();
+    // Each track holds its own level, so what played can be counted from the
+    // device's output rather than timed: the fake plays slower under load.
+    let (player, control) = fake_player();
+    let dir = tempfile::tempdir().unwrap();
+    let (first, second) = (dir.path().join("0.wav"), dir.path().join("1.wav"));
+    levels(&first, 44100, &[(2.0, 0.25)]);
+    levels(&second, 44100, &[(6.0, -0.25)]);
+    player.send(Cmd::Play(vec![first, second], 0));
+    // The decoder leads by just over a second, so by 1.4 s the first track
+    // has been read to its end and the second is staged.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while player.position() < Duration::from_millis(1400) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(player.status().index, 0, "first track ended too soon");
+
     player.send(Cmd::Seek(Duration::from_millis(500)));
     std::thread::sleep(Duration::from_millis(100));
-
     let s = player.status();
     assert_eq!(s.index, 0);
     assert!(
@@ -207,12 +220,15 @@ fn a_seek_near_the_end_of_a_track_stays_in_that_track() {
     );
     assert!(player.position() < Duration::from_secs(1));
 
-    // 1.5 s of the first track, then 6 s of the second. Seeking the second
-    // track instead plays 5.5 s of it, then all 6 s again.
     let s = wait_for(&player, |s| s.state == State::Stopped);
     assert_eq!(s.state, State::Stopped);
-    let took = sought.elapsed();
-    assert!(took < Duration::from_millis(9500), "played for {took:?}");
+    // Seeking the second track instead played 5.5 s of it, then all 6 s again.
+    let played = control.played.lock().unwrap();
+    let second_secs = played.iter().filter(|v| **v < -0.2).count() as f64 / 2.0 / 44100.0;
+    assert!(
+        (second_secs - 6.0).abs() < 0.1,
+        "the second track played for {second_secs:.2} s"
+    );
 }
 
 #[test]

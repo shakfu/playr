@@ -7,6 +7,7 @@
 
 pub mod convert;
 pub mod decode;
+pub mod meter;
 #[cfg(feature = "opus")]
 pub mod opus;
 pub mod output;
@@ -191,6 +192,8 @@ impl Player {
                 status.queue = status.queue.iter().cloned().chain(paths).collect();
                 Msg::Enqueue(status.queue.clone())
             }
+            // Set here, so the next `volume` call sees it even before the engine runs.
+            Cmd::SetVolume(v) => return self.shared.set_volume(v),
             cmd => Msg::Cmd(cmd),
         };
         // Under the lock, so the engine receives changes in the order they were made.
@@ -222,6 +225,16 @@ impl Player {
 
     pub fn volume(&self) -> f32 {
         self.shared.volume()
+    }
+
+    /// Momentary loudness of what is playing, in LUFS; `None` for silence.
+    pub fn loudness(&self) -> Option<f32> {
+        self.shared.loudness()
+    }
+
+    /// The largest sample magnitude played since the last call, which resets it.
+    pub fn take_peak(&self) -> f32 {
+        self.shared.take_peak()
     }
 }
 
@@ -447,7 +460,8 @@ impl Engine {
                 let target = (cur + delta as f64).max(0.0);
                 self.seek(Duration::from_secs_f64(target));
             }
-            Cmd::SetVolume(v) => self.shared.set_volume(v),
+            // Applied by `Player::send`, which never forwards it.
+            Cmd::SetVolume(_) => {}
             Cmd::SpeedBy(delta) => self.set_semitones(self.semitones + delta),
             Cmd::SpeedReset => self.set_semitones(0),
             Cmd::Quit => {}

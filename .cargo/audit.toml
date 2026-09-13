@@ -1,0 +1,10 @@
+# cargo-audit configuration.
+
+[advisories]
+ignore = [
+    # paste is unmaintained. lofty uses it as a compile-time macro, so it adds no
+    # code to the binary, and lofty has declined to replace it:
+    # https://github.com/Serial-ATA/lofty-rs/pull/625
+    # Revisit if lofty drops paste or an advisory reports a flaw in it.
+    "RUSTSEC-2024-0436",
+]

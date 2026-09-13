@@ -275,3 +275,19 @@ fn shift_arrows_seek_further_than_arrows() {
     let after_back = position_after(&mut app, KeyCode::Left, KeyModifiers::SHIFT);
     assert!((5.0..7.0).contains(&after_back), "shift-left: {after_back}");
 }
+
+#[test]
+fn quick_volume_presses_all_count() {
+    // Between frames the snapshot is stale, so each press must start from
+    // the volume the one before it set.
+    let (mut app, _dir) = app();
+    for _ in 0..10 {
+        press(&mut app, '-');
+    }
+    app.refresh();
+    let volume = app.screen().snapshot.volume;
+    assert!(
+        (volume - 0.5).abs() < 1e-3,
+        "volume {volume} after ten steps down"
+    );
+}

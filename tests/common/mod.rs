@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cpal::SampleFormat;
+use playr::audio::meter::Meter;
 use playr::audio::output::{render, Backend, DeviceEvent, OutputError, Plan, Shared};
 use playr::audio::{Player, Spec};
 
@@ -44,6 +45,19 @@ pub fn silence(path: &Path, rate: u32, secs: f32) {
     levels(path, rate, &[(secs, 0.0)]);
 }
 
+/// Writes `secs` of a 16-bit stereo 1 kHz sine at `dbfs` peak, at `rate`.
+pub fn tone(path: &Path, rate: u32, secs: f32, dbfs: f32) {
+    let amplitude = 10f32.powf(dbfs / 20.0);
+    let pcm: Vec<u8> = (0..(rate as f32 * secs) as usize)
+        .flat_map(|i| {
+            let v = amplitude * (std::f32::consts::TAU * 1000.0 * i as f32 / rate as f32).sin();
+            let sample = ((v * i16::MAX as f32).round() as i16).to_le_bytes();
+            [sample, sample].concat()
+        })
+        .collect();
+    write_wav(path, rate, pcm);
+}
+
 /// Writes 16-bit stereo WAV at `rate`: each `(secs, level)` holds one constant level.
 pub fn levels(path: &Path, rate: u32, parts: &[(f32, f32)]) {
     let pcm: Vec<u8> = parts
@@ -53,6 +67,11 @@ pub fn levels(path: &Path, rate: u32, parts: &[(f32, f32)]) {
             std::iter::repeat_n([sample, sample].concat(), (rate as f32 * secs) as usize).flatten()
         })
         .collect();
+    write_wav(path, rate, pcm);
+}
+
+/// Writes interleaved 16-bit stereo `pcm` at `rate` as a WAV file.
+fn write_wav(path: &Path, rate: u32, pcm: Vec<u8>) {
     let data = pcm.len() as u32;
     let mut wav = Vec::new();
     wav.extend_from_slice(b"RIFF");
@@ -136,12 +155,14 @@ impl Backend for Fake {
         std::thread::spawn(move || {
             // 10 ms of audio every 10 ms, as a device pulls it.
             let mut buf = vec![0.0f32; (plan.rate / 100) as usize * plan.channels as usize];
+            let mut meter = Meter::new(plan.rate, plan.channels);
             while alive.load(Ordering::Relaxed) {
                 if !control.stall.load(Ordering::Relaxed) {
                     render(
                         &mut buf,
                         &mut consumer,
                         &shared,
+                        &mut meter,
                         plan.channels as u64,
                         |v| v,
                     );

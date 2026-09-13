@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, 
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use super::{fmt_time, state_glyph, Input, Screen, View, KEYS};
+use super::{fmt_time, state_glyph, Input, Screen, Snapshot, View, KEYS};
 use crate::audio::State;
 use crate::db::Track;
 
@@ -158,14 +158,18 @@ fn track_line(t: &Track, width: u16, playing: bool, selected: bool) -> ListItem<
     ListItem::new(line)
 }
 
+/// A bordered pane, titled unless `title` is empty.
 fn list_block(title: &str) -> Block<'_> {
-    Block::default()
+    let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DIM))
-        .title(Span::styled(
-            format!(" {title} "),
-            Style::default().fg(ACCENT),
-        ))
+        .border_style(Style::default().fg(DIM));
+    if title.is_empty() {
+        return block;
+    }
+    block.title(Span::styled(
+        format!(" {title} "),
+        Style::default().fg(ACCENT),
+    ))
 }
 
 /// First row to show so that `selected` is on screen, moving as little as
@@ -230,10 +234,12 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
     let tracks = app.results.unwrap_or(app.all);
 
     let title = match app.input {
+        // The tabs already name the view and count it; a title says only
+        // what they do not.
         Input::Search(q) => format!("Search: {q}_"),
         _ => match app.results {
-            Some(r) => format!("Results ({})", r.len()),
-            None => format!("Library ({})", app.all.len()),
+            Some(_) => "Search results (esc clears)".to_string(),
+            None => String::new(),
         },
     };
 
@@ -257,8 +263,7 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
 
 fn draw_queue(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
     let status = &app.snapshot.status;
-    let title = format!("Queue ({})", app.queue.len());
-    draw_tracks(f, area, &title, app.queue, app.queue_state, |i, _| {
+    draw_tracks(f, area, "", app.queue, app.queue_state, |i, _| {
         i == status.index && status.state != State::Stopped
     });
 
@@ -295,8 +300,7 @@ fn draw_playlists(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
         })
         .collect();
     let empty = items.is_empty();
-    let title = format!("Playlists ({})", app.playlists.len());
-    let list = List::new(items).block(list_block(&title)).highlight_style(
+    let list = List::new(items).block(list_block("")).highlight_style(
         Style::default()
             .bg(SELECTED_BG)
             .add_modifier(Modifier::BOLD),
@@ -395,24 +399,86 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         return;
     }
 
-    let indicators = indicators(status.semitones, app.snapshot.volume);
+    let playing = status.state == State::Playing;
+    let indicators = indicators(status.semitones, app.snapshot, playing);
     let [left, right] = Layout::horizontal([
         Constraint::Min(0),
         Constraint::Length(indicators.width() as u16),
     ])
     .areas(hints);
+    // The bar takes whatever the indicators leave, less a space before them;
+    // a message borrows that space while it shows.
     if let Some(msg) = app.message {
         f.render_widget(
             Paragraph::new(Span::styled(msg, Style::default().fg(Color::Yellow))),
             left,
         );
+    } else if playing {
+        let cells = (left.width as usize).saturating_sub(3);
+        if cells > 0 {
+            let bar = level_bar(app.snapshot.loudness, app.snapshot.peak, cells);
+            f.render_widget(
+                Paragraph::new(Span::styled(bar, Style::default().fg(DIM))),
+                left,
+            );
+        }
     }
     f.render_widget(Paragraph::new(indicators), right);
 }
 
-/// Speed when it is not normal, a volume meter, and the help key.
-fn indicators(semitones: i32, volume: f32) -> Line<'static> {
+/// Lowest level the loudness bar shows, in dB relative to full scale.
+const METER_FLOOR_DB: f32 = -40.0;
+/// Cells in the volume bar.
+const VOLUME_CELLS: usize = 10;
+
+/// Cells of `cells` that a level of `db` fills, from the floor to full scale.
+fn meter_cells(db: f32, cells: usize) -> usize {
+    let fraction = (db - METER_FLOOR_DB) / -METER_FLOOR_DB;
+    (fraction * cells as f32).round().clamp(0.0, cells as f32) as usize
+}
+
+/// The loudness bar, `cells` wide, with the held peak marked on the same scale.
+///
+/// LUFS and dBFS are both relative to full scale, so one bar can show both.
+fn level_bar(loudness: Option<f32>, peak: Option<f32>, cells: usize) -> String {
+    let fill = loudness.map_or(0, |l| meter_cells(l, cells));
+    let marker = peak
+        .map(|p| meter_cells(p, cells))
+        .filter(|c| *c > 0)
+        .map(|c| c - 1);
+    let bar: String = (0..cells)
+        .map(|i| match i {
+            _ if Some(i) == marker => '|',
+            _ if i < fill => '#',
+            _ => '-',
+        })
+        .collect();
+    format!("[{bar}]")
+}
+
+/// Loudness and held peak as numbers.
+fn level_readout(loudness: Option<f32>, peak: Option<f32>) -> Vec<Span<'static>> {
+    let lufs = loudness.map_or("   --".into(), |l| format!("{l:>5.1}"));
+    let pk = peak.map_or("   --".into(), |p| format!("{p:>5.1}"));
+    // At full scale the source itself is clipping; playr's gain never exceeds 1.
+    let clipping = peak.is_some_and(|p| p >= -0.1);
+    vec![
+        Span::styled(format!("{lufs} LUFS  "), Style::default().fg(DIM)),
+        Span::styled(
+            format!("pk {pk}  "),
+            Style::default().fg(if clipping { Color::Red } else { DIM }),
+        ),
+    ]
+}
+
+/// The level readout while playing, speed when it is not normal, the volume,
+/// and the help key. The readout comes first, next to its bar.
+fn indicators(semitones: i32, snapshot: &Snapshot, playing: bool) -> Line<'static> {
+    let volume = snapshot.volume;
     let mut spans = Vec::new();
+    if playing {
+        spans.extend(level_readout(snapshot.loudness, snapshot.peak));
+    }
     // Only shown when it is not normal, so the usual case stays uncluttered.
     if semitones != 0 {
         let speed = crate::audio::speed_for(semitones);
@@ -421,12 +487,12 @@ fn indicators(semitones: i32, volume: f32) -> Line<'static> {
             Style::default().fg(Color::Yellow),
         ));
     }
-    let filled = (volume.clamp(0.0, 1.0) * 10.0).round() as usize;
+    let filled = (volume.clamp(0.0, 1.0) * VOLUME_CELLS as f32).round() as usize;
     spans.push(Span::styled(
         format!(
             "vol [{}{}] {:>3.0}%",
             "#".repeat(filled),
-            "-".repeat(10 - filled),
+            "-".repeat(VOLUME_CELLS - filled),
             volume * 100.0
         ),
         Style::default().fg(DIM),

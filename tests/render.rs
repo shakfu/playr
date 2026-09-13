@@ -27,6 +27,7 @@ struct Case<'a> {
     view: View,
     snapshot: &'a Snapshot,
     all: &'a [Track],
+    results: Option<&'a [Track]>,
     queue: &'a [Track],
     playlists: &'a [Playlist],
     input: &'a Input,
@@ -43,6 +44,7 @@ impl<'a> Case<'a> {
             view,
             snapshot,
             all: &[],
+            results: None,
             queue: &[],
             playlists: &[],
             input: &Input::None,
@@ -55,6 +57,11 @@ impl<'a> Case<'a> {
 
     fn all(mut self, v: &'a [Track]) -> Self {
         self.all = v;
+        self
+    }
+
+    fn results(mut self, v: &'a [Track]) -> Self {
+        self.results = Some(v);
         self
     }
 
@@ -132,7 +139,7 @@ impl<'a> Case<'a> {
                     view: self.view,
                     snapshot: self.snapshot,
                     all: self.all,
-                    results: None,
+                    results: self.results,
                     queue: self.queue,
                     playlists: self.playlists,
                     input: self.input,
@@ -159,6 +166,7 @@ fn stopped() -> Snapshot {
         status: Status::default(),
         position: Duration::ZERO,
         volume: 0.8,
+        ..Default::default()
     }
 }
 
@@ -288,6 +296,7 @@ fn now_playing_shows_title_position_and_source_format() {
         },
         position: Duration::from_secs(151),
         volume: 0.75,
+        ..Default::default()
     };
     let joined = Case::new(View::Queue, &snapshot).queue(&queue).text();
     assert!(joined.contains("So What"), "title missing:\n{joined}");
@@ -614,4 +623,179 @@ fn help_lists_every_key() {
             "{keys:?} missing from help:\n{joined}"
         );
     }
+}
+
+// --- level meter ---
+
+fn playing(loudness: Option<f32>, peak: Option<f32>) -> Snapshot {
+    let mut snapshot = stopped();
+    snapshot.status.state = State::Playing;
+    snapshot.loudness = loudness;
+    snapshot.peak = peak;
+    snapshot
+}
+
+/// The last non-blank line of a frame `width` wide.
+fn bottom_line(snapshot: &Snapshot, width: u16, message: Option<&str>) -> String {
+    let mut case = Case::new(View::Library, snapshot).size(width, 12);
+    if let Some(m) = message {
+        case = case.message(m);
+    }
+    case.render()
+        .into_iter()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_default()
+}
+
+/// The loudness bar's cells, between the first `[` and `]` on `line`.
+fn bar_of(line: &str) -> &str {
+    let open = line.find('[').expect("no bar");
+    let close = line[open..].find(']').expect("no bar end") + open;
+    &line[open + 1..close]
+}
+
+#[test]
+fn the_loudness_bar_fills_the_free_space_on_the_bottom_line() {
+    let snapshot = playing(Some(-18.2), Some(-3.1));
+    let narrow = bottom_line(&snapshot, 100, None);
+    let wide = bottom_line(&snapshot, 160, None);
+    let (narrow_cells, wide_cells) = (bar_of(&narrow).len(), bar_of(&wide).len());
+    assert!(
+        narrow_cells > 40,
+        "{narrow_cells} cells at 100 columns: {narrow:?}"
+    );
+    assert_eq!(
+        wide_cells,
+        narrow_cells + 60,
+        "the bar did not grow with the line"
+    );
+    assert!(
+        narrow.contains("] -18.2 LUFS  pk  -3.1"),
+        "readout not beside the bar: {narrow:?}"
+    );
+    assert!(
+        narrow.contains("vol [########--]"),
+        "volume missing: {narrow:?}"
+    );
+}
+
+#[test]
+fn the_bar_fill_and_peak_marker_follow_the_level() {
+    let line = bottom_line(&playing(Some(-18.2), Some(-3.1)), 120, None);
+    let bar = bar_of(&line);
+    let cells = bar.len() as f32;
+    // -40 dB to 0 across the bar: -18.2 LUFS fills 54.5%, the -3.1 peak sits at 92.25%.
+    let filled = bar.chars().filter(|c| *c == '#').count();
+    assert_eq!(filled, (0.545 * cells).round() as usize, "{bar}");
+    assert_eq!(
+        bar.find('|'),
+        Some((0.9225 * cells).round() as usize - 1),
+        "{bar}"
+    );
+}
+
+#[test]
+fn the_meter_is_hidden_unless_playing() {
+    let joined = Case::new(View::Library, &stopped()).text();
+    assert!(
+        !joined.contains("LUFS"),
+        "meter shown while stopped:\n{joined}"
+    );
+}
+
+#[test]
+fn silence_shows_an_empty_meter() {
+    let line = bottom_line(&playing(None, None), 100, None);
+    assert!(bar_of(&line).chars().all(|c| c == '-'), "{line:?}");
+    assert!(line.contains("]    -- LUFS  pk    --"), "{line:?}");
+}
+
+#[test]
+fn a_message_takes_the_bars_place_and_the_readout_stays() {
+    let line = bottom_line(
+        &playing(Some(-18.2), Some(-3.1)),
+        100,
+        Some("queued 3 track(s)"),
+    );
+    assert!(line.contains("queued 3 track(s)"), "{line:?}");
+    assert!(line.contains("-18.2 LUFS"), "readout hidden: {line:?}");
+    // The volume bar is the only bracketed bar left.
+    assert_eq!(line.matches('[').count(), 1, "bar still drawn: {line:?}");
+}
+
+#[test]
+fn the_meter_never_overflows_a_narrow_terminal() {
+    let snapshot = playing(Some(-18.2), Some(-3.1));
+    for width in [30u16, 50, 70] {
+        let lines = Case::new(View::Library, &snapshot).size(width, 12).render();
+        for line in lines {
+            assert!(
+                line.chars().count() <= width as usize,
+                "overflow at {width}: {line:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_peak_is_held_then_released() {
+    use playr::ui::{hold_peak, PEAK_HOLD};
+    use std::time::Instant;
+    let start = Instant::now();
+    let held = hold_peak(None, 0.9, start);
+    assert_eq!(held, Some((0.9, start)));
+    // A lower reading inside the hold keeps the peak.
+    let soon = start + PEAK_HOLD / 2;
+    assert_eq!(hold_peak(held, 0.2, soon), held);
+    // A higher one replaces it at once.
+    assert_eq!(hold_peak(held, 0.95, soon), Some((0.95, soon)));
+    // Once the hold has passed, the current reading shows.
+    let later = start + PEAK_HOLD;
+    assert_eq!(hold_peak(held, 0.2, later), Some((0.2, later)));
+    assert_eq!(hold_peak(held, 0.0, later), None);
+}
+
+// --- pane titles ---
+
+#[test]
+fn panes_do_not_repeat_the_tabs() {
+    let tracks = vec![track("So What", "Miles Davis", "Kind of Blue", 545)];
+    let playlists = vec![Playlist {
+        id: 1,
+        name: "late".into(),
+        len: 1,
+    }];
+    for view in [View::Library, View::Queue, View::Playlists] {
+        let lines = Case::new(view, &stopped())
+            .all(&tracks)
+            .queue(&tracks)
+            .playlists(&playlists)
+            .render();
+        // Row 0 is the tabs; row 1 is the pane's top border.
+        assert!(
+            lines[0].contains("Library 1"),
+            "tabs lost their counts: {:?}",
+            lines[0]
+        );
+        assert!(
+            lines[1].chars().all(|c| !c.is_alphanumeric()),
+            "{view:?} pane is titled: {:?}",
+            lines[1]
+        );
+    }
+}
+
+#[test]
+fn search_results_say_how_to_leave_them() {
+    let tracks = vec![track("So What", "Miles Davis", "Kind of Blue", 545)];
+    let lines = Case::new(View::Library, &stopped())
+        .all(&tracks)
+        .results(&tracks)
+        .render();
+    assert!(
+        lines[1].contains("Search results (esc clears)"),
+        "{:?}",
+        lines[1]
+    );
 }

@@ -63,7 +63,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Queue cursor follows playback, so the playing track stays on screen
 
-- Now playing shows title, artist, source rate, channels, volume and speed
+- Now playing shows title, artist, source rate and channels
 
 - Progress bar with elapsed and total time
 
@@ -71,7 +71,9 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Vim and arrow key navigation
 
-- `?` lists every key; the bottom line shows speed, a volume meter and messages
+- `?` lists every key; the bottom line shows messages, speed, volume, and a level meter
+
+- The level meter reads momentary loudness in LUFS (ITU-R BS.1770, 400 ms) and holds the sample peak for 1.5 s. It measures the recording before the volume setting, and marks the peak red at full scale
 
 ## Install
 
