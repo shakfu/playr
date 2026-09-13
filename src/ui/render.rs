@@ -33,7 +33,7 @@ pub fn draw(app: &mut Screen<'_>, f: &mut Frame) {
     draw_tabs(app, f, tabs_area);
     match app.view {
         View::Library => draw_library(app, f, body),
-        View::Queue => draw_queue(app, f, body),
+        View::Selection => draw_selection(app, f, body),
         View::Playlists => draw_playlists(app, f, body),
     }
     draw_bar(app, f, bar);
@@ -75,17 +75,17 @@ fn draw_help(f: &mut Frame, area: Rect) {
 }
 
 fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
-    let titles = [View::Library, View::Queue, View::Playlists].map(|v| {
+    let titles = [View::Library, View::Selection, View::Playlists].map(|v| {
         let n = match v {
             View::Library => app.visible().len(),
-            View::Queue => app.queue.len(),
+            View::Selection => app.selection.len(),
             View::Playlists => app.playlists.len(),
         };
         format!(" {} {} ", v.title(), n)
     });
     let selected = match app.view {
         View::Library => 0,
-        View::Queue => 1,
+        View::Selection => 1,
         View::Playlists => 2,
     };
     let tabs = Tabs::new(titles.to_vec())
@@ -261,19 +261,20 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
     }
 }
 
-fn draw_queue(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
+fn draw_selection(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
     let status = &app.snapshot.status;
-    draw_tracks(f, area, "", app.queue, app.queue_state, |i, _| {
-        i == status.index && status.state != State::Stopped
+    let current = status.current();
+    draw_tracks(f, area, "", app.selection, app.selection_state, |_, t| {
+        current.is_some_and(|p| p.as_os_str() == t.path.as_str())
     });
 
-    if app.queue.is_empty() {
+    if app.selection.is_empty() {
         let inner = area.inner(ratatui::layout::Margin {
             horizontal: 2,
             vertical: 1,
         });
         f.render_widget(
-            Paragraph::new("Queue is empty. Press Enter in the library to play from there.")
+            Paragraph::new("Selection is empty. Press a in the library to add tracks, then s to save them as a playlist.")
                 .style(Style::default().fg(DIM)),
             inner,
         );
@@ -313,7 +314,7 @@ fn draw_playlists(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
             vertical: 1,
         });
         f.render_widget(
-            Paragraph::new("No playlists. Build a queue, then press s to save it.")
+            Paragraph::new("No playlists. Build a selection, then press s to save it.")
                 .style(Style::default().fg(DIM)),
             inner,
         );
@@ -335,9 +336,9 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         vertical: 0,
     }));
 
-    // Prefer the tagged title from the queue over the bare file name.
+    // Prefer the tagged title from the playing list over the bare file name.
     let label = app
-        .queue
+        .playing
         .get(status.index)
         .map(|t| format!("{} - {}", t.display_title(), t.display_artist()))
         .or_else(|| {

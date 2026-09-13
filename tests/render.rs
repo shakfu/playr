@@ -28,13 +28,14 @@ struct Case<'a> {
     snapshot: &'a Snapshot,
     all: &'a [Track],
     results: Option<&'a [Track]>,
-    queue: &'a [Track],
+    playing: &'a [Track],
+    selection: &'a [Track],
     playlists: &'a [Playlist],
     input: &'a Input,
     message: Option<&'a str>,
     width: u16,
     height: u16,
-    /// Cursor row in the library and queue views; the first row when unset.
+    /// Cursor row in the library and selection views; the first row when unset.
     selected: Option<usize>,
 }
 
@@ -45,7 +46,8 @@ impl<'a> Case<'a> {
             snapshot,
             all: &[],
             results: None,
-            queue: &[],
+            playing: &[],
+            selection: &[],
             playlists: &[],
             input: &Input::None,
             message: None,
@@ -65,8 +67,13 @@ impl<'a> Case<'a> {
         self
     }
 
-    fn queue(mut self, v: &'a [Track]) -> Self {
-        self.queue = v;
+    fn playing(mut self, v: &'a [Track]) -> Self {
+        self.playing = v;
+        self
+    }
+
+    fn selection(mut self, v: &'a [Track]) -> Self {
+        self.selection = v;
         self
     }
 
@@ -121,7 +128,7 @@ impl<'a> Case<'a> {
             Some(cursor)
         });
         let mut qs = ListState::default();
-        qs.select(if self.queue.is_empty() {
+        qs.select(if self.selection.is_empty() {
             None
         } else {
             Some(cursor)
@@ -140,12 +147,13 @@ impl<'a> Case<'a> {
                     snapshot: self.snapshot,
                     all: self.all,
                     results: self.results,
-                    queue: self.queue,
+                    playing: self.playing,
+                    selection: self.selection,
                     playlists: self.playlists,
                     input: self.input,
                     message: self.message,
                     library_state: &mut ls,
-                    queue_state: &mut qs,
+                    selection_state: &mut qs,
                     playlist_state: &mut ps,
                 };
                 render::draw(&mut screen, f);
@@ -176,7 +184,7 @@ fn stopped() -> Snapshot {
 fn invisible_cells(
     view: View,
     all: &[Track],
-    queue: &[Track],
+    selection: &[Track],
     playlists: &[Playlist],
     row: u16,
 ) -> Vec<String> {
@@ -188,7 +196,7 @@ fn invisible_cells(
         st
     };
     let mut ls = sel(all);
-    let mut qs = sel(queue);
+    let mut qs = sel(selection);
     let mut ps = ListState::default();
     ps.select((!playlists.is_empty()).then_some(0));
 
@@ -199,12 +207,13 @@ fn invisible_cells(
                 snapshot: &snapshot,
                 all,
                 results: None,
-                queue,
+                playing: &[],
+                selection,
                 playlists,
                 input: &Input::None,
                 message: None,
                 library_state: &mut ls,
-                queue_state: &mut qs,
+                selection_state: &mut qs,
                 playlist_state: &mut ps,
             };
             render::draw(&mut screen, f);
@@ -238,12 +247,12 @@ fn the_selected_row_stays_readable_in_every_view() {
         len: 27,
     }];
 
-    for (view, all, queue, pls) in [
+    for (view, all, selection, pls) in [
         (View::Library, &tracks[..], &[][..], &[][..]),
-        (View::Queue, &[][..], &tracks[..], &[][..]),
+        (View::Selection, &[][..], &tracks[..], &[][..]),
         (View::Playlists, &[][..], &[][..], &playlists[..]),
     ] {
-        let hidden = invisible_cells(view, all, queue, pls, 2);
+        let hidden = invisible_cells(view, all, selection, pls, 2);
         assert!(
             hidden.is_empty(),
             "{view:?}: {} cells on the selected row have fg == bg: {:?}",
@@ -277,7 +286,7 @@ fn empty_library_explains_how_to_fill_it() {
 
 #[test]
 fn now_playing_shows_title_position_and_source_format() {
-    let queue = vec![track("So What", "Miles Davis", "Kind of Blue", 545)];
+    let playing = vec![track("So What", "Miles Davis", "Kind of Blue", 545)];
     let snapshot = Snapshot {
         status: Status {
             state: State::Playing,
@@ -298,7 +307,9 @@ fn now_playing_shows_title_position_and_source_format() {
         volume: 0.75,
         ..Default::default()
     };
-    let joined = Case::new(View::Queue, &snapshot).queue(&queue).text();
+    let joined = Case::new(View::Selection, &snapshot)
+        .playing(&playing)
+        .text();
     assert!(joined.contains("So What"), "title missing:\n{joined}");
     assert!(joined.contains("Miles Davis"), "artist missing:\n{joined}");
     assert!(joined.contains("2:31"), "position missing:\n{joined}");
@@ -316,7 +327,7 @@ fn resampling_is_shown_when_the_device_forces_it() {
     });
     snapshot.status.output_rate = 48000;
     snapshot.status.resampling = true;
-    let joined = Case::new(View::Queue, &snapshot).text();
+    let joined = Case::new(View::Selection, &snapshot).text();
     assert!(joined.contains("44.1kHz"), "source rate missing:\n{joined}");
     assert!(joined.contains("48.0kHz"), "device rate missing:\n{joined}");
 }
@@ -401,61 +412,6 @@ fn layout_survives_a_narrow_terminal() {
     }
 }
 
-// --- queue cursor following playback ---
-
-use playr::ui::follow_target;
-
-#[test]
-fn the_cursor_moves_to_the_track_that_starts_playing() {
-    // Track 2 starts while the cursor sits on track 1.
-    assert_eq!(follow_target(Some(0), Some(1), Some(0)), Some(1));
-}
-
-#[test]
-fn the_cursor_is_placed_when_a_queue_first_loads() {
-    assert_eq!(follow_target(None, Some(3), None), Some(3));
-}
-
-#[test]
-fn the_cursor_is_left_alone_while_a_track_keeps_playing() {
-    // Scrolled to track 12 during track 4; nothing has changed since, so the
-    // cursor must not be dragged back on every frame.
-    assert_eq!(follow_target(Some(4), Some(4), Some(12)), None);
-}
-
-#[test]
-fn the_cursor_is_left_alone_when_nothing_is_playing() {
-    assert_eq!(follow_target(Some(2), None, Some(7)), None);
-}
-
-#[test]
-fn browsing_is_interrupted_only_by_a_real_track_change() {
-    // Scroll away during track 4, then let track 5 begin.
-    let mut followed = Some(4usize);
-
-    // Scrolled away to track 12 while track 4 keeps playing.
-    let mut selected = Some(12usize);
-    for _ in 0..5 {
-        if let Some(t) = follow_target(followed, Some(4), selected) {
-            followed = Some(t);
-            selected = Some(t);
-        }
-    }
-    assert_eq!(
-        selected,
-        Some(12),
-        "scrolling was fought while the track played"
-    );
-
-    // Track 5 starts.
-    if let Some(t) = follow_target(followed, Some(5), selected) {
-        followed = Some(t);
-        selected = Some(t);
-    }
-    assert_eq!(selected, Some(5), "cursor did not follow the new track");
-    assert_eq!(followed, Some(5));
-}
-
 #[test]
 fn varispeed_is_shown_but_not_as_a_rate_conversion() {
     // Varispeed engages the resampler at the same rate. Reporting that as
@@ -469,7 +425,7 @@ fn varispeed_is_shown_but_not_as_a_rate_conversion() {
     snapshot.status.resampling = true;
     snapshot.status.semitones = 3;
 
-    let joined = Case::new(View::Queue, &snapshot).text();
+    let joined = Case::new(View::Selection, &snapshot).text();
     assert!(
         joined.contains("1.19x (+3 st)"),
         "speed not shown:\n{joined}"
@@ -488,7 +444,7 @@ fn normal_speed_is_not_announced() {
         channels: 2,
     });
     snapshot.status.output_rate = 44100;
-    let joined = Case::new(View::Queue, &snapshot).text();
+    let joined = Case::new(View::Selection, &snapshot).text();
     assert!(
         !joined.contains(" st)"),
         "speed shown when normal:\n{joined}"
@@ -503,17 +459,17 @@ fn a_cursor_far_down_a_long_library_is_on_screen() {
         .map(|i| track(&format!("Song {i:05}"), "A", "B", 60))
         .collect();
     let snapshot = stopped();
-    for view in [View::Library, View::Queue] {
+    for view in [View::Library, View::Selection] {
         let joined = Case::new(view, &snapshot)
             .all(&all)
-            .queue(&all)
+            .selection(&all)
             .selected(9_500)
             .text();
         assert!(
             joined.contains("Song 09500"),
             "cursor row not drawn:\n{joined}"
         );
-        // Not row 0: the now-playing bar names the first queue entry.
+        // Had the list not scrolled, its second row would show.
         assert!(
             !joined.contains("Song 00001"),
             "list did not scroll:\n{joined}"
@@ -551,9 +507,9 @@ fn an_empty_list_or_area_scrolls_nowhere() {
 fn a_pending_confirmation_is_shown_in_place_of_the_hints() {
     use playr::ui::Confirm;
     let input = Input::Confirm(Confirm::ReplacePlaylist("late".into()));
-    let joined = Case::new(View::Queue, &stopped()).input(&input).text();
+    let joined = Case::new(View::Selection, &stopped()).input(&input).text();
     assert!(
-        joined.contains("replace playlist \"late\" with the queue? (y/n)"),
+        joined.contains("replace playlist \"late\" with the selection? (y/n)"),
         "prompt not shown:\n{joined}"
     );
 }
@@ -596,7 +552,7 @@ fn the_bottom_line_shows_a_volume_meter_and_the_help_key() {
 #[test]
 fn a_message_shares_the_bottom_line_with_the_indicators() {
     let joined = Case::new(View::Library, &stopped())
-        .message("queued 3 track(s)")
+        .message("added to selection")
         .text();
     let last = joined
         .lines()
@@ -604,7 +560,7 @@ fn a_message_shares_the_bottom_line_with_the_indicators() {
         .find(|l| !l.trim().is_empty())
         .unwrap_or("");
     assert!(
-        last.contains("queued 3 track(s)"),
+        last.contains("added to selection"),
         "message missing: {last:?}"
     );
     assert!(last.contains("? help"), "indicators missing: {last:?}");
@@ -716,9 +672,9 @@ fn a_message_takes_the_bars_place_and_the_readout_stays() {
     let line = bottom_line(
         &playing(Some(-18.2), Some(-3.1)),
         100,
-        Some("queued 3 track(s)"),
+        Some("added to selection"),
     );
-    assert!(line.contains("queued 3 track(s)"), "{line:?}");
+    assert!(line.contains("added to selection"), "{line:?}");
     assert!(line.contains("-18.2 LUFS"), "readout hidden: {line:?}");
     // The volume bar is the only bracketed bar left.
     assert_eq!(line.matches('[').count(), 1, "bar still drawn: {line:?}");
@@ -766,10 +722,10 @@ fn panes_do_not_repeat_the_tabs() {
         name: "late".into(),
         len: 1,
     }];
-    for view in [View::Library, View::Queue, View::Playlists] {
+    for view in [View::Library, View::Selection, View::Playlists] {
         let lines = Case::new(view, &stopped())
             .all(&tracks)
-            .queue(&tracks)
+            .selection(&tracks)
             .playlists(&playlists)
             .render();
         // Row 0 is the tabs; row 1 is the pane's top border.

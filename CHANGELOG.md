@@ -6,7 +6,13 @@ Notable changes to playr. Format follows [Keep a Changelog][https://keepachangel
 
 ### Changed
 
+- The Queue view is now Selection: a list to collect tracks into and save as a playlist, separate from what plays. It starts empty. `a` adds a track, or a whole playlist, without touching playback; enter in the library plays the library from the selected track and leaves the selection alone. Before, enter replaced the queue with the whole list in view, so a queue built with `a` was lost to one keypress. In the selection, `d` removes a track, `J` and `K` or shift with up and down move it, `c` clears the list after `y`, and enter plays it. `playr <path>` selects the files as well as playing them. `a` moves the cursor down after adding, so a run of tracks takes one key each. A track already in the selection is skipped; a playlist added with `a` keeps its own repeats. Library API: `ui::View::Queue` is `View::Selection`, `App::with_queue` is `App::with_selection`, and `Screen` has `selection` and `playing` where it had `queue`.
+
 - The level meter's bar is coloured by position, as on an LED meter: green below -18 dB, the EBU R68 alignment level; yellow to -6 dB; red above. The peak marker takes its zone's colour. Colouring by the current reading instead would show most commercial masters, which sit above broadcast and streaming loudness targets, as a warning.
+
+### Removed
+
+- The cursor in the former queue view followed playback. The selection is not what plays, so it no longer does.
 
 ## [0.3.1]
 

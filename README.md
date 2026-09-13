@@ -51,17 +51,17 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Full-text search over title, artist, album and album artist
 
-- Search results play directly as an ad-hoc queue, in library order
+- Search results play directly, in library order
 
 - Playlists saved to and loaded from the database
 
 **Interface**
 
-- Three views: library, queue, playlists
+- Three views: library, selection, playlists
 
 - Search filters as you type
 
-- Queue cursor follows playback, so the playing track stays on screen
+- A selection to collect tracks into, edit and save as a playlist; it does not change what plays
 
 - Now playing shows title, artist, source rate and channels
 
@@ -117,15 +117,17 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 
 | keys                     | action                                      |
 |--------------------------|---------------------------------------------|
-| `tab`, `1` `2` `3`       | switch between library, queue and playlists |
+| `tab`, `1` `2` `3`       | switch to library, selection or playlists   |
 | `j` `k`, up/down         | move                                        |
 | `g` `G`, home/end        | jump to first or last                       |
 | page up/down             | move by ten                                 |
-| `enter`                  | play from here; in playlists, load it       |
-| `a`                      | queue the selection; plays if stopped       |
+| `enter`                  | play from here; in playlists, play it       |
+| `a`                      | add to the selection, then move down        |
 | `/`                      | search; `esc` clears                        |
-| `s`                      | save the queue; asks before overwriting     |
-| `d`                      | delete the selected playlist, after `y`     |
+| `s`                      | save the selection; asks before overwriting |
+| `d`                      | remove from selection; delete a playlist    |
+| `J` `K`, shift up/down   | move a track within the selection           |
+| `c`                      | clear the selection, after `y`              |
 | `space`                  | play or pause                               |
 | `n` `p`                  | next or previous track                      |
 | `x`                      | stop                                        |
@@ -137,9 +139,9 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 | `?`                      | list every key                              |
 | `q`                      | quit                                        |
 
-Searching filters as you type, across title, artist, album and album artist. Pressing enter on the results plays them as an ad-hoc queue.
+Searching filters as you type, across title, artist, album and album artist. Pressing enter on the results plays them.
 
-In the queue, the cursor follows playback, so the playing track stays on screen through a long album. It moves only when the track changes, so scrolling with `j`/`k` is not fought while a track plays.
+Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty, `a` adds to it without interrupting playback, and `s` saves it as a playlist. A track already in the selection is not added again, though a playlist's own repeats are kept. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
 
 ### Varispeed
 

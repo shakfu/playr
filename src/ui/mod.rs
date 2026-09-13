@@ -5,7 +5,7 @@
 
 pub mod render;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,15 +21,15 @@ use crate::db::Track;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Library,
-    Queue,
+    Selection,
     Playlists,
 }
 
 impl View {
     fn next(self) -> Self {
         match self {
-            View::Library => View::Queue,
-            View::Queue => View::Playlists,
+            View::Library => View::Selection,
+            View::Selection => View::Playlists,
             View::Playlists => View::Library,
         }
     }
@@ -37,7 +37,7 @@ impl View {
     fn title(self) -> &'static str {
         match self {
             View::Library => "Library",
-            View::Queue => "Queue",
+            View::Selection => "Selection",
             View::Playlists => "Playlists",
         }
     }
@@ -57,8 +57,10 @@ pub enum Input {
 /// A destructive action held until the listener confirms it.
 pub enum Confirm {
     DeletePlaylist(Playlist),
-    /// Overwrite the playlist of this name with the queue.
+    /// Overwrite the playlist of this name with the selection.
     ReplacePlaylist(String),
+    /// Empty the selection, which holds this many tracks.
+    ClearSelection(usize),
 }
 
 impl Confirm {
@@ -66,8 +68,9 @@ impl Confirm {
         match self {
             Confirm::DeletePlaylist(p) => format!("delete playlist \"{}\"? (y/n)", p.name),
             Confirm::ReplacePlaylist(name) => {
-                format!("replace playlist \"{name}\" with the queue? (y/n)")
+                format!("replace playlist \"{name}\" with the selection? (y/n)")
             }
+            Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection? (y/n)"),
         }
     }
 }
@@ -83,11 +86,15 @@ pub struct App {
     results: Option<Vec<Track>>,
     library_state: ListState,
 
-    /// Rows for the player's queue, which is the only queue.
-    queue: Vec<Track>,
-    /// The player queue `queue` was built from, compared by identity.
-    queue_source: Arc<[PathBuf]>,
-    queue_state: ListState,
+    /// Rows for the list the player is playing from.
+    playing: Vec<Track>,
+    /// The player list `playing` was built from, compared by identity.
+    playing_source: Arc<[PathBuf]>,
+
+    /// Tracks collected with `a`, to edit and save as a playlist. It does not
+    /// change what plays unless it is played itself.
+    selection: Vec<Track>,
+    selection_state: ListState,
 
     playlists: Vec<Playlist>,
     playlist_state: ListState,
@@ -98,8 +105,6 @@ pub struct App {
 
     /// Last error sequence shown, so each new one is surfaced exactly once.
     seen_error: u64,
-    /// Playing index the queue cursor was last moved to.
-    followed: Option<usize>,
     /// The peak shown, as a sample magnitude, and when it was reached.
     peak_hold: Option<(f32, Instant)>,
 
@@ -120,12 +125,14 @@ pub struct Screen<'a> {
     pub snapshot: &'a Snapshot,
     pub all: &'a [Track],
     pub results: Option<&'a [Track]>,
-    pub queue: &'a [Track],
+    /// Rows for the list the player is playing from.
+    pub playing: &'a [Track],
+    pub selection: &'a [Track],
     pub playlists: &'a [Playlist],
     pub input: &'a Input,
     pub message: Option<&'a str>,
     pub library_state: &'a mut ListState,
-    pub queue_state: &'a mut ListState,
+    pub selection_state: &'a mut ListState,
     pub playlist_state: &'a mut ListState,
 }
 
@@ -150,11 +157,12 @@ pub struct Snapshot {
 
 impl App {
     pub fn new(conn: Connection, player: Player) -> Self {
-        Self::with_queue(conn, player, Vec::new())
+        Self::with_selection(conn, player, Vec::new())
     }
 
-    /// Builds the app and starts playing `queue`, as handed over by the CLI.
-    pub fn with_queue(conn: Connection, player: Player, queue: Vec<Track>) -> Self {
+    /// Builds the app with `tracks` selected and playing, as the CLI hands
+    /// them over, so the files played are also listed.
+    pub fn with_selection(conn: Connection, player: Player, tracks: Vec<Track>) -> Self {
         let mut app = App {
             conn,
             player,
@@ -162,42 +170,45 @@ impl App {
             all: Vec::new(),
             results: None,
             library_state: ListState::default(),
-            queue: Vec::new(),
-            queue_source: Arc::default(),
-            queue_state: ListState::default(),
+            playing: Vec::new(),
+            playing_source: Arc::default(),
+            selection: Vec::new(),
+            selection_state: ListState::default(),
             playlists: Vec::new(),
             playlist_state: ListState::default(),
             input: Input::None,
             message: None,
             quit: false,
             seen_error: 0,
-            followed: None,
             peak_hold: None,
             snapshot: Snapshot::default(),
         };
-        if !queue.is_empty() {
-            app.play(queue, 0);
-            app.view = View::Queue;
+        if !tracks.is_empty() {
+            app.selection = tracks.clone();
+            app.selection_state.select(Some(0));
+            app.play(tracks, 0);
+            app.view = View::Selection;
         }
         app.reload();
         app
     }
 
-    /// Rebuilds `queue` if the player's queue is no longer the one it shows.
+    /// Rebuilds `playing` if the player's list is no longer the one it shows.
     ///
-    /// Changes made here update `queue` directly; this catches any other.
-    fn follow_player_queue(&mut self) {
+    /// Playing from here updates `playing` directly; this catches any other change.
+    fn follow_player(&mut self) {
         let current = self.player.queue();
-        if Arc::ptr_eq(&current, &self.queue_source) {
+        if Arc::ptr_eq(&current, &self.playing_source) {
             return;
         }
         let known: HashMap<&str, &Track> = self
-            .queue
+            .playing
             .iter()
+            .chain(&self.selection)
             .chain(&self.all)
             .map(|t| (t.path.as_str(), t))
             .collect();
-        self.queue = current
+        self.playing = current
             .iter()
             .map(|p| {
                 let path = p.to_string_lossy();
@@ -210,7 +221,7 @@ impl App {
                     })
             })
             .collect();
-        self.queue_source = current;
+        self.playing_source = current;
     }
 
     fn reload(&mut self) {
@@ -236,12 +247,13 @@ impl App {
             snapshot: &self.snapshot,
             all: &self.all,
             results: self.results.as_deref(),
-            queue: &self.queue,
+            playing: &self.playing,
+            selection: &self.selection,
             playlists: &self.playlists,
             input: &self.input,
             message: self.message.as_ref().map(|(m, _)| m.as_str()),
             library_state: &mut self.library_state,
-            queue_state: &mut self.queue_state,
+            selection_state: &mut self.selection_state,
             playlist_state: &mut self.playlist_state,
         }
     }
@@ -259,7 +271,6 @@ impl App {
                     }
                 }
             }
-            self.sync_queue();
             if let Some((_, at)) = &self.message {
                 if at.elapsed() > Duration::from_secs(4) {
                     self.message = None;
@@ -271,7 +282,7 @@ impl App {
 
     /// Samples the player for the next frame, and shows any new error once.
     pub fn refresh(&mut self) {
-        self.follow_player_queue();
+        self.follow_player();
         self.peak_hold = hold_peak(self.peak_hold, self.player.take_peak(), Instant::now());
         self.snapshot = Snapshot {
             status: self.player.status(),
@@ -296,23 +307,6 @@ impl App {
         }
     }
 
-    /// Keeps the displayed queue aligned with the engine's.
-    fn sync_queue(&mut self) {
-        let status = &self.snapshot.status;
-        if self.queue.is_empty() {
-            return;
-        }
-        let playing = match status.state {
-            State::Playing | State::Paused => Some(status.index),
-            State::Stopped => None,
-        };
-
-        if let Some(target) = follow_target(self.followed, playing, self.queue_state.selected()) {
-            self.followed = Some(target);
-            self.queue_state.select(Some(target));
-        }
-    }
-
     fn notify(&mut self, msg: impl Into<String>) {
         self.message = Some((msg.into(), Instant::now()));
     }
@@ -324,7 +318,7 @@ impl App {
 
     /// Handles one key press.
     pub fn on_key(&mut self, key: KeyEvent) {
-        self.follow_player_queue();
+        self.follow_player();
         // Before text entry, which would otherwise type it as `c`.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
@@ -365,9 +359,18 @@ impl App {
             KeyCode::Char('?') => self.input = Input::Help,
             KeyCode::Tab => self.view = self.view.next(),
             KeyCode::Char('1') => self.view = View::Library,
-            KeyCode::Char('2') => self.view = View::Queue,
+            KeyCode::Char('2') => self.view = View::Selection,
             KeyCode::Char('3') => self.view = View::Playlists,
 
+            // In the selection, shift moves the track rather than the cursor.
+            KeyCode::Char('J') if self.view == View::Selection => self.move_in_selection(1),
+            KeyCode::Char('K') if self.view == View::Selection => self.move_in_selection(-1),
+            KeyCode::Down if shifted(&key) && self.view == View::Selection => {
+                self.move_in_selection(1)
+            }
+            KeyCode::Up if shifted(&key) && self.view == View::Selection => {
+                self.move_in_selection(-1)
+            }
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
             KeyCode::PageDown => self.move_selection(10),
@@ -397,8 +400,8 @@ impl App {
             KeyCode::Enter => self.activate(),
             KeyCode::Char('a') => self.append_selection(),
             KeyCode::Char('s') => {
-                if self.queue.is_empty() {
-                    self.notify("queue is empty");
+                if self.selection.is_empty() {
+                    self.notify("selection is empty");
                 } else if self.conn.path().is_none_or(str::is_empty) {
                     // In memory, the playlist would be lost on exit.
                     self.notify("no library to save to; `playr scan <dir>` creates one");
@@ -406,7 +409,11 @@ impl App {
                     self.input = Input::SavePlaylist(String::new());
                 }
             }
+            KeyCode::Char('d') if self.view == View::Selection => self.remove_from_selection(),
             KeyCode::Char('d') => self.delete_playlist(),
+            KeyCode::Char('c') if self.view == View::Selection && !self.selection.is_empty() => {
+                self.input = Input::Confirm(Confirm::ClearSelection(self.selection.len()));
+            }
             _ => {}
         }
     }
@@ -462,7 +469,7 @@ impl App {
                 } else if self.playlists.iter().any(|p| p.name == name) {
                     self.input = Input::Confirm(Confirm::ReplacePlaylist(name));
                 } else {
-                    self.save_queue(&name);
+                    self.save_selection(&name);
                 }
             }
             KeyCode::Backspace => {
@@ -477,17 +484,17 @@ impl App {
         }
     }
 
-    fn save_queue(&mut self, name: &str) {
+    fn save_selection(&mut self, name: &str) {
         let ids: Vec<i64> = self
-            .queue
+            .selection
             .iter()
             .map(|t| t.id)
             .filter(|id| *id != 0)
             .collect();
         match query::save_playlist(&mut self.conn, name, &ids) {
             Ok(_) => {
-                // A playlist can only hold library tracks; `playr <path>` queues others.
-                let left_out = self.queue.len() - ids.len();
+                // A playlist can only hold library tracks; `playr <path>` selects others.
+                let left_out = self.selection.len() - ids.len();
                 let note = if left_out > 0 {
                     format!(", {left_out} not in the library left out")
                 } else {
@@ -502,7 +509,12 @@ impl App {
 
     fn confirm(&mut self, action: Confirm) {
         match action {
-            Confirm::ReplacePlaylist(name) => self.save_queue(&name),
+            Confirm::ReplacePlaylist(name) => self.save_selection(&name),
+            Confirm::ClearSelection(_) => {
+                self.selection.clear();
+                self.selection_state.select(None);
+                self.notify("selection cleared");
+            }
             Confirm::DeletePlaylist(pl) => {
                 if query::delete_playlist(&self.conn, pl.id).is_ok() {
                     self.playlists = query::playlists(&self.conn).unwrap_or_default();
@@ -517,7 +529,7 @@ impl App {
     fn len(&self) -> usize {
         match self.view {
             View::Library => self.visible().len(),
-            View::Queue => self.queue.len(),
+            View::Selection => self.selection.len(),
             View::Playlists => self.playlists.len(),
         }
     }
@@ -525,7 +537,7 @@ impl App {
     fn state_mut(&mut self) -> &mut ListState {
         match self.view {
             View::Library => &mut self.library_state,
-            View::Queue => &mut self.queue_state,
+            View::Selection => &mut self.selection_state,
             View::Playlists => &mut self.playlist_state,
         }
     }
@@ -549,7 +561,7 @@ impl App {
         self.state_mut().select(Some(next));
     }
 
-    /// Enter: play from here in the library, jump within the queue, or load a playlist.
+    /// Enter: play the list in view from the selected track, or play a playlist.
     fn activate(&mut self) {
         match self.view {
             View::Library => {
@@ -562,9 +574,9 @@ impl App {
                 }
                 self.play(tracks, i);
             }
-            View::Queue => {
-                if let Some(i) = self.queue_state.selected() {
-                    self.player.send(Cmd::Jump(i));
+            View::Selection => {
+                if let Some(i) = self.selection_state.selected() {
+                    self.play(self.selection.clone(), i);
                 }
             }
             View::Playlists => {
@@ -586,12 +598,12 @@ impl App {
         }
     }
 
+    /// Plays `tracks` from `index`. The selection is not touched.
     fn play(&mut self, tracks: Vec<Track>, index: usize) {
         let paths = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
         self.player.send(Cmd::Play(paths, index));
-        self.queue = tracks;
-        self.queue_source = self.player.queue();
-        self.queue_state.select(Some(index));
+        self.playing = tracks;
+        self.playing_source = self.player.queue();
     }
 
     fn append_selection(&mut self) {
@@ -608,17 +620,60 @@ impl App {
                 .and_then(|i| self.playlists.get(i))
                 .map(|pl| query::playlist_tracks(&self.conn, pl.id).unwrap_or_default())
                 .unwrap_or_default(),
-            View::Queue => return,
+            View::Selection => return,
         };
         if added.is_empty() {
             return;
         }
-        let count = added.len();
-        let paths = added.iter().map(|t| PathBuf::from(&t.path)).collect();
-        self.player.send(Cmd::Enqueue(paths));
-        self.queue.extend(added);
-        self.queue_source = self.player.queue();
-        self.notify(format!("queued {count} track(s)"));
+        // Skip what is already selected. Repeats within `added` stay, so a
+        // playlist that repeats a track on purpose keeps doing so.
+        let selected: HashSet<&str> = self.selection.iter().map(|t| t.path.as_str()).collect();
+        let new: Vec<Track> = added
+            .into_iter()
+            .filter(|t| !selected.contains(t.path.as_str()))
+            .collect();
+        // On to the next row either way, so a run of tracks takes one key each.
+        self.move_selection(1);
+        if new.is_empty() {
+            self.notify("already in selection");
+            return;
+        }
+        self.selection.extend(new);
+        if self.selection_state.selected().is_none() {
+            self.selection_state.select(Some(0));
+        }
+        // The tab already shows the total.
+        self.notify("added to selection");
+    }
+
+    fn remove_from_selection(&mut self) {
+        let Some(i) = self
+            .selection_state
+            .selected()
+            .filter(|i| *i < self.selection.len())
+        else {
+            return;
+        };
+        let removed = self.selection.remove(i);
+        self.select(i);
+        self.notify(format!("removed \"{}\"", removed.display_title()));
+    }
+
+    /// Moves the selected track in the selection `delta` places, keeping it selected.
+    fn move_in_selection(&mut self, delta: i64) {
+        let Some(i) = self
+            .selection_state
+            .selected()
+            .filter(|i| *i < self.selection.len())
+        else {
+            return;
+        };
+        let j = i as i64 + delta;
+        if j < 0 || j >= self.selection.len() as i64 {
+            return;
+        }
+        self.selection.swap(i, j as usize);
+        self.selection_state.select(Some(j as usize));
     }
 
     fn delete_playlist(&mut self) {
@@ -645,8 +700,12 @@ impl App {
 const SEEK_STEP: i64 = 5;
 const SEEK_JUMP: i64 = 30;
 
+fn shifted(key: &KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::SHIFT)
+}
+
 fn seek_step(key: &KeyEvent) -> i64 {
-    if key.modifiers.contains(KeyModifiers::SHIFT) {
+    if shifted(key) {
         SEEK_JUMP
     } else {
         SEEK_STEP
@@ -655,15 +714,23 @@ fn seek_step(key: &KeyEvent) -> i64 {
 
 /// Every key binding, as `(keys, action)`, for the help view.
 pub const KEYS: &[(&str, &str)] = &[
-    ("tab  1 2 3", "switch between library, queue and playlists"),
+    (
+        "tab  1 2 3",
+        "switch between library, selection and playlists",
+    ),
     ("j k  up down", "move"),
     ("g G  home end", "jump to first or last"),
     ("page up/down", "move by ten"),
-    ("enter", "play from here; in playlists, load it"),
-    ("a", "queue the selection; plays if stopped"),
+    ("enter", "play from here; in playlists, play it"),
+    (
+        "a",
+        "add to the selection: a track, or a whole playlist; move down",
+    ),
     ("/", "search; esc clears"),
-    ("s", "save the queue as a playlist"),
-    ("d", "delete the selected playlist"),
+    ("s", "save the selection as a playlist"),
+    ("d", "remove from the selection; delete a playlist"),
+    ("J K  shift up down", "move a track in the selection"),
+    ("c", "clear the selection"),
     ("space", "play or pause"),
     ("n p", "next or previous track"),
     ("x", "stop"),
@@ -705,30 +772,6 @@ pub fn hold_peak(
     match held {
         Some((level, at)) if level >= reading && now.duration_since(at) < PEAK_HOLD => held,
         _ => (reading > 0.0).then_some((reading, now)),
-    }
-}
-
-/// Where the queue cursor belongs after a status update, or `None` to leave it.
-///
-/// The cursor follows playback so the playing track stays on screen in a long
-/// queue: without it, a track change scrolls the current song out of view and
-/// it has to be hunted for.
-///
-/// It moves only when the track actually changes, not on every frame, so
-/// scrolling with `j`/`k` is not fought for as long as the track keeps playing.
-pub fn follow_target(
-    last_seen: Option<usize>,
-    playing: Option<usize>,
-    selected: Option<usize>,
-) -> Option<usize> {
-    match playing {
-        // Nothing is playing: leave the cursor wherever the listener put it.
-        None => None,
-        // First status after a queue is loaded.
-        Some(now) if selected.is_none() => Some(now),
-        // The track changed, so follow it.
-        Some(now) if last_seen != Some(now) => Some(now),
-        _ => None,
     }
 }
 

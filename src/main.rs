@@ -86,7 +86,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    // Everything else opens the interface, with a queue chosen by the arguments.
+    // Everything else opens the interface, with tracks chosen by the arguments.
     let start: Vec<Track> = match args.first().map(String::as_str) {
         Some("search") => {
             let q = args[1..].join(" ");
@@ -119,7 +119,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     // `ratatui::init` panics without a terminal; report it instead, since
     // running playr from a pipe or a service is an easy mistake to make.
     let mut terminal = ratatui::try_init().map_err(|e| format!("playr needs a terminal: {e}"))?;
-    let app = ui::App::with_queue(conn, player, start);
+    let app = ui::App::with_selection(conn, player, start);
     let result = app.run(&mut terminal);
     ratatui::restore();
     result?;

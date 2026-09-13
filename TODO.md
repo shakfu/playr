@@ -40,9 +40,7 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 ## Library
 
-- [ ] **Edit the queue.** No way to remove a track or reorder. Needs `d` in the queue view and a move binding. `Status::queue` is the only queue: an edit is a `Cmd` that `Player::send` applies to it, and the engine then moves `index`, its marks and any staged track to match.
-
-- [ ] **Edit playlists.** Playlists can be saved, loaded and deleted, but not changed after the fact except by replacing them wholesale.
+- [ ] **Rename playlists.** A playlist is edited by adding it to the selection with `a`, changing it, and saving it under the same name. There is no way to rename one short of saving a copy and deleting the original.
 
 - [ ] **Sort and group.** Library order is fixed: album artist, album, disc, track. No way to sort by date added, year or duration.
 
