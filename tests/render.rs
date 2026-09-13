@@ -3,6 +3,7 @@
 use playr::audio::{Spec, State, Status};
 use playr::db::query::Playlist;
 use playr::db::Track;
+use playr::ui::action::Keymap;
 use playr::ui::render::{self, scroll_offset};
 use playr::ui::{Input, Screen, Snapshot, View};
 use ratatui::backend::TestBackend;
@@ -37,6 +38,9 @@ struct Case<'a> {
     height: u16,
     /// Cursor row in the library and selection views; the first row when unset.
     selected: Option<usize>,
+    help_scroll: usize,
+    /// The key map; the defaults when unset.
+    keys: Option<&'a Keymap>,
 }
 
 impl<'a> Case<'a> {
@@ -54,6 +58,8 @@ impl<'a> Case<'a> {
             width: 100,
             height: 20,
             selected: None,
+            help_scroll: 0,
+            keys: None,
         }
     }
 
@@ -97,6 +103,16 @@ impl<'a> Case<'a> {
         self
     }
 
+    fn keys(mut self, keys: &'a Keymap) -> Self {
+        self.keys = Some(keys);
+        self
+    }
+
+    fn help_scroll(mut self, rows: usize) -> Self {
+        self.help_scroll = rows;
+        self
+    }
+
     fn size(mut self, width: u16, height: u16) -> Self {
         self.width = width;
         self.height = height;
@@ -118,8 +134,10 @@ impl<'a> Case<'a> {
     }
 
     /// Draws one frame and returns the cells.
-    fn buffer(self) -> ratatui::buffer::Buffer {
+    fn buffer(mut self) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(self.width, self.height)).unwrap();
+        let default_keys = Keymap::default();
+        let keys = self.keys.unwrap_or(&default_keys);
         let mut ls = ListState::default();
         let cursor = self.selected.unwrap_or(0);
         ls.select(if self.all.is_empty() {
@@ -151,6 +169,8 @@ impl<'a> Case<'a> {
                     selection: self.selection,
                     playlists: self.playlists,
                     input: self.input,
+                    keys,
+                    help_scroll: &mut self.help_scroll,
                     message: self.message,
                     library_state: &mut ls,
                     selection_state: &mut qs,
@@ -211,6 +231,8 @@ fn invisible_cells(
                 selection,
                 playlists,
                 input: &Input::None,
+                keys: &Keymap::default(),
+                help_scroll: &mut 0,
                 message: None,
                 library_state: &mut ls,
                 selection_state: &mut qs,
@@ -568,18 +590,131 @@ fn a_message_shares_the_bottom_line_with_the_indicators() {
 }
 
 #[test]
-fn help_lists_every_key() {
+fn help_lists_every_key_with_its_command_by_view() {
     let input = Input::Help;
     let joined = Case::new(View::Library, &stopped())
         .input(&input)
-        .size(100, 30)
+        .size(100, 80)
         .text();
-    for (keys, action) in playr::ui::KEYS {
+    let keys = Keymap::default();
+    for b in keys.bindings() {
+        let command = playr::ui::command::line(b.action.as_ref().unwrap(), b.view);
+        let row = joined
+            .lines()
+            // The command ends its row, so `:down` does not match `:down 10`.
+            .find(|l| {
+                l.split('\u{2502}')
+                    .any(|cell| cell.trim_end().ends_with(&format!(" :{command}")))
+            })
+            .unwrap_or_else(|| panic!(":{command} missing from key help:\n{joined}"));
         assert!(
-            joined.contains(action),
-            "{keys:?} missing from help:\n{joined}"
+            row.split_whitespace().any(|w| w == b.key.to_string()),
+            "{} not on the row for :{command}: {row:?}",
+            b.key
         );
     }
+    // Keys that run the same command share its row.
+    assert!(joined.contains(" j down shift-down "), "{joined}");
+
+    // The key list is narrower than its title; the popup widens to show it.
+    let short = Case::new(View::Library, &stopped())
+        .input(&input)
+        .size(80, 24)
+        .text();
+    assert!(
+        short.contains("Keys: j k scroll, any other key closes"),
+        "{short}"
+    );
+}
+
+#[test]
+fn the_help_hint_names_the_key_bound_to_the_key_list() {
+    use playr::ui::action::{Action, Key};
+    let hint = |keys: &Keymap| {
+        Case::new(View::Library, &stopped())
+            .keys(keys)
+            .render()
+            .into_iter()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap()
+    };
+    assert!(hint(&Keymap::default()).ends_with("? help"));
+    let mut keys = Keymap::default();
+    keys.unbind(None, Key::parse("?").unwrap());
+    keys.bind(None, Key::parse("f1").unwrap(), Some(Action::Help));
+    assert!(hint(&keys).ends_with("f1 help"), "{}", hint(&keys));
+    keys.unbind(None, Key::parse("f1").unwrap());
+    assert!(!hint(&keys).contains("help"), "{}", hint(&keys));
+}
+
+#[test]
+fn help_command_lists_every_command_with_its_arguments_by_view() {
+    let input = Input::CommandHelp;
+    // Tall enough for the whole list; 80 columns, the smallest common width.
+    let joined = Case::new(View::Library, &stopped())
+        .input(&input)
+        .size(80, 60)
+        .text();
+    for c in playr::ui::command::COMMANDS {
+        let usage = format!(":{} {}", c.name, c.args);
+        assert!(
+            joined.contains(usage.trim_end()) && joined.contains(c.help),
+            ":{} missing from command help:\n{joined}",
+            c.name
+        );
+    }
+    // Row numbers, by a row's text inside the border.
+    let row = |text: &str| {
+        joined
+            .lines()
+            .position(|l| {
+                let inner = l.trim().trim_matches('\u{2502}').trim();
+                inner == text || inner.starts_with(&format!("{text} "))
+            })
+            .unwrap_or_else(|| panic!("no row {text:?}:\n{joined}"))
+    };
+    let order = [
+        "in every view",
+        ":quit",
+        "library",
+        ":toggle",
+        "selection",
+        ":remove",
+        "playlists",
+        ":delete",
+    ];
+    let rows: Vec<usize> = order.iter().map(|t| row(t)).collect();
+    assert!(rows.is_sorted(), "out of order: {order:?} at rows {rows:?}");
+}
+
+#[test]
+fn a_long_help_list_scrolls_and_stops_at_its_end() {
+    let input = Input::CommandHelp;
+    let snapshot = stopped();
+    let case = || {
+        Case::new(View::Library, &snapshot)
+            .input(&input)
+            .size(80, 24)
+    };
+    let top = case().text();
+    assert!(top.contains(":help") && !top.contains(":rename"), "{top}");
+    assert!(top.contains("j k scroll"), "no scroll hint:\n{top}");
+    let bottom = case().help_scroll(1000).text();
+    assert!(
+        bottom.contains(":rename") && !bottom.contains(":help"),
+        "{bottom}"
+    );
+}
+
+#[test]
+fn a_command_being_typed_is_shown_in_place_of_the_hints() {
+    let mut line = playr::ui::command::CommandLine::default();
+    "seek 1:23".chars().for_each(|c| line.push(c));
+    let input = Input::Command(line);
+    let joined = Case::new(View::Library, &stopped()).input(&input).text();
+    let last = joined.lines().rev().find(|l| !l.trim().is_empty()).unwrap();
+    assert_eq!(last.trim(), ":seek 1:23_");
 }
 
 // --- level meter ---
@@ -875,4 +1010,49 @@ fn the_mode_shows_on_the_bottom_line_unless_normal() {
             "{mode:?} not shown:\n{joined}"
         );
     }
+}
+
+#[test]
+fn the_rename_prompt_names_the_playlist() {
+    let input = Input::RenamePlaylist {
+        from: Playlist {
+            id: 1,
+            name: "late".into(),
+            len: 3,
+        },
+        name: "night".into(),
+    };
+    let joined = Case::new(View::Playlists, &stopped()).input(&input).text();
+    assert!(joined.contains("rename \"late\" to: night_"), "{joined}");
+}
+
+// --- marks ---
+
+#[test]
+fn marks_show_under_the_progress_bar_where_they_fall() {
+    let mut snapshot = stopped();
+    snapshot.status.state = State::Playing;
+    snapshot.status.duration = Some(Duration::from_secs(100));
+    snapshot.marks = vec![
+        Duration::ZERO,
+        Duration::from_secs(50),
+        Duration::from_secs(100),
+    ];
+    let lines = Case::new(View::Library, &snapshot).size(100, 12).render();
+    let bar = lines
+        .iter()
+        .position(|l| l.contains("0:00 / 1:40"))
+        .expect("no progress bar");
+    let ticks = &lines[bar + 1];
+    let columns: Vec<usize> = ticks.match_indices('^').map(|(i, _)| i).collect();
+    // The bar is inset one cell either side: 98 cells from column 1.
+    let at = |fraction: f64| 1 + (fraction * 97.0).round() as usize;
+    assert_eq!(columns, [at(0.0), at(0.5), at(1.0)], "ticks row: {ticks:?}");
+
+    snapshot.status.duration = None;
+    let lines = Case::new(View::Library, &snapshot).size(100, 12).render();
+    assert!(
+        !lines.iter().any(|l| l.contains('^')),
+        "marks drawn without a duration"
+    );
 }

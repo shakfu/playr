@@ -21,6 +21,7 @@ usage:
 
 options:
   --db <path>                  use a different library file
+  --settings <path>            use a different settings file
   -h, --help                   show this help
   -V, --version                show the version
 ";
@@ -42,6 +43,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     if let Some(i) = args.iter().position(|a| a == "--db") {
         let value = args.get(i + 1).ok_or("--db needs a path")?.clone();
         db_path = PathBuf::from(value);
+        args.drain(i..=i + 1);
+    }
+
+    let mut config_path = None;
+    if let Some(i) = args.iter().position(|a| a == "--settings") {
+        let value = args.get(i + 1).ok_or("--settings needs a path")?.clone();
+        config_path = Some(PathBuf::from(value));
         args.drain(i..=i + 1);
     }
 
@@ -114,12 +122,28 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         None => Vec::new(),
     };
 
+    // Before the terminal is taken over, so every error can be read.
+    let config = match (&config_path, ui::config::default_path()) {
+        (Some(path), _) => ui::config::Config::load(path, true),
+        (None, Some(path)) => ui::config::Config::load(&path, false),
+        (None, None) => Ok(ui::config::Config::default()),
+    };
+    let config = match config {
+        Ok(config) => config,
+        Err(errors) => {
+            for e in errors {
+                eprintln!("playr: {e}");
+            }
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+
     let player = Player::new()?;
 
     // `ratatui::init` panics without a terminal; report it instead, since
     // running playr from a pipe or a service is an easy mistake to make.
     let mut terminal = ratatui::try_init().map_err(|e| format!("playr needs a terminal: {e}"))?;
-    let app = ui::App::with_selection(conn, player, start);
+    let app = ui::App::configured(conn, player, start, config);
     let result = app.run(&mut terminal);
     ratatui::restore();
     result?;

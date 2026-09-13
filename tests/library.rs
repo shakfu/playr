@@ -229,3 +229,189 @@ fn a_library_from_a_newer_playr_is_refused() {
     let err = db::open(&path).expect_err("a newer library was opened");
     assert!(err.to_string().contains("newer"), "error was {err}");
 }
+
+#[test]
+fn renaming_a_playlist_keeps_its_tracks_and_refuses_a_taken_name() {
+    let mut conn = seeded();
+    let all = query::all(&conn).unwrap();
+    let late = query::save_playlist(&mut conn, "late", &[all[0].id, all[1].id]).unwrap();
+    query::save_playlist(&mut conn, "early", &[all[2].id]).unwrap();
+    let names = |conn: &rusqlite::Connection| -> Vec<(String, i64)> {
+        query::playlists(conn)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.name, p.len))
+            .collect()
+    };
+
+    query::rename_playlist(&conn, late, "night").unwrap();
+    assert_eq!(
+        names(&conn),
+        [("early".to_string(), 1), ("night".to_string(), 2)]
+    );
+
+    assert!(query::rename_playlist(&conn, late, "early").is_err());
+    assert_eq!(
+        names(&conn),
+        [("early".to_string(), 1), ("night".to_string(), 2)],
+        "a failed rename changed a playlist"
+    );
+}
+
+/// The seeded library plus a title that names an artist and one with a colon.
+fn seeded_for_fields() -> rusqlite::Connection {
+    let conn = seeded();
+    db::upsert(
+        &conn,
+        &track("/m/e.flac", "Evans Theme", "Someone", "Tribute"),
+    )
+    .unwrap();
+    db::upsert(&conn, &track("/m/o.flac", "Op: 1", "Composer", "Works")).unwrap();
+    conn
+}
+
+fn titles(conn: &rusqlite::Connection, input: &str) -> Vec<String> {
+    let mut t: Vec<String> = query::search(conn, input)
+        .unwrap_or_else(|e| panic!("{input:?} raised {e}"))
+        .into_iter()
+        .map(|t| t.title.unwrap_or_default())
+        .collect();
+    t.sort();
+    t
+}
+
+#[test]
+fn a_field_limits_a_term_to_its_column() {
+    let conn = seeded_for_fields();
+    assert_eq!(
+        titles(&conn, "evans"),
+        ["Evans Theme", "My Foolish Heart", "Waltz for Debby"]
+    );
+    assert_eq!(
+        titles(&conn, "artist:evans"),
+        ["My Foolish Heart", "Waltz for Debby"]
+    );
+    assert_eq!(titles(&conn, "title:evans"), ["Evans Theme"]);
+    assert_eq!(titles(&conn, "album:blue"), ["So What"]);
+    assert_eq!(titles(&conn, "albumartist:someone"), ["Evans Theme"]);
+    assert_eq!(titles(&conn, "album_artist:someone"), ["Evans Theme"]);
+}
+
+#[test]
+fn field_terms_match_prefixes_ignore_field_case_and_combine() {
+    let conn = seeded_for_fields();
+    assert_eq!(
+        titles(&conn, "artist:ev"),
+        ["My Foolish Heart", "Waltz for Debby"]
+    );
+    assert_eq!(titles(&conn, "ARTIST:miles"), ["So What"]);
+    assert_eq!(titles(&conn, "artist:evans foolish"), ["My Foolish Heart"]);
+}
+
+#[test]
+fn a_quoted_value_is_a_phrase() {
+    let conn = seeded_for_fields();
+    assert_eq!(
+        titles(&conn, "artist:\"bill evans\""),
+        ["My Foolish Heart", "Waltz for Debby"]
+    );
+    assert!(
+        titles(&conn, "artist:\"evans bill\"").is_empty(),
+        "word order ignored"
+    );
+    // Unquoted, only the first word is limited to the field.
+    assert_eq!(titles(&conn, "artist:bill theme"), Vec::<String>::new());
+    assert_eq!(titles(&conn, "\"waltz for\""), ["Waltz for Debby"]);
+}
+
+#[test]
+fn a_prefix_that_names_no_field_is_text() {
+    let conn = seeded_for_fields();
+    assert_eq!(titles(&conn, "op:1"), ["Op: 1"]);
+    // A quote before the colon makes it text too.
+    assert!(titles(&conn, "\"artist:evans\"").is_empty());
+}
+
+#[test]
+fn an_empty_field_or_operators_in_a_value_are_harmless() {
+    let conn = seeded_for_fields();
+    assert!(titles(&conn, "artist:").is_empty());
+    assert!(titles(&conn, "artist:\"\"").is_empty());
+    for input in [
+        "artist:\"a AND b\"",
+        "title:*",
+        "album:NEAR(",
+        "artist:\"unclosed",
+    ] {
+        let _ = titles(&conn, input);
+    }
+}
+
+#[test]
+fn marks_are_kept_per_path_in_order() {
+    use query::Mark;
+    let conn = db::open_memory().unwrap();
+    let at = |ms| Mark::at_time(std::time::Duration::from_millis(ms), 44100);
+    query::add_mark(&conn, "/m/a.flac", at(90_000)).unwrap();
+    query::add_mark(&conn, "/m/a.flac", at(15_000)).unwrap();
+    query::add_mark(&conn, "/m/a.flac", at(15_000)).unwrap();
+    query::add_mark(&conn, "/m/b.flac", at(1_000)).unwrap();
+
+    let a = query::marks(&conn, "/m/a.flac").unwrap();
+    assert_eq!(
+        a,
+        [at(15_000), at(90_000)],
+        "unordered, or the duplicate was kept"
+    );
+    assert_eq!(a[0].frame, 15 * 44100);
+    assert_eq!(a[1].time(), std::time::Duration::from_secs(90));
+
+    assert_eq!(query::clear_marks(&conn, "/m/a.flac").unwrap(), 2);
+    assert!(query::marks(&conn, "/m/a.flac").unwrap().is_empty());
+    assert_eq!(
+        query::marks(&conn, "/m/b.flac").unwrap().len(),
+        1,
+        "cleared another track"
+    );
+}
+
+#[test]
+fn a_library_from_before_marks_gains_the_table_and_keeps_its_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let conn = db::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE marks").unwrap();
+    drop(conn);
+
+    let conn = db::open(&path).unwrap();
+    assert!(query::marks(&conn, "/m/a.flac").unwrap().is_empty());
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        version,
+        db::SCHEMA_VERSION,
+        "the version moved, locking out older playr"
+    );
+}
+
+#[test]
+fn marks_are_undone_in_the_order_they_were_added() {
+    use query::Mark;
+    let conn = db::open_memory().unwrap();
+    let at = |s| Mark::at_time(std::time::Duration::from_secs(s), 44100);
+    for s in [90, 15, 40] {
+        query::add_mark(&conn, "/m/a.flac", at(s)).unwrap();
+    }
+    query::add_mark(&conn, "/m/b.flac", at(5)).unwrap();
+
+    let undone: Vec<Option<Mark>> = (0..4)
+        .map(|_| query::remove_last_mark(&conn, "/m/a.flac").unwrap())
+        .collect();
+    assert_eq!(undone, [Some(at(40)), Some(at(15)), Some(at(90)), None]);
+    assert_eq!(
+        query::marks(&conn, "/m/b.flac").unwrap(),
+        [at(5)],
+        "undid another track's mark"
+    );
+}

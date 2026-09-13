@@ -7,7 +7,9 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, 
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use super::{fmt_time, state_glyph, Input, Screen, Snapshot, View, KEYS};
+use super::action::Keymap;
+use super::command::{self, view_name, COMMANDS};
+use super::{fmt_time, state_glyph, Input, Screen, Snapshot, View};
 use crate::audio::State;
 use crate::db::Track;
 
@@ -37,30 +39,96 @@ pub fn draw(app: &mut Screen<'_>, f: &mut Frame) {
         View::Playlists => draw_playlists(app, f, body),
     }
     draw_bar(app, f, bar);
-    if matches!(app.input, Input::Help) {
-        draw_help(f, f.area());
+    match app.input {
+        Input::Help => {
+            let rows = key_rows(app.keys);
+            let rows: Vec<(&str, &str)> =
+                rows.iter().map(|(k, c)| (k.as_str(), c.as_str())).collect();
+            draw_help(f, f.area(), "Keys", &rows, app.help_scroll);
+        }
+        Input::CommandHelp => {
+            let mut rows: Vec<(String, &str)> = Vec::new();
+            let mut group = None;
+            for c in COMMANDS {
+                if rows.is_empty() || c.view != group {
+                    group = c.view;
+                    let heading = c.view.map_or("in every view", view_name);
+                    rows.push((heading.to_string(), ""));
+                }
+                rows.push((format!(":{} {}", c.name, c.args), c.help));
+            }
+            let rows: Vec<(&str, &str)> = rows.iter().map(|(k, h)| (k.trim_end(), *h)).collect();
+            draw_help(f, f.area(), "Commands", &rows, app.help_scroll);
+        }
+        _ => {}
     }
 }
 
-/// The key list, centred over everything else.
-fn draw_help(f: &mut Frame, area: Rect) {
-    let key_width = KEYS.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-    let action_width = KEYS.iter().map(|(_, a)| a.len()).max().unwrap_or(0);
-    let lines: Vec<Line> = KEYS
+/// The key list: keys that run the same command share a row, under a heading
+/// for every view and then one for each view. A heading row has no command.
+fn key_rows(keys: &Keymap) -> Vec<(String, String)> {
+    let mut rows = vec![("in every view".to_string(), String::new())];
+    for view in [
+        None,
+        Some(View::Library),
+        Some(View::Selection),
+        Some(View::Playlists),
+    ] {
+        let mut group: Vec<(String, String)> = Vec::new();
+        for b in keys.bindings().iter().filter(|b| b.view == view) {
+            let command = match &b.action {
+                Some(action) => format!(":{}", command::line(action, view)),
+                None => "nothing".to_string(),
+            };
+            match group.iter_mut().find(|(_, c)| *c == command) {
+                Some((k, _)) => *k = format!("{k} {}", b.key),
+                None => group.push((b.key.to_string(), command)),
+            }
+        }
+        if let Some(v) = view {
+            if !group.is_empty() {
+                rows.push((view_name(v).to_string(), String::new()));
+            }
+        }
+        rows.extend(group);
+    }
+    rows
+}
+
+/// A list of keys or commands and what they do, centred over everything else.
+/// A row with no description is a heading. `scroll` is clamped to the rows
+/// that can scroll into view.
+fn draw_help(f: &mut Frame, area: Rect, name: &str, rows: &[(&str, &str)], scroll: &mut usize) {
+    let key_width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    let action_width = rows.iter().map(|(_, a)| a.len()).max().unwrap_or(0);
+    let lines: Vec<Line> = rows
         .iter()
-        .map(|(keys, action)| {
-            Line::from(vec![
+        .map(|(keys, action)| match *action {
+            "" => Line::from(Span::styled(
+                format!(" {keys}"),
+                Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+            )),
+            _ => Line::from(vec![
                 Span::styled(
                     format!(" {keys:<key_width$}  "),
                     Style::default().fg(ACCENT),
                 ),
                 Span::raw(*action),
-            ])
+            ]),
         })
         .collect();
-    // Keys, two spaces, the action, a space either side, and the borders.
-    let width = ((key_width + action_width + 6) as u16).min(area.width);
-    let height = (KEYS.len() as u16 + 2).min(area.height);
+    let height = (rows.len() as u16 + 2).min(area.height);
+    let visible = height.saturating_sub(2) as usize;
+    *scroll = (*scroll).min(rows.len().saturating_sub(visible));
+    let title = if rows.len() > visible {
+        format!("{name}: j k scroll, any other key closes")
+    } else {
+        format!("{name}: any key closes")
+    };
+    // Keys, two spaces, the action, a space either side, and the borders; or
+    // the title with its corners, if that is wider.
+    let width = (key_width + action_width + 6).max(title.len() + 4);
+    let width = (width as u16).min(area.width);
     let popup = Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + (area.height - height) / 2,
@@ -69,7 +137,9 @@ fn draw_help(f: &mut Frame, area: Rect) {
     };
     f.render_widget(Clear, popup);
     f.render_widget(
-        Paragraph::new(lines).block(list_block("Keys: any key closes")),
+        Paragraph::new(lines)
+            .scroll((*scroll as u16, 0))
+            .block(list_block(&title)),
         popup,
     );
 }
@@ -353,7 +423,8 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
     let status = &app.snapshot.status;
     let pos = app.snapshot.position;
 
-    let [now, progress, hints] = Layout::vertical([
+    let [now, progress, ticks, hints] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -409,12 +480,24 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         .ratio(ratio)
         .label(format!("{} / {}", fmt_time(pos), fmt_time(total)));
     f.render_widget(gauge, progress);
+    draw_marks(app, f, ticks);
 
     // A prompt needs the whole line; anything else shares it with the indicators.
     let prompt = match app.input {
         Input::SavePlaylist(name) => Some(Line::from(vec![
             Span::styled("save playlist as: ", Style::default().fg(ACCENT)),
             Span::raw(format!("{name}_")),
+        ])),
+        Input::RenamePlaylist { from, name } => Some(Line::from(vec![
+            Span::styled(
+                format!("rename \"{}\" to: ", from.name),
+                Style::default().fg(ACCENT),
+            ),
+            Span::raw(format!("{name}_")),
+        ])),
+        Input::Command(line) => Some(Line::from(vec![
+            Span::styled(":", Style::default().fg(ACCENT)),
+            Span::raw(format!("{}_", line.text)),
         ])),
         Input::Confirm(c) => Some(Line::from(Span::styled(
             c.prompt(),
@@ -428,7 +511,14 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
     }
 
     let playing = status.state == State::Playing;
-    let indicators = indicators(status.semitones, app.snapshot, playing);
+    // Whatever key opens the key list, if one does in every view.
+    let help_key = app
+        .keys
+        .bindings()
+        .iter()
+        .find(|b| b.view.is_none() && b.action == Some(crate::ui::action::Action::Help))
+        .map(|b| b.key.to_string());
+    let indicators = indicators(status.semitones, app.snapshot, playing, help_key);
     let [left, right] = Layout::horizontal([
         Constraint::Min(0),
         Constraint::Length(indicators.width() as u16),
@@ -449,6 +539,29 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         }
     }
     f.render_widget(Paragraph::new(indicators), right);
+}
+
+/// Marks as `^` under the progress bar, each where it falls in the track.
+fn draw_marks(app: &Screen<'_>, f: &mut Frame, area: Rect) {
+    let marks = &app.snapshot.marks;
+    let Some(total) = app.snapshot.status.duration.filter(|d| !d.is_zero()) else {
+        return;
+    };
+    let width = area.width as usize;
+    if marks.is_empty() || width == 0 {
+        return;
+    }
+    let mut row = vec![' '; width];
+    for mark in marks {
+        // The same scale as the gauge: the start at the first cell, the end at the last.
+        let fraction = (mark.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0);
+        row[(fraction * (width - 1) as f64).round() as usize] = '^';
+    }
+    let row: String = row.into_iter().collect();
+    f.render_widget(
+        Paragraph::new(Span::styled(row, Style::default().fg(Color::Yellow))),
+        area,
+    );
 }
 
 /// Lowest level the loudness bar shows, in dB relative to full scale.
@@ -521,7 +634,12 @@ fn level_readout(loudness: Option<f32>, peak: Option<f32>) -> Vec<Span<'static>>
 
 /// The level readout while playing, speed when it is not normal, the volume,
 /// and the help key. The readout comes first, next to its bar.
-fn indicators(semitones: i32, snapshot: &Snapshot, playing: bool) -> Line<'static> {
+fn indicators(
+    semitones: i32,
+    snapshot: &Snapshot,
+    playing: bool,
+    help_key: Option<String>,
+) -> Line<'static> {
     let volume = snapshot.volume;
     let mut spans = Vec::new();
     if playing {
@@ -552,6 +670,11 @@ fn indicators(semitones: i32, snapshot: &Snapshot, playing: bool) -> Line<'stati
         ),
         Style::default().fg(DIM),
     ));
-    spans.push(Span::styled("  ? help", Style::default().fg(ACCENT)));
+    if let Some(key) = help_key {
+        spans.push(Span::styled(
+            format!("  {key} help"),
+            Style::default().fg(ACCENT),
+        ));
+    }
     Line::from(spans)
 }

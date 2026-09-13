@@ -1,0 +1,76 @@
+# playr's default settings.
+#
+# ~/.config/playr/settings.toml is read on top of these, so it only needs the
+# lines it changes. The format is described in README.md, under Configuration.
+
+# Percent, 0 to 100.
+volume = 100
+# normal, shuffle, repeat or repeat-one.
+mode = "normal"
+# Semitones, -12 to 12.
+speed = 0
+
+# Keys for every view. Each value is a : command; "nop" makes a key do nothing.
+[keys]
+q = "quit"
+"?" = "keys"
+":" = "command"
+tab = "next-view"
+1 = "view library"
+2 = "view selection"
+3 = "view playlists"
+j = "down"
+down = "down"
+shift-down = "down"
+k = "up"
+up = "up"
+shift-up = "up"
+pagedown = "down 10"
+pageup = "up 10"
+g = "first"
+home = "first"
+G = "last"
+end = "last"
+enter = "play"
+"/" = "search"
+s = "save"
+space = "pause"
+n = "next"
+p = "prev"
+x = "stop"
+right = "seek +5"
+left = "seek -5"
+shift-right = "seek +30"
+shift-left = "seek -30"
+"+" = "volume +5"
+"=" = "volume +5"
+"-" = "volume -5"
+_ = "volume -5"
+"]" = "speed +1"
+"[" = "speed -1"
+'\' = "speed 0"
+m = "mode +"
+M = "mode -"
+b = "mark"
+B = "unmark"
+C = "delmarks"
+"." = "next-mark"
+"," = "prev-mark"
+
+# Keys for one view, which win there over the keys above.
+[keys.library]
+a = "toggle"
+esc = "clear-search"
+
+[keys.selection]
+d = "remove"
+J = "move +1"
+K = "move -1"
+shift-down = "move +1"
+shift-up = "move -1"
+c = "clear"
+
+[keys.playlists]
+a = "add"
+d = "delete"
+r = "rename"

@@ -2,11 +2,54 @@
 
 Notable changes to playr. Format follows [Keep a Changelog][https://keepachangelog.com/en/1.1.0/], versioning follows [Semantic Versioning][https://semver.org/spec/v2.0.0.html].
 
-## [Unreleased]
+## [0.4.0]
 
 ### Added
 
+- Marks. `b` marks the playing position, `B` removes the mark added most recently, `,` and `.` seek to the previous and next mark, and `C` clears the track's marks after asking for `y`. Marks show as `^` under the progress bar. They are stored in the library by file path and source frame, so a rescan that renumbers tracks keeps them and they stay exact at any playback speed. The new table needs no schema version change, so older playr still opens the library.
+
+- `r` in the playlists tab renames the selected playlist, starting from its current name. A name another playlist already has is refused, since taking it would merge or replace that playlist.
+
+- Search terms can be limited to one field: `title:`, `artist:`, `album:` or `albumartist:`, as in `artist:evans`. A quoted value is matched as a phrase, as in `artist:"bill evans"`. A prefix that names no field stays part of the text, so a title such as `Op: 1` is still found. `playr search` accepts the same syntax.
+
 - Playback modes, stepped through with `m` and back with `M`: normal, shuffle, repeat, and repeat one. Shuffle plays every track once per pass in random order, reshuffles at the end of each pass, and never opens a pass with the track that closed the last. It keeps a play order beside the list rather than reordering it, so the list on screen keeps its order and `p` steps back through what played. A mode applies to whatever list is playing. Changing mode rebuilds a next track that has already started loading, so the change takes effect from that track. Under repeat, a list of files that will not play stops after one pass instead of retrying them forever.
+
+- Vim-style `:` commands. Every key's action has one, and commands also take what a key cannot: a time, a percentage, or a name. `docs/cheatsheet.md` lists them all, and `:help` inside playr. A leading `+` or `-` makes a number relative.
+
+  ```
+  :seek 1:23      :seek -30       :volume 60      :speed +1
+  :mode shuffle   :mark 2:05      :playlist late night
+  ```
+
+  Commands that act on one view's rows work only there: `:remove`, `:move` and `:clear` in the selection; `:toggle` and `:clear-search` in the library; `:add`, `:delete` and `:rename` in playlists. In another view they are refused with the view they belong to, since they would act on a cursor that is not on screen. A command can be shortened to any prefix unique among those usable in the current view. Tab completes those names and some arguments, and up and down recall earlier lines; the history holds 100 lines for the session.
+
+  Keys and commands both resolve to one `Action` type, performed in one place, so a key and its command cannot drift apart. Library API: `ui::action`, `ui::command` and `ui::config` are new; `App::perform` runs an action; `App::configured` takes a `ui::config::Config`; `Screen` has `keys` and `help_scroll`; `ui::KEYS` is gone; and `Cmd::SetSpeed` sets an absolute speed.
+
+- A settings file, `~/.config/playr/settings.toml`, or the path given with `--settings`. It sets the starting volume, mode and speed, and binds keys. Each key's value is a `:` command, checked by the same parser as the prompt, so a binding cannot mean something its command does not.
+
+  ```toml
+  volume = 60
+  mode = "shuffle"
+
+  [keys]
+  right = "seek +10"
+  q = "nop"
+
+  [keys.selection]
+  x = "remove"
+  ```
+
+  A key under `[keys.VIEW]` wins in that view. The defaults are a settings file too, `src/ui/settings.toml`, read by the same code; a user file applies on top of it. TOML over a file of `:` commands because editors highlight and check it, and it gives colours a natural table later; the cost is the `toml` crate. Any bad setting stops playr before it starts, with every error listed by line. Starting anyway and showing the first error was the alternative, but a skipped binding is easy to miss. `:map` and `:unmap` change keys while playr runs.
+
+### Changed
+
+- `?` lists the keys as bound, grouped by view, with the command each key runs. It showed a fixed list before, which a remapped key would contradict. The bottom line's help hint names whichever key opens it.
+
+- A key with Ctrl or Alt held, or Shift on a key that is not a character, only runs a binding that names that chord. Before, most chords ran the plain key's action, so Ctrl-M cycled the mode as `M` does.
+
+- The key and command lists scroll with `j` and `k`; any other key closes them. The key list already ran past the bottom of a 24-row terminal.
+
+- `esc` clears a search only in the library, where the results are shown. `a` in the selection and `d` in the library did nothing and are now unbound.
 
 ## [0.3.3]
 

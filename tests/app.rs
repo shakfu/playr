@@ -468,3 +468,540 @@ fn m_cycles_the_playback_mode_and_says_which() {
     press(&mut app, 'M');
     assert_eq!(mode(&mut app), Mode::RepeatOne);
 }
+
+fn typing(app: &mut App, text: &str) {
+    for c in text.chars() {
+        press(app, c);
+    }
+}
+
+fn erase(app: &mut App, n: usize) {
+    for _ in 0..n {
+        key(app, KeyCode::Backspace, KeyModifiers::NONE);
+    }
+}
+
+#[test]
+fn r_renames_the_selected_playlist() {
+    let (mut app, _dir) = app();
+    press(&mut app, '3');
+    press(&mut app, 'r');
+    assert!(
+        matches!(&app.screen().input, Input::RenamePlaylist { name, .. } if name == "late"),
+        "the prompt did not start from the current name"
+    );
+    erase(&mut app, 4);
+    typing(&mut app, "night");
+    enter(&mut app);
+    assert_eq!(playlist_lens(&mut app), [("night".to_string(), 1)]);
+    assert_eq!(app.screen().message, Some("renamed \"late\" to \"night\""));
+}
+
+#[test]
+fn renaming_refuses_a_taken_or_empty_name_and_follows_the_playlist() {
+    let (mut app, _dir) = app();
+    press(&mut app, 's');
+    typing(&mut app, "early");
+    enter(&mut app);
+    press(&mut app, '3');
+    press(&mut app, 'j');
+    assert_eq!(
+        app.screen().playlist_state.selected(),
+        Some(1),
+        "not on late"
+    );
+
+    press(&mut app, 'r');
+    erase(&mut app, 4);
+    typing(&mut app, "early");
+    enter(&mut app);
+    assert_eq!(
+        app.screen().message,
+        Some("a playlist named \"early\" already exists")
+    );
+
+    press(&mut app, 'r');
+    erase(&mut app, 4);
+    enter(&mut app);
+    assert_eq!(app.screen().message, Some("playlist name cannot be empty"));
+
+    press(&mut app, 'r');
+    typing(&mut app, "x");
+    key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(
+        playlist_lens(&mut app),
+        [("early".to_string(), 2), ("late".to_string(), 1)],
+        "a refused or cancelled rename changed a playlist"
+    );
+
+    // Renamed to sort first, it moves up, and the cursor goes with it.
+    press(&mut app, 'r');
+    erase(&mut app, 4);
+    typing(&mut app, "aaa");
+    enter(&mut app);
+    assert_eq!(
+        playlist_lens(&mut app),
+        [("aaa".to_string(), 1), ("early".to_string(), 2)]
+    );
+    assert_eq!(app.screen().playlist_state.selected(), Some(0));
+}
+
+/// Refreshes until `done` holds for the app's snapshot, or five seconds pass.
+fn refresh_until(app: &mut App, done: impl Fn(&playr::ui::Snapshot) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        app.refresh();
+        if done(app.screen().snapshot) || std::time::Instant::now() > deadline {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn b_marks_and_comma_and_period_seek_between_marks() {
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 60.0);
+    let path = file.to_string_lossy().into_owned();
+    let track = Track {
+        path: path.clone(),
+        ..Default::default()
+    };
+    let mut app = App::with_selection(conn, common::fake_player().0, vec![track]);
+    let seconds = |app: &mut App| {
+        std::thread::sleep(Duration::from_millis(300));
+        app.refresh();
+        app.screen().snapshot.position.as_secs_f64()
+    };
+    refresh_until(&mut app, |s| s.position > Duration::from_millis(200));
+
+    press(&mut app, 'b');
+    assert_eq!(app.screen().message, Some("marked 0:00"));
+    press(&mut app, 'b');
+    assert_eq!(app.screen().message, Some("already marked at 0:00"));
+
+    key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
+    assert!(seconds(&mut app) > 30.0);
+    press(&mut app, 'b');
+    assert_eq!(app.screen().message, Some("marked 0:30"));
+
+    // Stored in the library, so another connection sees them.
+    let other = db::open(&library).unwrap();
+    assert_eq!(query::marks(&other, &path).unwrap().len(), 2);
+
+    // Half a second past the 0:30 mark, within a second of it, so `,` skips it.
+    std::thread::sleep(Duration::from_millis(500));
+    press(&mut app, ',');
+    let back = seconds(&mut app);
+    assert!(back < 2.0, "comma went to {back}s, not the first mark");
+    press(&mut app, '.');
+    let forward = seconds(&mut app);
+    assert!((30.0..31.5).contains(&forward), "period went to {forward}s");
+    press(&mut app, '.');
+    assert_eq!(app.screen().message, Some("no later mark"));
+
+    // A mark added last but earlier in the track: `B` removes it, not 0:30.
+    key(&mut app, KeyCode::Left, KeyModifiers::SHIFT);
+    key(&mut app, KeyCode::Right, KeyModifiers::NONE);
+    let _ = seconds(&mut app);
+    press(&mut app, 'b');
+    assert_eq!(app.screen().message, Some("marked 0:05"));
+    press(&mut app, 'B');
+    assert_eq!(app.screen().message, Some("removed mark at 0:05"));
+    let left: Vec<u64> = query::marks(&other, &path)
+        .unwrap()
+        .iter()
+        .map(|m| m.time().as_secs())
+        .collect();
+    assert_eq!(left, [0, 30], "undo removed the wrong mark");
+
+    press(&mut app, 'C');
+    assert!(confirming(&mut app), "clearing did not ask");
+    press(&mut app, 'y');
+    assert_eq!(app.screen().message, Some("marks cleared"));
+    assert!(query::marks(&other, &path).unwrap().is_empty());
+    app.refresh();
+    assert!(app.screen().snapshot.marks.is_empty());
+}
+
+#[test]
+fn marks_need_something_playing() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let mut app = App::new(conn, common::fake_player().0);
+    for c in ['b', ',', '.', 'B', 'C'] {
+        press(&mut app, c);
+        assert_eq!(
+            app.screen().message,
+            Some("nothing is playing"),
+            "after {c:?}"
+        );
+    }
+}
+
+/// Types `:line` and Enter.
+fn command(app: &mut App, line: &str) {
+    press(app, ':');
+    typing(app, line);
+    enter(app);
+}
+
+fn command_text(app: &mut App) -> Option<String> {
+    match app.screen().input {
+        Input::Command(line) => Some(line.text.clone()),
+        _ => None,
+    }
+}
+
+#[test]
+fn colon_commands_do_what_their_keys_do() {
+    use playr::audio::Mode;
+    use playr::ui::View;
+    let (mut app, _dir) = app();
+
+    command(&mut app, "mode shuffle");
+    assert_eq!(app.screen().message, Some("mode: shuffle"));
+    app.refresh();
+    assert_eq!(app.screen().snapshot.status.mode, Mode::Shuffle);
+
+    command(&mut app, "vol 30");
+    app.refresh();
+    assert!((app.screen().snapshot.volume - 0.3).abs() < 1e-3);
+    command(&mut app, "volume -10");
+    app.refresh();
+    assert!((app.screen().snapshot.volume - 0.2).abs() < 1e-3);
+
+    command(&mut app, "save night");
+    assert_eq!(
+        playlist_lens(&mut app),
+        [("late".to_string(), 1), ("night".to_string(), 2)]
+    );
+    command(&mut app, "save late");
+    assert!(confirming(&mut app), "replacing by command did not ask");
+    press(&mut app, 'n');
+
+    command(&mut app, "rename dusk");
+    assert_eq!(
+        app.screen().message,
+        Some(":rename works in the playlists view")
+    );
+    command(&mut app, "view playlists");
+    assert_eq!(app.screen().view, View::Playlists);
+    command(&mut app, "rename dusk");
+    assert_eq!(
+        playlist_lens(&mut app),
+        [("dusk".to_string(), 1), ("night".to_string(), 2)]
+    );
+
+    command(&mut app, "playlist dusk");
+    assert_eq!(app.screen().message, Some("playing \"dusk\""));
+    assert_eq!(playing_paths(&mut app), ["/m/a.flac"]);
+    command(&mut app, "playlist nope");
+    assert_eq!(
+        app.screen().message,
+        Some("no single playlist named \"nope\"")
+    );
+
+    command(&mut app, "q");
+    assert!(app.quitting());
+}
+
+#[test]
+fn a_bad_command_says_why_and_closes_the_prompt() {
+    let (mut app, _dir) = app();
+    command(&mut app, "seek soon");
+    assert_eq!(
+        app.screen().message,
+        Some("not a time: soon (try 1:23 or 90)")
+    );
+    assert!(command_text(&mut app).is_none());
+
+    // Esc and deleting past the colon both close it without running anything.
+    press(&mut app, ':');
+    typing(&mut app, "q");
+    key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(command_text(&mut app).is_none());
+    press(&mut app, ':');
+    typing(&mut app, "q");
+    erase(&mut app, 1);
+    assert_eq!(command_text(&mut app).as_deref(), Some(""));
+    erase(&mut app, 1);
+    assert!(command_text(&mut app).is_none());
+    assert!(!app.quitting());
+}
+
+#[test]
+fn keys_in_the_command_prompt_edit_it_rather_than_act() {
+    use playr::ui::View;
+    let (mut app, _dir) = app();
+    let view = app.screen().view;
+    press(&mut app, ':');
+    typing(&mut app, "mo");
+    key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(command_text(&mut app).as_deref(), Some("mode"));
+    assert_eq!(app.screen().view, view, "tab switched view");
+    typing(&mut app, " sh");
+    key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(command_text(&mut app).as_deref(), Some("mode shuffle"));
+    enter(&mut app);
+
+    // Playlist names complete from the library.
+    press(&mut app, ':');
+    typing(&mut app, "playlist l");
+    key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(command_text(&mut app).as_deref(), Some("playlist late"));
+    key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+    command(&mut app, "view library");
+    command(&mut app, "view selection");
+    assert_eq!(app.screen().view, View::Selection);
+
+    // Up recalls; a cancelled line was not recorded.
+    press(&mut app, ':');
+    key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+    assert_eq!(command_text(&mut app).as_deref(), Some("view selection"));
+    key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+    key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+    assert_eq!(command_text(&mut app).as_deref(), Some("mode shuffle"));
+    key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+    assert_eq!(command_text(&mut app).as_deref(), Some("view library"));
+    enter(&mut app);
+    assert_eq!(app.screen().view, View::Library);
+    assert_eq!(
+        app.screen().selection_state.selected(),
+        Some(0),
+        "up or down moved the cursor"
+    );
+}
+
+#[test]
+fn help_command_lists_commands_and_the_next_key_only_closes_it() {
+    let (mut app, _dir) = app();
+    command(&mut app, "help");
+    assert!(matches!(app.screen().input, Input::CommandHelp));
+    press(&mut app, 'q');
+    assert!(matches!(app.screen().input, Input::None));
+    assert!(!app.quitting());
+}
+
+#[test]
+fn seek_and_mark_commands_take_times() {
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 60.0);
+    let path = file.to_string_lossy().into_owned();
+    let track = Track {
+        path: path.clone(),
+        ..Default::default()
+    };
+    let mut app = App::with_selection(conn, common::fake_player().0, vec![track]);
+    refresh_until(&mut app, |s| s.position > Duration::from_millis(100));
+    let seconds = |app: &mut App| {
+        std::thread::sleep(Duration::from_millis(300));
+        app.refresh();
+        app.screen().snapshot.position.as_secs_f64()
+    };
+
+    command(&mut app, "seek 0:40");
+    let at = seconds(&mut app);
+    assert!((40.0..41.0).contains(&at), ":seek 0:40 went to {at}s");
+    command(&mut app, "seek -30");
+    let at = seconds(&mut app);
+    assert!((10.0..11.5).contains(&at), ":seek -30 went to {at}s");
+
+    command(&mut app, "mark 0:25");
+    assert_eq!(app.screen().message, Some("marked 0:25"));
+    let marks: Vec<u64> = query::marks(&db::open(&library).unwrap(), &path)
+        .unwrap()
+        .iter()
+        .map(|m| m.time().as_secs())
+        .collect();
+    assert_eq!(marks, [25]);
+}
+
+#[test]
+fn view_commands_act_on_the_view_they_belong_to() {
+    use playr::ui::View;
+    let (mut app, _dir) = app();
+    assert_eq!(app.screen().view, View::Selection);
+
+    // Selection: move, remove, clear.
+    command(&mut app, "move +1");
+    assert_eq!(selection_paths(&mut app), ["/m/b.flac", "/m/a.flac"]);
+    command(&mut app, "first");
+    command(&mut app, "remove");
+    assert_eq!(selection_paths(&mut app), ["/m/a.flac"]);
+    command(&mut app, "delete");
+    assert_eq!(
+        app.screen().message,
+        Some(":delete works in the playlists view")
+    );
+    command(&mut app, "clear");
+    assert!(confirming(&mut app), ":clear did not ask");
+    press(&mut app, 'y');
+    assert!(selection_paths(&mut app).is_empty());
+
+    // Library: toggle, with the cursor moved by command.
+    command(&mut app, "view library");
+    command(&mut app, "last");
+    command(&mut app, "toggle");
+    assert_eq!(selection_paths(&mut app), ["/m/b.flac"]);
+    command(&mut app, "up");
+    command(&mut app, "toggle");
+    assert_eq!(selection_paths(&mut app), ["/m/b.flac", "/m/a.flac"]);
+    command(&mut app, "search zzz");
+    assert!(app.screen().results.is_some());
+    command(&mut app, "clear-search");
+    assert!(app.screen().results.is_none());
+
+    // Playlists: add, rename, delete.
+    command(&mut app, "next-view");
+    command(&mut app, "next-view");
+    assert_eq!(app.screen().view, View::Playlists);
+    command(&mut app, "clear");
+    assert_eq!(
+        app.screen().message,
+        Some(":clear works in the selection view")
+    );
+    command(&mut app, "add");
+    assert_eq!(app.screen().message, Some("already in selection"));
+    command(&mut app, "delete");
+    assert!(confirming(&mut app), ":delete did not ask");
+    press(&mut app, 'y');
+    assert!(playlist_lens(&mut app).is_empty());
+}
+
+#[test]
+fn tab_completes_only_commands_that_work_in_this_view() {
+    let (mut app, _dir) = app();
+    press(&mut app, ':');
+    typing(&mut app, "re");
+    key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(command_text(&mut app).as_deref(), Some("remove"));
+    key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+    press(&mut app, '3');
+    press(&mut app, ':');
+    typing(&mut app, "re");
+    key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(command_text(&mut app).as_deref(), Some("rename"));
+}
+
+#[test]
+fn help_lists_scroll_with_j_and_k_and_other_keys_close_them() {
+    let (mut app, _dir) = app();
+    for (line, open) in [("help", "commands"), ("keys", "keys")] {
+        command(&mut app, line);
+        let showing = |app: &mut App| match app.screen().input {
+            Input::CommandHelp => Some("commands"),
+            Input::Help => Some("keys"),
+            _ => None,
+        };
+        assert_eq!(showing(&mut app), Some(open));
+        press(&mut app, 'j');
+        key(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(*app.screen().help_scroll, 11);
+        press(&mut app, 'k');
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(*app.screen().help_scroll, 9);
+        assert_eq!(showing(&mut app), Some(open), "scrolling closed it");
+        press(&mut app, 'x');
+        assert_eq!(showing(&mut app), None);
+    }
+    // Reopening starts at the top.
+    command(&mut app, "help");
+    assert_eq!(*app.screen().help_scroll, 0);
+}
+
+#[test]
+fn the_config_sets_keys_and_startup_before_anything_plays() {
+    use playr::audio::Mode;
+    use playr::ui::config::Config;
+    let config =
+        Config::parse("volume = 30\nmode = 'repeat'\n[keys.selection]\nctrl-x = 'remove'").unwrap();
+    let tracks: Vec<Track> = ["/m/a.flac", "/m/b.flac"]
+        .iter()
+        .map(|p| Track {
+            path: p.to_string(),
+            ..Default::default()
+        })
+        .collect();
+    let mut app = App::configured(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        tracks,
+        config,
+    );
+    assert_eq!(
+        app.screen().message,
+        None,
+        "a startup setting was announced"
+    );
+    app.refresh();
+    assert!((app.screen().snapshot.volume - 0.3).abs() < 1e-3);
+    assert_eq!(app.screen().snapshot.status.mode, Mode::Repeat);
+
+    key(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+    assert_eq!(selection_paths(&mut app), ["/m/b.flac"]);
+    // Ctrl-C quits whatever the key map says.
+    chord(&mut app, KeyModifiers::CONTROL, 'c');
+    assert!(app.quitting());
+}
+
+#[test]
+fn map_and_unmap_change_keys_while_running() {
+    let (mut app, _dir) = app();
+    command(&mut app, "map ctrl-x clear");
+    assert_eq!(
+        app.screen().message,
+        Some(":clear works in the selection view; use map selection ctrl-x clear")
+    );
+    command(&mut app, "map selection ctrl-x clear");
+    assert_eq!(app.screen().message, Some("map selection ctrl-x clear"));
+    key(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+    assert!(confirming(&mut app), "the mapped key did not run :clear");
+    press(&mut app, 'n');
+
+    command(&mut app, "map selection d nop");
+    press(&mut app, 'd');
+    assert_eq!(selection_paths(&mut app).len(), 2, "d still removed");
+
+    // Unmapping falls back to a binding for all views, not to the default,
+    // and no default binds d in all views.
+    command(&mut app, "unmap selection d");
+    assert_eq!(app.screen().message, Some("unmapped d"));
+    press(&mut app, 'd');
+    assert_eq!(
+        selection_paths(&mut app).len(),
+        2,
+        "d fell back to a default"
+    );
+    command(&mut app, "map d first");
+    command(&mut app, "last");
+    press(&mut app, 'd');
+    assert_eq!(
+        app.screen().selection_state.selected(),
+        Some(0),
+        "no fallback to all views"
+    );
+    command(&mut app, "map selection d remove");
+    press(&mut app, 'd');
+    assert_eq!(
+        selection_paths(&mut app).len(),
+        1,
+        "remapping did not restore d"
+    );
+    command(&mut app, "unmap selection d");
+    command(&mut app, "unmap selection d");
+    assert_eq!(
+        app.screen().message,
+        Some("d has no binding in the selection view")
+    );
+}

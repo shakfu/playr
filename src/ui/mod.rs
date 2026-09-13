@@ -3,6 +3,9 @@
 //! One thread: it renders, reads keys, and talks to the player over a channel.
 //! Nothing here blocks on audio.
 
+pub mod action;
+pub mod command;
+pub mod config;
 pub mod render;
 
 use std::collections::{HashMap, HashSet};
@@ -15,8 +18,11 @@ use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
 use crate::audio::{Cmd, Player, State, Status};
-use crate::db::query::{self, Playlist};
+use crate::db::query::{self, Mark, Playlist};
 use crate::db::Track;
+use action::{Action, Keymap};
+use command::{CommandLine, History};
+use config::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -48,10 +54,19 @@ pub enum Input {
     None,
     Search(String),
     SavePlaylist(String),
+    /// A new name for the playlist `from`, being typed.
+    RenamePlaylist {
+        from: Playlist,
+        name: String,
+    },
     /// Waiting for `y` before an action that cannot be undone.
     Confirm(Confirm),
     /// The key list is open; the next key closes it.
     Help,
+    /// The command list is open; the next key closes it.
+    CommandHelp,
+    /// A `:` command being typed.
+    Command(CommandLine),
 }
 
 /// A destructive action held until the listener confirms it.
@@ -61,6 +76,8 @@ pub enum Confirm {
     ReplacePlaylist(String),
     /// Empty the selection, which holds this many tracks.
     ClearSelection(usize),
+    /// Remove this many marks from the playing track.
+    ClearMarks(usize),
 }
 
 impl Confirm {
@@ -71,6 +88,7 @@ impl Confirm {
                 format!("replace playlist \"{name}\" with the selection? (y/n)")
             }
             Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection? (y/n)"),
+            Confirm::ClearMarks(n) => format!("clear all {n} marks from this track? (y/n)"),
         }
     }
 }
@@ -100,6 +118,11 @@ pub struct App {
     playlist_state: ListState,
 
     input: Input,
+    /// `:` command lines entered this session.
+    history: History,
+    keys: Keymap,
+    /// Rows the key or command list is scrolled by.
+    help_scroll: usize,
     message: Option<(String, Instant)>,
     quit: bool,
 
@@ -107,6 +130,9 @@ pub struct App {
     seen_error: u64,
     /// The peak shown, as a sample magnitude, and when it was reached.
     peak_hold: Option<(f32, Instant)>,
+    /// Marks in the track `marks_for`, earliest first.
+    marks: Vec<Mark>,
+    marks_for: Option<PathBuf>,
 
     /// One snapshot of the player per frame.
     ///
@@ -130,6 +156,9 @@ pub struct Screen<'a> {
     pub selection: &'a [Track],
     pub playlists: &'a [Playlist],
     pub input: &'a Input,
+    pub keys: &'a Keymap,
+    /// Rows the key or command list is scrolled by; drawing clamps it.
+    pub help_scroll: &'a mut usize,
     pub message: Option<&'a str>,
     pub library_state: &'a mut ListState,
     pub selection_state: &'a mut ListState,
@@ -153,6 +182,8 @@ pub struct Snapshot {
     pub loudness: Option<f32>,
     /// The highest recent sample peak in dBFS, held for [`PEAK_HOLD`].
     pub peak: Option<f32>,
+    /// Marks in the playing track, as times into it, earliest first.
+    pub marks: Vec<Duration>,
 }
 
 impl App {
@@ -163,6 +194,17 @@ impl App {
     /// Builds the app with `tracks` selected and playing, as the CLI hands
     /// them over, so the files played are also listed.
     pub fn with_selection(conn: Connection, player: Player, tracks: Vec<Track>) -> Self {
+        Self::configured(conn, player, tracks, Config::default())
+    }
+
+    /// As [`App::with_selection`], with the keys, volume, mode and speed of
+    /// `config`. They apply before `tracks` start, so a shuffle covers them.
+    pub fn configured(
+        conn: Connection,
+        player: Player,
+        tracks: Vec<Track>,
+        config: Config,
+    ) -> Self {
         let mut app = App {
             conn,
             player,
@@ -177,12 +219,20 @@ impl App {
             playlists: Vec::new(),
             playlist_state: ListState::default(),
             input: Input::None,
+            history: History::default(),
+            keys: config.keys,
+            help_scroll: 0,
             message: None,
             quit: false,
             seen_error: 0,
             peak_hold: None,
+            marks: Vec::new(),
+            marks_for: None,
             snapshot: Snapshot::default(),
         };
+        app.player.send(Cmd::SetVolume(config.volume));
+        app.player.send(Cmd::SetMode(config.mode));
+        app.player.send(Cmd::SetSpeed(config.speed));
         if !tracks.is_empty() {
             app.selection = tracks.clone();
             app.selection_state.select(Some(0));
@@ -251,6 +301,8 @@ impl App {
             selection: &self.selection,
             playlists: &self.playlists,
             input: &self.input,
+            keys: &self.keys,
+            help_scroll: &mut self.help_scroll,
             message: self.message.as_ref().map(|(m, _)| m.as_str()),
             library_state: &mut self.library_state,
             selection_state: &mut self.selection_state,
@@ -290,7 +342,11 @@ impl App {
             volume: self.player.volume(),
             loudness: self.player.loudness(),
             peak: self.peak_hold.map(|(p, _)| 20.0 * p.log10()),
+            marks: Vec::new(),
         };
+        let current = self.snapshot.status.current().cloned();
+        self.follow_marks(current.as_ref());
+        self.snapshot.marks = self.marks.iter().map(Mark::time).collect();
         let seq = self.snapshot.status.error_seq;
         if seq > self.seen_error {
             let missed = seq - self.seen_error - 1;
@@ -339,9 +395,22 @@ impl App {
                 }
                 return;
             }
-            Input::Help => {
-                self.input = Input::None;
+            Input::Help | Input::CommandHelp => {
+                // The lists can be longer than the screen.
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => self.help_scroll += 1,
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.help_scroll = self.help_scroll.saturating_sub(1)
+                    }
+                    KeyCode::PageDown => self.help_scroll += 10,
+                    KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                    _ => self.input = Input::None,
+                }
                 return;
+            }
+            Input::Command(line) => {
+                let line = line.clone();
+                return self.command_key(key, line);
             }
             Input::Search(buf) => {
                 let buf = buf.clone();
@@ -351,73 +420,203 @@ impl App {
                 let buf = buf.clone();
                 return self.save_key(key, buf);
             }
+            Input::RenamePlaylist { from, name } => {
+                let (from, name) = (from.clone(), name.clone());
+                return self.rename_key(key, from, name);
+            }
             Input::None => {}
         }
 
-        match key.code {
-            KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char('?') => self.input = Input::Help,
-            KeyCode::Tab => self.view = self.view.next(),
-            KeyCode::Char('1') => self.view = View::Library,
-            KeyCode::Char('2') => self.view = View::Selection,
-            KeyCode::Char('3') => self.view = View::Playlists,
+        if let Some(action) = self.keys.lookup((&key).into(), self.view).cloned() {
+            self.perform(action);
+        }
+    }
 
-            // In the selection, shift moves the track rather than the cursor.
-            KeyCode::Char('J') if self.view == View::Selection => self.move_in_selection(1),
-            KeyCode::Char('K') if self.view == View::Selection => self.move_in_selection(-1),
-            KeyCode::Down if shifted(&key) && self.view == View::Selection => {
-                self.move_in_selection(1)
+    /// Does `action`. Keys and `:` commands both arrive here.
+    pub fn perform(&mut self, action: Action) {
+        self.follow_player();
+        match action {
+            Action::Quit => self.quit = true,
+            Action::Help => {
+                self.help_scroll = 0;
+                self.input = Input::Help;
             }
-            KeyCode::Up if shifted(&key) && self.view == View::Selection => {
-                self.move_in_selection(-1)
+            Action::CommandHelp => {
+                self.help_scroll = 0;
+                self.input = Input::CommandHelp;
             }
-            KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
-            KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
-            KeyCode::PageDown => self.move_selection(10),
-            KeyCode::PageUp => self.move_selection(-10),
-            KeyCode::Char('g') | KeyCode::Home => self.select(0),
-            KeyCode::Char('G') | KeyCode::End => self.select(self.len().saturating_sub(1)),
-
-            KeyCode::Char(' ') => self.player.send(Cmd::TogglePause),
-            KeyCode::Char('n') => self.player.send(Cmd::Next),
-            KeyCode::Char('p') => self.player.send(Cmd::Prev),
-            KeyCode::Char('x') => self.player.send(Cmd::Stop),
-            KeyCode::Char('m') => self.cycle_mode(true),
-            KeyCode::Char('M') => self.cycle_mode(false),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.nudge_volume(0.05),
-            KeyCode::Char('-') | KeyCode::Char('_') => self.nudge_volume(-0.05),
-            KeyCode::Right => self.player.send(Cmd::SeekBy(seek_step(&key))),
-            KeyCode::Left => self.player.send(Cmd::SeekBy(-seek_step(&key))),
-            // Varispeed: one semitone per press, pitch moving with tempo.
-            KeyCode::Char(']') => self.player.send(Cmd::SpeedBy(1)),
-            KeyCode::Char('[') => self.player.send(Cmd::SpeedBy(-1)),
-            KeyCode::Char('\\') => self.player.send(Cmd::SpeedReset),
-
-            KeyCode::Char('/') => self.input = Input::Search(String::new()),
-            KeyCode::Esc => {
+            Action::ShowView(view) => self.view = view,
+            Action::NextView => self.view = self.view.next(),
+            Action::Cursor(rows) => self.move_selection(rows),
+            Action::CursorFirst => self.select(0),
+            Action::CursorLast => self.select(self.len().saturating_sub(1)),
+            Action::StartSearch => self.input = Input::Search(String::new()),
+            Action::Search(query) => {
+                self.apply_search(&query);
+                if self.visible().is_empty() {
+                    self.notify("no matches");
+                }
+            }
+            Action::ClearSearch => {
                 if self.results.take().is_some() {
                     self.library_state.select(Some(0));
                 }
             }
-            KeyCode::Enter => self.activate(),
-            KeyCode::Char('a') => self.append_selection(),
-            KeyCode::Char('s') => {
+            Action::StartCommand => self.input = Input::Command(CommandLine::default()),
+            Action::Activate => self.activate(),
+
+            Action::Add => self.append_selection(),
+            Action::Remove => self.remove_from_selection(),
+            Action::MoveTrack(delta) => self.move_in_selection(delta),
+            Action::ClearSelection => {
                 if self.selection.is_empty() {
                     self.notify("selection is empty");
-                } else if self.conn.path().is_none_or(str::is_empty) {
-                    // In memory, the playlist would be lost on exit.
-                    self.notify("no library to save to; `playr scan <dir>` creates one");
                 } else {
+                    self.input = Input::Confirm(Confirm::ClearSelection(self.selection.len()));
+                }
+            }
+            Action::StartSave => {
+                if self.can_save() {
                     self.input = Input::SavePlaylist(String::new());
                 }
             }
-            KeyCode::Char('d') if self.view == View::Selection => self.remove_from_selection(),
-            KeyCode::Char('d') => self.delete_playlist(),
-            KeyCode::Char('c') if self.view == View::Selection && !self.selection.is_empty() => {
-                self.input = Input::Confirm(Confirm::ClearSelection(self.selection.len()));
+            Action::SaveAs(name) => {
+                if self.can_save() {
+                    self.save_as(&name);
+                }
             }
-            _ => {}
+            Action::DeletePlaylist => self.delete_playlist(),
+            Action::StartRename => self.start_rename(),
+            Action::RenameTo(name) => match self.playlist_under_cursor() {
+                Some(from) => self.rename_to(&from, &name),
+                None => self.notify("no playlist under the cursor in the playlists view"),
+            },
+            Action::PlayPlaylist(name) => self.play_playlist_named(&name),
+
+            Action::TogglePause => self.player.send(Cmd::TogglePause),
+            Action::Next => self.player.send(Cmd::Next),
+            Action::Prev => self.player.send(Cmd::Prev),
+            Action::Stop => self.player.send(Cmd::Stop),
+            Action::SeekBy(seconds) => self.player.send(Cmd::SeekBy(seconds)),
+            Action::SeekTo(at) => self.player.send(Cmd::Seek(at)),
+            Action::VolumeBy(delta) => self.nudge_volume(delta),
+            Action::SetVolume(v) => self.player.send(Cmd::SetVolume(v)),
+            Action::SpeedBy(semitones) => self.player.send(Cmd::SpeedBy(semitones)),
+            Action::SetSpeed(semitones) => self.player.send(Cmd::SetSpeed(semitones)),
+            Action::CycleMode(forward) => self.cycle_mode(forward),
+            Action::SetMode(mode) => {
+                self.player.send(Cmd::SetMode(mode));
+                self.notify(format!("mode: {}", mode.name()));
+            }
+
+            Action::Mark => self.add_mark(None),
+            Action::MarkAt(at) => self.add_mark(Some(at)),
+            Action::UndoMark => self.undo_mark(),
+            Action::ClearMarks => self.ask_to_clear_marks(),
+            Action::NextMark => self.jump_to_mark(true),
+            Action::PrevMark => self.jump_to_mark(false),
+
+            Action::Map { view, key, action } => {
+                let shown = command::line(
+                    &Action::Map {
+                        view,
+                        key,
+                        action: action.clone(),
+                    },
+                    None,
+                );
+                self.keys.bind(view, key, action.map(|a| *a));
+                self.notify(shown);
+            }
+            Action::Unmap { view, key } => {
+                if self.keys.unbind(view, key) {
+                    self.notify(format!("unmapped {key}"));
+                } else {
+                    self.notify(format!("{key} has no binding {}", command::scope(view)));
+                }
+            }
         }
+    }
+
+    /// Whether the selection can be saved, saying why not when it cannot.
+    fn can_save(&mut self) -> bool {
+        if self.selection.is_empty() {
+            self.notify("selection is empty");
+            false
+        } else if self.conn.path().is_none_or(str::is_empty) {
+            // In memory, the playlist would be lost on exit.
+            self.notify("no library to save to; `playr scan <dir>` creates one");
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Saves the selection as `name`, asking first if that replaces a playlist.
+    fn save_as(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.notify("playlist name cannot be empty");
+        } else if self.playlists.iter().any(|p| p.name == name) {
+            self.input = Input::Confirm(Confirm::ReplacePlaylist(name.to_string()));
+        } else {
+            self.save_selection(name);
+        }
+    }
+
+    fn playlist_under_cursor(&self) -> Option<Playlist> {
+        if self.view != View::Playlists {
+            return None;
+        }
+        self.playlist_state
+            .selected()
+            .and_then(|i| self.playlists.get(i))
+            .cloned()
+    }
+
+    fn play_playlist_named(&mut self, name: &str) {
+        let Some(pl) = query::find_playlist(&self.playlists, name.trim()).cloned() else {
+            return self.notify(format!("no single playlist named \"{}\"", name.trim()));
+        };
+        let tracks = query::playlist_tracks(&self.conn, pl.id).unwrap_or_default();
+        if tracks.is_empty() {
+            return self.notify("playlist is empty");
+        }
+        self.play(tracks, 0);
+        self.notify(format!("playing \"{}\"", pl.name));
+    }
+
+    fn command_key(&mut self, key: KeyEvent, mut line: CommandLine) {
+        match key.code {
+            KeyCode::Esc => return self.input = Input::None,
+            KeyCode::Enter => {
+                self.input = Input::None;
+                if line.text.trim().is_empty() {
+                    return;
+                }
+                // Recorded even when it fails, so a typo can be recalled and fixed.
+                self.history.push(&line.text);
+                match command::parse(&line.text, self.view) {
+                    Ok(action) => self.perform(action),
+                    Err(e) => self.notify(e),
+                }
+                return;
+            }
+            // Deleting past the colon closes the prompt, as in vim.
+            KeyCode::Backspace if !line.pop() => return self.input = Input::None,
+            KeyCode::Tab | KeyCode::BackTab => {
+                let names: Vec<String> = self.playlists.iter().map(|p| p.name.clone()).collect();
+                line.complete(key.code == KeyCode::Tab, self.view, &names);
+            }
+            KeyCode::Up => line.recall(true, &self.history),
+            KeyCode::Down => line.recall(false, &self.history),
+            _ => {
+                if let Some(c) = typed(&key) {
+                    line.push(c);
+                }
+            }
+        }
+        self.input = Input::Command(line);
     }
 
     fn search_key(&mut self, key: KeyEvent, mut buf: String) {
@@ -465,14 +664,7 @@ impl App {
             KeyCode::Esc => self.input = Input::None,
             KeyCode::Enter => {
                 self.input = Input::None;
-                let name = buf.trim().to_string();
-                if name.is_empty() {
-                    self.notify("playlist name cannot be empty");
-                } else if self.playlists.iter().any(|p| p.name == name) {
-                    self.input = Input::Confirm(Confirm::ReplacePlaylist(name));
-                } else {
-                    self.save_selection(&name);
-                }
+                self.save_as(&buf);
             }
             KeyCode::Backspace => {
                 buf.pop();
@@ -484,6 +676,60 @@ impl App {
             }
             _ => self.input = Input::SavePlaylist(buf),
         }
+    }
+
+    fn start_rename(&mut self) {
+        let Some(from) = self.playlist_under_cursor() else {
+            return self.notify("no playlist under the cursor in the playlists view");
+        };
+        // Starts from the current name, which is usually a small edit away.
+        let name = from.name.clone();
+        self.input = Input::RenamePlaylist { from, name };
+    }
+
+    fn rename_key(&mut self, key: KeyEvent, from: Playlist, mut name: String) {
+        match key.code {
+            KeyCode::Esc => self.input = Input::None,
+            KeyCode::Enter => {
+                self.input = Input::None;
+                self.rename_to(&from, &name);
+            }
+            KeyCode::Backspace => {
+                name.pop();
+                self.input = Input::RenamePlaylist { from, name };
+            }
+            KeyCode::Char(c) if typed(&key).is_some() => {
+                name.push(c);
+                self.input = Input::RenamePlaylist { from, name };
+            }
+            _ => self.input = Input::RenamePlaylist { from, name },
+        }
+    }
+
+    /// Renames `from` to `name`, unless the name is empty, unchanged or taken.
+    fn rename_to(&mut self, from: &Playlist, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.notify("playlist name cannot be empty");
+        } else if name == from.name {
+            self.notify("name unchanged");
+        } else if self.playlists.iter().any(|p| p.name == name) {
+            // Renaming onto it would have to merge or replace two playlists.
+            self.notify(format!("a playlist named \"{name}\" already exists"));
+        } else {
+            self.rename_playlist(from, name);
+        }
+    }
+
+    fn rename_playlist(&mut self, from: &Playlist, name: &str) {
+        if let Err(e) = query::rename_playlist(&self.conn, from.id, name) {
+            return self.notify(format!("could not rename: {e}"));
+        }
+        self.playlists = query::playlists(&self.conn).unwrap_or_default();
+        // The list is sorted by name, so the renamed playlist may have moved.
+        let at = self.playlists.iter().position(|p| p.id == from.id);
+        self.playlist_state.select(at);
+        self.notify(format!("renamed \"{}\" to \"{name}\"", from.name));
     }
 
     fn save_selection(&mut self, name: &str) {
@@ -512,6 +758,18 @@ impl App {
     fn confirm(&mut self, action: Confirm) {
         match action {
             Confirm::ReplacePlaylist(name) => self.save_selection(&name),
+            Confirm::ClearMarks(_) => {
+                let Some(path) = self.marks_for.clone() else {
+                    return;
+                };
+                match query::clear_marks(&self.conn, &path.to_string_lossy()) {
+                    Ok(_) => {
+                        self.marks.clear();
+                        self.notify("marks cleared");
+                    }
+                    Err(e) => self.notify(format!("could not clear marks: {e}")),
+                }
+            }
             Confirm::ClearSelection(_) => {
                 self.selection.clear();
                 self.selection_state.select(None);
@@ -720,6 +978,116 @@ impl App {
         self.input = Input::Confirm(Confirm::DeletePlaylist(pl));
     }
 
+    /// Loads the marks for `path` if they are not the ones held.
+    fn follow_marks(&mut self, path: Option<&PathBuf>) {
+        if self.marks_for.as_ref() == path {
+            return;
+        }
+        self.marks = path
+            .and_then(|p| query::marks(&self.conn, &p.to_string_lossy()).ok())
+            .unwrap_or_default();
+        self.marks_for = path.cloned();
+    }
+
+    /// The playing track's path and source rate, read fresh rather than from
+    /// the snapshot, or a message saying nothing is playing.
+    fn playing_track(&mut self) -> Option<(PathBuf, u32)> {
+        let status = self.player.status();
+        let track = match (status.state, status.current(), status.source) {
+            (State::Playing | State::Paused, Some(path), Some(source)) => {
+                Some((path.clone(), source.rate))
+            }
+            _ => None,
+        };
+        if track.is_none() {
+            self.notify("nothing is playing");
+        }
+        track
+    }
+
+    /// Marks `at`, or the playing position, unless a mark is already within [`MARK_NEAR`].
+    fn add_mark(&mut self, at: Option<Duration>) {
+        let Some((path, rate)) = self.playing_track() else {
+            return;
+        };
+        self.follow_marks(Some(&path));
+        let at = at.unwrap_or_else(|| self.player.position());
+        if let Some(near) = self
+            .marks
+            .iter()
+            .find(|m| m.time().abs_diff(at) < MARK_NEAR)
+        {
+            return self.notify(format!("already marked at {}", fmt_time(near.time())));
+        }
+        let mark = Mark::at_time(at, rate);
+        if let Err(e) = query::add_mark(&self.conn, &path.to_string_lossy(), mark) {
+            return self.notify(format!("could not mark: {e}"));
+        }
+        self.marks.push(mark);
+        self.marks.sort_by_key(|m| m.frame);
+        // As with playlists: in memory, the mark is gone when playr exits.
+        let kept = if self.conn.path().is_none_or(str::is_empty) {
+            " (not kept: no library file)"
+        } else {
+            ""
+        };
+        self.notify(format!("marked {}{kept}", fmt_time(at)));
+    }
+
+    /// Removes the most recently added mark in the playing track: marks are a
+    /// chain, and `B` takes off the last link.
+    fn undo_mark(&mut self) {
+        let Some((path, _)) = self.playing_track() else {
+            return;
+        };
+        self.follow_marks(Some(&path));
+        match query::remove_last_mark(&self.conn, &path.to_string_lossy()) {
+            Ok(Some(mark)) => {
+                self.marks.retain(|m| m.frame != mark.frame);
+                self.notify(format!("removed mark at {}", fmt_time(mark.time())));
+            }
+            Ok(None) => self.notify("no marks in this track"),
+            Err(e) => self.notify(format!("could not remove mark: {e}")),
+        }
+    }
+
+    fn ask_to_clear_marks(&mut self) {
+        let Some((path, _)) = self.playing_track() else {
+            return;
+        };
+        self.follow_marks(Some(&path));
+        if self.marks.is_empty() {
+            return self.notify("no marks in this track");
+        }
+        self.input = Input::Confirm(Confirm::ClearMarks(self.marks.len()));
+    }
+
+    /// Seeks to the next mark, or back to the previous one.
+    ///
+    /// Back skips a mark less than [`MARK_BACK`] behind, as `p` restarts a
+    /// track rather than leaving it, so pressing it twice steps back twice.
+    fn jump_to_mark(&mut self, forward: bool) {
+        let Some((path, _)) = self.playing_track() else {
+            return;
+        };
+        self.follow_marks(Some(&path));
+        let at = self.player.position();
+        let mut times = self.marks.iter().map(Mark::time);
+        let target = if forward {
+            times.find(|t| *t > at + MARK_NEAR / 2)
+        } else {
+            times.rev().find(|t| *t + MARK_BACK < at)
+        };
+        match target {
+            Some(t) => {
+                self.player.send(Cmd::Seek(t));
+                self.notify(format!("mark at {}", fmt_time(t)));
+            }
+            None if forward => self.notify("no later mark"),
+            None => self.notify("no earlier mark"),
+        }
+    }
+
     /// Moves to the next playback mode, or the previous one.
     fn cycle_mode(&mut self, forward: bool) {
         // Not the snapshot: it is a frame old, so quick presses would repeat a step.
@@ -740,56 +1108,11 @@ impl App {
     }
 }
 
-/// Seconds an arrow key seeks, or a shift-arrow.
-const SEEK_STEP: i64 = 5;
-const SEEK_JUMP: i64 = 30;
-
-fn shifted(key: &KeyEvent) -> bool {
-    key.modifiers.contains(KeyModifiers::SHIFT)
-}
-
-fn seek_step(key: &KeyEvent) -> i64 {
-    if shifted(key) {
-        SEEK_JUMP
-    } else {
-        SEEK_STEP
-    }
-}
-
-/// Every key binding, as `(keys, action)`, for the help view.
-pub const KEYS: &[(&str, &str)] = &[
-    (
-        "tab  1 2 3",
-        "switch between library, selection and playlists",
-    ),
-    ("j k  up down", "move"),
-    ("g G  home end", "jump to first or last"),
-    ("page up/down", "move by ten"),
-    ("enter", "play from here; in playlists, play it"),
-    (
-        "a",
-        "select or unselect a track, or add a playlist; move down",
-    ),
-    ("/", "search; esc clears"),
-    ("s", "save the selection as a playlist"),
-    ("d", "remove from the selection; delete a playlist"),
-    ("J K  shift up down", "move a track in the selection"),
-    ("c", "clear the selection"),
-    ("space", "play or pause"),
-    ("n p", "next or previous track"),
-    ("x", "stop"),
-    (
-        "m M",
-        "next or previous mode: normal, shuffle, repeat, repeat one",
-    ),
-    ("left right", "seek back or forward 5 seconds"),
-    ("shift left right", "seek back or forward 30 seconds"),
-    ("[ ]", "varispeed down or up a semitone"),
-    ("\\", "back to normal speed"),
-    ("+ -", "volume"),
-    ("?", "show this list"),
-    ("q  ctrl-c", "quit"),
-];
+/// Marks closer than this to one another are the same mark.
+const MARK_NEAR: Duration = Duration::from_millis(500);
+/// How far past a mark playback must be before `,` returns to it rather than
+/// the one before.
+const MARK_BACK: Duration = Duration::from_secs(1);
 
 /// The character `key` types, or `None` for any other key and for a Ctrl or
 /// Alt chord, which is a command rather than text.

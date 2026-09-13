@@ -100,6 +100,8 @@ pub enum Cmd {
     SpeedBy(i32),
     /// Return to normal speed.
     SpeedReset,
+    /// Set the speed shift to this many semitones.
+    SetSpeed(i32),
     /// Change how playback moves through the list. See [`Mode`].
     SetMode(Mode),
     Quit,
@@ -488,6 +490,7 @@ impl Engine {
             Cmd::SetVolume(_) => {}
             Cmd::SpeedBy(delta) => self.set_semitones(self.semitones + delta),
             Cmd::SpeedReset => self.set_semitones(0),
+            Cmd::SetSpeed(semitones) => self.set_semitones(semitones),
             Cmd::SetMode(mode) => self.set_mode(mode),
             Cmd::Quit => {}
         }

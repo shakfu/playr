@@ -43,22 +43,70 @@ pub fn count(conn: &Connection) -> Result<i64> {
     conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
 }
 
-/// Turns free-form user input into an FTS5 prefix query.
-///
-/// Each whitespace-separated token becomes a quoted prefix term, so input
-/// containing FTS operators (`AND`, `*`, `"`, `:`) is matched literally rather
-/// than being parsed as syntax or raising an error.
-fn fts_query(input: &str) -> Option<String> {
-    let terms: Vec<String> = input
-        .split_whitespace()
-        .filter(|t| !t.is_empty())
-        .map(|t| format!("\"{}\"*", t.replace('"', "\"\"")))
-        .collect();
-    if terms.is_empty() {
-        None
-    } else {
-        Some(terms.join(" "))
+/// Fields a search term can be limited to, as typed, and their FTS5 columns.
+const FIELDS: &[(&str, &str)] = &[
+    ("title", "title"),
+    ("artist", "artist"),
+    ("album", "album"),
+    ("albumartist", "album_artist"),
+    ("album_artist", "album_artist"),
+];
+
+/// Splits search input into terms: whitespace separates them except inside
+/// double quotes, which are removed. A term that starts with a known `field:`,
+/// before any quote, is limited to that field's column.
+fn terms(input: &str) -> Vec<(Option<&'static str>, String)> {
+    let mut out = Vec::new();
+    let mut chars = input.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        if chars.peek().is_none() {
+            return out;
+        }
+        let (mut text, mut quoted, mut seen_quote, mut colon) = (String::new(), false, false, None);
+        while let Some(c) = chars.next_if(|c| quoted || !c.is_whitespace()) {
+            match c {
+                '"' => (quoted, seen_quote) = (!quoted, true),
+                ':' if !seen_quote && colon.is_none() => {
+                    colon = Some(text.len());
+                    text.push(c);
+                }
+                _ => text.push(c),
+            }
+        }
+        let field = colon.and_then(|at| {
+            let name = text[..at].to_ascii_lowercase();
+            FIELDS
+                .iter()
+                .find(|(typed, _)| *typed == name)
+                .map(|(_, column)| (at, *column))
+        });
+        match field {
+            Some((at, column)) => out.push((Some(column), text[at + 1..].to_string())),
+            None => out.push((None, text)),
+        }
     }
+}
+
+/// Turns search input into an FTS5 query of prefix terms, all of which must match.
+///
+/// Every term is quoted, so FTS operators in the input (`AND`, `*`, `"`) are
+/// matched as text rather than parsed or raising an error. `artist:evans`
+/// limits a term to one column, and `artist:"bill evans"` a phrase; a prefix
+/// that names no field, as in `op:1`, stays part of the text.
+fn fts_query(input: &str) -> Option<String> {
+    let terms: Vec<String> = terms(input)
+        .into_iter()
+        .filter(|(_, text)| !text.trim().is_empty())
+        .map(|(column, text)| {
+            let phrase = format!("\"{}\"*", text.replace('"', "\"\""));
+            match column {
+                Some(column) => format!("{column} : {phrase}"),
+                None => phrase,
+            }
+        })
+        .collect();
+    (!terms.is_empty()).then(|| terms.join(" "))
 }
 
 /// Full-text search over title, artist, album and album artist.
@@ -173,6 +221,93 @@ pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> Result<Vec<Track>
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([playlist_id], row_to_track)?;
     rows.collect()
+}
+
+/// Renames a playlist, keeping its tracks. Fails if another playlist is
+/// already called `name`, since names are unique.
+pub fn rename_playlist(conn: &Connection, playlist_id: i64, name: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE playlists SET name = ?1 WHERE id = ?2",
+        rusqlite::params![name, playlist_id],
+    )?;
+    Ok(())
+}
+
+// --- marks ---
+
+/// A marked position in a track, as a source frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mark {
+    pub frame: u64,
+    /// The source sample rate `frame` counts in.
+    pub rate: u32,
+}
+
+impl Mark {
+    /// A mark at `at` into a track sampled at `rate`.
+    pub fn at_time(at: std::time::Duration, rate: u32) -> Self {
+        Mark {
+            frame: (at.as_secs_f64() * rate as f64).round() as u64,
+            rate,
+        }
+    }
+
+    /// How far into the track the mark is.
+    pub fn time(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(self.frame as f64 / self.rate.max(1) as f64)
+    }
+}
+
+/// The marks in the track at `path`, earliest first.
+pub fn marks(conn: &Connection, path: &str) -> Result<Vec<Mark>> {
+    let mut stmt = conn.prepare("SELECT frame, rate FROM marks WHERE path = ?1 ORDER BY frame")?;
+    let rows = stmt.query_map([path], |r| {
+        Ok(Mark {
+            // SQLite integers are signed; a frame count stays far below i64::MAX.
+            frame: r.get::<_, i64>(0)? as u64,
+            rate: r.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Adds a mark; a mark already at the same frame is left as it is.
+pub fn add_mark(conn: &Connection, path: &str, mark: Mark) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO marks (path, frame, rate) VALUES (?1, ?2, ?3)",
+        rusqlite::params![path, mark.frame as i64, mark.rate],
+    )?;
+    Ok(())
+}
+
+/// Removes the mark most recently added to the track at `path`, and returns it.
+///
+/// Marks are removed in the reverse of the order they were added, whatever
+/// their positions. The row id records that order, so it survives a restart.
+pub fn remove_last_mark(conn: &Connection, path: &str) -> Result<Option<Mark>> {
+    let last = conn
+        .query_row(
+            "SELECT rowid, frame, rate FROM marks WHERE path = ?1 ORDER BY rowid DESC LIMIT 1",
+            [path],
+            |r| {
+                let mark = Mark {
+                    frame: r.get::<_, i64>(1)? as u64,
+                    rate: r.get(2)?,
+                };
+                Ok((r.get::<_, i64>(0)?, mark))
+            },
+        )
+        .optional()?;
+    let Some((rowid, mark)) = last else {
+        return Ok(None);
+    };
+    conn.execute("DELETE FROM marks WHERE rowid = ?1", [rowid])?;
+    Ok(Some(mark))
+}
+
+/// Removes every mark in the track at `path`, returning how many there were.
+pub fn clear_marks(conn: &Connection, path: &str) -> Result<usize> {
+    conn.execute("DELETE FROM marks WHERE path = ?1", [path])
 }
 
 pub fn delete_playlist(conn: &Connection, playlist_id: i64) -> Result<()> {

@@ -4,7 +4,11 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 ## Playback
 
-- [ ] **Resume on start.** Remember the last track and position, offer to resume. Needs a small state table, added as schema version 2 (`PRAGMA user_version`).
+- [ ] **Resume on start.** Remember the last track and position, offer to resume. Needs a small state table. A new table is compatible with older playr, so like `marks` it needs no `PRAGMA user_version` bump.
+
+- [ ] **A-B loop between marks.** Loop the stretch between the marks either side of the playing position, for practice with varispeed. Marks are already source frames; the loop is an engine change.
+
+- [ ] **Marks for sampling tools.** Hand a marked passage to another tool. `docs/dev/sampler.md` sets out the data model and weighs a JSON Lines file against OSC. Marks already record path and source frame.
 
 - [ ] **Gapless across a sample-rate change.** A rate change rebuilds the output stream and leaves a gap. Fixing it means resampling both sides to a common rate, which trades a gap for a conversion. Worth a flag, not a default.
 
@@ -38,11 +42,7 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 ## Library
 
-- [ ] **Rename playlists.** A playlist is edited by adding it to the selection with `a`, changing it, and saving it under the same name. There is no way to rename one short of saving a copy and deleting the original.
-
 - [ ] **Sort and group.** Library order is fixed: album artist, album, disc, track. No way to sort by date added, year or duration.
-
-- [ ] **Field-scoped search.** `artist:evans` and similar. FTS5 supports column filters already; this is query construction.
 
 - [ ] **Watch for changes.** A scan is manual. `notify` could pick up new files, at the cost of a watcher thread.
 
@@ -54,11 +54,9 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 ## Interface
 
-- [ ] **Configuration file.** Nothing is configurable: not keys, not colours, not the seek step, not the default volume.
+- [ ] **Colours.** Not configurable. `render.rs` uses 16 colours directly; they need named roles, such as accent and dim, before a `[colors]` table in `settings.toml` could set them.
 
-- [ ] **Album art.** Terminal image protocols exist (kitty, sixel). Embedded art is already parsed by Symphonia. Out of scope until the rest is settled.
-
-- [ ] **Mouse.** No mouse support.
+- [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. A table in the library would keep it.
 
 ## Testing and packaging
 

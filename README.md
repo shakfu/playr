@@ -21,6 +21,8 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Seek by 5 seconds in either direction, or 30 with shift, resuming on the exact sample
 
+- Marks: `b` marks a moment in a track, `B` undoes the last mark, `,` and `.` seek between marks, and marks are kept in the library
+
 - Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
 
 - Volume as a float gain applied before quantisation
@@ -51,7 +53,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Scans commit every 500 files, so an interrupted scan keeps its progress
 
-- Full-text search over title, artist, album and album artist
+- Full-text search over title, artist, album and album artist, or within one of them with `artist:evans`
 
 - Search results play directly, in library order
 
@@ -72,6 +74,8 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 - Skipped files and audio device errors shown in the status line
 
 - Vim and arrow key navigation
+
+- Vim-style `:` commands for every action, with Tab completion and a history; they also take arguments such as `:seek 1:23` or `:playlist late night`
 
 - `?` lists every key; the bottom line shows messages, speed, volume, and a level meter
 
@@ -106,6 +110,7 @@ playr scan ~/music          # index a directory
 playr                       # browse the library
 playr ~/music/some/album    # play a directory, recursively, without indexing
 playr search bill evans     # play everything that matches
+playr search album:blue     # match the album only
 playr playlist "late night" # play a saved playlist
 playr playlists             # list saved playlists
 playr formats               # show what this build can decode
@@ -126,23 +131,31 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 | `enter`                  | play from here; in playlists, play it       |
 | `a`                      | select or unselect, then move down          |
 | `/`                      | search; `esc` clears                        |
+| `r`                      | rename the selected playlist                |
 | `s`                      | save the selection; asks before overwriting |
 | `d`                      | remove from selection; delete a playlist    |
 | `J` `K`, shift up/down   | move a track within the selection           |
-| `c`                      | clear the selection, after `y`              |
+| `c`                      | clear the selection; asks y/n               |
 | `space`                  | play or pause                               |
 | `n` `p`                  | next or previous track                      |
 | `x`                      | stop                                        |
 | `m` `M`                  | next or previous playback mode              |
 | left/right               | seek back or forward 5 seconds              |
 | shift left/right         | seek back or forward 30 seconds             |
+| `b`                      | mark the playing position                   |
+| `,` `.`                  | seek to the previous or next mark           |
+| `B`                      | undo the last mark                          |
+| `C`                      | clear all marks in this track; asks y/n     |
 | `[` `]`                  | varispeed down or up, one semitone a press  |
 | `\`                      | back to normal speed                        |
 | `+` `-`                  | volume                                      |
+| `:`                      | type a command; see [Commands](#commands)   |
 | `?`                      | list every key                              |
 | `q`                      | quit                                        |
 
 Searching filters as you type, across title, artist, album and album artist. Pressing enter on the results plays them.
+
+Every word must match, as the start of a word. Prefix a word with a field to match it in that field alone: `title:`, `artist:`, `album:`, or `albumartist:`. Quote words to match them together in order, as in `artist:"bill evans"`; unquoted, a field applies only to the word it is attached to. A prefix that is not one of these fields is searched as text, so `op:1` still finds a title with a colon in it.
 
 Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
 
@@ -159,11 +172,51 @@ Enter plays the list you are looking at, from the selected track: the library, s
 
 A mode applies to whatever list is playing: the library, search results, the selection, or a playlist. To shuffle across several playlists, add them to the selection with `a` and play the selection. Shuffle keeps the list on screen in its own order, and `p` goes back through the tracks it has played. Under repeat one, `n` moves on to the next track, which then repeats. Changing mode takes effect from the next track, even if it has already started loading.
 
+### Marks
+
+`b` marks the playing position in the current track. Marks show as `^` under the progress bar. `.` seeks to the next mark and `,` to the previous one; within a second after a mark, `,` goes to the one before it, so pressing it twice steps back twice. A mark within half a second of an existing one is not added again.
+
+Marks form a chain: `B` removes the mark added most recently, then the one before, whatever their positions in the track. `C` clears all of the track's marks; it asks first, and only `y` confirms.
+
+Marks are stored in the library by file path and source frame, so they survive a rescan and stay exact at any playback speed. Without a library file they last until playr exits. A mark lands slightly after the moment you meant, by your reaction time.
+
 ### Varispeed
 
 `[` and `]` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
 
 This is not the pitch-preserving speed change of a podcast app. That is time-stretching, which needs a phase vocoder; this is a change of resampling ratio, which is what varispeed means.
+
+### Commands
+
+`:` opens a command line: `:seek 1:23`, `:volume 60`, `:playlist late night`. Every key's action has a command, and commands also take arguments no key can, such as a time or a name. Some commands work only in one view, as `:remove` in the selection. Tab completes, up recalls earlier lines, and `:help` lists every command. [docs/cheatsheet.md](docs/cheatsheet.md) has the full list.
+
+## Configuration
+
+playr reads `$XDG_CONFIG_HOME/playr/settings.toml`, or `~/.config/playr/settings.toml`, when it starts. `--settings <path>` reads another file instead. The file is optional, and it is read on top of the defaults in [`src/ui/settings.toml`](src/ui/settings.toml), so it only needs what it changes. Copying the defaults file whole is also valid.
+
+```toml
+volume = 60          # percent, 0 to 100
+mode = "shuffle"     # normal, shuffle, repeat or repeat-one
+speed = -3           # semitones, -12 to 12
+
+[keys]               # every view
+right = "seek +10"
+shift-right = "seek +60"
+ctrl-s = "save"
+q = "nop"
+"?" = "help"
+
+[keys.selection]     # one view: library, selection or playlists
+x = "remove"
+```
+
+- Each key's value is a `:` command, as listed in [docs/cheatsheet.md](docs/cheatsheet.md). `"nop"` makes a key do nothing, and `"command"` opens the `:` prompt.
+- A key under `[keys.VIEW]` wins in that view over the same key under `[keys]`.
+- A key under `[keys]` needs a command that works in every view. `d = "remove"` there is refused, with the table to put it in.
+- Keys are named by their character (`j`, `J`), or as `space`, `enter`, `esc`, `tab`, `backtab`, `backspace`, `delete`, `insert`, `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, or `f1` to `f12`. Prefix `ctrl-`, `alt-` or `shift-` for a chord; a chord only matches a binding that names it. TOML needs quotes around a key that is not a letter, digit, `-` or `_`, such as `"?"`.
+- `ctrl-c` always quits, and the keys inside prompts and help lists cannot be changed.
+
+Any error stops playr before it starts, and every bad setting is listed with its line number. `?` lists the keys as bound. `:map` and `:unmap` change keys until playr exits.
 
 ## Formats
 

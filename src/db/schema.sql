@@ -57,3 +57,12 @@ CREATE TABLE IF NOT EXISTS playlist_items (
   track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   PRIMARY KEY (playlist_id, position)
 );
+
+-- Positions marked in a track. Keyed by path rather than track id, so marks
+-- survive a rescan that renumbers tracks and work for files outside the library.
+CREATE TABLE IF NOT EXISTS marks (
+  path  TEXT NOT NULL,
+  frame INTEGER NOT NULL,  -- source frame index, exact at any playback speed
+  rate  INTEGER NOT NULL,  -- the source sample rate `frame` counts in
+  PRIMARY KEY (path, frame)
+);

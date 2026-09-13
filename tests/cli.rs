@@ -8,6 +8,8 @@ use std::process::{Command, Stdio};
 
 fn playr(db: &Path, args: &[&str]) {
     Command::new(env!("CARGO_BIN_EXE_playr"))
+        // Not the config of whoever runs the tests.
+        .env("XDG_CONFIG_HOME", db.parent().unwrap())
         .arg("--db")
         .arg(db)
         .args(args)
@@ -59,5 +61,58 @@ fn an_unknown_option_is_refused() {
     assert!(
         stderr.contains("unknown option --bogus"),
         "stderr was {stderr:?}"
+    );
+}
+
+/// Runs playr with a settings directory and no terminal, returning its exit status and stderr.
+fn with_config(dir: &Path, args: &[&str]) -> (bool, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_playr"))
+        .env("XDG_CONFIG_HOME", dir)
+        .arg("--db")
+        .arg(dir.join("library.db"))
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn bad_settings_stop_playr_before_it_starts_and_list_every_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("playr")).unwrap();
+    let default = dir.path().join("playr/settings.toml");
+    std::fs::write(&default, "volume = 50\nfrob = 1\n[keys]\nd = 'remove'\n").unwrap();
+
+    let (ok, stderr) = with_config(dir.path(), &[]);
+    assert!(!ok);
+    let path = default.display();
+    assert!(
+        stderr.contains(&format!("playr: {path}: line 2: unknown setting: frob")),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("playr: {path}: line 4: :remove works")),
+        "{stderr}"
+    );
+    // Stopped at the settings, not at the missing terminal.
+    assert!(!stderr.contains("terminal"), "{stderr}");
+
+    // --settings replaces the default file, and must exist.
+    let other = dir.path().join("other.toml");
+    std::fs::write(&other, "volume = 50\n").unwrap();
+    let (_, stderr) = with_config(dir.path(), &["--settings", other.to_str().unwrap()]);
+    assert!(
+        !stderr.contains("line 2"),
+        "the default file was read: {stderr}"
+    );
+    let (ok, stderr) = with_config(dir.path(), &["--settings", "/nonexistent/playr.toml"]);
+    assert!(!ok);
+    assert!(
+        stderr.contains("playr: /nonexistent/playr.toml:"),
+        "{stderr}"
     );
 }

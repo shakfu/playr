@@ -1,6 +1,6 @@
 [package]
 name = "playr"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -32,6 +32,7 @@ lofty = "0.25.1"
 walkdir = "2.5.0"
 # Already built for ratatui; used to size columns in terminal cells.
 unicode-width = "0.2.2"
+toml = { version = "1.1", default-features = false, features = ["parse", "preserve_order"] }
 
 [dev-dependencies]
 tempfile = "3"
