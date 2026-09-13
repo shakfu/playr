@@ -2,6 +2,12 @@
 
 Notable changes to playr. Format follows [Keep a Changelog][https://keepachangelog.com/en/1.1.0/], versioning follows [Semantic Versioning][https://semver.org/spec/v2.0.0.html].
 
+## [Unreleased]
+
+### Changed
+
+- The level meter's bar is coloured by position, as on an LED meter: green below -18 dB, the EBU R68 alignment level; yellow to -6 dB; red above. The peak marker takes its zone's colour. Colouring by the current reading instead would show most commercial masters, which sit above broadcast and streaming loudness targets, as a warning.
+
 ## [0.3.1]
 
 ### Added

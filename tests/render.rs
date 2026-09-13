@@ -799,3 +799,68 @@ fn search_results_say_how_to_leave_them() {
         lines[1]
     );
 }
+
+/// Symbol and foreground colour of each loudness bar cell, drawn `width` wide.
+fn bar_cells(snapshot: &Snapshot, width: u16) -> Vec<(String, ratatui::style::Color)> {
+    let buf = Case::new(View::Library, snapshot).size(width, 12).buffer();
+    let row = (0..buf.area.height)
+        .find(|&y| {
+            let line: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
+            line.contains("LUFS")
+        })
+        .expect("no meter row");
+    let symbols: Vec<(String, ratatui::style::Color)> = (0..width)
+        .map(|x| (buf[(x, row)].symbol().to_string(), buf[(x, row)].fg))
+        .collect();
+    let open = symbols.iter().position(|(s, _)| s == "[").unwrap();
+    let close = symbols[open..].iter().position(|(s, _)| s == "]").unwrap() + open;
+    symbols[open + 1..close].to_vec()
+}
+
+/// The zone a cell's centre falls in: green below -18 dB, yellow to -6, red above.
+fn expected_zone(i: usize, cells: usize) -> ratatui::style::Color {
+    use ratatui::style::Color;
+    let db = -40.0 * (1.0 - (i as f32 + 0.5) / cells as f32);
+    match db {
+        _ if db >= -6.0 => Color::Red,
+        _ if db >= -18.0 => Color::Yellow,
+        _ => Color::Green,
+    }
+}
+
+#[test]
+fn the_bar_is_green_then_yellow_then_red_by_position() {
+    use ratatui::style::Color;
+    let cells = bar_cells(&playing(Some(-2.0), Some(-1.0)), 120);
+    let n = cells.len();
+    let mut zones = Vec::new();
+    for (i, (symbol, fg)) in cells.iter().enumerate() {
+        match symbol.as_str() {
+            "#" | "|" => {
+                assert_eq!(*fg, expected_zone(i, n), "cell {i} of {n} ({symbol})");
+                if zones.last() != Some(fg) {
+                    zones.push(*fg);
+                }
+            }
+            "-" => assert_eq!(*fg, Color::DarkGray, "empty cell {i} is coloured"),
+            other => panic!("unexpected {other:?} in the bar"),
+        }
+    }
+    assert_eq!(zones, [Color::Green, Color::Yellow, Color::Red]);
+    let marker = cells
+        .iter()
+        .find(|(s, _)| s == "|")
+        .expect("no peak marker");
+    assert_eq!(marker.1, Color::Red, "a -1 dBFS peak is in the red zone");
+}
+
+#[test]
+fn a_quiet_signal_stays_green() {
+    use ratatui::style::Color;
+    let cells = bar_cells(&playing(Some(-30.0), Some(-24.0)), 120);
+    for (symbol, fg) in &cells {
+        if symbol == "#" || symbol == "|" {
+            assert_eq!(*fg, Color::Green, "{symbol} is {fg:?} at -30 LUFS");
+        }
+    }
+}

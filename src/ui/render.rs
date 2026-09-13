@@ -417,10 +417,7 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         let cells = (left.width as usize).saturating_sub(3);
         if cells > 0 {
             let bar = level_bar(app.snapshot.loudness, app.snapshot.peak, cells);
-            f.render_widget(
-                Paragraph::new(Span::styled(bar, Style::default().fg(DIM))),
-                left,
-            );
+            f.render_widget(Paragraph::new(bar), left);
         }
     }
     f.render_widget(Paragraph::new(indicators), right);
@@ -437,23 +434,46 @@ fn meter_cells(db: f32, cells: usize) -> usize {
     (fraction * cells as f32).round().clamp(0.0, cells as f32) as usize
 }
 
+/// Where the bar turns yellow: the EBU R68 digital alignment level.
+const YELLOW_FROM_DB: f32 = -18.0;
+/// Where the bar turns red: a conventional headroom mark.
+const RED_FROM_DB: f32 = -6.0;
+
+/// Colour of cell `i` of `cells`, by the level at its centre, as on an LED meter.
+fn zone_colour(i: usize, cells: usize) -> Color {
+    let db = METER_FLOOR_DB * (1.0 - (i as f32 + 0.5) / cells as f32);
+    if db >= RED_FROM_DB {
+        Color::Red
+    } else if db >= YELLOW_FROM_DB {
+        Color::Yellow
+    } else {
+        Color::Green
+    }
+}
+
 /// The loudness bar, `cells` wide, with the held peak marked on the same scale.
 ///
 /// LUFS and dBFS are both relative to full scale, so one bar can show both.
-fn level_bar(loudness: Option<f32>, peak: Option<f32>, cells: usize) -> String {
+/// Filled cells and the marker take their zone's colour; the numbers beside
+/// the bar carry the same reading for anyone who cannot tell the colours apart.
+fn level_bar(loudness: Option<f32>, peak: Option<f32>, cells: usize) -> Line<'static> {
     let fill = loudness.map_or(0, |l| meter_cells(l, cells));
     let marker = peak
         .map(|p| meter_cells(p, cells))
         .filter(|c| *c > 0)
         .map(|c| c - 1);
-    let bar: String = (0..cells)
-        .map(|i| match i {
-            _ if Some(i) == marker => '|',
-            _ if i < fill => '#',
-            _ => '-',
-        })
-        .collect();
-    format!("[{bar}]")
+    let dim = Style::default().fg(DIM);
+    let mut spans = vec![Span::styled("[", dim)];
+    spans.extend((0..cells).map(|i| {
+        let zone = Style::default().fg(zone_colour(i, cells));
+        match i {
+            _ if Some(i) == marker => Span::styled("|", zone),
+            _ if i < fill => Span::styled("#", zone),
+            _ => Span::styled("-", dim),
+        }
+    }));
+    spans.push(Span::styled("]", dim));
+    Line::from(spans)
 }
 
 /// Loudness and held peak as numbers.

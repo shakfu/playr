@@ -73,7 +73,9 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - `?` lists every key; the bottom line shows messages, speed, volume, and a level meter
 
-- The level meter reads momentary loudness in LUFS (ITU-R BS.1770, 400 ms) and holds the sample peak for 1.5 s. It measures the recording before the volume setting, and marks the peak red at full scale
+- The level meter reads momentary loudness in LUFS (ITU-R BS.1770, 400 ms) and holds the sample peak for 1.5 s. It measures the recording before the volume setting
+
+- The meter bar runs from -40 dB to full scale and fills green below -18 dB, yellow to -6 dB, and red above; the peak marker `|` takes the colour of where it sits. Red on the bar means near the top, which is normal for loud masters. The peak number turns red only at full scale, where the recording clips
 
 ## Install
 
