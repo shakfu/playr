@@ -206,6 +206,9 @@ Marks are stored in the library by file path and source frame, so they survive a
 
 `:slice` writes parts of the playing track as WAV files, for rtrack or any sampler. Marks set the regions. The region is the span between the marks either side of the playhead, from the start of the track or to its end where there is no mark on that side.
 
+![Slicing a Boards of Canada record is a good use of an afternoon.](https://raw.githubusercontent.com/shakfu/playr/main/docs/media/waveform.png)
+
+
 | command             | writes                                                               |
 |---------------------|----------------------------------------------------------------------|
 | `:slice region`     | the region                                                           |
