@@ -214,15 +214,22 @@ fn bad_settings_stop_playr_before_it_starts_and_list_every_error() {
 #[test]
 fn a_missing_home_variable_does_not_stop_playr() {
     // Windows does not set HOME; the defaults expand ~ and must still load.
+    // A bad setting stops playr just after the defaults load and before it
+    // takes the terminal, so the test does not depend on having one.
     let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("settings.toml");
+    std::fs::write(&settings, "frob = 1\n").unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_playr"))
         .env_remove("HOME")
         .env_remove("XDG_CONFIG_HOME")
         .arg("--db")
         .arg(dir.path().join("library.db"))
+        .arg("--settings")
+        .arg(&settings)
         .stdin(Stdio::null())
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("needs a terminal"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert!(stderr.contains("line 1: unknown setting: frob"), "{stderr}");
 }
