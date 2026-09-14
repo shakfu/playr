@@ -1,6 +1,6 @@
 # A GUI frontend
 
-Design sketch, written 2026-09-14 against playr 0.5.0. Nothing here is built. `docs/architecture.md` describes the crates this builds on.
+Design, written 2026-09-14 against playr 0.5.0, as a sketch before any of it was built. Steps 1 to 7 are done; the sections on where each step differs record what changed on the way. `docs/architecture.md` describes the crates this builds on.
 
 ## Goal
 
@@ -185,10 +185,28 @@ The event sink sends to the model's channel and calls `ctx.request_repaint()`, s
 | 3 | Done. `:scan DIR` as a session job with progress events, and `:open PATH...`; the terminal gains both | medium |
 | 4 | Done. `playr-gui`: window, tabs, library table, search, transport bar, messages, keys | medium |
 | 5 | Done. Selection and playlists, dialogs, command bar, key and command lists, parity test | medium |
-| 6 | Sampler view: waveform, zoom, click to seek and mark, slicing | medium |
-| 7 | Packaging: release archives for `playr-gui`, macOS bundle, Windows icon, Linux desktop file | small |
+| 6 | Done. Sampler view: waveform, zoom, click to seek and mark, slicing | medium |
+| 7 | Done. Packaging: release archives for `playr-gui`, macOS bundle, Windows icon, Linux desktop file | small |
 
 Step 2 carried the risk, as step 3 of the core split did: it moved most of `src/ui/mod.rs`.
+
+### Where step 7 differs from the sketch
+
+- **One archive a platform.** `packaging/package.sh` puts `playr` and `playr-gui` in the same archive rather than separate ones, so a release keeps five archives. The release workflow builds both with Opus, which `playr-gui` gains as a feature of its own.
+- **The icon is drawn from an SVG.** `crates/playr-gui/assets/playr.svg` is rendered by `packaging/icons.sh` (`make icons`, macOS only, since it needs `iconutil`) into `playr.png` for the window and Linux, `playr.icns` for the bundle, and `playr.ico`, which `build.rs` embeds in the Windows executable with `embed-resource`.
+- **The macOS bundle is unsigned.** Signing and notarization need an Apple Developer account. A downloaded `playr.app` is refused until allowed in System Settings or its quarantine attribute is removed; the README says how.
+- **Linux gets a desktop entry, not a package.** `playr.desktop` and `playr.png` ship in the archive for the user to copy; no `.deb`, Flatpak or AppImage. The window's app id, `playr`, matches the entry's name and `StartupWMClass`.
+- **Verified here:** the macOS arm64 archive was built as the workflow builds it, `playr.app` launched, and both binaries report 0.5.1 and list Opus. The Linux branch of the packaging script was checked with placeholder binaries. The Windows icon resource and both Linux builds are unverified until the next release run.
+- **Still not published to crates.io.** `playr-gui` keeps `publish = false`.
+
+### Where step 6 differs from the sketch
+
+- **The layout is shared.** `playr_app::sampler::Layout` holds one frame's geometry: which frames each column shows, the playhead's column, the marks, the region, each column's levels for a display, and the time under a point. It also words the scale, the times shown and the region line, and `peaks_of` and `plan_text` word the waiting and planning states. The terminal's sampler view draws from it too, so both show the same region and numbers; its render tests pass unchanged.
+- **A column is a point wide.** The window asks the layout for as many columns as it has points, so zoom stops at 64 frames a point, as it stops at 64 frames a cell in the terminal. Columns start on whole peak buckets, so a track can end short of the right edge, as in the terminal.
+- **The third display draws lines.** Each column is a line from its lowest to its highest sample around the centre. Its button reads "Waveform", while `:display braille` and the message still name it braille, for the terminal's sake.
+- **Controls.** Zoom in, Zoom out, Whole track, the three displays, and Write slices and Discard slices, which are enabled only while slices are planned, sit under the waveform and are in `controls::SAMPLER_BAR`. The Slice menu from step 5 plans slices while this view shows.
+- **Tests.** Window tests shift-click the waveform to mark, click it to seek, zoom with the wheel, and plan and write a region slice into a temporary directory. `crates/playr-app/tests/sampler.rs` checks the layout's columns, region, levels, extents and words.
+- **Not yet:** dragging a mark, and hearing a region on its own, which the terminal cannot do either.
 
 ### Where step 5 differs from the sketch
 

@@ -1,6 +1,6 @@
 # playr
 
-A minimal TUI music player. Plays a directory, a saved playlist, or the results of a search. Keeps a SQLite index of your library.
+A minimal music player, in a terminal or a desktop window. Plays a directory, a saved playlist, or the results of a search. Keeps a SQLite index of your library.
 
 It contacts no server, fetches no metadata, scrobbles nothing, and has no network code in it at all.
 
@@ -87,44 +87,63 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 ## Install
 
-Each [GitHub release](https://github.com/shakfu/playr/releases) has prebuilt binaries, with Opus, for:
+playr is two programs: `playr`, the terminal interface, and `playr-gui`, a desktop window with the same features, keys and `:` commands. Both read the same library and settings.
+
+### Release archives
+
+Each [GitHub release](https://github.com/shakfu/playr/releases) has prebuilt archives, with Opus, for:
 
 - Linux: x86_64 and arm64, glibc 2.35 or later
 - macOS: arm64 and x86_64, 11.0 or later
 - Windows: x86_64
 
-`SHA256SUMS` in each release holds the archives' checksums.
+Each archive holds both programs, with `SHA256SUMS` in the release for checking them. Put `playr` on your `PATH`; the window needs one more step on macOS and Linux:
 
-From [crates.io](https://crates.io/crates/playr):
+- **macOS:** the window is `playr.app`; move it to `Applications`. It is not signed or notarized, so macOS refuses to open it once downloaded with a browser; allow it under System Settings, Privacy & Security, or run `xattr -dr com.apple.quarantine playr.app`.
+- **Linux:** copy `playr-gui` onto your `PATH`, `playr.desktop` to `~/.local/share/applications`, and `playr.png` to `~/.local/share/icons/hicolor/256x256/apps`, and playr is listed among your applications.
+- **Windows:** run `playr-gui.exe`; it opens without a console window.
 
-```sh
-cargo install playr                    # without Opus
-cargo install playr --features opus    # with Opus; needs cmake
-```
-
-From a clone:
+### From a clone
 
 ```sh
-make build                    # debug
-make release                  # release
-make install                  # release, copied to ~/.local/bin
+make install    # both programs, and the window as an application
+make gui        # run the window without installing
+make app        # macOS: build target/release/playr.app
 ```
 
-Building needs Rust 1.89+, ALSA headers on Linux (`libasound2-dev` on Debian and Ubuntu), and a C compiler. SQLite is vendored and compiled from source, which is what the C compiler is for; no SQLite package has to be installed.
+`make install` copies `playr` and `playr-gui` to `~/.local/bin`. On macOS it also puts `playr.app` in `~/Applications`; on Linux it adds `playr.desktop` and its icon under `~/.local/share`.
+
+### With cargo
+
+```sh
+cargo install playr                                             # the terminal, from crates.io
+cargo install --git https://github.com/shakfu/playr playr-gui    # the window, from GitHub
+```
+
+`playr-gui` is not on crates.io yet. `cargo install` builds only the program, without the macOS bundle or the Linux desktop entry. Add `--features opus` to either for Opus.
+
+### Building
+
+Building needs Rust 1.89+ and a C compiler. SQLite is vendored and compiled from source, which is what the C compiler is for; no SQLite package has to be installed. On Linux it also needs the ALSA headers, and the window needs the X11 and Wayland development headers. On Debian and Ubuntu:
+
+```sh
+sudo apt install libasound2-dev                       # both programs
+sudo apt install libxkbcommon-dev libwayland-dev \
+  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev   # the window
+```
 
 ### Opus
 
 Opus is off by default. It needs libopus, which is vendored and built with **cmake** -- the only part of playr that needs it. To include it:
 
 ```sh
-cargo build --release --features opus
+cargo build --release --features opus                                        # the terminal
+cargo build --release -p playr -p playr-gui --features playr/opus,playr-gui/opus   # both
 ```
 
-Without it, Opus files are reported as undecodable and skipped, the same as WMA or DSD. `playr formats` says which build you have. `make install` builds without Opus; to install with it, copy `target/release/playr` after the build above, or use `cargo install playr --features opus`.
+Without it, Opus files are reported as undecodable and skipped, the same as WMA or DSD. `playr formats` says which build you have. `make install` builds without Opus; to install with it, copy the binaries after the build above, or use `cargo install` with `--features opus`.
 
 ## Use
-
-A desktop window is in progress: `make gui`, or `cargo run --release -p playr-gui`, opens it with the same options, keys and `:` commands as the terminal. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport and the level meter; the sampler view is not in it yet. [docs/dev/gui.md](docs/dev/gui.md) tracks what is left.
 
 ```sh
 playr scan ~/music          # index a directory
@@ -143,6 +162,18 @@ playr formats               # show what this build can decode
 The library lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan`, or `:scan` inside playr, creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
 
 Rescanning only re-reads files whose size or modification time changed, and drops rows under the scanned directory whose files are gone. Rows elsewhere are kept, so a scan made while a drive is unmounted does not empty its playlists.
+
+### Desktop window
+
+```sh
+playr-gui                        # open the window on the library
+playr-gui ~/music/some/album     # play a directory, as playr does
+playr-gui --db other.db          # use a different library file
+```
+
+It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
+
+File, Add folder to library scans a directory, as `playr scan` does, and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
 
 ## Keys
 
@@ -237,11 +268,11 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 |---------|-------------------------|---------------------------------------------------|
 | `z` `Z` | `:zoom +`, `:zoom -`    | zoom in or out, centred on the playhead           |
 | `0`     | `:zoom all`             | show the whole track                              |
-| `w`     | `:display`              | switch display: envelope, dB, Braille             |
+| `w`     | `:display`              | switch display: Braille, envelope, dB             |
 | `enter` | `:write`                | write the slices planned                          |
 | `esc`   | `:discard`              | discard them                                      |
 
-- **Displays.** The envelope draws each column as two bars in eighth blocks: its RMS level in the bright colour, inside its peak level in a darker one. The waveform is folded, with negative samples counted by their size, so the bars use the full height. RMS shows loudness, such as a verse against a chorus, where a mastered track's peaks are near full scale everywhere; peak shows where each hit starts. The Braille display draws the waveform around a centre line, two dots across and four down a cell, which shows its shape. Both scale to the loudest sample in the track.
+- **Displays.** The envelope draws each column as two bars in eighth blocks: its RMS level in the bright colour, inside its peak level in a darker one. The waveform is folded, with negative samples counted by their size, so the bars use the full height. RMS shows loudness, such as a verse against a chorus, where a mastered track's peaks are near full scale everywhere; peak shows where each hit starts. The Braille display, which the view starts with, draws the waveform around a centre line, two dots across and four down a cell, which shows its shape. Both scale to the loudest sample in the track.
 - **dB.** The dB display draws the same bars on a scale from -48 dBFS to full scale, not scaled to the track. A linear scale puts RMS 12 dB below full scale a quarter of the way up; this puts it three quarters of the way, which spreads out quiet passages and the level changes between sections. Levels below -48 dB draw nothing.
 - **Zoom.** Each step halves the time a column shows, down to 64 frames, 1.5 ms at 44.1 kHz. Columns start on the 32-frame buckets the peaks are kept in, so a column never shows a neighbour's hit.
 - **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track. Outside the view, `:slice` writes at once.
@@ -322,9 +353,11 @@ Volume is a float gain applied before quantisation.
 make test
 ```
 
-`make test` runs the suite for all three crates in the workspace, `playr-core`, `playr-app` and `playr`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, so they need no audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
+`make test` runs the suite for all four crates in the workspace, `playr-core`, `playr-app`, `playr` and `playr-gui`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, and the window's tests drive it headless with `egui_kittest`, so neither needs a display or an audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
 
 `.github/workflows/test.yml` runs both builds' tests on Linux, macOS and Windows on every branch push and pull request, with `PLAYR_REQUIRE_FFMPEG=1`, and checks formatting and clippy on Linux. Runners have no audio device, so only the real-device smoke test skips there.
+
+`.github/workflows/release.yml` builds and packages both programs for every platform when a version tag is pushed, and publishes the release. Run by hand from the Actions tab with no tag, it builds and packages the chosen branch and keeps the archives as the run's artifacts without publishing, to try every platform's build before tagging.
 
 Opus output was checked against `ffmpeg` by decoding the same file both ways: identical frame counts and 138.7 dB SNR, with no alignment offset.
 

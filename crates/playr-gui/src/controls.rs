@@ -4,8 +4,8 @@
 //! test reads them, so a control cannot perform one thing and be counted as
 //! another.
 
-use playr_app::action::{Action, Slicing};
-use playr_app::View;
+use playr_app::action::{Action, Slicing, Zoom};
+use playr_app::{Display, View};
 
 /// A button or menu item.
 pub struct Control {
@@ -93,6 +93,18 @@ pub const PLAYLIST_ROW: &[Control] = &[
     control("Delete", Action::DeletePlaylist),
 ];
 
+/// Buttons under the waveform.
+pub const SAMPLER_BAR: &[Control] = &[
+    control("Zoom in", Action::Zoom(Zoom::In)),
+    control("Zoom out", Action::Zoom(Zoom::Out)),
+    control("Whole track", Action::Zoom(Zoom::All)),
+    control("Envelope", Action::Display(Some(Display::Envelope))),
+    control("dB", Action::Display(Some(Display::Decibels))),
+    control("Waveform", Action::Display(Some(Display::Braille))),
+    control("Write slices", Action::WriteSlices),
+    control("Discard slices", Action::DiscardSlices),
+];
+
 /// Every table above.
 pub const TABLES: &[&[Control]] = &[
     TRANSPORT,
@@ -106,6 +118,7 @@ pub const TABLES: &[&[Control]] = &[
     SELECTION_ROW,
     SELECTION_BAR,
     PLAYLIST_ROW,
+    SAMPLER_BAR,
 ];
 
 /// Actions whose value comes from how a control is used, by name: a slider's
@@ -114,8 +127,12 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("SetVolume", "the volume slider"),
     ("SetSpeed", "the speed slider"),
     ("SetMode", "the mode menu"),
-    ("SeekTo", "a click on the progress bar"),
-    ("MarkAt", "a shift-click on the progress bar"),
+    ("SeekTo", "a click on the progress bar or the waveform"),
+    (
+        "MarkAt",
+        "a shift-click on the progress bar or the waveform",
+    ),
+    ("Zoom", "the mouse wheel over the waveform"),
     ("MoveTrack", "a selection row dragged to another place"),
     ("Add", "a library row's tick box"),
     ("Activate", "a double click on a row"),

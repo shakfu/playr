@@ -1,6 +1,14 @@
 //! The sampler view's geometry: which frames each column shows, and the dB scale.
 
-use playr_app::sampler::{db_height, fmt_frames, window, DB_FLOOR, MIN_FRAMES_PER_COLUMN};
+use std::sync::Arc;
+use std::time::Duration;
+
+use playr_app::sampler::{
+    db_height, fmt_frames, peaks_of, plan_text, window, Layout, Sampler, Wave, DB_FLOOR,
+    MIN_FRAMES_PER_COLUMN,
+};
+use playr_app::Display;
+use playr_core::wave::Peaks;
 use playr_core::wave::BUCKET;
 
 #[test]
@@ -41,4 +49,100 @@ fn the_db_scale_runs_from_the_floor_to_full_scale() {
     assert!((at(-24.0) - 0.5).abs() < 1e-5);
     assert_eq!(at(-60.0), 0.0, "below the floor");
     assert_eq!(db_height(2.0), 1.0, "above full scale");
+}
+
+/// 100 columns of 4 s at 8000 Hz: a quiet second, a loud one, then silence.
+fn layout(zoom: u32, position: Duration, marks: &[Duration]) -> Layout {
+    let data: Vec<f32> = (0..32_000)
+        .map(|i| match i {
+            0..8000 => 0.1,
+            8000..16_000 => {
+                if i % 2 == 0 {
+                    0.8
+                } else {
+                    -0.8
+                }
+            }
+            _ => 0.0,
+        })
+        .collect();
+    let peaks = Arc::new(Peaks::from_interleaved(&data, 1, 8000));
+    Layout::new(peaks, 100, zoom, position, marks)
+}
+
+#[test]
+fn a_layout_places_the_playhead_marks_and_region_in_columns() {
+    let secs = Duration::from_secs;
+    let l = layout(0, Duration::from_millis(1500), &[secs(1), secs(2)]);
+    // 320 frames a column, whole buckets, from the start.
+    assert_eq!((l.start, l.per_column, l.zoom), (0, 320, 0));
+    assert_eq!(l.playhead(), Some(37));
+    assert_eq!(l.column_of(8000), Some(25));
+    assert_eq!(l.column_of(40_000), None);
+    assert_eq!(l.region, (8000, 16_000));
+    assert!(l.in_region(30) && !l.in_region(10) && !l.in_region(60));
+    assert_eq!(l.time_at(50.0), secs(2));
+    assert_eq!(l.scale(), "40 ms");
+    assert_eq!(l.shown(), "0:00.000-0:04.000");
+    assert_eq!(
+        l.region_text(),
+        "region 0:01.000-0:02.000 (1.000 s)  marks 2"
+    );
+}
+
+#[test]
+fn a_layout_scales_levels_for_each_display() {
+    let l = layout(0, Duration::ZERO, &[]);
+    // The loud second is the loudest sample: full height on the linear scale.
+    let (rms, peak) = l.heights(Display::Envelope, 30);
+    assert!(
+        (rms - 1.0).abs() < 1e-3 && (peak - 1.0).abs() < 1e-3,
+        "{rms} {peak}"
+    );
+    let (_, quiet) = l.heights(Display::Envelope, 10);
+    assert!((quiet - 0.125).abs() < 1e-3, "{quiet}");
+    // On the dB scale 0.1 is -20 dBFS, 28 of 48 dB above the floor.
+    let (_, quiet_db) = l.heights(Display::Decibels, 10);
+    assert!((quiet_db - 28.0 / 48.0).abs() < 1e-2, "{quiet_db}");
+    assert_eq!(l.heights(Display::Envelope, 70), (0.0, 0.0));
+    assert_eq!(l.extent(8000, 8320), (-1.0, 1.0));
+    // Past the end there are no samples: an empty extent.
+    assert_eq!(l.extent(40_000, 40_320), (1.0, -1.0));
+}
+
+#[test]
+fn the_waveform_waits_for_its_track_with_a_reason() {
+    let playing = std::path::PathBuf::from("/m/a.wav");
+    let mut sampler = Sampler::default();
+    assert_eq!(
+        peaks_of(&sampler, None).unwrap_err(),
+        "Nothing is playing. Play a track to see its waveform."
+    );
+    sampler.wave = Wave::Reading {
+        path: playing.clone(),
+        job: 1,
+    };
+    assert_eq!(
+        peaks_of(&sampler, Some(&playing)).unwrap_err(),
+        "Reading the waveform..."
+    );
+    sampler.wave = Wave::Failed {
+        path: playing.clone(),
+        error: "bad header".into(),
+    };
+    assert_eq!(
+        peaks_of(&sampler, Some(&playing)).unwrap_err(),
+        "Cannot read the waveform: bad header"
+    );
+    sampler.wave = Wave::Ready {
+        path: "/m/other.wav".into(),
+        peaks: Arc::new(Peaks::from_interleaved(&[0.0], 1, 8000)),
+    };
+    assert!(
+        peaks_of(&sampler, Some(&playing)).is_err(),
+        "another track's peaks"
+    );
+    assert_eq!(plan_text(&sampler), "");
+    sampler.planning = true;
+    assert_eq!(plan_text(&sampler), "planning slices");
 }

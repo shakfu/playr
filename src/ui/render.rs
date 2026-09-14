@@ -14,7 +14,7 @@ use super::{
 use playr_app::action::Action;
 use playr_app::command::{self, view_name};
 use playr_app::message::fmt_time;
-use playr_app::sampler::{self, Display, Wave};
+use playr_app::sampler::{self, Display};
 use playr_app::{meter, model};
 use playr_core::audio::State;
 use playr_core::db::Track;
@@ -130,47 +130,36 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
     let name = current
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned());
-    let peaks = match (&app.sampler.wave, current) {
-        (Wave::Ready { path, peaks }, Some(playing)) if path == playing => Some(peaks.clone()),
-        _ => None,
-    };
-    let Some(peaks) = peaks else {
-        let hint = match (&app.sampler.wave, current) {
-            (_, None) => "Nothing is playing. Play a track to see its waveform.".to_string(),
-            (Wave::Failed { error, .. }, _) => format!("Cannot read the waveform: {error}"),
-            _ => "Reading the waveform...".to_string(),
-        };
-        let block = list_block(name.as_deref().unwrap_or(""));
-        let inner = block.inner(area).inner(ratatui::layout::Margin {
-            horizontal: 1,
-            vertical: 0,
-        });
-        f.render_widget(block, area);
-        f.render_widget(Paragraph::new(hint).style(Style::default().fg(DIM)), inner);
-        return app.sampler.zoom;
+    let peaks = match sampler::peaks_of(app.sampler, current) {
+        Ok(peaks) => peaks,
+        Err(hint) => {
+            let block = list_block(name.as_deref().unwrap_or(""));
+            let inner = block.inner(area).inner(ratatui::layout::Margin {
+                horizontal: 1,
+                vertical: 0,
+            });
+            f.render_widget(block, area);
+            f.render_widget(Paragraph::new(hint).style(Style::default().fg(DIM)), inner);
+            return app.sampler.zoom;
+        }
     };
 
-    let rate = peaks.rate.max(1);
-    let frame_of = |d: std::time::Duration| (d.as_secs_f64() * rate as f64).round() as u64;
-    let at = frame_of(app.snapshot.position);
     let inner_width = area.width.saturating_sub(2).max(1) as u64;
-    let (start, per_column, zoom) =
-        sampler::window(peaks.frames, inner_width, app.sampler.zoom, at);
-    let shown_end = (start + per_column * inner_width).min(peaks.frames);
-
-    let ms = per_column as f64 * 1000.0 / rate as f64;
-    let scale = if ms < 10.0 {
-        format!("{ms:.1} ms")
-    } else {
-        format!("{:.0} ms", ms)
-    };
+    let layout = sampler::Layout::new(
+        peaks,
+        inner_width,
+        app.sampler.zoom,
+        app.snapshot.position,
+        &app.snapshot.marks,
+    );
+    let zoom = layout.zoom;
     // The file name last: it is the longest part, and the bar below names the
     // track too, so a narrow terminal cuts it rather than the view's scale.
     let title = format!(
-        "{}  {}-{}  1 col = {scale}  {}",
+        "{}  {}  1 col = {}  {}",
         app.sampler.display.name(),
-        sampler::fmt_frames(start, rate),
-        sampler::fmt_frames(shown_end, rate),
+        layout.shown(),
+        layout.scale(),
         name.as_deref().unwrap_or(""),
     );
     let block = list_block(&title);
@@ -182,26 +171,12 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
     let width = inner.width as usize;
     let rows = inner.height.saturating_sub(2) as usize;
 
-    let marks: Vec<u64> = app.snapshot.marks.iter().map(|&d| frame_of(d)).collect();
-    let (region_start, region_end) = playr_core::samples::region(&marks, at);
-    let region_end = region_end.unwrap_or(peaks.frames);
-    let column_of = |frame: u64| {
-        (frame >= start && frame < start + per_column * width as u64)
-            .then(|| ((frame - start) / per_column) as usize)
-    };
-    let loudest = peaks.loudest().max(f32::MIN_POSITIVE);
-    let span_of = |c: usize| {
-        let a = start + c as u64 * per_column;
-        (a, a + per_column)
-    };
-
-    let playhead = column_of(at);
+    let playhead = layout.playhead();
     // Where a column is: under the playhead, in the region, or outside it.
     let colours = |c: usize| {
-        let (a, b) = span_of(c);
         if Some(c) == playhead {
             (Color::Yellow, Color::Indexed(136))
-        } else if a < region_end && b > region_start {
+        } else if layout.in_region(c) {
             (ACCENT, Color::Indexed(30))
         } else {
             (Color::Gray, DIM)
@@ -209,17 +184,8 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
     };
     let mut lines: Vec<Line> = match app.sampler.display {
         Display::Envelope | Display::Decibels => {
-            let height = |magnitude: f32| match app.sampler.display {
-                Display::Decibels => sampler::db_height(magnitude),
-                _ => magnitude / loudest,
-            };
             let columns: Vec<(f32, f32)> = (0..width)
-                .map(|c| {
-                    let (a, b) = span_of(c);
-                    peaks.range(a, b).map_or((0.0, 0.0), |e| {
-                        (height(e.rms), height(e.min.abs().max(e.max.abs())))
-                    })
-                })
+                .map(|c| layout.heights(app.sampler.display, c))
                 .collect();
             glyphs::envelope_rows(&columns, rows)
                 .iter()
@@ -246,15 +212,11 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
         Display::Braille => {
             let extents: Vec<(f32, f32)> = (0..width)
                 .flat_map(|c| {
-                    let (a, b) = span_of(c);
+                    let (a, b) = layout.span_of(c);
                     let mid = a + (b - a).div_ceil(2);
                     [(a, mid), (mid, b)]
                 })
-                .map(|(a, b)| {
-                    peaks
-                        .range(a, b)
-                        .map_or((1.0, -1.0), |e| (e.min / loudest, e.max / loudest))
-                })
+                .map(|(a, b)| layout.extent(a, b))
                 .collect();
             glyphs::braille_rows(&extents, rows)
                 .iter()
@@ -272,16 +234,11 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
     // Planned slice edges, then marks, then the playhead: the later wins a column.
     let mut axis: Vec<(char, Style)> = vec![(' ', Style::default()); width];
     if let Some(pending) = &app.sampler.pending {
-        let edges = pending
-            .spans
-            .iter()
-            .flat_map(|&(a, b)| [Some(a), b])
-            .flatten();
-        for c in edges.filter_map(column_of) {
+        for c in sampler::edges(pending).filter_map(|e| layout.column_of(e)) {
             axis[c] = ('+', Style::default().fg(Color::Magenta));
         }
     }
-    for c in marks.iter().filter_map(|&m| column_of(m)) {
+    for c in layout.marks.iter().filter_map(|&m| layout.column_of(m)) {
         axis[c] = ('|', Style::default().fg(Color::Yellow));
     }
     if let Some(c) = playhead {
@@ -294,25 +251,14 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
     }
     lines.push(runs(axis.into_iter()));
 
-    let region = format!(
-        "region {}-{} ({:.3} s)  marks {}",
-        sampler::fmt_frames(region_start, rate),
-        sampler::fmt_frames(region_end, rate),
-        (region_end - region_start) as f64 / rate as f64,
-        marks.len(),
-    );
     // First, so a narrow terminal cuts the region detail rather than the keys.
-    let plan = match (&app.sampler.pending, app.sampler.planning) {
-        (_, true) => "planning slices  ".to_string(),
-        (Some(p), _) => format!(
-            "{} slices planned: enter writes, esc discards  ",
-            p.spans.len()
-        ),
-        (None, _) => String::new(),
-    };
+    let mut plan = sampler::plan_text(app.sampler);
+    if !plan.is_empty() {
+        plan.push_str("  ");
+    }
     lines.push(Line::from(vec![
         Span::styled(plan, Style::default().fg(Color::Magenta)),
-        Span::styled(region, Style::default().fg(DIM)),
+        Span::styled(layout.region_text(), Style::default().fg(DIM)),
     ]));
     // A short view keeps the axis and detail lines and loses waveform rows.
     let skip = lines.len().saturating_sub(inner.height as usize);

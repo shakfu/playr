@@ -12,6 +12,11 @@ categories = ["multimedia::audio"]
 # Not published until it has the terminal's features; see docs/dev/gui.md.
 publish = false
 
+[features]
+default = []
+# Opus decoding via libopus, as in the terminal build; see the playr crate.
+opus = ["playr-core/opus"]
+
 [dependencies]
 playr-core.workspace = true
 playr-app.workspace = true
@@ -27,3 +32,6 @@ egui_kittest = { version = "0.36.2", features = ["eframe"] }
 hound.workspace = true
 rtrb.workspace = true
 tempfile.workspace = true
+
+[build-dependencies]
+embed-resource = "3"

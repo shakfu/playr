@@ -1,23 +1,29 @@
-# Builds playr for each platform when a version tag is pushed, and publishes
-# the archives to a GitHub release whose notes are that version's CHANGELOG.md
-# section. Tags are bare versions, such as 0.5.0.
+# Builds playr and playr-gui for each platform when a version tag is pushed,
+# packages them with packaging/package.sh, and publishes the archives to a
+# GitHub release whose notes are that version's CHANGELOG.md section. Tags are
+# bare versions, such as 0.6.0.
+#
+# Run by hand with no tag, it tests, builds and packages the branch chosen and
+# keeps the archives as the run's artifacts, publishing nothing: a way to try
+# every platform's build before tagging.
 name: release
 
 on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+"]
-  # To release a tag pushed before this workflow existed.
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to release, such as 0.5.0
-        required: true
+        description: An existing tag to release, such as 0.6.0; empty builds the branch without releasing
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 env:
-  TAG: ${{ inputs.tag || github.ref_name }}
+  # The tag to release, or empty for a build that publishes nothing.
+  TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -26,9 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ env.TAG || github.sha }}
 
       - name: The tag matches the version in Cargo.toml
+        if: env.TAG != ''
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           if [ "$version" != "$TAG" ]; then
@@ -37,6 +44,7 @@ jobs:
           fi
 
       - name: Release notes from CHANGELOG.md
+        if: env.TAG != ''
         run: |
           awk -v v="$TAG" '$0 == "## [" v "]" {found = 1; next} found && /^## \[/ {exit} found' CHANGELOG.md > notes.md
           if ! grep -q '[^[:space:]]' notes.md; then
@@ -45,6 +53,7 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@v7
+        if: env.TAG != ''
         with:
           name: notes
           path: notes.md
@@ -76,41 +85,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ env.TAG || github.sha }}
 
-      - name: Install ALSA headers
+      - name: Install ALSA headers and window libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      # Opus needs cmake, which every runner image has.
+      # The terminal and the desktop window. Opus needs cmake, which every
+      # runner image has.
       - name: Build
-        run: cargo build --release --locked --features opus --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p playr -p playr-gui --features playr/opus,playr-gui/opus
 
       - name: Package
         shell: bash
-        run: |
-          name="playr-$TAG-${{ matrix.target }}"
-          mkdir "$name"
-          cp README.md CHANGELOG.md LICENSE "$name/"
-          if [ "$RUNNER_OS" = Windows ]; then
-            cp "target/${{ matrix.target }}/release/playr.exe" "$name/"
-            7z a "$name.zip" "$name"
-          else
-            cp "target/${{ matrix.target }}/release/playr" "$name/"
-            tar czf "$name.tar.gz" "$name"
-          fi
+        # A build that releases nothing is named by its commit.
+        run: packaging/package.sh ${{ matrix.target }} "${TAG:-$(git rev-parse --short HEAD)}"
 
       - uses: actions/upload-artifact@v7
         with:
           name: playr-${{ matrix.target }}
-          path: playr-${{ env.TAG }}-${{ matrix.target }}.*
+          path: playr-*-${{ matrix.target }}.*
 
   release:
     needs: build
+    if: github.event_name == 'push' || inputs.tag != ''
     runs-on: ubuntu-22.04
     permissions:
       contents: write

@@ -321,6 +321,12 @@ impl Model {
         &self.sampler
     }
 
+    /// Sets how the sampler draws the waveform, as a frontend does to choose
+    /// the display it starts with. `:display` sets it too, with a message.
+    pub fn set_display(&mut self, display: crate::Display) {
+        self.sampler.display = display;
+    }
+
     /// Sets the sampler's zoom, as a frontend does once it has clamped it to
     /// what the track and view allow.
     pub fn set_zoom(&mut self, zoom: u32) {

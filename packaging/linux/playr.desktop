@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=playr
+GenericName=Music player
+Comment=Play and sample a local music library
+Exec=playr-gui %F
+Icon=playr
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/flac;audio/mpeg;audio/mp4;audio/ogg;audio/opus;audio/wav;audio/x-wav;audio/aiff;audio/x-aiff;
+StartupWMClass=playr

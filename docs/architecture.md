@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, current as of playr 0.5.1. Steps 1 to 7 of the split are done; step 8 is deferred. The terminal is the only frontend today.
+Design note, current as of playr 0.6.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal and the desktop window, `playr-gui`.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -35,7 +35,7 @@ playr-tauri   Tauri backend      -----------------> playr-core [serde]
 
 ![Crates and their modules](media/architecture-crates.svg)
 
-The Rust frontends also depend on `playr-core` directly, for `Session` and the types `dispatch` passes; the arrows show only where each frontend gets its interaction from. `playr-gui` is in progress (`docs/dev/gui.md`); `playr-tauri` does not exist. `[serde]` is step 8.
+The Rust frontends also depend on `playr-core` directly, for `Session` and the types `dispatch` passes; the arrows show only where each frontend gets its interaction from. `playr-gui` is described in `docs/dev/gui.md`; `playr-tauri` does not exist. `[serde]` is step 8.
 
 - **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
 - **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state) and `sampler` (the sampler view's state and column geometry). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.

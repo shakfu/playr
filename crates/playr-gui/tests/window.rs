@@ -337,3 +337,158 @@ fn shift_clicking_the_progress_bar_marks_there() {
         other => panic!("no mark: {other:?}"),
     }
 }
+
+/// A window playing 12 s of loud and quiet stretches, showing the sampler once
+/// its waveform is read, with slices written under `samples`.
+fn sampling(samples: &std::path::Path) -> (Harness<'static, Gui>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("hits.wav");
+    common::levels(
+        &file,
+        8000,
+        &[(1.0, -3.0), (2.0, -40.0), (1.0, -3.0), (8.0, -40.0)],
+    );
+    let track = Track {
+        path: file.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let mut model = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        vec![track],
+        Config::default(),
+    );
+    model.session_mut().set_samples_dir(samples.to_path_buf());
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 720.0))
+        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
+    harness.run_steps(2);
+    typing(&mut harness, "4");
+    wait(&mut harness, |m| {
+        matches!(m.sampler().wave, playr_app::sampler::Wave::Ready { .. })
+    });
+    harness.run_steps(2);
+    (harness, dir)
+}
+
+/// Steps until `done` holds for the model, or five seconds pass.
+fn wait(harness: &mut Harness<'_, Gui>, done: impl Fn(&Model) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !done(model(harness)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "gave up waiting: {:?}",
+            model(harness).message()
+        );
+        harness.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn the_waveform_seeks_marks_and_zooms_under_the_mouse() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    let rect = harness.get_by_label("Track waveform").rect();
+
+    // A shift-click a quarter of the way along marks near 3 s of 12.
+    let quarter = egui::pos2(rect.left() + rect.width() / 4.0, rect.center().y);
+    harness.hover_at(quarter);
+    harness.run_steps(1);
+    harness.event_modifiers(
+        egui::Event::PointerButton {
+            pos: quarter,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::SHIFT,
+        },
+        egui::Modifiers::SHIFT,
+    );
+    harness.event_modifiers(
+        egui::Event::PointerButton {
+            pos: quarter,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::SHIFT,
+        },
+        egui::Modifiers::SHIFT,
+    );
+    harness.run_steps(2);
+    match model(&harness).message() {
+        Some(Message::Core(Notice::Done(Outcome::Marked { at, .. }))) => {
+            assert!((2..=3).contains(&at.as_secs()), "marked at {at:?}")
+        }
+        other => panic!("no mark: {other:?}"),
+    }
+
+    // A plain click three quarters along seeks near 9 s.
+    let three_quarters = egui::pos2(rect.left() + rect.width() * 0.75, rect.center().y);
+    harness.hover_at(three_quarters);
+    harness.run_steps(1);
+    harness.event(egui::Event::PointerButton {
+        pos: three_quarters,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.event(egui::Event::PointerButton {
+        pos: three_quarters,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(2);
+    wait(&mut harness, |m| {
+        (8.0..10.5).contains(&m.snapshot().position.as_secs_f64())
+    });
+
+    harness.hover_at(rect.center());
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 100.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(3);
+    assert!(model(&harness).sampler().zoom > 0, "the wheel did not zoom");
+    harness.get_by_label("Whole track").click();
+    harness.run_steps(2);
+    assert_eq!(model(&harness).sampler().zoom, 0);
+}
+
+#[test]
+fn slices_planned_in_the_sampler_are_written_with_a_button() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    // With nothing planned the button is disabled, so a click does nothing.
+    harness.get_by_label("Write slices").click();
+    harness.run_steps(2);
+    assert_ne!(model(&harness).message(), Some(&Message::NoSlicesPlanned));
+    harness.get_by_label("Slice").click();
+    harness.run_steps(2);
+    harness.get_by_label("Slice the region").click();
+    harness.run_steps(2);
+    wait(&mut harness, |m| m.sampler().pending.is_some());
+    harness.run_steps(2);
+    let planned = model(&harness)
+        .sampler()
+        .pending
+        .as_ref()
+        .unwrap()
+        .spans
+        .len();
+    // No marks: the region is the whole track, one slice.
+    assert_eq!(planned, 1);
+
+    harness.get_by_label("Write slices").click();
+    harness.run_steps(2);
+    wait(&mut harness, |m| {
+        matches!(
+            m.message(),
+            Some(Message::Core(Notice::Done(Outcome::Exported { .. })))
+        )
+    });
+    let written = std::fs::read_dir(samples.path()).unwrap().count();
+    assert_eq!(written, 1, "one export directory");
+    assert!(model(&harness).sampler().pending.is_none());
+}

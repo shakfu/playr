@@ -146,8 +146,11 @@ impl App {
         tracks: Vec<Track>,
         config: Config,
     ) -> Self {
+        let mut model = Model::new(conn, player, tracks, config);
+        // In a terminal the Braille display shows a waveform's shape best.
+        model.set_display(playr_app::Display::Braille);
         App {
-            model: Model::new(conn, player, tracks, config),
+            model,
             offsets: Offsets::default(),
             help_scroll: 0,
         }

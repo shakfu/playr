@@ -7,6 +7,7 @@
 
 pub mod controls;
 pub mod keys;
+mod sampler;
 mod transport;
 mod views;
 
@@ -43,6 +44,7 @@ pub struct Gui {
     shown: Input,
     /// The view and cursor row shown last frame, to scroll to a row a key moved to.
     cursor: (View, Option<usize>),
+    wheel: sampler::Wheel,
 }
 
 impl Gui {
@@ -54,6 +56,7 @@ impl Gui {
             name: String::new(),
             shown: Input::None,
             cursor: (View::Library, None),
+            wheel: sampler::Wheel::default(),
         }
     }
 
@@ -366,7 +369,9 @@ impl Gui {
             View::Library | View::Selection => views::tracks(&self.model, ui, view, scroll),
             View::Playlists => views::playlists(&self.model, ui, scroll),
             View::Sampler => {
-                ui.weak("The sampler view is not in the desktop window yet.");
+                for action in sampler::show(&mut self.model, ui, &mut self.wheel) {
+                    self.perform(action);
+                }
                 None
             }
         };
