@@ -210,3 +210,19 @@ fn bad_settings_stop_playr_before_it_starts_and_list_every_error() {
         "{stderr}"
     );
 }
+
+#[test]
+fn a_missing_home_variable_does_not_stop_playr() {
+    // Windows does not set HOME; the defaults expand ~ and must still load.
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_playr"))
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .arg("--db")
+        .arg(dir.path().join("library.db"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("needs a terminal"), "{stderr}");
+}

@@ -2,6 +2,16 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Release binaries. Pushing a version tag such as `0.6.0` runs `.github/workflows/release.yml`: it checks that the tag matches `Cargo.toml` and that `CHANGELOG.md` has a section for it, runs `make test` on Linux, builds with Opus for Linux (x86_64, arm64), macOS (arm64, x86_64) and Windows (x86_64), and publishes the archives, `SHA256SUMS` and that changelog section as the GitHub release. The workflow can also be run by hand for a tag pushed earlier.
+
+### Fixed
+
+- playr started only when `HOME` was set. The default `samples` directory expands `~`, and without `HOME` the defaults failed to parse, which panicked at startup. Windows does not set `HOME`, so every Windows build would have stopped there. The home directory now comes from the platform, `USERPROFILE` on Windows.
+
 ## [0.5.0]
 
 ### Added

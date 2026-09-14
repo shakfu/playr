@@ -87,13 +87,30 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 ## Install
 
+Each [GitHub release](https://github.com/shakfu/playr/releases) has prebuilt binaries, with Opus, for:
+
+- Linux: x86_64 and arm64, glibc 2.35 or later
+- macOS: arm64 and x86_64, 11.0 or later
+- Windows: x86_64
+
+`SHA256SUMS` in each release holds the archives' checksums.
+
+From [crates.io](https://crates.io/crates/playr):
+
+```sh
+cargo install playr                    # without Opus
+cargo install playr --features opus    # with Opus; needs cmake
+```
+
+From a clone:
+
 ```sh
 make build                    # debug
 make release                  # release
 make install                  # release, copied to ~/.local/bin
 ```
 
-Needs Rust 1.89+, ALSA headers (`libasound2-dev` on Debian and Ubuntu), and a C compiler. SQLite is vendored and compiled from source, which is what the C compiler is for; no SQLite package has to be installed.
+Building needs Rust 1.89+, ALSA headers on Linux (`libasound2-dev` on Debian and Ubuntu), and a C compiler. SQLite is vendored and compiled from source, which is what the C compiler is for; no SQLite package has to be installed.
 
 ### Opus
 
@@ -103,7 +120,7 @@ Opus is off by default. It needs libopus, which is vendored and built with **cma
 cargo build --release --features opus
 ```
 
-Without it, Opus files are reported as undecodable and skipped, the same as WMA or DSD. `playr formats` says which build you have. `make install` builds without Opus; to install with it, copy `target/release/playr` after the build above.
+Without it, Opus files are reported as undecodable and skipped, the same as WMA or DSD. `playr formats` says which build you have. `make install` builds without Opus; to install with it, copy `target/release/playr` after the build above, or use `cargo install playr --features opus`.
 
 ## Use
 

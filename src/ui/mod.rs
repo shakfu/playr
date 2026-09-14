@@ -810,7 +810,7 @@ pub fn confirm_prompt(confirm: &Confirm) -> String {
 
 /// `path`, with the home directory shown as `~` to keep messages short.
 pub fn home_as_tilde(path: &std::path::Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = std::env::home_dir();
     match home.and_then(|h| path.strip_prefix(h).ok().map(|rest| rest.to_path_buf())) {
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),

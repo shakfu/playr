@@ -166,7 +166,7 @@ impl Settings {
 /// `path` with a leading `~/` replaced by the home directory, if it is then absolute.
 fn expand_home(path: &str) -> Option<PathBuf> {
     let path = match path.strip_prefix("~/") {
-        Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
+        Some(rest) => std::env::home_dir()?.join(rest),
         None => PathBuf::from(path),
     };
     path.is_absolute().then_some(path)
@@ -177,6 +177,6 @@ pub fn default_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+        .or_else(|| std::env::home_dir().map(|h| h.join(".config")))?;
     Some(base.join("playr/settings.toml"))
 }

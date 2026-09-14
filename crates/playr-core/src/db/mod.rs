@@ -63,7 +63,7 @@ pub fn default_path() -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".local/share")))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("playr").join("library.db")
 }
