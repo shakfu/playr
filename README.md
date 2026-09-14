@@ -317,6 +317,8 @@ make test
 
 `make test` runs the suite for all three crates in the workspace, `playr-core`, `playr-app` and `playr`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, so they need no audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
 
+`.github/workflows/test.yml` runs both builds' tests on Linux, macOS and Windows on every branch push and pull request, with `PLAYR_REQUIRE_FFMPEG=1`, and checks formatting and clippy on Linux. Runners have no audio device, so only the real-device smoke test skips there.
+
 Opus output was checked against `ffmpeg` by decoding the same file both ways: identical frame counts and 138.7 dB SNR, with no alignment offset.
 
 ## License

@@ -75,6 +75,4 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 ## Testing and packaging
 
-- [ ] **CI.** Tests run only when a release tag is pushed, on Linux, in `.github/workflows/release.yml`. Nothing runs on push or pull request. A test workflow should run `make test` on Linux, macOS and Windows with `PLAYR_REQUIRE_FFMPEG=1`, so missing ffmpeg fails the run. A runner has no audio device, so only the real-device smoke test skips there.
-
 - [ ] **Packaging.** No man page and no shell completions. The command line is parsed with clap, so `clap_mangen` and `clap_complete` can generate them. Release binaries are built by `.github/workflows/release.yml`; crates.io publishing is still manual, with `cargo publish --workspace`.
