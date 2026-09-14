@@ -2,9 +2,9 @@
 
 use std::time::Duration;
 
-use playr::ui::action::{Action, Key, Keymap};
-use playr::ui::command::{completions, line, parse, CommandLine, History, COMMANDS, HISTORY_LEN};
-use playr::ui::View::{self, Library, Playlists, Selection};
+use playr_app::action::{Action, Key, Keymap};
+use playr_app::command::{completions, line, parse, CommandLine, History, COMMANDS, HISTORY_LEN};
+use playr_app::View::{self, Library, Playlists, Selection};
 use playr_core::audio::Mode;
 
 fn secs(s: f64) -> Duration {
@@ -510,7 +510,7 @@ fn command_lines_round_trip_through_parse() {
 
 #[test]
 fn export_and_slice_choose_how_the_track_is_cut() {
-    use playr::ui::action::Slicing;
+    use playr_app::action::Slicing;
     for (text, cut) in [
         ("slice region", Slicing::Region),
         ("slice marks", Slicing::Marks),
@@ -559,7 +559,7 @@ fn export_and_slice_choose_how_the_track_is_cut() {
 
 #[test]
 fn the_cheatsheet_lists_every_command_under_its_view() {
-    let sheet = include_str!("../docs/cheatsheet.md");
+    let sheet = include_str!("../../../docs/cheatsheet.md");
     let section = |heading: &str| {
         let start = sheet
             .find(&format!("## {heading}\n"))

@@ -113,10 +113,13 @@ playr                       # browse the library
 playr ~/music/some/album    # play a directory, recursively, without indexing
 playr search bill evans     # play everything that matches
 playr search album:blue     # match the album only
+playr search --json evans   # print the matches as JSON instead of playing them
 playr playlist "late night" # play a saved playlist
 playr playlists             # list saved playlists
 playr formats               # show what this build can decode
 ```
+
+`playr <command> --help` describes each command. A search that starts with `-` goes after `--`, as in `playr search -- -ology`. `--json` prints an array with one object per track, holding every library column, `null` for a missing tag, and `duration_ms` in milliseconds; no match prints `[]` and exits with status 1. Bad arguments exit with status 2.
 
 The library lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan` creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
 
@@ -202,6 +205,8 @@ Slices are read from the source file, so volume and speed do not apply. They are
 
 For MP3 and AAC, frame positions follow playr's decoder. Another decoder can count the codec's encoder delay differently and place the same slice up to a few thousand frames away.
 
+[docs/sampler.md](docs/sampler.md) shows how regions and cuts fit together, what `samples.json` holds, and how precise a mark is.
+
 ### Sampler view
 
 `4` opens a view of the playing track's waveform, read from the file the first time the view opens for that track. Marks show as `|` under it, the playhead as `^`, and the region between the marks either side of the playhead in the accent colour. The detail line gives the region's times to the millisecond.
@@ -233,11 +238,11 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 
 ## Configuration
 
-playr reads `$XDG_CONFIG_HOME/playr/settings.toml`, or `~/.config/playr/settings.toml`, when it starts. `--settings <path>` reads another file instead. The file is optional, and it is read on top of the defaults in [`src/ui/settings.toml`](src/ui/settings.toml), so it only needs what it changes. Copying the defaults file whole is also valid.
+playr reads `$XDG_CONFIG_HOME/playr/settings.toml`, or `~/.config/playr/settings.toml`, when it starts. `--settings <path>` reads another file instead. The file is optional, and it is read on top of the defaults in [`crates/playr-core/src/settings.toml`](crates/playr-core/src/settings.toml) and the default keys in [`crates/playr-app/src/keys.toml`](crates/playr-app/src/keys.toml), so it only needs what it changes. Copying either defaults file whole, or both into one, is also valid.
 
 ```toml
 volume = 60                        # percent, 0 to 100
-mode = "shuffle"                   # normal, shuffle, repeat or repeat-one
+mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in full
 speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 samples = "~/Music/playr/samples"  # where :slice writes
@@ -283,13 +288,17 @@ Volume is a float gain applied before quantisation.
 
 `TODO.md` lists what is missing and what is blocked upstream.
 
+## Design
+
+[docs/architecture.md](docs/architecture.md) describes how the code splits into `playr-core`, `playr-app` and the terminal, so another frontend, such as an egui or Tauri app, can reuse everything but the terminal.
+
 ## Tests
 
 ```sh
 make test
 ```
 
-`make test` runs the suite for both crates in the workspace, `playr-core` and `playr`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, so they need no audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
+`make test` runs the suite for all three crates in the workspace, `playr-core`, `playr-app` and `playr`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, so they need no audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
 
 Opus output was checked against `ffmpeg` by decoding the same file both ways: identical frame counts and 138.7 dB SNR, with no alignment offset.
 

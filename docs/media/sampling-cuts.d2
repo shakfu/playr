@@ -1,0 +1,46 @@
+# What each :slice cut writes, for a track with two marks and the playhead between them.
+# Render: make diagrams
+
+cuts: "What each :slice cut writes" {
+  grid-rows: 5
+  grid-columns: 4
+  grid-gap: 10
+
+  h0: " " {style.opacity: 0}
+  h1: "start to mark 1"
+  h2: "mark 1 to mark 2\nthe region: playhead here" {style.fill: "#DEE3FA"}
+  h3: "mark 2 to end"
+
+  r0: ":slice region" {shape: text}
+  r1: " " {style.opacity: 0}
+  r2: "S00"
+  r3: " " {style.opacity: 0}
+
+  m0: ":slice marks" {shape: text}
+  m1: "S00"
+  m2: "S01"
+  m3: "S02"
+
+  e0: ":slice 4" {shape: text}
+  e1: " " {style.opacity: 0}
+  e2: " " {
+    grid-columns: 4
+    grid-gap: 4
+    a: "S00"
+    b: "S01"
+    c: "S02"
+    d: "S03"
+  }
+  e3: " " {style.opacity: 0}
+
+  o0: ":slice onsets" {shape: text}
+  o1: " " {style.opacity: 0}
+  o2: " " {
+    grid-columns: 3
+    grid-gap: 4
+    a: "S00\nmark 1 to hit"
+    b: "S01\nhit to hit"
+    c: "S02\nhit to mark 2"
+  }
+  o3: " " {style.opacity: 0}
+}

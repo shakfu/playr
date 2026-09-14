@@ -1,0 +1,22 @@
+[package]
+name = "playr-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "What playr's Rust frontends share: actions, : commands, key bindings, settings and dispatch"
+keywords = ["music", "audio", "player"]
+categories = ["multimedia::audio"]
+
+[dependencies]
+playr-core.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# The fake audio device in playr-core's test helpers.
+cpal.workspace = true
+rtrb.workspace = true
+hound.workspace = true
+rusqlite.workspace = true

@@ -7,10 +7,12 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, 
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use super::action::Keymap;
-use super::command::{self, view_name, COMMANDS};
 use super::sampler::{self, Display, Fill, Wave};
-use super::{fmt_time, state_glyph, Input, Screen, Snapshot, View};
+use super::{
+    confirm_prompt, fmt_time, state_glyph, view_title, Drawn, Input, Screen, Scroll, Snapshot, View,
+};
+use playr_app::action::{Action, Keymap};
+use playr_app::command::{self, view_name, COMMANDS};
 use playr_core::audio::State;
 use playr_core::db::Track;
 
@@ -25,7 +27,9 @@ const SELECTED_BG: Color = Color::DarkGray;
 /// instead of being allowed to disappear.
 const DIM_SELECTED: Color = Color::Gray;
 
-pub fn draw(app: &mut Screen<'_>, f: &mut Frame) {
+/// Draws a frame, and returns the scroll positions, cursors, help scroll and
+/// zoom it settled on, for the next frame to start from.
+pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
     let [tabs_area, body, bar] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(3),
@@ -33,21 +37,26 @@ pub fn draw(app: &mut Screen<'_>, f: &mut Frame) {
     ])
     .areas(f.area());
 
+    let mut drawn = Drawn {
+        lists: app.lists,
+        help_scroll: app.help_scroll,
+        zoom: app.sampler.zoom,
+    };
     draw_tabs(app, f, tabs_area);
     match app.view {
-        View::Library => draw_library(app, f, body),
-        View::Selection => draw_selection(app, f, body),
-        View::Playlists => draw_playlists(app, f, body),
-        View::Sampler => draw_sampler(app, f, body),
+        View::Library => drawn.lists.library = draw_library(app, f, body),
+        View::Selection => drawn.lists.selection = draw_selection(app, f, body),
+        View::Playlists => drawn.lists.playlists = draw_playlists(app, f, body),
+        View::Sampler => drawn.zoom = draw_sampler(app, f, body),
     }
     draw_bar(app, f, bar);
-    match app.input {
+    drawn.help_scroll = match app.input {
         Input::Help => {
             let rows = key_rows(app.keys, app.view);
             let rows: Vec<(&str, &str)> =
                 rows.iter().map(|(k, c)| (k.as_str(), c.as_str())).collect();
             let name = format!("Keys in the {} view", view_name(app.view));
-            draw_help(f, f.area(), &name, &rows, app.help_scroll);
+            draw_help(f, f.area(), &name, &rows, app.help_scroll)
         }
         Input::CommandHelp => {
             let mut rows: Vec<(String, &str)> = Vec::new();
@@ -61,10 +70,11 @@ pub fn draw(app: &mut Screen<'_>, f: &mut Frame) {
                 rows.push((format!(":{} {}", c.name, c.args), c.help));
             }
             let rows: Vec<(&str, &str)> = rows.iter().map(|(k, h)| (k.trim_end(), *h)).collect();
-            draw_help(f, f.area(), "Commands", &rows, app.help_scroll);
+            draw_help(f, f.area(), "Commands", &rows, app.help_scroll)
         }
-        _ => {}
-    }
+        _ => app.help_scroll,
+    };
+    drawn
 }
 
 /// The keys that work in `view`: its own bindings, then those for every view
@@ -105,9 +115,9 @@ fn key_rows(keys: &Keymap, view: View) -> Vec<(String, String)> {
 }
 
 /// A list of keys or commands and what they do, centred over everything else.
-/// A row with no description is a heading. `scroll` is clamped to the rows
-/// that can scroll into view.
-fn draw_help(f: &mut Frame, area: Rect, name: &str, rows: &[(&str, &str)], scroll: &mut usize) {
+/// A row with no description is a heading. Returns `scroll` clamped to the
+/// rows that can scroll into view.
+fn draw_help(f: &mut Frame, area: Rect, name: &str, rows: &[(&str, &str)], scroll: usize) -> usize {
     let key_width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     let action_width = rows.iter().map(|(_, a)| a.len()).max().unwrap_or(0);
     let lines: Vec<Line> = rows
@@ -128,7 +138,7 @@ fn draw_help(f: &mut Frame, area: Rect, name: &str, rows: &[(&str, &str)], scrol
         .collect();
     let height = (rows.len() as u16 + 2).min(area.height);
     let visible = height.saturating_sub(2) as usize;
-    *scroll = (*scroll).min(rows.len().saturating_sub(visible));
+    let scroll = scroll.min(rows.len().saturating_sub(visible));
     let title = if rows.len() > visible {
         format!("{name}: j k scroll, any other key closes")
     } else {
@@ -147,15 +157,17 @@ fn draw_help(f: &mut Frame, area: Rect, name: &str, rows: &[(&str, &str)], scrol
     f.render_widget(Clear, popup);
     f.render_widget(
         Paragraph::new(lines)
-            .scroll((*scroll as u16, 0))
+            .scroll((scroll as u16, 0))
             .block(list_block(&title)),
         popup,
     );
+    scroll
 }
 
 /// The playing track's waveform, with its region, marks, playhead and any
 /// slices planned, above an axis row marking them and a line of detail.
-fn draw_sampler(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
+/// Returns the zoom, clamped to what the track and width allow.
+fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
     let current = app.snapshot.status.current();
     let name = current
         .and_then(|p| p.file_name())
@@ -177,7 +189,7 @@ fn draw_sampler(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
         });
         f.render_widget(block, area);
         f.render_widget(Paragraph::new(hint).style(Style::default().fg(DIM)), inner);
-        return;
+        return app.sampler.zoom;
     };
 
     let rate = peaks.rate.max(1);
@@ -186,7 +198,6 @@ fn draw_sampler(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
     let inner_width = area.width.saturating_sub(2).max(1) as u64;
     let (start, per_column, zoom) =
         sampler::window(peaks.frames, inner_width, app.sampler.zoom, at);
-    app.sampler.zoom = zoom;
     let shown_end = (start + per_column * inner_width).min(peaks.frames);
 
     let ms = per_column as f64 * 1000.0 / rate as f64;
@@ -208,7 +219,7 @@ fn draw_sampler(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     if inner.height == 0 {
-        return;
+        return zoom;
     }
     let width = inner.width as usize;
     let rows = inner.height.saturating_sub(2) as usize;
@@ -351,6 +362,7 @@ fn draw_sampler(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
         Paragraph::new(lines.split_off(skip.min(lines.len()))),
         inner,
     );
+    zoom
 }
 
 /// A line of styled characters, with each run of one style in one span.
@@ -386,9 +398,9 @@ fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
             View::Library => app.visible().len(),
             View::Selection => app.selection.len(),
             View::Playlists => app.playlists.len(),
-            View::Sampler => return format!(" {} ", v.title()),
+            View::Sampler => return format!(" {} ", view_title(v)),
         };
-        format!(" {} {} ", v.title(), n)
+        format!(" {} {} ", view_title(v), n)
     });
     let selected = views.iter().position(|v| *v == app.view).unwrap_or(0);
     let tabs = Tabs::new(titles.to_vec())
@@ -506,7 +518,8 @@ pub fn scroll_offset(offset: usize, selected: Option<usize>, rows: usize, len: u
     offset
 }
 
-/// Draws the rows of `tracks` that fit in `area`.
+/// Draws the rows of `tracks` that fit in `area`, and returns `scroll` with its
+/// row kept inside the list and on screen.
 ///
 /// Only those rows are formatted. Handing `List` every track would format the
 /// whole library on every frame, which is 200,000 strings at 50,000 tracks.
@@ -515,16 +528,14 @@ fn draw_tracks(
     area: Rect,
     title: &str,
     tracks: &[Track],
-    state: &mut ListState,
+    scroll: Scroll,
     playing: impl Fn(usize, &Track) -> bool,
     marked: impl Fn(&Track) -> bool,
-) {
+) -> Scroll {
     let len = tracks.len();
-    let selected = state.selected().map(|s| s.min(len.saturating_sub(1)));
+    let selected = scroll.row.map(|s| s.min(len.saturating_sub(1)));
     let rows = area.height.saturating_sub(2) as usize;
-    let offset = scroll_offset(state.offset(), selected, rows, len);
-    state.select(if len == 0 { None } else { selected });
-    *state.offset_mut() = offset;
+    let offset = scroll_offset(scroll.offset, selected, rows, len);
 
     let end = (offset + rows).min(len);
     let items: Vec<ListItem> = tracks[offset..end]
@@ -542,9 +553,13 @@ fn draw_tracks(
     );
     let mut window = ListState::default().with_selected(selected.map(|s| s - offset));
     f.render_stateful_widget(list, area, &mut window);
+    Scroll {
+        row: if len == 0 { None } else { selected },
+        offset,
+    }
 }
 
-fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
+fn draw_library(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
     let current = app.snapshot.status.current();
     let tracks = app.results.unwrap_or(app.all);
 
@@ -560,12 +575,12 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
 
     let selected: std::collections::HashSet<&str> =
         app.selection.iter().map(|t| t.path.as_str()).collect();
-    draw_tracks(
+    let scroll = draw_tracks(
         f,
         area,
         &title,
         tracks,
-        app.library_state,
+        app.lists.library,
         |_, t| current.is_some_and(|p| p.as_os_str() == t.path.as_str()),
         |t| selected.contains(t.path.as_str()),
     );
@@ -582,18 +597,19 @@ fn draw_library(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
         });
         f.render_widget(Paragraph::new(hint).style(Style::default().fg(DIM)), inner);
     }
+    scroll
 }
 
-fn draw_selection(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
+fn draw_selection(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
     let status = &app.snapshot.status;
     let current = status.current();
     // Every row here is selected, so no row is marked.
-    draw_tracks(
+    let scroll = draw_tracks(
         f,
         area,
         "",
         app.selection,
-        app.selection_state,
+        app.lists.selection,
         |_, t| current.is_some_and(|p| p.as_os_str() == t.path.as_str()),
         |_| false,
     );
@@ -609,10 +625,11 @@ fn draw_selection(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
             inner,
         );
     }
+    scroll
 }
 
-fn draw_playlists(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
-    let selected = app.playlist_state.selected();
+fn draw_playlists(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
+    let selected = app.lists.playlists.row;
     let items: Vec<ListItem> = app
         .playlists
         .iter()
@@ -636,7 +653,10 @@ fn draw_playlists(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
             .bg(SELECTED_BG)
             .add_modifier(Modifier::BOLD),
     );
-    f.render_stateful_widget(list, area, app.playlist_state);
+    let mut state = ListState::default()
+        .with_selected(selected)
+        .with_offset(app.lists.playlists.offset);
+    f.render_stateful_widget(list, area, &mut state);
 
     if empty {
         let inner = area.inner(ratatui::layout::Margin {
@@ -648,6 +668,10 @@ fn draw_playlists(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
                 .style(Style::default().fg(DIM)),
             inner,
         );
+    }
+    Scroll {
+        row: state.selected(),
+        offset: state.offset(),
     }
 }
 
@@ -733,7 +757,7 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
             Span::raw(format!("{}_", line.text)),
         ])),
         Input::Confirm(c) => Some(Line::from(Span::styled(
-            c.prompt(),
+            confirm_prompt(c),
             Style::default().fg(Color::Yellow),
         ))),
         _ => None,
@@ -749,9 +773,9 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         .keys
         .bindings()
         .iter()
-        .filter(|b| b.action == Some(crate::ui::action::Action::Help))
+        .filter(|b| b.action == Some(Action::Help))
         .map(|b| b.key)
-        .find(|&key| app.keys.lookup(key, app.view) == Some(&crate::ui::action::Action::Help))
+        .find(|&key| app.keys.lookup(key, app.view) == Some(&Action::Help))
         .map(|key| key.to_string());
     let indicators = indicators(status.semitones, app.snapshot, playing, help_key);
     let [left, right] = Layout::horizontal([

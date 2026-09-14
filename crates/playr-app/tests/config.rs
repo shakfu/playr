@@ -1,17 +1,13 @@
 //! Key names, the key map, and the settings file.
 
-use playr::ui::action::{Action, Key, Keymap};
-use playr::ui::config::{Config, DEFAULT_SETTINGS};
-use playr::ui::View::{Library, Playlists, Selection};
+use playr_app::action::{Action, Key, Keymap};
+use playr_app::config::{Config, DEFAULT_KEYS};
+use playr_app::View::{Library, Playlists, Selection};
 use playr_core::audio::Mode;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use playr_core::settings::{Settings, DEFAULT_SETTINGS};
 
 fn key(text: &str) -> Key {
     Key::parse(text).unwrap()
-}
-
-fn event(code: KeyCode, mods: KeyModifiers) -> Key {
-    (&KeyEvent::new(code, mods)).into()
 }
 
 #[test]
@@ -45,22 +41,6 @@ fn key_names_parse_and_print_the_same() {
 }
 
 #[test]
-fn a_key_press_matches_the_name_a_binding_uses() {
-    // Terminals report the shifted character, often with Shift set as well.
-    assert_eq!(event(KeyCode::Char('J'), KeyModifiers::SHIFT), key("J"));
-    assert_eq!(event(KeyCode::Char('?'), KeyModifiers::SHIFT), key("?"));
-    assert_eq!(event(KeyCode::Char(' '), KeyModifiers::NONE), key("space"));
-    assert_eq!(
-        event(KeyCode::Char('S'), KeyModifiers::CONTROL),
-        key("ctrl-s")
-    );
-    assert_eq!(event(KeyCode::BackTab, KeyModifiers::SHIFT), key("backtab"));
-    assert_eq!(event(KeyCode::Down, KeyModifiers::SHIFT), key("shift-down"));
-    assert_ne!(event(KeyCode::Down, KeyModifiers::SHIFT), key("down"));
-    assert_ne!(event(KeyCode::Char('m'), KeyModifiers::CONTROL), key("m"));
-}
-
-#[test]
 fn a_view_binding_wins_and_nothing_stops_the_fallback() {
     let mut keys = Keymap::empty();
     keys.bind(None, key("d"), Some(Action::Stop));
@@ -84,17 +64,17 @@ fn an_empty_file_gives_the_defaults() {
     let config = Config::parse("").unwrap();
     assert_eq!(config, Config::default());
     assert_eq!(config.keys, Keymap::default());
-    assert_eq!(
-        (config.volume, config.mode, config.speed),
-        (1.0, Mode::Normal, 0)
-    );
+    assert_eq!(config.settings, Settings::default());
     assert_eq!(Keymap::default().bindings().len(), 62);
 }
 
 #[test]
-fn the_default_settings_file_is_a_valid_user_file() {
-    // Copied whole to ~/.config/playr/settings.toml, it changes nothing.
+fn the_default_files_are_valid_user_files() {
+    // Copied whole to ~/.config/playr/settings.toml, each changes nothing.
     assert_eq!(Config::parse(DEFAULT_SETTINGS), Ok(Config::default()));
+    assert_eq!(Config::parse(DEFAULT_KEYS), Ok(Config::default()));
+    let both = format!("{DEFAULT_SETTINGS}\n{DEFAULT_KEYS}");
+    assert_eq!(Config::parse(&both), Ok(Config::default()));
 }
 
 #[test]
@@ -120,7 +100,11 @@ fn the_file_changes_keys_and_sets_how_playback_starts() {
     "#;
     let config = Config::parse(text).unwrap();
     assert_eq!(
-        (config.volume, config.mode, config.speed),
+        (
+            config.settings.volume,
+            config.settings.mode,
+            config.settings.speed
+        ),
         (0.4, Mode::Shuffle, -3)
     );
     let keys = &config.keys;
@@ -187,52 +171,6 @@ x = "delete"
     assert_eq!(syntax.len(), 1);
     assert!(syntax[0].starts_with("line 2: "), "{syntax:?}");
     assert!(Config::parse("keys = 1").unwrap_err()[0].contains("keys cannot be an integer"));
-}
-
-#[test]
-fn the_samples_directory_defaults_to_music_and_expands_home() {
-    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
-    assert_eq!(Config::default().samples, home.join("Music/playr/samples"));
-    let config = Config::parse("samples = \"~/loops\"").unwrap();
-    assert_eq!(config.samples, home.join("loops"));
-    let config = Config::parse("samples = \"/tmp/cuts\"").unwrap();
-    assert_eq!(config.samples, std::path::PathBuf::from("/tmp/cuts"));
-    assert_eq!(
-        Config::parse("samples = \"cuts\"").unwrap_err(),
-        ["line 1: samples must be an absolute path or start with ~/"]
-    );
-    assert_eq!(
-        Config::parse("samples = 3").unwrap_err(),
-        ["line 1: samples cannot be an integer"]
-    );
-}
-
-#[test]
-fn onset_sensitivity_defaults_to_the_middle_and_stays_in_range() {
-    assert_eq!(Config::default().onset_sensitivity, 0.5);
-    assert_eq!(
-        Config::parse("onset_sensitivity = 0.8")
-            .unwrap()
-            .onset_sensitivity,
-        0.8
-    );
-    assert_eq!(
-        Config::parse("onset_sensitivity = 1")
-            .unwrap()
-            .onset_sensitivity,
-        1.0
-    );
-    for bad in [
-        "onset_sensitivity = 1.5",
-        "onset_sensitivity = -0.1",
-        "onset_sensitivity = \"high\"",
-    ] {
-        assert_eq!(
-            Config::parse(bad).unwrap_err(),
-            ["line 1: onset_sensitivity is a number from 0 to 1"],
-            "{bad}"
-        );
-    }
 }
 
 #[test]

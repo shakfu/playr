@@ -1,0 +1,53 @@
+# playr's crates and what depends on what.
+# Render: make diagrams
+
+direction: down
+
+playr: "playr (terminal frontend)" {
+  main: "main.rs\nclap command line"
+  app: "ui::App\nimplements Frontend"
+  render: "ui::render\ndraw(&Screen) -> Drawn"
+  sampler: "ui::sampler\nwaveform glyphs"
+  notice: "ui::notice::text\nwords every Message"
+}
+
+gui: "playr-gui (egui frontend)\nnot built" {
+  style.stroke-dash: 3
+}
+
+tauri: "playr-tauri (Tauri backend)\nnot built" {
+  style.stroke-dash: 3
+}
+
+app: "playr-app" {
+  action: "action\nAction, Key, Keymap"
+  command: "command\n: parser, completion, history"
+  config: "config\n[keys] tables"
+  dispatch: "dispatch\nFrontend, dispatch"
+  message: "message\nMessage"
+}
+
+core: "playr-core" {
+  session: "session\nSession"
+  notice: "notice\nNotice, Outcome, Refusal"
+  event: "event\nEvent, EventSink"
+  settings: "settings\nSettings"
+  audio: "audio\nPlayer, engine"
+  db: "db\nlibrary, playlists, marks"
+  scan
+  samples: "samples\nplan and write slices"
+  wave: "wave\nPeaks"
+}
+
+playr -> app: "actions, commands, keys"
+playr -> core: "Session, types"
+gui -> app: "actions, commands, keys" {
+  style.stroke-dash: 3
+}
+gui -> core: "Session, types" {
+  style.stroke-dash: 3
+}
+tauri -> core: "serde feature (step 8)" {
+  style.stroke-dash: 3
+}
+app -> core: "calls Session"

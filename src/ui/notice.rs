@@ -1,4 +1,4 @@
-//! The messages the terminal shows on its bottom line, and their wording.
+//! The words the terminal shows on its bottom line for each message.
 //!
 //! Core operations report a [`Notice`]; the rest are about the terminal
 //! itself: prompts, key bindings and views. [`text`] is the only place either
@@ -7,51 +7,11 @@
 
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
 
-use super::action::{Action, Key};
-use super::command;
+use playr_app::command;
+pub use playr_app::message::Message;
+
+use super::fmt_time;
 use super::home_as_tilde;
-use super::sampler::Display;
-use super::{fmt_time, View};
-
-/// A message for the bottom line.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Message {
-    Core(Notice),
-    /// A confirmation was answered with anything but `y`.
-    Cancelled,
-    NoMatches,
-    NoPlaylistUnderCursor,
-    Display(Display),
-    /// A `map` command took effect; holds the `Action::Map`.
-    Mapped(Action),
-    Unmapped(Key),
-    NotBound {
-        key: Key,
-        view: Option<View>,
-    },
-    NoSlicesPlanned,
-    SlicesDiscarded,
-    /// A `:` command could not be parsed or run; the parser's own words.
-    Command(String),
-}
-
-impl From<Notice> for Message {
-    fn from(notice: Notice) -> Self {
-        Message::Core(notice)
-    }
-}
-
-impl From<Outcome> for Message {
-    fn from(outcome: Outcome) -> Self {
-        Message::Core(Notice::Done(outcome))
-    }
-}
-
-impl From<Refusal> for Message {
-    fn from(refusal: Refusal) -> Self {
-        Message::Core(Notice::Refused(refusal))
-    }
-}
 
 /// `n` slices, as a count with its noun.
 fn slices(n: usize) -> String {

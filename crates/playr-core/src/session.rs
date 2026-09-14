@@ -3,7 +3,7 @@
 //! Operations take what they act on as arguments, a track, an index into the
 //! selection or a playlist id, never a cursor or a view, and report what they
 //! did as a [`Notice`]. A frontend turns its own cursor or click into those
-//! arguments and words the notice. `docs/dev/architecture.md` sets out the
+//! arguments and words the notice. `docs/architecture.md` sets out the
 //! design. Work that takes seconds runs on its own thread and reports through
 //! the session's [`EventSink`], as the engine does.
 

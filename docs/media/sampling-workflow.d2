@@ -1,0 +1,28 @@
+# From a playing track to a sample bank.
+# Render: make diagrams
+
+direction: right
+
+play: "Play a track"
+mark: "Mark passages\nb, or :mark TIME"
+where: "In the sampler view?" {
+  shape: diamond
+}
+now: ":slice writes at once"
+plan: ":slice plans slices\nedges drawn as +"
+write: "enter or :write"
+discard: "esc or :discard,\nor the track changes" {
+  style.stroke-dash: 3
+}
+bank: "Sample bank directory\n000-name_S00.wav ...\nsamples.json" {
+  shape: page
+}
+
+play -> mark
+mark -> where: ":slice region, marks,\nN or onsets"
+where -> now: "no"
+where -> plan: "yes"
+plan -> write
+plan -> discard
+now -> bank
+write -> bank

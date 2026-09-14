@@ -4,9 +4,9 @@
 #[path = "../crates/playr-core/tests/common/mod.rs"]
 mod common;
 
-use playr::ui::action::Key;
 use playr::ui::notice::Message;
 use playr::ui::{App, Input};
+use playr_app::action::Key;
 use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -546,11 +546,7 @@ fn renaming_refuses_a_taken_or_empty_name_and_follows_the_playlist() {
     enter(&mut app);
     press(&mut app, '3');
     press(&mut app, 'j');
-    assert_eq!(
-        app.screen().playlist_state.selected(),
-        Some(1),
-        "not on late"
-    );
+    assert_eq!(app.screen().lists.playlists.row, Some(1), "not on late");
 
     press(&mut app, 'r');
     erase(&mut app, 4);
@@ -581,7 +577,7 @@ fn renaming_refuses_a_taken_or_empty_name_and_follows_the_playlist() {
         playlist_lens(&mut app),
         [("aaa".to_string(), 1), ("early".to_string(), 2)]
     );
-    assert_eq!(app.screen().playlist_state.selected(), Some(0));
+    assert_eq!(app.screen().lists.playlists.row, Some(0));
 }
 
 /// Refreshes until `done` holds for the app's snapshot, or five seconds pass.
@@ -813,7 +809,7 @@ fn keys_in_the_command_prompt_edit_it_rather_than_act() {
     enter(&mut app);
     assert_eq!(app.screen().view, View::Library);
     assert_eq!(
-        app.screen().selection_state.selected(),
+        app.screen().lists.selection.row,
         Some(0),
         "up or down moved the cursor"
     );
@@ -958,22 +954,42 @@ fn help_lists_scroll_with_j_and_k_and_other_keys_close_them() {
         assert_eq!(showing(&mut app), Some(open));
         press(&mut app, 'j');
         key(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
-        assert_eq!(*app.screen().help_scroll, 11);
+        assert_eq!(app.screen().help_scroll, 11);
         press(&mut app, 'k');
         key(&mut app, KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(*app.screen().help_scroll, 9);
+        assert_eq!(app.screen().help_scroll, 9);
         assert_eq!(showing(&mut app), Some(open), "scrolling closed it");
         press(&mut app, 'x');
         assert_eq!(showing(&mut app), None);
     }
     // Reopening starts at the top.
     command(&mut app, "help");
-    assert_eq!(*app.screen().help_scroll, 0);
+    assert_eq!(app.screen().help_scroll, 0);
+}
+
+#[test]
+fn a_scroll_past_the_end_of_help_is_taken_back_once_drawn() {
+    let (mut app, _dir) = app();
+    command(&mut app, "help");
+    for _ in 0..100 {
+        key(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+    }
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+    let mut drawn = None;
+    terminal
+        .draw(|f| drawn = Some(playr::ui::render::draw(&app.screen(), f)))
+        .unwrap();
+    let end = drawn.unwrap().help_scroll;
+    assert!(end < 1000, "not clamped: {end}");
+    app.drawn(drawn.unwrap());
+    // One k moves the list at once, not after 1,000 presses.
+    press(&mut app, 'k');
+    assert_eq!(app.screen().help_scroll, end - 1);
 }
 
 #[test]
 fn the_config_sets_keys_and_startup_before_anything_plays() {
-    use playr::ui::config::Config;
+    use playr_app::config::Config;
     use playr_core::audio::Mode;
     let config =
         Config::parse("volume = 30\nmode = 'repeat'\n[keys.selection]\nctrl-x = 'remove'").unwrap();
@@ -1016,7 +1032,7 @@ fn map_and_unmap_change_keys_while_running() {
     assert_eq!(
         said(&app),
         msg(Message::Mapped(
-            playr::ui::command::parse("map selection ctrl-x clear", playr::ui::View::Library)
+            playr_app::command::parse("map selection ctrl-x clear", playr::ui::View::Library)
                 .unwrap()
         ))
     );
@@ -1042,7 +1058,7 @@ fn map_and_unmap_change_keys_while_running() {
     command(&mut app, "last");
     press(&mut app, 'd');
     assert_eq!(
-        app.screen().selection_state.selected(),
+        app.screen().lists.selection.row,
         Some(0),
         "no fallback to all views"
     );
@@ -1066,7 +1082,7 @@ fn map_and_unmap_change_keys_while_running() {
 
 #[test]
 fn export_commands_write_slices_of_the_playing_track_in_the_background() {
-    use playr::ui::config::Config;
+    use playr_app::config::Config;
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("long.wav");
@@ -1139,7 +1155,7 @@ fn wait_for_export(app: &mut App) -> Result<(std::path::PathBuf, usize), String>
 
 #[test]
 fn slice_onsets_uses_the_setting_unless_given_a_sensitivity() {
-    use playr::ui::config::Config;
+    use playr_app::config::Config;
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();
     // Noise at -40 dB with a hit 10 dB louder: found at sensitivity 1, not 0.
@@ -1301,7 +1317,7 @@ fn zoom_and_display_keys_work_only_in_the_sampler() {
 
 #[test]
 fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
-    use playr::ui::config::Config;
+    use playr_app::config::Config;
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();
     let samples = dir.path().join("samples");

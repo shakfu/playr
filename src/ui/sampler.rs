@@ -20,33 +20,7 @@ use playr_core::wave::Peaks;
 /// Fewest frames a column shows, so a Braille dot still covers whole buckets.
 pub const MIN_FRAMES_PER_COLUMN: u64 = 2 * playr_core::wave::BUCKET;
 
-/// How the waveform is drawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Display {
-    #[default]
-    Envelope,
-    Decibels,
-    Braille,
-}
-
-impl Display {
-    pub fn name(self) -> &'static str {
-        match self {
-            Display::Envelope => "envelope",
-            Display::Decibels => "db",
-            Display::Braille => "braille",
-        }
-    }
-
-    /// The display `w` switches to after this one.
-    pub fn next(self) -> Display {
-        match self {
-            Display::Envelope => Display::Decibels,
-            Display::Decibels => Display::Braille,
-            Display::Braille => Display::Envelope,
-        }
-    }
-}
+pub use playr_app::Display;
 
 /// The level the dB display draws as empty, in dBFS.
 pub const DB_FLOOR: f32 = -48.0;

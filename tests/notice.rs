@@ -5,11 +5,11 @@
 
 use std::time::Duration;
 
-use playr::ui::action::Key;
-use playr::ui::command::parse;
 use playr::ui::notice::{text, Message};
 use playr::ui::sampler::Display;
 use playr::ui::View;
+use playr_app::action::Key;
+use playr_app::command::parse;
 use playr_core::audio::Mode;
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
 

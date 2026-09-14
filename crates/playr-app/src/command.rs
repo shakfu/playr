@@ -3,9 +3,8 @@
 
 use std::time::Duration;
 
-use super::action::{Action, Key, Slicing, Zoom};
-use super::sampler::Display;
-use super::View;
+use crate::action::{Action, Key, Slicing, Zoom};
+use crate::{Display, View};
 use playr_core::audio::Mode;
 use playr_core::samples::MAX_SLICES;
 
@@ -128,12 +127,7 @@ pub const COMMANDS: &[Command] = &[
     only(Sampler, "discard", "", "discard the slices :slice planned"),
 ];
 
-const MODES: &[(&str, Mode)] = &[
-    ("normal", Mode::Normal),
-    ("shuffle", Mode::Shuffle),
-    ("repeat", Mode::Repeat),
-    ("repeat-one", Mode::RepeatOne),
-];
+const MODES: &[(&str, Mode)] = &Mode::NAMES;
 
 const VIEWS: &[(&str, View)] = &[
     ("library", Library),
@@ -267,9 +261,9 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         ClearMarks => "delmarks".into(),
         NextMark => "next-mark".into(),
         PrevMark => "prev-mark".into(),
-        Zoom(super::action::Zoom::In) => "zoom +".into(),
-        Zoom(super::action::Zoom::Out) => "zoom -".into(),
-        Zoom(super::action::Zoom::All) => "zoom all".into(),
+        Zoom(crate::action::Zoom::In) => "zoom +".into(),
+        Zoom(crate::action::Zoom::Out) => "zoom -".into(),
+        Zoom(crate::action::Zoom::All) => "zoom all".into(),
         Display(None) => "display".into(),
         Display(Some(d)) => format!("display {}", d.name()),
         WriteSlices => "write".into(),

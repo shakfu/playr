@@ -3,9 +3,6 @@
 //! One thread: it renders, reads keys, and talks to the player over a channel.
 //! Nothing here blocks on audio.
 
-pub mod action;
-pub mod command;
-pub mod config;
 pub mod notice;
 pub mod render;
 pub mod sampler;
@@ -16,53 +13,28 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub use playr_app::dispatch::Confirm;
+pub use playr_app::View;
 use ratatui::crossterm::event::{
     self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
-use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
-use action::{Action, Keymap, Slicing};
-use command::{CommandLine, History};
-use config::Config;
 use notice::Message;
+use playr_app::action::{Action, Key, Keymap, Modifiers, Zoom};
+use playr_app::command::{self, CommandLine, History};
+use playr_app::config::Config;
+use playr_app::dispatch::{
+    confirmed, dispatch, rename, save_as, search, Frontend, Presentation, Prompt,
+};
 use playr_core::audio::{Cmd, Player, State, Status};
 use playr_core::db::query::{Mark, Playlist};
 use playr_core::db::Track;
 use playr_core::event::{Event, EventSink};
-use playr_core::notice::{Notice, Outcome, Refusal, Task};
-use playr_core::samples;
+use playr_core::notice::{Notice, Outcome, Task};
+use playr_core::samples::Plan;
 use playr_core::session::Session;
 use sampler::{Sampler, Wave};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
-    Library,
-    Selection,
-    Playlists,
-    /// The playing track's waveform, for marking and slicing it.
-    Sampler,
-}
-
-impl View {
-    fn next(self) -> Self {
-        match self {
-            View::Library => View::Selection,
-            View::Selection => View::Playlists,
-            View::Playlists => View::Sampler,
-            View::Sampler => View::Library,
-        }
-    }
-
-    fn title(self) -> &'static str {
-        match self {
-            View::Library => "Library",
-            View::Selection => "Selection",
-            View::Playlists => "Playlists",
-            View::Sampler => "Sampler",
-        }
-    }
-}
 
 /// What typed input is currently being collected.
 pub enum Input {
@@ -84,30 +56,6 @@ pub enum Input {
     Command(CommandLine),
 }
 
-/// A destructive action held until the listener confirms it.
-pub enum Confirm {
-    DeletePlaylist(Playlist),
-    /// Overwrite the playlist of this name with the selection.
-    ReplacePlaylist(String),
-    /// Empty the selection, which holds this many tracks.
-    ClearSelection(usize),
-    /// Remove this many marks from the playing track.
-    ClearMarks(usize),
-}
-
-impl Confirm {
-    pub fn prompt(&self) -> String {
-        match self {
-            Confirm::DeletePlaylist(p) => format!("delete playlist \"{}\"? (y/n)", p.name),
-            Confirm::ReplacePlaylist(name) => {
-                format!("replace playlist \"{name}\" with the selection? (y/n)")
-            }
-            Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection? (y/n)"),
-            Confirm::ClearMarks(n) => format!("clear all {n} marks from this track? (y/n)"),
-        }
-    }
-}
-
 pub struct App {
     /// The library and player, and everything done with them.
     session: Session,
@@ -115,15 +63,13 @@ pub struct App {
 
     /// Search results; when set, the library view shows these instead.
     results: Option<Vec<Track>>,
-    library_state: ListState,
+    /// The cursor and scroll position of each list.
+    lists: Lists,
 
     /// Rows for the list the player is playing from.
     playing: Vec<Track>,
     /// The player list `playing` was built from, compared by identity.
     playing_source: Arc<[PathBuf]>,
-
-    selection_state: ListState,
-    playlist_state: ListState,
 
     input: Input,
     /// `:` command lines entered this session.
@@ -151,10 +97,39 @@ pub struct App {
     snapshot: Snapshot,
 }
 
-/// Everything the drawing code reads.
+/// A list's cursor row, if one is chosen, and the first row it shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Scroll {
+    pub row: Option<usize>,
+    pub offset: usize,
+}
+
+/// The cursor and scroll position of each list in the interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Lists {
+    pub library: Scroll,
+    pub selection: Scroll,
+    pub playlists: Scroll,
+}
+
+/// What drawing a frame settled, for the next frame to start from: where each
+/// list scrolled to, with its cursor kept inside the list, and the help
+/// scroll and zoom kept within what can be shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Drawn {
+    pub lists: Lists,
+    pub help_scroll: usize,
+    pub zoom: u32,
+}
+
+/// No typed input, for a [`Screen`] that collects none.
+static NO_INPUT: Input = Input::None;
+
+/// Everything the drawing code reads, and nothing it writes.
 ///
 /// Rendering takes this rather than the whole `App` so it can be exercised
-/// against a `TestBackend` without an audio device.
+/// against a `TestBackend` without an audio device. What drawing settles comes
+/// back as a [`Drawn`].
 pub struct Screen<'a> {
     pub view: View,
     pub snapshot: &'a Snapshot,
@@ -166,17 +141,39 @@ pub struct Screen<'a> {
     pub playlists: &'a [Playlist],
     pub input: &'a Input,
     pub keys: &'a Keymap,
-    /// The sampler view's state; drawing clamps its zoom.
-    pub sampler: &'a mut Sampler,
-    /// Rows the key or command list is scrolled by; drawing clamps it.
-    pub help_scroll: &'a mut usize,
+    pub sampler: &'a Sampler,
+    /// Rows the key or command list is scrolled by.
+    pub help_scroll: usize,
     pub message: Option<&'a str>,
-    pub library_state: &'a mut ListState,
-    pub selection_state: &'a mut ListState,
-    pub playlist_state: &'a mut ListState,
+    pub lists: Lists,
 }
 
-impl Screen<'_> {
+impl<'a> Screen<'a> {
+    /// A screen of `view` with empty lists, no input and no message. Set the
+    /// rest with struct update syntax: `Screen { all: &tracks, ..Screen::new(..) }`.
+    pub fn new(
+        view: View,
+        snapshot: &'a Snapshot,
+        keys: &'a Keymap,
+        sampler: &'a Sampler,
+    ) -> Screen<'a> {
+        Screen {
+            view,
+            snapshot,
+            all: &[],
+            results: None,
+            playing: &[],
+            selection: &[],
+            playlists: &[],
+            input: &NO_INPUT,
+            keys,
+            sampler,
+            help_scroll: 0,
+            message: None,
+            lists: Lists::default(),
+        }
+    }
+
     /// The track list the library pane is showing.
     pub fn visible(&self) -> &[Track] {
         self.results.unwrap_or(self.all)
@@ -221,20 +218,18 @@ impl App {
             let _ = send.send(event);
         });
         let mut session = Session::new(conn, player, sink);
-        session.set_samples_dir(config.samples);
+        session.set_samples_dir(config.settings.samples);
         let mut app = App {
             session,
             view: View::Library,
             results: None,
-            library_state: ListState::default(),
+            lists: Lists::default(),
             playing: Vec::new(),
             playing_source: Arc::default(),
-            selection_state: ListState::default(),
-            playlist_state: ListState::default(),
             input: Input::None,
             history: History::default(),
             keys: config.keys,
-            onset_sensitivity: config.onset_sensitivity,
+            onset_sensitivity: config.settings.onset_sensitivity,
             events,
             sampler: Sampler::default(),
             help_scroll: 0,
@@ -243,12 +238,12 @@ impl App {
             peak_hold: None,
             snapshot: Snapshot::default(),
         };
-        app.session.send(Cmd::SetVolume(config.volume));
-        app.session.send(Cmd::SetMode(config.mode));
-        app.session.send(Cmd::SetSpeed(config.speed));
+        app.session.send(Cmd::SetVolume(config.settings.volume));
+        app.session.send(Cmd::SetMode(config.settings.mode));
+        app.session.send(Cmd::SetSpeed(config.settings.speed));
         if !tracks.is_empty() {
             app.session.set_selection(tracks.clone());
-            app.selection_state.select(Some(0));
+            app.lists.selection.row = Some(0);
             app.play(tracks, 0);
             app.view = View::Selection;
         }
@@ -289,11 +284,11 @@ impl App {
 
     fn reload(&mut self) {
         self.session.reload();
-        if !self.session.tracks().is_empty() && self.library_state.selected().is_none() {
-            self.library_state.select(Some(0));
+        if !self.session.tracks().is_empty() && self.lists.library.row.is_none() {
+            self.lists.library.row = Some(0);
         }
-        if !self.session.playlists().is_empty() && self.playlist_state.selected().is_none() {
-            self.playlist_state.select(Some(0));
+        if !self.session.playlists().is_empty() && self.lists.playlists.row.is_none() {
+            self.lists.playlists.row = Some(0);
         }
     }
 
@@ -303,30 +298,37 @@ impl App {
     }
 
     /// Borrows the state the renderer needs.
-    pub fn screen(&mut self) -> Screen<'_> {
+    pub fn screen(&self) -> Screen<'_> {
         Screen {
-            view: self.view,
-            snapshot: &self.snapshot,
             all: self.session.tracks(),
             results: self.results.as_deref(),
             playing: &self.playing,
             selection: self.session.selection(),
             playlists: self.session.playlists(),
             input: &self.input,
-            keys: &self.keys,
-            sampler: &mut self.sampler,
-            help_scroll: &mut self.help_scroll,
+            help_scroll: self.help_scroll,
             message: self.message.as_ref().map(|(_, text, _)| text.as_str()),
-            library_state: &mut self.library_state,
-            selection_state: &mut self.selection_state,
-            playlist_state: &mut self.playlist_state,
+            lists: self.lists,
+            ..Screen::new(self.view, &self.snapshot, &self.keys, &self.sampler)
         }
+    }
+
+    /// Takes what drawing a frame settled: scroll positions, and cursors,
+    /// help scroll and zoom kept within what could be shown.
+    pub fn drawn(&mut self, drawn: Drawn) {
+        self.lists = drawn.lists;
+        self.help_scroll = drawn.help_scroll;
+        self.sampler.zoom = drawn.zoom;
     }
 
     pub fn run(mut self, terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
         while !self.quit {
             self.refresh();
-            terminal.draw(|f| render::draw(&mut self.screen(), f))?;
+            let mut drawn = None;
+            terminal.draw(|f| drawn = Some(render::draw(&self.screen(), f)))?;
+            if let Some(drawn) = drawn {
+                self.drawn(drawn);
+            }
 
             // A short poll keeps the progress bar moving without busy-waiting.
             if event::poll(Duration::from_millis(200))? {
@@ -459,7 +461,7 @@ impl App {
                 };
                 // Anything but `y` cancels, so a stray key cannot confirm.
                 if typed(&key) == Some('y') {
-                    self.confirm(action);
+                    confirmed(action, self);
                 } else {
                     self.notify(Message::Cancelled);
                 }
@@ -497,7 +499,7 @@ impl App {
             Input::None => {}
         }
 
-        if let Some(action) = self.keys.lookup((&key).into(), self.view).cloned() {
+        if let Some(action) = key_of(&key).and_then(|k| self.keys.lookup(k, self.view).cloned()) {
             self.perform(action);
         }
     }
@@ -505,181 +507,9 @@ impl App {
     /// Does `action`. Keys and `:` commands both arrive here.
     pub fn perform(&mut self, action: Action) {
         self.follow_player();
-        match action {
-            Action::Quit => self.quit = true,
-            Action::Help => {
-                self.help_scroll = 0;
-                self.input = Input::Help;
-            }
-            Action::CommandHelp => {
-                self.help_scroll = 0;
-                self.input = Input::CommandHelp;
-            }
-            Action::ShowView(view) => self.view = view,
-            Action::NextView => self.view = self.view.next(),
-            Action::Cursor(rows) => self.move_selection(rows),
-            Action::CursorFirst => self.select(0),
-            Action::CursorLast => self.select(self.len().saturating_sub(1)),
-            Action::StartSearch => self.input = Input::Search(String::new()),
-            Action::Search(query) => {
-                self.apply_search(&query);
-                if self.visible().is_empty() {
-                    self.notify(Message::NoMatches);
-                }
-            }
-            Action::ClearSearch => {
-                if self.results.take().is_some() {
-                    self.library_state.select(Some(0));
-                }
-            }
-            Action::StartCommand => self.input = Input::Command(CommandLine::default()),
-            Action::Activate => self.activate(),
-
-            Action::Add => self.append_selection(),
-            Action::Remove => self.remove_from_selection(),
-            Action::MoveTrack(delta) => self.move_in_selection(delta),
-            Action::ClearSelection => match self.session.selection().len() {
-                0 => self.notify(Refusal::SelectionEmpty),
-                n => self.input = Input::Confirm(Confirm::ClearSelection(n)),
-            },
-            Action::StartSave => match self.session.check_save() {
-                Ok(()) => self.input = Input::SavePlaylist(String::new()),
-                Err(refusal) => self.notify(refusal),
-            },
-            Action::SaveAs(name) => match self.session.check_save() {
-                Ok(()) => self.save_as(&name),
-                Err(refusal) => self.notify(refusal),
-            },
-            Action::DeletePlaylist => self.delete_playlist(),
-            Action::StartRename => self.start_rename(),
-            Action::RenameTo(name) => match self.playlist_under_cursor() {
-                Some(from) => self.rename_to(&from, &name),
-                None => self.notify(Message::NoPlaylistUnderCursor),
-            },
-            Action::PlayPlaylist(name) => {
-                let notice = self.session.play_playlist_named(&name);
-                self.follow_player();
-                self.notify(notice);
-            }
-
-            Action::TogglePause => self.session.send(Cmd::TogglePause),
-            Action::Next => self.session.send(Cmd::Next),
-            Action::Prev => self.session.send(Cmd::Prev),
-            Action::Stop => self.session.send(Cmd::Stop),
-            Action::SeekBy(seconds) => self.session.send(Cmd::SeekBy(seconds)),
-            Action::SeekTo(at) => self.session.send(Cmd::Seek(at)),
-            Action::VolumeBy(delta) => self.session.volume_by(delta),
-            Action::SetVolume(v) => self.session.send(Cmd::SetVolume(v)),
-            Action::SpeedBy(semitones) => self.session.send(Cmd::SpeedBy(semitones)),
-            Action::SetSpeed(semitones) => self.session.send(Cmd::SetSpeed(semitones)),
-            Action::CycleMode(forward) => {
-                let notice = self.session.cycle_mode(forward);
-                self.notify(notice);
-            }
-            Action::SetMode(mode) => {
-                let notice = self.session.set_mode(mode);
-                self.notify(notice);
-            }
-
-            Action::Mark => {
-                let notice = self.session.add_mark(None);
-                self.notify(notice);
-            }
-            Action::MarkAt(at) => {
-                let notice = self.session.add_mark(Some(at));
-                self.notify(notice);
-            }
-            Action::UndoMark => {
-                let notice = self.session.undo_mark();
-                self.notify(notice);
-            }
-            Action::ClearMarks => match self.session.marks_to_clear() {
-                Ok(n) => self.input = Input::Confirm(Confirm::ClearMarks(n)),
-                Err(refusal) => self.notify(refusal),
-            },
-            Action::NextMark => {
-                let notice = self.session.seek_to_mark(true);
-                self.notify(notice);
-            }
-            Action::PrevMark => {
-                let notice = self.session.seek_to_mark(false);
-                self.notify(notice);
-            }
-
-            Action::Slice(slicing) => {
-                let cut = match slicing {
-                    Slicing::Region => samples::Cut::Region,
-                    Slicing::Marks => samples::Cut::Marks,
-                    Slicing::Equal(n) => samples::Cut::Equal(n),
-                    Slicing::Onsets(s) => samples::Cut::Onsets(s.unwrap_or(self.onset_sensitivity)),
-                };
-                // The sampler view shows slices before they are written.
-                if self.view == View::Sampler {
-                    self.plan(cut);
-                } else {
-                    self.export(cut);
-                }
-            }
-            Action::Zoom(zoom) => {
-                self.sampler.zoom = match zoom {
-                    action::Zoom::In => self.sampler.zoom + 1,
-                    action::Zoom::Out => self.sampler.zoom.saturating_sub(1),
-                    action::Zoom::All => 0,
-                }
-            }
-            Action::Display(display) => {
-                self.sampler.display = display.unwrap_or(self.sampler.display.next());
-                self.notify(Message::Display(self.sampler.display));
-            }
-            Action::WriteSlices => match self.sampler.pending.take() {
-                Some(plan) => {
-                    self.session.write_slices(plan);
-                    self.notify(Outcome::ExportStarted);
-                }
-                None => self.notify(Message::NoSlicesPlanned),
-            },
-            Action::DiscardSlices => match self.sampler.pending.take() {
-                Some(_) => self.notify(Message::SlicesDiscarded),
-                None => self.notify(Message::NoSlicesPlanned),
-            },
-
-            Action::Map { view, key, action } => {
-                let shown = Action::Map {
-                    view,
-                    key,
-                    action: action.clone(),
-                };
-                self.keys.bind(view, key, action.map(|a| *a));
-                self.notify(Message::Mapped(shown));
-            }
-            Action::Unmap { view, key } => {
-                if self.keys.unbind(view, key) {
-                    self.notify(Message::Unmapped(key));
-                } else {
-                    self.notify(Message::NotBound { key, view });
-                }
-            }
-        }
-    }
-
-    /// Saves the selection as `name`, asking first if that replaces a playlist.
-    fn save_as(&mut self, name: &str) {
-        match self.session.save_selection(name, false) {
-            Notice::Refused(Refusal::WouldReplace(name)) => {
-                self.input = Input::Confirm(Confirm::ReplacePlaylist(name));
-            }
-            notice => self.notify(notice),
-        }
-    }
-
-    fn playlist_under_cursor(&self) -> Option<Playlist> {
-        if self.view != View::Playlists {
-            return None;
-        }
-        self.playlist_state
-            .selected()
-            .and_then(|i| self.session.playlists().get(i))
-            .cloned()
+        dispatch(action, self);
+        // An action that plays changes the player's list; show its rows at once.
+        self.follow_player();
     }
 
     fn command_key(&mut self, key: KeyEvent, mut line: CommandLine) {
@@ -734,30 +564,16 @@ impl App {
             }
             KeyCode::Backspace => {
                 buf.pop();
-                self.apply_search(&buf);
+                search(self, &buf);
                 self.input = Input::Search(buf);
             }
             KeyCode::Char(c) if typed(&key).is_some() => {
                 buf.push(c);
-                self.apply_search(&buf);
+                search(self, &buf);
                 self.input = Input::Search(buf);
             }
             _ => self.input = Input::Search(buf),
         }
-    }
-
-    fn apply_search(&mut self, term: &str) {
-        self.view = View::Library;
-        if term.is_empty() {
-            self.results = None;
-        } else {
-            self.results = Some(self.session.search(term));
-        }
-        self.library_state.select(if self.visible().is_empty() {
-            None
-        } else {
-            Some(0)
-        });
     }
 
     fn save_key(&mut self, key: KeyEvent, mut buf: String) {
@@ -765,7 +581,7 @@ impl App {
             KeyCode::Esc => self.input = Input::None,
             KeyCode::Enter => {
                 self.input = Input::None;
-                self.save_as(&buf);
+                save_as(self, &buf);
             }
             KeyCode::Backspace => {
                 buf.pop();
@@ -779,21 +595,12 @@ impl App {
         }
     }
 
-    fn start_rename(&mut self) {
-        let Some(from) = self.playlist_under_cursor() else {
-            return self.notify(Message::NoPlaylistUnderCursor);
-        };
-        // Starts from the current name, which is usually a small edit away.
-        let name = from.name.clone();
-        self.input = Input::RenamePlaylist { from, name };
-    }
-
     fn rename_key(&mut self, key: KeyEvent, from: Playlist, mut name: String) {
         match key.code {
             KeyCode::Esc => self.input = Input::None,
             KeyCode::Enter => {
                 self.input = Input::None;
-                self.rename_to(&from, &name);
+                rename(self, &from, &name);
             }
             KeyCode::Backspace => {
                 name.pop();
@@ -807,216 +614,11 @@ impl App {
         }
     }
 
-    /// Renames `from` to `name`; the cursor follows it to its new place.
-    fn rename_to(&mut self, from: &Playlist, name: &str) {
-        let notice = self.session.rename_playlist(from.id, name);
-        if matches!(notice, Notice::Done(_)) {
-            // The list is sorted by name, so the renamed playlist may have moved.
-            let at = self
-                .session
-                .playlists()
-                .iter()
-                .position(|p| p.id == from.id);
-            self.playlist_state.select(at);
-        }
-        self.notify(notice);
-    }
-
-    fn confirm(&mut self, action: Confirm) {
-        match action {
-            Confirm::ReplacePlaylist(name) => {
-                let notice = self.session.save_selection(&name, true);
-                self.notify(notice);
-            }
-            Confirm::ClearMarks(_) => {
-                if let Some(notice) = self.session.clear_marks() {
-                    self.notify(notice);
-                }
-            }
-            Confirm::ClearSelection(_) => {
-                let outcome = self.session.clear_selection();
-                self.selection_state.select(None);
-                self.notify(outcome);
-            }
-            Confirm::DeletePlaylist(pl) => {
-                if let Some(notice) = self.session.delete_playlist(pl.id) {
-                    self.view = View::Playlists;
-                    self.select(self.playlist_state.selected().unwrap_or(0));
-                    self.notify(notice);
-                }
-            }
-        }
-    }
-
-    fn len(&self) -> usize {
-        match self.view {
-            View::Library => self.visible().len(),
-            View::Selection => self.session.selection().len(),
-            View::Playlists => self.session.playlists().len(),
-            View::Sampler => 0,
-        }
-    }
-
-    fn state_mut(&mut self) -> &mut ListState {
-        match self.view {
-            View::Library => &mut self.library_state,
-            View::Selection => &mut self.selection_state,
-            // Never moved: the sampler has no rows, and `select` leaves it.
-            View::Playlists | View::Sampler => &mut self.playlist_state,
-        }
-    }
-
-    fn select(&mut self, i: usize) {
-        if self.view == View::Sampler {
-            return;
-        }
-        let len = self.len();
-        if len == 0 {
-            self.state_mut().select(None);
-        } else {
-            self.state_mut().select(Some(i.min(len - 1)));
-        }
-    }
-
-    fn move_selection(&mut self, delta: i64) {
-        let len = self.len();
-        if len == 0 {
-            return;
-        }
-        let cur = self.state_mut().selected().unwrap_or(0) as i64;
-        let next = (cur + delta).clamp(0, len as i64 - 1) as usize;
-        self.state_mut().select(Some(next));
-    }
-
-    /// Enter: play the list in view from the selected track, or play a playlist.
-    fn activate(&mut self) {
-        match self.view {
-            View::Library => {
-                let Some(i) = self.library_state.selected() else {
-                    return;
-                };
-                let tracks = self.visible().to_vec();
-                if tracks.is_empty() {
-                    return;
-                }
-                self.play(tracks, i);
-            }
-            View::Selection => {
-                if let Some(i) = self.selection_state.selected() {
-                    self.play(self.session.selection().to_vec(), i);
-                }
-            }
-            View::Sampler => {}
-            View::Playlists => {
-                let Some(pl) = self.playlist_under_cursor() else {
-                    return;
-                };
-                let notice = self.session.play_playlist(pl.id);
-                self.follow_player();
-                self.notify(notice);
-            }
-        }
-    }
-
     /// Plays `tracks` from `index`. The selection is not touched.
     fn play(&mut self, tracks: Vec<Track>, index: usize) {
         self.session.play(&tracks, index);
         self.playing = tracks;
         self.playing_source = self.session.player().queue();
-    }
-
-    /// `a`: in the library, selects the track or unselects it if it was
-    /// selected; on a playlist, adds its tracks. Either way the cursor moves on.
-    fn append_selection(&mut self) {
-        let outcome = match self.view {
-            View::Library => {
-                let Some(track) = self
-                    .library_state
-                    .selected()
-                    .and_then(|i| self.visible().get(i).cloned())
-                else {
-                    return;
-                };
-                self.session.toggle_selected(track)
-            }
-            View::Playlists => {
-                let Some(pl) = self.playlist_under_cursor() else {
-                    return;
-                };
-                let Some(outcome) = self.session.add_playlist_to_selection(pl.id) else {
-                    return;
-                };
-                outcome
-            }
-            View::Selection | View::Sampler => return,
-        };
-        // Keep the selection's cursor on a track: on the first once a track is
-        // added, and within the list when unselecting shortens it.
-        let len = self.session.selection().len();
-        match outcome {
-            Outcome::RemovedFromSelection => {
-                let cursor = self
-                    .selection_state
-                    .selected()
-                    .map(|i| i.min(len.saturating_sub(1)));
-                self.selection_state
-                    .select(if len == 0 { None } else { cursor });
-            }
-            Outcome::AddedToSelection if self.selection_state.selected().is_none() => {
-                self.selection_state.select(Some(0));
-            }
-            _ => {}
-        }
-        // On to the next row, so a run of tracks takes one key each.
-        self.move_selection(1);
-        self.notify(outcome);
-    }
-
-    fn remove_from_selection(&mut self) {
-        let Some(i) = self.selection_state.selected() else {
-            return;
-        };
-        if let Some(outcome) = self.session.remove_from_selection(i) {
-            self.select(i);
-            self.notify(outcome);
-        }
-    }
-
-    /// Moves the selected track in the selection `delta` places, keeping it selected.
-    fn move_in_selection(&mut self, delta: i64) {
-        let Some(i) = self.selection_state.selected() else {
-            return;
-        };
-        if let Some(to) = self.session.move_in_selection(i, delta) {
-            self.selection_state.select(Some(to));
-        }
-    }
-
-    fn delete_playlist(&mut self) {
-        if let Some(pl) = self.playlist_under_cursor() {
-            self.input = Input::Confirm(Confirm::DeletePlaylist(pl));
-        }
-    }
-
-    /// Cuts the playing track on another thread. Reading a long region takes
-    /// seconds, so [`App::refresh`] reports the result when it arrives.
-    fn export(&mut self, cut: samples::Cut) {
-        match self.session.export(cut) {
-            Ok(_) => self.notify(Outcome::ExportStarted),
-            Err(refusal) => self.notify(refusal),
-        }
-    }
-
-    /// Plans slices of the playing track on another thread, for the sampler
-    /// view to show until they are written or discarded.
-    fn plan(&mut self, cut: samples::Cut) {
-        match self.session.plan_slices(cut) {
-            Ok(_) => {
-                self.sampler.planning = true;
-                self.notify(Outcome::PlanStarted);
-            }
-            Err(refusal) => self.notify(refusal),
-        }
     }
 
     /// Keeps the sampler's waveform and planned slices on the playing track.
@@ -1044,6 +646,165 @@ impl App {
                 Wave::None
             }
         };
+    }
+}
+
+impl Frontend for App {
+    fn session(&self) -> &Session {
+        &self.session
+    }
+
+    fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    fn keys(&mut self) -> &mut Keymap {
+        &mut self.keys
+    }
+
+    fn view(&self) -> View {
+        self.view
+    }
+
+    fn set_view(&mut self, view: View) {
+        self.view = view;
+    }
+
+    fn cursor(&self, view: View) -> Option<usize> {
+        match view {
+            View::Library => self.lists.library.row,
+            View::Selection => self.lists.selection.row,
+            View::Playlists => self.lists.playlists.row,
+            View::Sampler => None,
+        }
+    }
+
+    fn set_cursor(&mut self, view: View, row: Option<usize>) {
+        match view {
+            View::Library => self.lists.library.row = row,
+            View::Selection => self.lists.selection.row = row,
+            View::Playlists => self.lists.playlists.row = row,
+            View::Sampler => {}
+        }
+    }
+
+    fn listed(&self) -> &[Track] {
+        self.visible()
+    }
+
+    fn set_results(&mut self, results: Option<Vec<Track>>) -> Option<Vec<Track>> {
+        std::mem::replace(&mut self.results, results)
+    }
+
+    fn onset_sensitivity(&self) -> f32 {
+        self.onset_sensitivity
+    }
+
+    fn notify(&mut self, message: Message) {
+        App::notify(self, message);
+    }
+
+    fn confirm(&mut self, question: Confirm) {
+        self.input = Input::Confirm(question);
+    }
+
+    fn prompt(&mut self, prompt: Prompt) {
+        self.input = match prompt {
+            Prompt::Search => Input::Search(String::new()),
+            Prompt::Command => Input::Command(CommandLine::default()),
+            Prompt::Save => Input::SavePlaylist(String::new()),
+            // Starts from the current name, which is usually a small edit away.
+            Prompt::Rename(from) => {
+                let name = from.name.clone();
+                Input::RenamePlaylist { from, name }
+            }
+        };
+    }
+
+    fn present(&mut self, presentation: Presentation) {
+        match presentation {
+            Presentation::Quit => self.quit = true,
+            Presentation::KeyList => {
+                self.help_scroll = 0;
+                self.input = Input::Help;
+            }
+            Presentation::CommandList => {
+                self.help_scroll = 0;
+                self.input = Input::CommandHelp;
+            }
+            Presentation::Zoom(zoom) => {
+                self.sampler.zoom = match zoom {
+                    Zoom::In => self.sampler.zoom + 1,
+                    Zoom::Out => self.sampler.zoom.saturating_sub(1),
+                    Zoom::All => 0,
+                }
+            }
+            Presentation::Display(display) => {
+                self.sampler.display = display.unwrap_or(self.sampler.display.next());
+                App::notify(self, Message::Display(self.sampler.display));
+            }
+        }
+    }
+
+    fn planning(&mut self) {
+        self.sampler.planning = true;
+    }
+
+    fn take_plan(&mut self) -> Option<Plan> {
+        self.sampler.pending.take()
+    }
+}
+
+/// The key a terminal key event names, or `None` for a key no binding can name.
+pub fn key_of(event: &KeyEvent) -> Option<Key> {
+    use playr_app::action::KeyCode as K;
+    let code = match event.code {
+        KeyCode::Char(c) => K::Char(c),
+        KeyCode::F(n) => K::F(n),
+        KeyCode::Enter => K::Enter,
+        KeyCode::Esc => K::Esc,
+        KeyCode::Tab => K::Tab,
+        KeyCode::BackTab => K::BackTab,
+        KeyCode::Backspace => K::Backspace,
+        KeyCode::Delete => K::Delete,
+        KeyCode::Insert => K::Insert,
+        KeyCode::Up => K::Up,
+        KeyCode::Down => K::Down,
+        KeyCode::Left => K::Left,
+        KeyCode::Right => K::Right,
+        KeyCode::Home => K::Home,
+        KeyCode::End => K::End,
+        KeyCode::PageUp => K::PageUp,
+        KeyCode::PageDown => K::PageDown,
+        _ => return None,
+    };
+    let mods = Modifiers {
+        ctrl: event.modifiers.contains(KeyModifiers::CONTROL),
+        alt: event.modifiers.contains(KeyModifiers::ALT),
+        shift: event.modifiers.contains(KeyModifiers::SHIFT),
+    };
+    Some(Key::new(code, mods))
+}
+
+/// The name of `view` on its tab.
+pub fn view_title(view: View) -> &'static str {
+    match view {
+        View::Library => "Library",
+        View::Selection => "Selection",
+        View::Playlists => "Playlists",
+        View::Sampler => "Sampler",
+    }
+}
+
+/// The question asked before `confirm`.
+pub fn confirm_prompt(confirm: &Confirm) -> String {
+    match confirm {
+        Confirm::DeletePlaylist(p) => format!("delete playlist \"{}\"? (y/n)", p.name),
+        Confirm::ReplacePlaylist(name) => {
+            format!("replace playlist \"{name}\" with the selection? (y/n)")
+        }
+        Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection? (y/n)"),
+        Confirm::ClearMarks(n) => format!("clear all {n} marks from this track? (y/n)"),
     }
 }
 

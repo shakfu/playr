@@ -21,6 +21,14 @@ pub enum Mode {
 impl Mode {
     const CYCLE: [Mode; 4] = [Mode::Normal, Mode::Shuffle, Mode::Repeat, Mode::RepeatOne];
 
+    /// Each mode's name in commands and settings.
+    pub const NAMES: [(&'static str, Mode); 4] = [
+        ("normal", Mode::Normal),
+        ("shuffle", Mode::Shuffle),
+        ("repeat", Mode::Repeat),
+        ("repeat-one", Mode::RepeatOne),
+    ];
+
     fn position(self) -> usize {
         Self::CYCLE.iter().position(|m| *m == self).unwrap_or(0)
     }

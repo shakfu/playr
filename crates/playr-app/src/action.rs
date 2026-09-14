@@ -11,9 +11,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-use super::View;
+use crate::View;
 use playr_core::audio::Mode;
 
 /// One thing the interface can do.
@@ -87,7 +85,7 @@ pub enum Action {
     /// Zoom the sampler view.
     Zoom(Zoom),
     /// Show the waveform this way, or switch to the other way when `None`.
-    Display(Option<super::sampler::Display>),
+    Display(Option<crate::Display>),
     /// Write the slices planned in the sampler view.
     WriteSlices,
     DiscardSlices,
@@ -126,11 +124,43 @@ pub enum Slicing {
     Onsets(Option<f32>),
 }
 
+/// A key, as bindings name it. Each frontend converts its own key events to
+/// these with [`Key::new`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KeyCode {
+    Char(char),
+    /// A function key, 1 to 12.
+    F(u8),
+    Enter,
+    Esc,
+    Tab,
+    BackTab,
+    Backspace,
+    Delete,
+    Insert,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+}
+
+/// The modifier keys held with a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Modifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
 /// A key with its Ctrl, Alt and Shift modifiers, as a binding names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Key {
     code: KeyCode,
-    mods: KeyModifiers,
+    mods: Modifiers,
 }
 
 /// Names for keys that are not a printable character.
@@ -153,28 +183,25 @@ const KEY_NAMES: &[(&str, KeyCode)] = &[
     ("pagedown", KeyCode::PageDown),
 ];
 
-const MODIFIERS: &[(&str, KeyModifiers)] = &[
-    ("ctrl-", KeyModifiers::CONTROL),
-    ("alt-", KeyModifiers::ALT),
-    ("shift-", KeyModifiers::SHIFT),
-];
+/// Modifier prefixes in names, in the order a name writes them.
+const PREFIXES: [&str; 3] = ["ctrl-", "alt-", "shift-"];
 
 impl Key {
-    fn new(code: KeyCode, mods: KeyModifiers) -> Self {
-        let mut mods = mods & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
+    /// The key `code` with `mods` held, as a binding would name it.
+    pub fn new(code: KeyCode, mut mods: Modifiers) -> Self {
         let code = match code {
             KeyCode::Char(c) => {
                 // The character already says whether Shift was held: `J`, `?`.
-                mods.remove(KeyModifiers::SHIFT);
+                mods.shift = false;
                 // A terminal sends Ctrl-S and Ctrl-s as the same control code.
-                if mods.contains(KeyModifiers::CONTROL) {
+                if mods.ctrl {
                     KeyCode::Char(c.to_ascii_lowercase())
                 } else {
                     code
                 }
             }
             KeyCode::BackTab => {
-                mods.remove(KeyModifiers::SHIFT);
+                mods.shift = false;
                 code
             }
             _ => code,
@@ -185,12 +212,16 @@ impl Key {
     /// Parses `j`, `J`, `space`, `pagedown`, `f5`, `ctrl-s` or `shift-right`.
     pub fn parse(text: &str) -> Result<Key, String> {
         let mut rest = text;
-        let mut mods = KeyModifiers::NONE;
+        let mut mods = Modifiers::default();
         // A prefix needs a key after it, so `-` and `ctrl--` name the minus key.
         'prefixes: loop {
-            for (prefix, m) in MODIFIERS {
+            for prefix in PREFIXES {
                 if let Some(r) = rest.strip_prefix(prefix).filter(|r| !r.is_empty()) {
-                    mods |= *m;
+                    match prefix {
+                        "ctrl-" => mods.ctrl = true,
+                        "alt-" => mods.alt = true,
+                        _ => mods.shift = true,
+                    }
                     rest = r;
                     continue 'prefixes;
                 }
@@ -217,16 +248,11 @@ impl Key {
     }
 }
 
-impl From<&KeyEvent> for Key {
-    fn from(event: &KeyEvent) -> Self {
-        Key::new(event.code, event.modifiers)
-    }
-}
-
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (prefix, m) in MODIFIERS {
-            if self.mods.contains(*m) {
+        let held = [self.mods.ctrl, self.mods.alt, self.mods.shift];
+        for (prefix, held) in PREFIXES.iter().zip(held) {
+            if held {
                 f.write_str(prefix)?;
             }
         }
@@ -236,6 +262,7 @@ impl fmt::Display for Key {
         match self.code {
             KeyCode::Char(c) => write!(f, "{c}"),
             KeyCode::F(n) => write!(f, "f{n}"),
+            // Every other code has a name above.
             other => write!(f, "{other:?}"),
         }
     }
@@ -259,7 +286,7 @@ pub struct Keymap {
 /// The bindings in the default settings, `settings.toml`.
 impl Default for Keymap {
     fn default() -> Self {
-        super::config::Config::default().keys
+        crate::config::Config::default().keys
     }
 }
 

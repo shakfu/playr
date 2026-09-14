@@ -8,7 +8,7 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 - [ ] **A-B loop between marks.** Loop the stretch between the marks either side of the playing position, for practice with varispeed. Marks are already source frames; the loop is an engine change.
 
-- [ ] **Live marks for sampling tools.** Slices can be exported as files. Handing a marked passage to a running tool, such as SuperCollider, is not done: `docs/dev/sampler.md` weighs a JSON Lines file against OSC.
+- [ ] **Live marks for sampling tools.** Slices can be exported as files. Handing a marked passage to a running tool, such as SuperCollider, is not done: `docs/sampler.md` weighs a JSON Lines file against OSC.
 
 - [ ] **Sampler: mark editing.** A cursor in the sampler view, independent of the playhead; select a mark and nudge it by a column, a millisecond or a frame; snap to a zero crossing or the nearest onset; delete one mark. `MARK_NEAR` refuses marks within 500 ms of each other, which is too coarse at the sampler's zoom.
 
@@ -69,18 +69,6 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 ## Interface
 
-- [ ] **Command-line parsing.** Arguments are parsed by hand in `main.rs`. `--db` and `--settings` are taken from anywhere in the arguments, but `--help` and unknown flags are only noticed as the first argument. Found with the current build:
-
-  | command | result |
-  |-|-|
-  | `playr scan --help` | scans a directory named `--help`, and creates the library if there is none |
-  | `playr search --help` | searches for the text `--help` |
-  | `playr search rock --db` | fails with `--db needs a path`: a search cannot contain `--db` or `--settings` |
-  | `playr playlists --bogus` | ignores the unknown flag |
-  | `playr formats extra` | ignores the extra argument |
-
-  Replace it with [clap](https://docs.rs/clap)'s derive API: one struct per subcommand gives per-subcommand `--help`, errors for unknown flags and extra arguments, and `--` to pass a search that looks like a flag. `clap_complete` and `clap_mangen` would then generate shell completions and the man page that Packaging lists as missing. A smaller parser such as `lexopt` fixes the parsing without generating help, completions or a man page. The CLI belongs to the terminal frontend in `docs/dev/architecture.md`, so this can happen before or after that split.
-
 - [ ] **Colours.** Not configurable. `render.rs` uses 16 colours directly; they need named roles, such as accent and dim, before a `[colors]` table in `settings.toml` could set them.
 
 - [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. A table in the library would keep it.
@@ -89,4 +77,4 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 - [ ] **CI.** No workflow. Should run `make test` on both feature settings with `PLAYR_REQUIRE_FFMPEG=1`, so missing ffmpeg fails the run. A runner has no audio device, so only the real-device smoke test skips there.
 
-- [ ] **Packaging.** No release binaries, no crates.io publish, no man page.
+- [ ] **Packaging.** No release binaries, no crates.io publish, no man page, no shell completions. The command line is parsed with clap, so `clap_mangen` and `clap_complete` can generate the last two.

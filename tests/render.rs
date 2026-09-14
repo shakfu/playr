@@ -1,14 +1,13 @@
 //! Rendering tests against a headless backend. No audio device involved.
 
-use playr::ui::action::Keymap;
 use playr::ui::render::{self, scroll_offset};
 use playr::ui::sampler::Sampler;
-use playr::ui::{Input, Screen, Snapshot, View};
+use playr::ui::{Drawn, Input, Lists, Screen, Scroll, Snapshot, View};
+use playr_app::action::Keymap;
 use playr_core::audio::{Spec, State, Status};
 use playr_core::db::query::Playlist;
 use playr_core::db::Track;
 use ratatui::backend::TestBackend;
-use ratatui::widgets::ListState;
 use ratatui::Terminal;
 use std::time::Duration;
 
@@ -37,7 +36,7 @@ struct Case<'a> {
     message: Option<&'a str>,
     width: u16,
     height: u16,
-    /// Cursor row in the library and selection views; the first row when unset.
+    /// Cursor row in each list; the first row when unset.
     selected: Option<usize>,
     help_scroll: usize,
     /// The key map; the defaults when unset.
@@ -142,54 +141,45 @@ impl<'a> Case<'a> {
     }
 
     /// Draws one frame and returns the cells.
-    fn buffer(mut self) -> ratatui::buffer::Buffer {
+    fn buffer(self) -> ratatui::buffer::Buffer {
+        self.frame().0
+    }
+
+    /// Draws one frame and returns what drawing settled.
+    fn drawn(self) -> Drawn {
+        self.frame().1
+    }
+
+    fn frame(self) -> (ratatui::buffer::Buffer, Drawn) {
         let mut terminal = Terminal::new(TestBackend::new(self.width, self.height)).unwrap();
         let default_keys = Keymap::default();
         let keys = self.keys.unwrap_or(&default_keys);
-        let mut ls = ListState::default();
         let cursor = self.selected.unwrap_or(0);
-        ls.select(if self.all.is_empty() {
-            None
-        } else {
-            Some(cursor)
-        });
-        let mut qs = ListState::default();
-        qs.select(if self.selection.is_empty() {
-            None
-        } else {
-            Some(cursor)
-        });
-        let mut ps = ListState::default();
-        ps.select(if self.playlists.is_empty() {
-            None
-        } else {
-            Some(0)
-        });
-
+        let at = |empty: bool, row| Scroll {
+            row: (!empty).then_some(row),
+            offset: 0,
+        };
+        let screen = Screen {
+            all: self.all,
+            results: self.results,
+            playing: self.playing,
+            selection: self.selection,
+            playlists: self.playlists,
+            input: self.input,
+            help_scroll: self.help_scroll,
+            message: self.message,
+            lists: Lists {
+                library: at(self.all.is_empty(), cursor),
+                selection: at(self.selection.is_empty(), cursor),
+                playlists: at(self.playlists.is_empty(), cursor),
+            },
+            ..Screen::new(self.view, self.snapshot, keys, &self.sampler)
+        };
+        let mut drawn = None;
         terminal
-            .draw(|f| {
-                let mut screen = Screen {
-                    view: self.view,
-                    snapshot: self.snapshot,
-                    all: self.all,
-                    results: self.results,
-                    playing: self.playing,
-                    selection: self.selection,
-                    playlists: self.playlists,
-                    input: self.input,
-                    keys,
-                    sampler: &mut self.sampler,
-                    help_scroll: &mut self.help_scroll,
-                    message: self.message,
-                    library_state: &mut ls,
-                    selection_state: &mut qs,
-                    playlist_state: &mut ps,
-                };
-                render::draw(&mut screen, f);
-            })
+            .draw(|f| drawn = Some(render::draw(&screen, f)))
             .unwrap();
-
-        terminal.backend().buffer().clone()
+        (terminal.backend().buffer().clone(), drawn.unwrap())
     }
 
     /// Draws one frame and joins it for substring assertions.
@@ -219,36 +209,26 @@ fn invisible_cells(
 ) -> Vec<String> {
     let snapshot = stopped();
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-    let sel = |v: &[Track]| {
-        let mut st = ListState::default();
-        st.select((!v.is_empty()).then_some(0));
-        st
+    let first = |rows: bool| Scroll {
+        row: rows.then_some(0),
+        offset: 0,
     };
-    let mut ls = sel(all);
-    let mut qs = sel(selection);
-    let mut ps = ListState::default();
-    ps.select((!playlists.is_empty()).then_some(0));
-
+    let keys = Keymap::default();
+    let sampler = Sampler::default();
+    let screen = Screen {
+        all,
+        selection,
+        playlists,
+        lists: Lists {
+            library: first(!all.is_empty()),
+            selection: first(!selection.is_empty()),
+            playlists: first(!playlists.is_empty()),
+        },
+        ..Screen::new(view, &snapshot, &keys, &sampler)
+    };
     terminal
         .draw(|f| {
-            let mut screen = Screen {
-                view,
-                snapshot: &snapshot,
-                all,
-                results: None,
-                playing: &[],
-                selection,
-                playlists,
-                input: &Input::None,
-                keys: &Keymap::default(),
-                sampler: &mut Sampler::default(),
-                help_scroll: &mut 0,
-                message: None,
-                library_state: &mut ls,
-                selection_state: &mut qs,
-                playlist_state: &mut ps,
-            };
-            render::draw(&mut screen, f);
+            render::draw(&screen, f);
         })
         .unwrap();
 
@@ -601,7 +581,7 @@ fn a_message_shares_the_bottom_line_with_the_indicators() {
 
 #[test]
 fn help_lists_the_keys_that_work_in_the_view() {
-    use playr::ui::action::Key;
+    use playr_app::action::Key;
     let input = Input::Help;
     let keys = Keymap::default();
     for view in [
@@ -634,7 +614,7 @@ fn help_lists_the_keys_that_work_in_the_view() {
             let Some(action) = keys.lookup(b.key, view) else {
                 continue;
             };
-            let command = playr::ui::command::line(action, Some(view));
+            let command = playr_app::command::line(action, Some(view));
             let row = row_for(&command)
                 .unwrap_or_else(|| panic!(":{command} missing from {name} help:\n{joined}"));
             if b.view == Some(view) || keys.lookup(b.key, view) == b.action.as_ref() {
@@ -684,7 +664,7 @@ fn help_lists_the_keys_that_work_in_the_view() {
 
 #[test]
 fn the_help_hint_names_the_key_bound_to_the_key_list() {
-    use playr::ui::action::{Action, Key};
+    use playr_app::action::{Action, Key};
     let hint = |keys: &Keymap| {
         Case::new(View::Library, &stopped())
             .keys(keys)
@@ -716,7 +696,7 @@ fn help_command_lists_every_command_with_its_arguments_by_view() {
         .input(&input)
         .size(80, 60)
         .text();
-    for c in playr::ui::command::COMMANDS {
+    for c in playr_app::command::COMMANDS {
         let usage = format!(":{} {}", c.name, c.args);
         assert!(
             joined.contains(usage.trim_end()) && joined.contains(c.help),
@@ -765,11 +745,69 @@ fn a_long_help_list_scrolls_and_stops_at_its_end() {
         bottom.contains(":rename") && !bottom.contains(":help"),
         "{bottom}"
     );
+    // Drawing returns the last scroll that changes the list, and no further.
+    let end = case().help_scroll(1000).drawn().help_scroll;
+    assert!(end > 0 && end < 1000, "{end}");
+    assert_eq!(case().help_scroll(end).text(), bottom);
+    assert_ne!(case().help_scroll(end - 1).text(), bottom);
+    assert_eq!(case().help_scroll(end + 1).drawn().help_scroll, end);
+}
+
+#[test]
+fn drawing_returns_each_cursor_inside_its_list_and_on_screen() {
+    let tracks: Vec<Track> = (0..30)
+        .map(|i| track(&format!("t{i}"), "a", "b", 60))
+        .collect();
+    let playlists: Vec<Playlist> = (0..30)
+        .map(|i| Playlist {
+            id: i,
+            name: format!("p{i}"),
+            len: 1,
+        })
+        .collect();
+    let snapshot = stopped();
+    let case = |view| {
+        Case::new(view, &snapshot)
+            .all(&tracks)
+            .selection(&tracks)
+            .playlists(&playlists)
+    };
+    // 20 rows less the tabs, the bar and two borders leaves 13 list rows.
+    let last = Scroll {
+        row: Some(29),
+        offset: 17,
+    };
+    let first = Scroll {
+        row: Some(0),
+        offset: 0,
+    };
+    for view in [View::Library, View::Selection, View::Playlists] {
+        let lists = case(view).selected(99).drawn().lists;
+        let (shown, others) = match view {
+            View::Library => (lists.library, [lists.selection, lists.playlists]),
+            View::Selection => (lists.selection, [lists.library, lists.playlists]),
+            _ => (lists.playlists, [lists.library, lists.selection]),
+        };
+        assert_eq!(shown, last, "{view:?}");
+        // Lists not on screen come back as they went in.
+        assert_eq!(others[0].row, Some(99), "{view:?}");
+        assert_eq!(others[1].row, Some(99), "{view:?}");
+        assert_eq!(
+            case(view).drawn().lists,
+            Lists {
+                library: first,
+                selection: first,
+                playlists: first,
+            }
+        );
+    }
+    let empty = Case::new(View::Library, &snapshot).selected(5).drawn();
+    assert_eq!(empty.lists.library, Scroll::default());
 }
 
 #[test]
 fn a_command_being_typed_is_shown_in_place_of_the_hints() {
-    let mut line = playr::ui::command::CommandLine::default();
+    let mut line = playr_app::command::CommandLine::default();
     "seek 1:23".chars().for_each(|c| line.push(c));
     let input = Input::Command(line);
     let joined = Case::new(View::Library, &stopped()).input(&input).text();
@@ -1401,6 +1439,32 @@ fn the_envelope_shades_rms_inside_the_peak() {
     );
     assert_eq!(cell(30, 4).symbol(), "\u{2588}");
     assert_eq!(cell(30, 4).fg, Color::Indexed(30));
+}
+
+#[test]
+fn drawing_returns_the_zoom_clamped_to_the_track() {
+    use playr::ui::sampler::Display;
+    let zoomed = |zoom| Sampler {
+        zoom,
+        ..sampler_with("/m/t.wav", Display::Envelope)
+    };
+    let snapshot = sampling("/m/t.wav", Duration::ZERO, &[]);
+    let draw = |sampler| {
+        Case::new(View::Sampler, &snapshot)
+            .sampler(sampler)
+            .size(42, 20)
+            .drawn()
+            .zoom
+    };
+    // 6,400 frames over 40 columns is 160 a column; two halvings reach 64.
+    assert_eq!(draw(zoomed(1)), 1);
+    assert_eq!(draw(zoomed(50)), 2);
+    // With no waveform to show, the zoom is kept for when there is one.
+    let reading = Sampler {
+        zoom: 50,
+        ..Sampler::default()
+    };
+    assert_eq!(draw(reading), 50);
 }
 
 #[test]

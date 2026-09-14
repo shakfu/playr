@@ -1,0 +1,16 @@
+# playr's default settings.
+#
+# ~/.config/playr/settings.toml is read on top of these, so it only needs the
+# lines it changes. The format is described in README.md, under Configuration.
+# Key bindings are the terminal's, in crates/playr-app/src/keys.toml.
+
+# Percent, 0 to 100.
+volume = 100
+# normal, shuffle, repeat or repeat-one.
+mode = "normal"
+# Semitones, -12 to 12.
+speed = 0
+# How readily :slice onsets finds hits, 0 to 1; higher finds more.
+onset_sensitivity = 0.5
+# Where :slice writes, one directory per slicing. ~ is your home.
+samples = "~/Music/playr/samples"

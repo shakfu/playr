@@ -1,6 +1,7 @@
 INSTALL_DIR := $(HOME)/.local/bin
+DIAGRAMS := $(patsubst %.d2,%.svg,$(wildcard docs/media/*.d2))
 
-.PHONY: all build release test fmt clippy run clean install
+.PHONY: all build release test fmt clippy run clean install diagrams
 
 all: build
 
@@ -28,6 +29,12 @@ install: release
 	@install -d $(INSTALL_DIR)
 	@install -m 755 target/release/playr $(INSTALL_DIR)/playr
 	@echo "installed executable to $(INSTALL_DIR)"
+
+# Renders each docs/media/*.d2 whose source is newer than its .svg.
+diagrams: $(DIAGRAMS)
+
+docs/media/%.svg: docs/media/%.d2
+	@d2 --layout=tala $< $@
 
 clean:
 	@cargo clean

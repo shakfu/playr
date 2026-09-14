@@ -1,34 +1,72 @@
 //! playr: a minimal TUI music player.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::{Parser, Subcommand};
 use playr::ui;
 use playr_core::audio::Player;
 use playr_core::db::{self, Track};
 use playr_core::scan;
 
-const USAGE: &str = "\
-playr - a minimal TUI music player
+/// playr - a minimal TUI music player
+///
+/// With no command, browses the library; with paths, plays them.
+#[derive(Parser)]
+#[command(
+    version,
+    // Each subcommand name is a file `playr <path>` cannot play; `help` need not be one.
+    disable_help_subcommand = true,
+    override_usage = "playr [OPTIONS] [PATHS]...\n       playr [OPTIONS] <COMMAND>"
+)]
+struct Cli {
+    /// Files or directories to play; directories are played recursively
+    paths: Vec<PathBuf>,
 
-usage:
-  playr                        browse the library
-  playr <path>...              play files or directories (recursively)
-  playr scan <dir>...          add a directory to the library
-  playr search <query>         play everything matching a search
-  playr playlist <name>        play a saved playlist
-  playr playlists              list saved playlists
-  playr formats                show which formats this build can decode
+    /// Use a different library file
+    #[arg(long, global = true, value_name = "PATH")]
+    db: Option<PathBuf>,
 
-options:
-  --db <path>                  use a different library file
-  --settings <path>            use a different settings file
-  -h, --help                   show this help
-  -V, --version                show the version
-";
+    /// Use a different settings file
+    #[arg(long, global = true, value_name = "PATH")]
+    settings: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Add directories to the library, creating it if there is none
+    Scan {
+        /// Directories to scan, recursively
+        #[arg(required = true, value_name = "DIR")]
+        dirs: Vec<PathBuf>,
+    },
+    /// Play everything matching a search; put a query that starts with - after --
+    Search {
+        /// Print the matches as a JSON array instead of playing them
+        #[arg(long)]
+        json: bool,
+        /// Words to match, as in the / prompt; field:word matches one field
+        #[arg(required = true, value_name = "QUERY")]
+        query: Vec<String>,
+    },
+    /// Play a saved playlist
+    Playlist {
+        /// The playlist's name; quotes are optional
+        #[arg(required = true, value_name = "NAME")]
+        name: Vec<String>,
+    },
+    /// List saved playlists
+    Playlists,
+    /// Show which formats this build can decode
+    Formats,
+}
 
 fn main() -> ExitCode {
-    match run() {
+    let cli = Cli::parse();
+    match run(cli) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("playr: {e}");
@@ -37,97 +75,69 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-
-    let mut db_path = db::default_path();
-    if let Some(i) = args.iter().position(|a| a == "--db") {
-        let value = args.get(i + 1).ok_or("--db needs a path")?.clone();
-        db_path = PathBuf::from(value);
-        args.drain(i..=i + 1);
-    }
-
-    let mut config_path = None;
-    if let Some(i) = args.iter().position(|a| a == "--settings") {
-        let value = args.get(i + 1).ok_or("--settings needs a path")?.clone();
-        config_path = Some(PathBuf::from(value));
-        args.drain(i..=i + 1);
-    }
-
-    match args.first().map(String::as_str) {
-        Some("-h") | Some("--help") => {
-            print!("{USAGE}");
-            return Ok(ExitCode::SUCCESS);
-        }
-        Some("-V") | Some("--version") => {
-            println!("playr {}", env!("CARGO_PKG_VERSION"));
-            return Ok(ExitCode::SUCCESS);
-        }
-        Some("formats") => {
-            print_formats();
-            return Ok(ExitCode::SUCCESS);
-        }
-        _ => {}
+fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    if let Some(Command::Formats) = cli.command {
+        print_formats();
+        return Ok(ExitCode::SUCCESS);
     }
 
     // Only `scan` creates the library. Without one, everything else runs on an
     // empty in-memory library, so playing a file leaves nothing behind.
-    let mut conn = if args.first().map(String::as_str) == Some("scan") || db_path.try_exists()? {
+    let db_path = cli.db.unwrap_or_else(db::default_path);
+    let scanning = matches!(cli.command, Some(Command::Scan { .. }));
+    let mut conn = if scanning || db_path.try_exists()? {
         db::open(&db_path)?
     } else {
         db::open_memory()?
     };
 
-    match args.first().map(String::as_str) {
-        Some("scan") => {
-            let dirs = &args[1..];
-            if dirs.is_empty() {
-                return Err("scan needs at least one directory".into());
-            }
-            return cmd_scan(&mut conn, dirs);
-        }
-        Some("playlists") => {
+    // Everything else opens the interface, with tracks chosen by the arguments.
+    let start: Vec<Track> = match cli.command {
+        Some(Command::Formats) => unreachable!("handled above"),
+        Some(Command::Scan { dirs }) => return cmd_scan(&mut conn, &dirs),
+        Some(Command::Playlists) => {
             for p in db::query::playlists(&conn)? {
                 println!("{:<40} {:>4} tracks", p.name, p.len);
             }
             return Ok(ExitCode::SUCCESS);
         }
-        _ => {}
-    }
-
-    // Everything else opens the interface, with tracks chosen by the arguments.
-    let start: Vec<Track> = match args.first().map(String::as_str) {
-        Some("search") => {
-            let q = args[1..].join(" ");
+        Some(Command::Search { json, query }) => {
+            let q = query.join(" ");
             if q.trim().is_empty() {
                 return Err("search needs a query".into());
             }
             let hits = db::query::search(&conn, &q)?;
+            if json {
+                // `[]` for no matches, so a script can always parse the output.
+                println!("{}", tracks_json(&hits));
+                return Ok(if hits.is_empty() {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                });
+            }
             if hits.is_empty() {
                 eprintln!("playr: nothing matches {q:?}");
                 return Ok(ExitCode::FAILURE);
             }
             hits
         }
-        Some("playlist") => {
-            let name = args[1..].join(" ");
+        Some(Command::Playlist { name }) => {
+            let name = name.join(" ");
             let lists = db::query::playlists(&conn)?;
             let pl = db::query::find_playlist(&lists, name.trim())
                 .ok_or_else(|| format!("no single playlist named {name:?}"))?;
             db::query::playlist_tracks(&conn, pl.id)?
         }
-        Some(flag) if flag.starts_with('-') => {
-            return Err(format!("unknown option {flag} (see playr --help)").into())
-        }
-        Some(_) => collect_paths(&conn, &args)?,
-        None => Vec::new(),
+        None if cli.paths.is_empty() => Vec::new(),
+        None => collect_paths(&conn, &cli.paths)?,
     };
 
     // Before the terminal is taken over, so every error can be read.
-    let config = match (&config_path, ui::config::default_path()) {
-        (Some(path), _) => ui::config::Config::load(path, true),
-        (None, Some(path)) => ui::config::Config::load(&path, false),
-        (None, None) => Ok(ui::config::Config::default()),
+    let config = match (&cli.settings, playr_app::config::default_path()) {
+        (Some(path), _) => playr_app::config::Config::load(path, true),
+        (None, Some(path)) => playr_app::config::Config::load(&path, false),
+        (None, None) => Ok(playr_app::config::Config::default()),
     };
     let config = match config {
         Ok(config) => config,
@@ -151,20 +161,48 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// `tracks` as a JSON array of objects, one field per library column, with
+/// `null` for a tag the file lacks.
+fn tracks_json(tracks: &[Track]) -> String {
+    let rows: Vec<serde_json::Value> = tracks
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "path": t.path,
+                "title": t.title,
+                "artist": t.artist,
+                "album": t.album,
+                "album_artist": t.album_artist,
+                "track_no": t.track_no,
+                "disc_no": t.disc_no,
+                "year": t.year,
+                "genre": t.genre,
+                "duration_ms": t.duration_ms,
+                "sample_rate": t.sample_rate,
+                "channels": t.channels,
+                "bit_depth": t.bit_depth,
+                "mtime": t.mtime,
+                "size": t.size,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(rows).to_string()
+}
+
 fn cmd_scan(
     conn: &mut rusqlite::Connection,
-    dirs: &[String],
+    dirs: &[PathBuf],
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut total = scan::ScanStats::default();
     let multi = dirs.len() > 1;
     let mut removed = 0;
-    for dir in dirs {
-        let path = Path::new(dir);
+    for path in dirs {
         if !path.is_dir() {
-            eprintln!("playr: not a directory: {dir}");
+            eprintln!("playr: not a directory: {}", path.display());
             continue;
         }
-        println!("scanning {dir}");
+        println!("scanning {}", path.display());
         let stats = scan::scan_dir(conn, path, |s, p| {
             // Overwrite one line rather than scrolling a wall of filenames.
             if s.seen % 25 == 0 {
@@ -207,14 +245,14 @@ fn cmd_scan(
 /// directory still shows titles rather than file names.
 fn collect_paths(
     conn: &rusqlite::Connection,
-    args: &[String],
+    args: &[PathBuf],
 ) -> Result<Vec<Track>, Box<dyn std::error::Error>> {
     let mut files: Vec<PathBuf> = Vec::new();
     for arg in args {
         // Canonical, to match the library's keys: `playr .` must find the
         // rows `playr scan ~/music` wrote.
-        let Ok(path) = Path::new(arg).canonicalize() else {
-            eprintln!("playr: no such file: {arg}");
+        let Ok(path) = arg.canonicalize() else {
+            eprintln!("playr: no such file: {}", arg.display());
             continue;
         };
         if path.is_dir() {
@@ -233,7 +271,7 @@ fn collect_paths(
         } else if path.is_file() {
             files.push(path);
         } else {
-            eprintln!("playr: no such file: {arg}");
+            eprintln!("playr: no such file: {}", arg.display());
         }
     }
     // The queue carries paths as text, so a lossy name would open nothing.
