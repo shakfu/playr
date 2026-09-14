@@ -355,7 +355,7 @@ make test
 
 `make test` runs the suite for all four crates in the workspace, `playr-core`, `playr-app`, `playr` and `playr-gui`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, and the window's tests drive it headless with `egui_kittest`, so neither needs a display or an audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
 
-`.github/workflows/test.yml` runs both builds' tests on Linux, macOS and Windows on every branch push and pull request, with `PLAYR_REQUIRE_FFMPEG=1`, and checks formatting and clippy on Linux. Runners have no audio device, so only the real-device smoke test skips there.
+`.github/workflows/test.yml` runs both builds' tests on Linux, macOS and Windows on every branch push and pull request, with `PLAYR_REQUIRE_FFMPEG=1` and ffmpeg 9.0 on every runner, and checks formatting and clippy on Linux. Runners have no audio device, so only the real-device smoke test skips there.
 
 `.github/workflows/release.yml` builds and packages both programs for every platform when a version tag is pushed, and publishes the release. Run by hand from the Actions tab with no tag, it builds and packages the chosen branch and keeps the archives as the run's artifacts without publishing, to try every platform's build before tagging.
 

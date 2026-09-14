@@ -31,9 +31,19 @@ jobs:
       - uses: actions/checkout@v7
 
       # ALSA for playback; the rest for the desktop window's windowing libraries.
-      - name: Install ALSA headers, window libraries and ffmpeg
+      - name: Install ALSA headers and window libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      # Every runner makes its test audio with ffmpeg 9.0. Ubuntu 22.04's own
+      # package is 4.4, whose encoders write different files, so Linux takes
+      # BtbN's static build of the 9.0 series, which updates within 9.0.
+      - name: Install ffmpeg
+        if: runner.os == 'Linux'
+        run: |
+          build=ffmpeg-n9.0-latest-linux64-gpl-9.0
+          curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$build.tar.xz" | tar xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$build/bin" >> "$GITHUB_PATH"
 
       - name: Install ffmpeg
         if: runner.os == 'macOS'
@@ -42,6 +52,11 @@ jobs:
       - name: Install ffmpeg
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
+
+      # Named in the log, since the test audio depends on it.
+      - name: ffmpeg version
+        shell: bash
+        run: ffmpeg -version | head -1
 
       - uses: dtolnay/rust-toolchain@stable
 
