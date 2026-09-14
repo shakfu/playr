@@ -34,7 +34,7 @@ pub enum Cut {
 }
 
 /// One export: which track, where the playhead and marks are, and how to cut.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Job {
     pub path: PathBuf,
     /// The source rate that `at` and `marks` count frames in.
@@ -170,6 +170,13 @@ pub fn onsets(mono: &[f32], rate: u32, sensitivity: f32) -> Vec<usize> {
 
 /// A slice's first frame and its end, exclusive, or `None` for the end of the track.
 pub type Span = (u64, Option<u64>);
+
+/// Slices planned for a job, to be written with [`write`] or dropped.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Plan {
+    pub job: Job,
+    pub spans: Vec<Span>,
+}
 
 /// Runs `job`, returning the directory written and the slices in it.
 pub fn export(job: &Job) -> Result<Exported, String> {

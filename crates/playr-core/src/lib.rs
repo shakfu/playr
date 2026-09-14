@@ -6,6 +6,9 @@
 
 pub mod audio;
 pub mod db;
+pub mod event;
+pub mod notice;
 pub mod samples;
 pub mod scan;
+pub mod session;
 pub mod wave;

@@ -4,9 +4,39 @@
 #[path = "../crates/playr-core/tests/common/mod.rs"]
 mod common;
 
+use playr::ui::action::Key;
+use playr::ui::notice::Message;
 use playr::ui::{App, Input};
 use playr_core::db::{self, query, Track};
+use playr_core::notice::{Notice, Outcome, Refusal};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+/// The message on the bottom line.
+fn said(app: &App) -> Option<Message> {
+    app.message().cloned()
+}
+
+/// `m` as the message a test expects.
+fn msg(m: impl Into<Message>) -> Option<Message> {
+    Some(m.into())
+}
+
+/// Which message about a mark is showing, and the whole seconds of the time it
+/// names, for marks placed at the playhead rather than at an exact time.
+fn mark_seconds(app: &App) -> Option<(&'static str, u64)> {
+    match app.message()? {
+        Message::Core(Notice::Done(Outcome::Marked { at, kept: true })) => {
+            Some(("Marked", at.as_secs()))
+        }
+        Message::Core(Notice::Refused(Refusal::AlreadyMarked { at })) => {
+            Some(("AlreadyMarked", at.as_secs()))
+        }
+        Message::Core(Notice::Done(Outcome::MarkRemoved { at })) => {
+            Some(("MarkRemoved", at.as_secs()))
+        }
+        _ => None,
+    }
+}
 
 fn press(app: &mut App, c: char) {
     app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
@@ -124,11 +154,7 @@ fn saving_without_a_library_file_is_refused() {
         !matches!(app.screen().input, Input::SavePlaylist(_)),
         "the save prompt opened"
     );
-    let message = app.screen().message.map(str::to_string);
-    assert!(
-        message.as_deref().is_some_and(|m| m.contains("playr scan")),
-        "no explanation: {message:?}"
-    );
+    assert_eq!(said(&app), msg(Refusal::NoLibraryFile));
 }
 
 fn chord(app: &mut App, modifiers: KeyModifiers, c: char) {
@@ -213,10 +239,13 @@ fn saving_says_how_many_tracks_were_left_out() {
         press(&mut app, c);
     }
     enter(&mut app);
-    let message = app.screen().message.map(str::to_string).unwrap_or_default();
-    assert!(
-        message.contains("1 tracks, 1 not in the library left out"),
-        "message was {message:?}"
+    assert_eq!(
+        said(&app),
+        msg(Outcome::Saved {
+            name: "mix".into(),
+            tracks: 1,
+            left_out: 1
+        })
     );
 }
 
@@ -226,9 +255,13 @@ fn errors_between_frames_are_counted() {
     let (mut app, _dir) = app();
     std::thread::sleep(std::time::Duration::from_millis(300));
     app.refresh();
-    let message = app.screen().message.map(str::to_string).unwrap_or_default();
-    assert!(message.contains("b.flac"), "message was {message:?}");
-    assert!(message.contains("(and 1 more)"), "message was {message:?}");
+    match said(&app) {
+        Some(Message::Core(Notice::PlaybackError { error, missed })) => {
+            assert!(error.contains("b.flac"), "error was {error:?}");
+            assert_eq!(missed, 1);
+        }
+        other => panic!("no playback error: {other:?}"),
+    }
 }
 
 fn selection_paths(app: &mut App) -> Vec<String> {
@@ -361,7 +394,7 @@ fn a_on_a_playlist_adds_its_tracks_not_already_selected() {
     );
     // Added again, every track is already there.
     press(&mut app, 'a');
-    assert_eq!(app.screen().message, Some("already in selection"));
+    assert_eq!(said(&app), msg(Outcome::AlreadyInSelection));
     assert_eq!(selection_paths(&mut app).len(), 3);
 
     // Into a selection holding b, only the tracks it lacks are added.
@@ -433,13 +466,13 @@ fn a_toggles_a_track_and_moves_the_cursor_down() {
 
     press(&mut app, '1');
     press(&mut app, 'a');
-    assert_eq!(app.screen().message, Some("added to selection"));
+    assert_eq!(said(&app), msg(Outcome::AddedToSelection));
     press(&mut app, 'a');
     assert_eq!(selection_paths(&mut app), ["/m/a.flac", "/m/b.flac"]);
 
     // On the last row the cursor stays, so a second press unselects b.
     press(&mut app, 'a');
-    assert_eq!(app.screen().message, Some("removed from selection"));
+    assert_eq!(said(&app), msg(Outcome::RemovedFromSelection));
     assert_eq!(selection_paths(&mut app), ["/m/a.flac"]);
 
     // Back on a: unselect it, and the cursor moves on to b, which is selected again.
@@ -462,7 +495,7 @@ fn m_cycles_the_playback_mode_and_says_which() {
     press(&mut app, 'm');
     press(&mut app, 'm');
     // Before `refresh`, which reports the missing test files' errors over it.
-    assert_eq!(app.screen().message, Some("mode: repeat"));
+    assert_eq!(said(&app), msg(Outcome::Mode(Mode::Repeat)));
     assert_eq!(mode(&mut app), Mode::Repeat);
     press(&mut app, 'm');
     press(&mut app, 'm');
@@ -496,7 +529,13 @@ fn r_renames_the_selected_playlist() {
     typing(&mut app, "night");
     enter(&mut app);
     assert_eq!(playlist_lens(&mut app), [("night".to_string(), 1)]);
-    assert_eq!(app.screen().message, Some("renamed \"late\" to \"night\""));
+    assert_eq!(
+        said(&app),
+        msg(Outcome::Renamed {
+            from: "late".into(),
+            to: "night".into()
+        })
+    );
 }
 
 #[test]
@@ -517,15 +556,12 @@ fn renaming_refuses_a_taken_or_empty_name_and_follows_the_playlist() {
     erase(&mut app, 4);
     typing(&mut app, "early");
     enter(&mut app);
-    assert_eq!(
-        app.screen().message,
-        Some("a playlist named \"early\" already exists")
-    );
+    assert_eq!(said(&app), msg(Refusal::NameTaken("early".into())));
 
     press(&mut app, 'r');
     erase(&mut app, 4);
     enter(&mut app);
-    assert_eq!(app.screen().message, Some("playlist name cannot be empty"));
+    assert_eq!(said(&app), msg(Refusal::NameEmpty));
 
     press(&mut app, 'r');
     typing(&mut app, "x");
@@ -582,14 +618,14 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     refresh_until(&mut app, |s| s.position > Duration::from_millis(200));
 
     press(&mut app, 'b');
-    assert_eq!(app.screen().message, Some("marked 0:00"));
+    assert_eq!(mark_seconds(&app), Some(("Marked", 0)));
     press(&mut app, 'b');
-    assert_eq!(app.screen().message, Some("already marked at 0:00"));
+    assert_eq!(mark_seconds(&app), Some(("AlreadyMarked", 0)));
 
     key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
     assert!(seconds(&mut app) > 30.0);
     press(&mut app, 'b');
-    assert_eq!(app.screen().message, Some("marked 0:30"));
+    assert_eq!(mark_seconds(&app), Some(("Marked", 30)));
 
     // Stored in the library, so another connection sees them.
     let other = db::open(&library).unwrap();
@@ -604,16 +640,16 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     let forward = seconds(&mut app);
     assert!((30.0..31.5).contains(&forward), "period went to {forward}s");
     press(&mut app, '.');
-    assert_eq!(app.screen().message, Some("no later mark"));
+    assert_eq!(said(&app), msg(Refusal::NoLaterMark));
 
     // A mark added last but earlier in the track: `B` removes it, not 0:30.
     key(&mut app, KeyCode::Left, KeyModifiers::SHIFT);
     key(&mut app, KeyCode::Right, KeyModifiers::NONE);
     let _ = seconds(&mut app);
     press(&mut app, 'b');
-    assert_eq!(app.screen().message, Some("marked 0:05"));
+    assert_eq!(mark_seconds(&app), Some(("Marked", 5)));
     press(&mut app, 'B');
-    assert_eq!(app.screen().message, Some("removed mark at 0:05"));
+    assert_eq!(mark_seconds(&app), Some(("MarkRemoved", 5)));
     let left: Vec<u64> = query::marks(&other, &path)
         .unwrap()
         .iter()
@@ -624,7 +660,7 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     press(&mut app, 'C');
     assert!(confirming(&mut app), "clearing did not ask");
     press(&mut app, 'y');
-    assert_eq!(app.screen().message, Some("marks cleared"));
+    assert_eq!(said(&app), msg(Outcome::MarksCleared));
     assert!(query::marks(&other, &path).unwrap().is_empty());
     app.refresh();
     assert!(app.screen().snapshot.marks.is_empty());
@@ -637,11 +673,7 @@ fn marks_need_something_playing() {
     let mut app = App::new(conn, common::fake_player().0);
     for c in ['b', ',', '.', 'B', 'C'] {
         press(&mut app, c);
-        assert_eq!(
-            app.screen().message,
-            Some("nothing is playing"),
-            "after {c:?}"
-        );
+        assert_eq!(said(&app), msg(Refusal::NothingPlaying), "after {c:?}");
     }
 }
 
@@ -666,7 +698,10 @@ fn colon_commands_do_what_their_keys_do() {
     let (mut app, _dir) = app();
 
     command(&mut app, "mode shuffle");
-    assert_eq!(app.screen().message, Some("mode: shuffle"));
+    assert_eq!(
+        said(&app),
+        msg(Outcome::Mode(playr_core::audio::Mode::Shuffle))
+    );
     app.refresh();
     assert_eq!(app.screen().snapshot.status.mode, Mode::Shuffle);
 
@@ -688,8 +723,10 @@ fn colon_commands_do_what_their_keys_do() {
 
     command(&mut app, "rename dusk");
     assert_eq!(
-        app.screen().message,
-        Some(":rename works in the playlists view")
+        said(&app),
+        msg(Message::Command(
+            ":rename works in the playlists view".into()
+        ))
     );
     command(&mut app, "view playlists");
     assert_eq!(app.screen().view, View::Playlists);
@@ -700,13 +737,15 @@ fn colon_commands_do_what_their_keys_do() {
     );
 
     command(&mut app, "playlist dusk");
-    assert_eq!(app.screen().message, Some("playing \"dusk\""));
+    assert_eq!(
+        said(&app),
+        msg(Outcome::PlayingPlaylist {
+            name: "dusk".into()
+        })
+    );
     assert_eq!(playing_paths(&mut app), ["/m/a.flac"]);
     command(&mut app, "playlist nope");
-    assert_eq!(
-        app.screen().message,
-        Some("no single playlist named \"nope\"")
-    );
+    assert_eq!(said(&app), msg(Refusal::NoPlaylistNamed("nope".into())));
 
     command(&mut app, "q");
     assert!(app.quitting());
@@ -717,8 +756,8 @@ fn a_bad_command_says_why_and_closes_the_prompt() {
     let (mut app, _dir) = app();
     command(&mut app, "seek soon");
     assert_eq!(
-        app.screen().message,
-        Some("not a time: soon (try 1:23 or 90)")
+        said(&app),
+        msg(Message::Command("not a time: soon (try 1:23 or 90)".into()))
     );
     assert!(command_text(&mut app).is_none());
 
@@ -819,7 +858,13 @@ fn seek_and_mark_commands_take_times() {
     assert!((10.0..11.5).contains(&at), ":seek -30 went to {at}s");
 
     command(&mut app, "mark 0:25");
-    assert_eq!(app.screen().message, Some("marked 0:25"));
+    assert_eq!(
+        said(&app),
+        msg(Outcome::Marked {
+            at: Duration::from_secs(25),
+            kept: true
+        })
+    );
     let marks: Vec<u64> = query::marks(&db::open(&library).unwrap(), &path)
         .unwrap()
         .iter()
@@ -842,8 +887,10 @@ fn view_commands_act_on_the_view_they_belong_to() {
     assert_eq!(selection_paths(&mut app), ["/m/a.flac"]);
     command(&mut app, "delete");
     assert_eq!(
-        app.screen().message,
-        Some(":delete works in the playlists view")
+        said(&app),
+        msg(Message::Command(
+            ":delete works in the playlists view".into()
+        ))
     );
     command(&mut app, "clear");
     assert!(confirming(&mut app), ":clear did not ask");
@@ -869,11 +916,13 @@ fn view_commands_act_on_the_view_they_belong_to() {
     assert_eq!(app.screen().view, View::Playlists);
     command(&mut app, "clear");
     assert_eq!(
-        app.screen().message,
-        Some(":clear works in the selection view")
+        said(&app),
+        msg(Message::Command(
+            ":clear works in the selection view".into()
+        ))
     );
     command(&mut app, "add");
-    assert_eq!(app.screen().message, Some("already in selection"));
+    assert_eq!(said(&app), msg(Outcome::AlreadyInSelection));
     command(&mut app, "delete");
     assert!(confirming(&mut app), ":delete did not ask");
     press(&mut app, 'y');
@@ -941,11 +990,7 @@ fn the_config_sets_keys_and_startup_before_anything_plays() {
         tracks,
         config,
     );
-    assert_eq!(
-        app.screen().message,
-        None,
-        "a startup setting was announced"
-    );
+    assert_eq!(said(&app), None, "a startup setting was announced");
     app.refresh();
     assert!((app.screen().snapshot.volume - 0.3).abs() < 1e-3);
     assert_eq!(app.screen().snapshot.status.mode, Mode::Repeat);
@@ -962,11 +1007,19 @@ fn map_and_unmap_change_keys_while_running() {
     let (mut app, _dir) = app();
     command(&mut app, "map ctrl-x clear");
     assert_eq!(
-        app.screen().message,
-        Some(":clear works in the selection view; use map selection ctrl-x clear")
+        said(&app),
+        msg(Message::Command(
+            ":clear works in the selection view; use map selection ctrl-x clear".into()
+        ))
     );
     command(&mut app, "map selection ctrl-x clear");
-    assert_eq!(app.screen().message, Some("map selection ctrl-x clear"));
+    assert_eq!(
+        said(&app),
+        msg(Message::Mapped(
+            playr::ui::command::parse("map selection ctrl-x clear", playr::ui::View::Library)
+                .unwrap()
+        ))
+    );
     key(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
     assert!(confirming(&mut app), "the mapped key did not run :clear");
     press(&mut app, 'n');
@@ -978,7 +1031,7 @@ fn map_and_unmap_change_keys_while_running() {
     // Unmapping falls back to a binding for all views, not to the default,
     // and no default binds d in all views.
     command(&mut app, "unmap selection d");
-    assert_eq!(app.screen().message, Some("unmapped d"));
+    assert_eq!(said(&app), msg(Message::Unmapped(Key::parse("d").unwrap())));
     press(&mut app, 'd');
     assert_eq!(
         selection_paths(&mut app).len(),
@@ -1003,8 +1056,11 @@ fn map_and_unmap_change_keys_while_running() {
     command(&mut app, "unmap selection d");
     command(&mut app, "unmap selection d");
     assert_eq!(
-        app.screen().message,
-        Some("d has no binding in the selection view")
+        said(&app),
+        msg(Message::NotBound {
+            key: Key::parse("d").unwrap(),
+            view: Some(playr::ui::View::Selection)
+        })
     );
 }
 
@@ -1035,27 +1091,21 @@ fn export_commands_write_slices_of_the_playing_track_in_the_background() {
     command(&mut app, "seek 0:07");
     std::thread::sleep(Duration::from_millis(300));
     command(&mut app, "slice region");
-    assert_eq!(app.screen().message, Some("exporting"));
+    assert_eq!(said(&app), msg(Outcome::ExportStarted));
     let first = samples.join("long");
-    assert_eq!(
-        wait_for_export(&mut app),
-        format!("exported 1 slice to {}", first.display())
-    );
+    assert_eq!(wait_for_export(&mut app), Ok((first.clone(), 1)));
     let wav = first.join("000-long_S00.wav");
     assert_eq!(hound::WavReader::open(&wav).unwrap().duration(), 5 * 8000);
 
     command(&mut app, "slice marks");
-    assert_eq!(
-        wait_for_export(&mut app),
-        format!("exported 3 slices to {}", samples.join("long-2").display())
-    );
+    assert_eq!(wait_for_export(&mut app), Ok((samples.join("long-2"), 3)));
 
     command(&mut app, "stop");
     refresh_until(&mut app, |s| {
         s.status.state == playr_core::audio::State::Stopped
     });
     command(&mut app, "slice 4");
-    assert_eq!(app.screen().message, Some("nothing is playing"));
+    assert_eq!(said(&app), msg(Refusal::NothingPlaying));
 }
 
 #[test]
@@ -1070,14 +1120,17 @@ fn paths_under_home_are_shown_from_tilde() {
     assert_eq!(home_as_tilde(Path::new("/opt/cuts")), "/opt/cuts");
 }
 
-/// The message an export reports, once it has.
-fn wait_for_export(app: &mut App) -> String {
+/// The directory and slice count an export reports, or its error, once it has.
+fn wait_for_export(app: &mut App) -> Result<(std::path::PathBuf, usize), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         app.refresh();
-        let message = app.screen().message.unwrap_or_default().to_string();
-        if message.starts_with("export") && message != "exporting" {
-            return message;
+        match said(app) {
+            Some(Message::Core(Notice::Done(Outcome::Exported { dir, slices }))) => {
+                return Ok((dir, slices))
+            }
+            Some(Message::Core(Notice::Failed { error, .. })) => return Err(error),
+            _ => {}
         }
         assert!(std::time::Instant::now() < deadline, "no report");
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1110,10 +1163,10 @@ fn slice_onsets_uses_the_setting_unless_given_a_sensitivity() {
     w.finalize().unwrap();
 
     for (setting, typed, slices) in [
-        (0.0, "slice onsets", "1 slice"),
-        (0.0, "slice onsets 1", "2 slices"),
-        (1.0, "slice onsets", "2 slices"),
-        (1.0, "slice onsets 0", "1 slice"),
+        (0.0, "slice onsets", 1),
+        (0.0, "slice onsets 1", 2),
+        (1.0, "slice onsets", 2),
+        (1.0, "slice onsets 0", 1),
     ] {
         let settings = format!(
             "onset_sensitivity = {setting:.1}\nsamples = {:?}",
@@ -1131,10 +1184,10 @@ fn slice_onsets_uses_the_setting_unless_given_a_sensitivity() {
         );
         refresh_until(&mut app, |s| s.position > Duration::from_millis(50));
         command(&mut app, typed);
-        let message = wait_for_export(&mut app);
+        let exported = wait_for_export(&mut app);
         assert!(
-            message.starts_with(&format!("exported {slices} to")),
-            "{typed:?} with onset_sensitivity {setting}: {message}"
+            matches!(exported, Ok((_, n)) if n == slices),
+            "{typed:?} with onset_sensitivity {setting}: {exported:?}"
         );
     }
 }
@@ -1227,10 +1280,10 @@ fn zoom_and_display_keys_work_only_in_the_sampler() {
 
     press(&mut app, 'w');
     assert_eq!(app.screen().sampler.display, Display::Decibels);
-    assert_eq!(app.screen().message, Some("display: db"));
+    assert_eq!(said(&app), msg(Message::Display(Display::Decibels)));
     press(&mut app, 'w');
     assert_eq!(app.screen().sampler.display, Display::Braille);
-    assert_eq!(app.screen().message, Some("display: braille"));
+    assert_eq!(said(&app), msg(Message::Display(Display::Braille)));
     command(&mut app, "display db");
     assert_eq!(app.screen().sampler.display, Display::Decibels);
     press(&mut app, 'w');
@@ -1241,8 +1294,8 @@ fn zoom_and_display_keys_work_only_in_the_sampler() {
     press(&mut app, '1');
     command(&mut app, "zoom +");
     assert_eq!(
-        app.screen().message,
-        Some(":zoom works in the sampler view")
+        said(&app),
+        msg(Message::Command(":zoom works in the sampler view".into()))
     );
 }
 
@@ -1277,13 +1330,10 @@ fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
     refresh_until(&mut app, |s| s.position > Duration::from_secs(6));
     press(&mut app, '4');
     key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-    assert_eq!(
-        app.screen().message,
-        Some("no slices planned; :slice plans them")
-    );
+    assert_eq!(said(&app), msg(Message::NoSlicesPlanned));
 
     command(&mut app, "slice 4");
-    assert_eq!(app.screen().message, Some("planning slices"));
+    assert_eq!(said(&app), msg(Outcome::PlanStarted));
     wait_for_sampler(&mut app, |s| s.pending.is_some());
     let spans = app.screen().sampler.pending.as_ref().unwrap().spans.clone();
     assert_eq!(
@@ -1295,19 +1345,13 @@ fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
             (70_000, Some(80_000))
         ]
     );
-    assert_eq!(
-        app.screen().message,
-        Some("4 slices planned: enter writes, esc discards")
-    );
+    assert_eq!(said(&app), msg(Outcome::Planned { slices: 4 }));
     assert!(!samples.exists(), "planning wrote files");
 
     key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
     assert!(app.screen().sampler.pending.is_none());
     let first = samples.join("long");
-    assert_eq!(
-        wait_for_export(&mut app),
-        format!("exported 4 slices to {}", first.display())
-    );
+    assert_eq!(wait_for_export(&mut app), Ok((first.clone(), 4)));
     let lengths: Vec<u32> = (0..4)
         .map(|i| {
             let file = first.join(format!("{i:03}-long_S{i:02}.wav"));
@@ -1319,7 +1363,7 @@ fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
     command(&mut app, "slice marks");
     wait_for_sampler(&mut app, |s| s.pending.is_some());
     key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
-    assert_eq!(app.screen().message, Some("slices discarded"));
+    assert_eq!(said(&app), msg(Message::SlicesDiscarded));
     assert!(
         !samples.join("long-2").exists(),
         "discarded slices were written"
@@ -1334,5 +1378,5 @@ fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
     // Outside the sampler, :slice writes at once, as before.
     press(&mut app, '1');
     command(&mut app, "slice region");
-    assert!(wait_for_export(&mut app).starts_with("exported 1 slice to"));
+    assert!(matches!(wait_for_export(&mut app), Ok((_, 1))));
 }

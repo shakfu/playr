@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note. Written 2026-09-14 against playr 0.4.0, unreleased. Step 1 is done: the workspace and `crates/playr-core`. The section Today describes the code before it.
+Design note. Written 2026-09-14 against playr 0.4.0, unreleased. Steps 1 to 4 are done: the workspace and `crates/playr-core`, messages as data in `playr_core::notice`, `playr_core::session::Session`, and events in `playr_core::event`. The section Today describes the code before it.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -122,7 +122,7 @@ pub enum Refusal {
 }
 ```
 
-The terminal words them in one function, `notice_text`, which replaces the strings now spread through `App`. Tests assert on variants, not wording.
+The terminal words them in one function, `ui::notice::text`, which replaces the strings now spread through `App`. Tests assert on variants, not wording.
 
 ### Events
 
@@ -198,15 +198,30 @@ Each step leaves `make test` passing and changes no behaviour.
 | step | change | size |
 |-|-|-|
 | 1 | Done. Cargo workspace. Move `audio`, `db`, `scan`, `samples` and `wave` and their tests into playr-core | small; imports only |
-| 2 | `Outcome` and `Refusal` in the core; the terminal words them in `notice_text`; tests assert variants | medium; about 60 message sites |
-| 3 | `Session` in the core. Move library state and the operations above into it with explicit arguments; `App` holds a `Session` | large; most of `ui/mod.rs` and the app tests |
-| 4 | `Event` and `EventSink`. Workers and the engine push events; `App` drains one channel instead of three | medium |
+| 2 | Done. `Outcome` and `Refusal` in the core; the terminal words them in `ui::notice::text`; tests assert variants | medium; about 60 message sites |
+| 3 | Done. `Session` in the core. Move library state and the operations above into it with explicit arguments; `App` holds a `Session` | large; most of `ui/mod.rs` and the app tests |
+| 4 | Done. `Event` and `EventSink`. Workers and the engine push events; `App` drains one channel instead of three | medium |
 | 5 | playr-app: `Action`, commands, key map with its own `Key`, `Frontend`, `dispatch`. The terminal implements `Frontend` | medium |
 | 6 | Presentation cleanup in the terminal: cursors as indices, `ListState` built per frame, `Screen` built with defaults | small |
 | 7 | Settings split between core and frontend tables | small |
 | 8 | `serde` feature on core types, with a test that serialises each public type | small; can wait for a Tauri frontend |
 
 Steps 2 and 3 carry the risk. Step 2 first makes step 3 a move of code that already returns data.
+
+## Where step 3 differs from the sketch above
+
+- `play` and `toggle_selected` take `Track`s, not ids. Files given on the command line are selected and played without being in the library, so they have no id.
+- Playback commands go through `Session::send(Cmd)` rather than a `Transport` type, and `Session::player()` gives read access for the per-frame snapshot. A narrower `Transport` and a `playback()` snapshot can replace them when a second frontend needs them.
+- `slice_job` returns the `Job`; spawning the export, plan and peaks threads stays in `App` until step 4 moves it behind events.
+- Operations that did nothing silently before still do: `delete_playlist` and `clear_marks` return `Option<Notice>`, and `add_playlist_to_selection` returns nothing for an empty playlist.
+
+## Where step 4 differs from the sketch above
+
+- `Event::TrackChanged` carries `path: Option<PathBuf>`: the engine can move to an index its queue does not hold, as when the queue is empty.
+- `Event::Planned` carries the `track` it planned, so a frontend can drop a failed plan for a track no longer playing, not only a finished one.
+- `Session::new` takes the sink and hands it to the player with `Player::set_events`; `event::ignore()` is a sink for a session nobody watches.
+- The player's `Status` keeps `error` and `error_seq`. The engine tests read them, and a frontend may still poll instead of listening.
+- A peaks read that another replaces stops and sends nothing, rather than an event a frontend must recognise as stale.
 
 ## Decisions left open
 

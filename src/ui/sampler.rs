@@ -11,10 +11,10 @@
 //! Only these glyphs are not ASCII; everything else in the view is.
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use playr_core::samples::{Job, Span};
+use playr_core::event::JobId;
+use playr_core::samples::Plan;
 use playr_core::wave::Peaks;
 
 /// Fewest frames a column shows, so a Braille dot still covers whole buckets.
@@ -64,10 +64,10 @@ pub fn db_height(magnitude: f32) -> f32 {
 pub enum Wave {
     #[default]
     None,
-    /// Being read on another thread, which stops when `cancel` is set.
+    /// Being read by the session, as background job `job`.
     Reading {
         path: PathBuf,
-        cancel: Arc<AtomicBool>,
+        job: JobId,
     },
     Ready {
         path: PathBuf,
@@ -90,13 +90,6 @@ impl Wave {
     }
 }
 
-/// Slices planned for the track, shown until written or discarded.
-#[derive(Debug, Clone)]
-pub struct Pending {
-    pub job: Job,
-    pub spans: Vec<Span>,
-}
-
 /// Everything the sampler view keeps between frames.
 #[derive(Debug, Clone, Default)]
 pub struct Sampler {
@@ -107,7 +100,8 @@ pub struct Sampler {
     pub zoom: u32,
     /// Whether slices are being planned on another thread.
     pub planning: bool,
-    pub pending: Option<Pending>,
+    /// Slices planned for the track, shown until written or discarded.
+    pub pending: Option<Plan>,
 }
 
 /// The first frame shown and the frames a column shows, for `width` columns

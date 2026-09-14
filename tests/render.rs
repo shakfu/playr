@@ -1236,11 +1236,12 @@ fn the_sampler_draws_the_envelope_with_marks_region_and_playhead() {
 
 #[test]
 fn planned_slices_are_drawn_before_they_are_written() {
-    use playr::ui::sampler::{Display, Pending};
+    use playr::ui::sampler::Display;
+    use playr_core::samples::Plan;
     let ms = Duration::from_millis;
     let snapshot = sampling("/m/t.wav", ms(1500), &[ms(1000), ms(2500)]);
     let mut sampler = sampler_with("/m/t.wav", Display::Envelope);
-    sampler.pending = Some(Pending {
+    sampler.pending = Some(Plan {
         job: playr_core::samples::Job {
             path: "/m/t.wav".into(),
             rate: 1600,
@@ -1307,7 +1308,7 @@ fn the_sampler_says_why_there_is_no_waveform() {
     let reading = Sampler {
         wave: Wave::Reading {
             path: "/m/t.wav".into(),
-            cancel: Default::default(),
+            job: 1,
         },
         ..Sampler::default()
     };

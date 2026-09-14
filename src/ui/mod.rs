@@ -6,35 +6,34 @@
 pub mod action;
 pub mod command;
 pub mod config;
+pub mod notice;
 pub mod render;
 pub mod sampler;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
 use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
 use action::{Action, Keymap, Slicing};
 use command::{CommandLine, History};
 use config::Config;
+use notice::Message;
 use playr_core::audio::{Cmd, Player, State, Status};
-use playr_core::db::query::{self, Mark, Playlist};
+use playr_core::db::query::{Mark, Playlist};
 use playr_core::db::Track;
-use playr_core::samples::{self, Exported};
-use playr_core::wave::Peaks;
-use sampler::{Pending, Sampler, Wave};
-
-/// What an export thread reports.
-type ExportResult = Result<Exported, String>;
-/// What a waveform thread reports: the track, and its peaks unless cancelled.
-type WaveResult = (PathBuf, Result<Option<Peaks>, String>);
-/// What a planning thread reports: the job planned, and its slices.
-type PlanResult = (samples::Job, Result<Vec<samples::Span>, String>);
+use playr_core::event::{Event, EventSink};
+use playr_core::notice::{Notice, Outcome, Refusal, Task};
+use playr_core::samples;
+use playr_core::session::Session;
+use sampler::{Sampler, Wave};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -110,12 +109,10 @@ impl Confirm {
 }
 
 pub struct App {
-    conn: Connection,
-    player: Player,
+    /// The library and player, and everything done with them.
+    session: Session,
     view: View,
 
-    /// Every track in the library, loaded once.
-    all: Vec<Track>,
     /// Search results; when set, the library view shows these instead.
     results: Option<Vec<Track>>,
     library_state: ListState,
@@ -125,42 +122,26 @@ pub struct App {
     /// The player list `playing` was built from, compared by identity.
     playing_source: Arc<[PathBuf]>,
 
-    /// Tracks collected with `a`, to edit and save as a playlist. It does not
-    /// change what plays unless it is played itself.
-    selection: Vec<Track>,
     selection_state: ListState,
-
-    playlists: Vec<Playlist>,
     playlist_state: ListState,
 
     input: Input,
     /// `:` command lines entered this session.
     history: History,
     keys: Keymap,
-    /// Where exports are written.
-    samples: PathBuf,
     /// For `:slice onsets` without a sensitivity.
     onset_sensitivity: f32,
-    /// Where export threads send their results, and where `refresh` reads them.
-    export_done: Sender<ExportResult>,
-    export_results: Receiver<ExportResult>,
+    /// Events from the session's engine and background work, drained each frame.
+    events: Receiver<Event>,
     sampler: Sampler,
-    wave_done: Sender<WaveResult>,
-    wave_results: Receiver<WaveResult>,
-    plan_done: Sender<PlanResult>,
-    plan_results: Receiver<PlanResult>,
     /// Rows the key or command list is scrolled by.
     help_scroll: usize,
-    message: Option<(String, Instant)>,
+    /// The message on the bottom line, its words, and when it was shown.
+    message: Option<(Message, String, Instant)>,
     quit: bool,
 
-    /// Last error sequence shown, so each new one is surfaced exactly once.
-    seen_error: u64,
     /// The peak shown, as a sample magnitude, and when it was reached.
     peak_hold: Option<(f32, Instant)>,
-    /// Marks in the track `marks_for`, earliest first.
-    marks: Vec<Mark>,
-    marks_for: Option<PathBuf>,
 
     /// One snapshot of the player per frame.
     ///
@@ -235,48 +216,38 @@ impl App {
         tracks: Vec<Track>,
         config: Config,
     ) -> Self {
-        let (export_done, export_results) = mpsc::channel();
-        let (wave_done, wave_results) = mpsc::channel();
-        let (plan_done, plan_results) = mpsc::channel();
+        let (send, events) = mpsc::channel();
+        let sink: EventSink = Arc::new(move |event| {
+            let _ = send.send(event);
+        });
+        let mut session = Session::new(conn, player, sink);
+        session.set_samples_dir(config.samples);
         let mut app = App {
-            conn,
-            player,
+            session,
             view: View::Library,
-            all: Vec::new(),
             results: None,
             library_state: ListState::default(),
             playing: Vec::new(),
             playing_source: Arc::default(),
-            selection: Vec::new(),
             selection_state: ListState::default(),
-            playlists: Vec::new(),
             playlist_state: ListState::default(),
             input: Input::None,
             history: History::default(),
             keys: config.keys,
-            samples: config.samples,
             onset_sensitivity: config.onset_sensitivity,
-            export_done,
-            export_results,
+            events,
             sampler: Sampler::default(),
-            wave_done,
-            wave_results,
-            plan_done,
-            plan_results,
             help_scroll: 0,
             message: None,
             quit: false,
-            seen_error: 0,
             peak_hold: None,
-            marks: Vec::new(),
-            marks_for: None,
             snapshot: Snapshot::default(),
         };
-        app.player.send(Cmd::SetVolume(config.volume));
-        app.player.send(Cmd::SetMode(config.mode));
-        app.player.send(Cmd::SetSpeed(config.speed));
+        app.session.send(Cmd::SetVolume(config.volume));
+        app.session.send(Cmd::SetMode(config.mode));
+        app.session.send(Cmd::SetSpeed(config.speed));
         if !tracks.is_empty() {
-            app.selection = tracks.clone();
+            app.session.set_selection(tracks.clone());
             app.selection_state.select(Some(0));
             app.play(tracks, 0);
             app.view = View::Selection;
@@ -289,15 +260,15 @@ impl App {
     ///
     /// Playing from here updates `playing` directly; this catches any other change.
     fn follow_player(&mut self) {
-        let current = self.player.queue();
+        let current = self.session.player().queue();
         if Arc::ptr_eq(&current, &self.playing_source) {
             return;
         }
         let known: HashMap<&str, &Track> = self
             .playing
             .iter()
-            .chain(&self.selection)
-            .chain(&self.all)
+            .chain(self.session.selection())
+            .chain(self.session.tracks())
             .map(|t| (t.path.as_str(), t))
             .collect();
         self.playing = current
@@ -317,19 +288,18 @@ impl App {
     }
 
     fn reload(&mut self) {
-        self.all = query::all(&self.conn).unwrap_or_default();
-        self.playlists = query::playlists(&self.conn).unwrap_or_default();
-        if !self.all.is_empty() && self.library_state.selected().is_none() {
+        self.session.reload();
+        if !self.session.tracks().is_empty() && self.library_state.selected().is_none() {
             self.library_state.select(Some(0));
         }
-        if !self.playlists.is_empty() && self.playlist_state.selected().is_none() {
+        if !self.session.playlists().is_empty() && self.playlist_state.selected().is_none() {
             self.playlist_state.select(Some(0));
         }
     }
 
     /// The track list the library view is currently showing.
     fn visible(&self) -> &[Track] {
-        self.results.as_deref().unwrap_or(&self.all)
+        self.results.as_deref().unwrap_or(self.session.tracks())
     }
 
     /// Borrows the state the renderer needs.
@@ -337,16 +307,16 @@ impl App {
         Screen {
             view: self.view,
             snapshot: &self.snapshot,
-            all: &self.all,
+            all: self.session.tracks(),
             results: self.results.as_deref(),
             playing: &self.playing,
-            selection: &self.selection,
-            playlists: &self.playlists,
+            selection: self.session.selection(),
+            playlists: self.session.playlists(),
             input: &self.input,
             keys: &self.keys,
             sampler: &mut self.sampler,
             help_scroll: &mut self.help_scroll,
-            message: self.message.as_ref().map(|(m, _)| m.as_str()),
+            message: self.message.as_ref().map(|(_, text, _)| text.as_str()),
             library_state: &mut self.library_state,
             selection_state: &mut self.selection_state,
             playlist_state: &mut self.playlist_state,
@@ -360,13 +330,13 @@ impl App {
 
             // A short poll keeps the progress bar moving without busy-waiting.
             if event::poll(Duration::from_millis(200))? {
-                if let Event::Key(key) = event::read()? {
+                if let TermEvent::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         self.on_key(key);
                     }
                 }
             }
-            if let Some((_, at)) = &self.message {
+            if let Some((_, _, at)) = &self.message {
                 if at.elapsed() > Duration::from_secs(4) {
                     self.message = None;
                 }
@@ -378,49 +348,93 @@ impl App {
     /// Samples the player for the next frame, and shows any new error once.
     pub fn refresh(&mut self) {
         self.follow_player();
-        self.peak_hold = hold_peak(self.peak_hold, self.player.take_peak(), Instant::now());
+        let player = self.session.player();
+        self.peak_hold = hold_peak(self.peak_hold, player.take_peak(), Instant::now());
         self.snapshot = Snapshot {
-            status: self.player.status(),
-            position: self.player.position(),
-            volume: self.player.volume(),
-            loudness: self.player.loudness(),
+            status: player.status(),
+            position: player.position(),
+            volume: player.volume(),
+            loudness: player.loudness(),
             peak: self.peak_hold.map(|(p, _)| 20.0 * p.log10()),
             marks: Vec::new(),
         };
         let current = self.snapshot.status.current().cloned();
-        self.follow_marks(current.as_ref());
-        self.snapshot.marks = self.marks.iter().map(Mark::time).collect();
+        self.snapshot.marks = self
+            .session
+            .marks_for(current.as_ref())
+            .iter()
+            .map(Mark::time)
+            .collect();
+        self.drain_events(current.as_ref());
         self.follow_wave(current.as_ref());
-        while let Ok(result) = self.export_results.try_recv() {
-            match result {
-                Ok(out) => {
-                    let slices = match out.slices.len() {
-                        1 => "1 slice".to_string(),
-                        n => format!("{n} slices"),
-                    };
-                    self.notify(format!("exported {slices} to {}", home_as_tilde(&out.dir)));
+    }
+
+    /// Takes in what the engine and background work have sent since the last
+    /// frame. Of several playback errors, the last is shown with a count of
+    /// the others, so a run of bad files is not hidden behind one name.
+    fn drain_events(&mut self, current: Option<&PathBuf>) {
+        let mut error: Option<(String, u64)> = None;
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                // The frame's snapshot already shows the track and state.
+                Event::TrackChanged { .. } | Event::StateChanged(_) => {}
+                Event::PlaybackError(e) => {
+                    let missed = error.map_or(0, |(_, n)| n + 1);
+                    error = Some((e, missed));
                 }
-                Err(e) => self.notify(format!("export failed: {e}")),
+                Event::Peaks { job, track, result } => {
+                    if !matches!(self.sampler.wave, Wave::Reading { job: reading, .. } if reading == job)
+                    {
+                        continue;
+                    }
+                    self.sampler.wave = match result {
+                        Ok(peaks) => Wave::Ready { path: track, peaks },
+                        Err(error) => Wave::Failed { path: track, error },
+                    };
+                }
+                Event::Planned { track, result, .. } => {
+                    self.sampler.planning = false;
+                    if Some(&track) != current {
+                        continue;
+                    }
+                    match result {
+                        Ok(plan) => {
+                            let slices = plan.spans.len();
+                            self.sampler.pending = Some(plan);
+                            self.notify(Outcome::Planned { slices });
+                        }
+                        Err(error) => self.notify(Notice::Failed {
+                            task: Task::Slice,
+                            error,
+                        }),
+                    }
+                }
+                Event::Exported { result, .. } => match result {
+                    Ok(out) => self.notify(Outcome::Exported {
+                        slices: out.slices.len(),
+                        dir: out.dir,
+                    }),
+                    Err(error) => self.notify(Notice::Failed {
+                        task: Task::Export,
+                        error,
+                    }),
+                },
             }
         }
-        let seq = self.snapshot.status.error_seq;
-        if seq > self.seen_error {
-            let missed = seq - self.seen_error - 1;
-            self.seen_error = seq;
-            if let Some(e) = self.snapshot.status.error.clone() {
-                // Only the latest error is kept, so a run of bad files would
-                // otherwise show one name and hide the rest.
-                if missed > 0 {
-                    self.notify(format!("{e} (and {missed} more)"));
-                } else {
-                    self.notify(e);
-                }
-            }
+        if let Some((error, missed)) = error {
+            self.notify(Notice::PlaybackError { error, missed });
         }
     }
 
-    fn notify(&mut self, msg: impl Into<String>) {
-        self.message = Some((msg.into(), Instant::now()));
+    fn notify(&mut self, message: impl Into<Message>) {
+        let message = message.into();
+        let text = notice::text(&message);
+        self.message = Some((message, text, Instant::now()));
+    }
+
+    /// The message on the bottom line, if one is showing.
+    pub fn message(&self) -> Option<&Message> {
+        self.message.as_ref().map(|(m, _, _)| m)
     }
 
     /// Whether a key has asked the interface to exit.
@@ -447,7 +461,7 @@ impl App {
                 if typed(&key) == Some('y') {
                     self.confirm(action);
                 } else {
-                    self.notify("cancelled");
+                    self.notify(Message::Cancelled);
                 }
                 return;
             }
@@ -510,7 +524,7 @@ impl App {
             Action::Search(query) => {
                 self.apply_search(&query);
                 if self.visible().is_empty() {
-                    self.notify("no matches");
+                    self.notify(Message::NoMatches);
                 }
             }
             Action::ClearSearch => {
@@ -524,53 +538,73 @@ impl App {
             Action::Add => self.append_selection(),
             Action::Remove => self.remove_from_selection(),
             Action::MoveTrack(delta) => self.move_in_selection(delta),
-            Action::ClearSelection => {
-                if self.selection.is_empty() {
-                    self.notify("selection is empty");
-                } else {
-                    self.input = Input::Confirm(Confirm::ClearSelection(self.selection.len()));
-                }
-            }
-            Action::StartSave => {
-                if self.can_save() {
-                    self.input = Input::SavePlaylist(String::new());
-                }
-            }
-            Action::SaveAs(name) => {
-                if self.can_save() {
-                    self.save_as(&name);
-                }
-            }
+            Action::ClearSelection => match self.session.selection().len() {
+                0 => self.notify(Refusal::SelectionEmpty),
+                n => self.input = Input::Confirm(Confirm::ClearSelection(n)),
+            },
+            Action::StartSave => match self.session.check_save() {
+                Ok(()) => self.input = Input::SavePlaylist(String::new()),
+                Err(refusal) => self.notify(refusal),
+            },
+            Action::SaveAs(name) => match self.session.check_save() {
+                Ok(()) => self.save_as(&name),
+                Err(refusal) => self.notify(refusal),
+            },
             Action::DeletePlaylist => self.delete_playlist(),
             Action::StartRename => self.start_rename(),
             Action::RenameTo(name) => match self.playlist_under_cursor() {
                 Some(from) => self.rename_to(&from, &name),
-                None => self.notify("no playlist under the cursor in the playlists view"),
+                None => self.notify(Message::NoPlaylistUnderCursor),
             },
-            Action::PlayPlaylist(name) => self.play_playlist_named(&name),
-
-            Action::TogglePause => self.player.send(Cmd::TogglePause),
-            Action::Next => self.player.send(Cmd::Next),
-            Action::Prev => self.player.send(Cmd::Prev),
-            Action::Stop => self.player.send(Cmd::Stop),
-            Action::SeekBy(seconds) => self.player.send(Cmd::SeekBy(seconds)),
-            Action::SeekTo(at) => self.player.send(Cmd::Seek(at)),
-            Action::VolumeBy(delta) => self.nudge_volume(delta),
-            Action::SetVolume(v) => self.player.send(Cmd::SetVolume(v)),
-            Action::SpeedBy(semitones) => self.player.send(Cmd::SpeedBy(semitones)),
-            Action::SetSpeed(semitones) => self.player.send(Cmd::SetSpeed(semitones)),
-            Action::CycleMode(forward) => self.cycle_mode(forward),
-            Action::SetMode(mode) => {
-                self.player.send(Cmd::SetMode(mode));
-                self.notify(format!("mode: {}", mode.name()));
+            Action::PlayPlaylist(name) => {
+                let notice = self.session.play_playlist_named(&name);
+                self.follow_player();
+                self.notify(notice);
             }
 
-            Action::Mark => self.add_mark(None),
-            Action::MarkAt(at) => self.add_mark(Some(at)),
-            Action::UndoMark => self.undo_mark(),
-            Action::ClearMarks => self.ask_to_clear_marks(),
-            Action::NextMark => self.jump_to_mark(true),
-            Action::PrevMark => self.jump_to_mark(false),
+            Action::TogglePause => self.session.send(Cmd::TogglePause),
+            Action::Next => self.session.send(Cmd::Next),
+            Action::Prev => self.session.send(Cmd::Prev),
+            Action::Stop => self.session.send(Cmd::Stop),
+            Action::SeekBy(seconds) => self.session.send(Cmd::SeekBy(seconds)),
+            Action::SeekTo(at) => self.session.send(Cmd::Seek(at)),
+            Action::VolumeBy(delta) => self.session.volume_by(delta),
+            Action::SetVolume(v) => self.session.send(Cmd::SetVolume(v)),
+            Action::SpeedBy(semitones) => self.session.send(Cmd::SpeedBy(semitones)),
+            Action::SetSpeed(semitones) => self.session.send(Cmd::SetSpeed(semitones)),
+            Action::CycleMode(forward) => {
+                let notice = self.session.cycle_mode(forward);
+                self.notify(notice);
+            }
+            Action::SetMode(mode) => {
+                let notice = self.session.set_mode(mode);
+                self.notify(notice);
+            }
+
+            Action::Mark => {
+                let notice = self.session.add_mark(None);
+                self.notify(notice);
+            }
+            Action::MarkAt(at) => {
+                let notice = self.session.add_mark(Some(at));
+                self.notify(notice);
+            }
+            Action::UndoMark => {
+                let notice = self.session.undo_mark();
+                self.notify(notice);
+            }
+            Action::ClearMarks => match self.session.marks_to_clear() {
+                Ok(n) => self.input = Input::Confirm(Confirm::ClearMarks(n)),
+                Err(refusal) => self.notify(refusal),
+            },
+            Action::NextMark => {
+                let notice = self.session.seek_to_mark(true);
+                self.notify(notice);
+            }
+            Action::PrevMark => {
+                let notice = self.session.seek_to_mark(false);
+                self.notify(notice);
+            }
 
             Action::Slice(slicing) => {
                 let cut = match slicing {
@@ -595,68 +629,46 @@ impl App {
             }
             Action::Display(display) => {
                 self.sampler.display = display.unwrap_or(self.sampler.display.next());
-                self.notify(format!("display: {}", self.sampler.display.name()));
+                self.notify(Message::Display(self.sampler.display));
             }
             Action::WriteSlices => match self.sampler.pending.take() {
-                Some(Pending { job, spans }) => {
-                    let done = self.export_done.clone();
-                    std::thread::spawn(move || {
-                        let _ = done.send(samples::write(&job, &spans));
-                    });
-                    self.notify("exporting");
+                Some(plan) => {
+                    self.session.write_slices(plan);
+                    self.notify(Outcome::ExportStarted);
                 }
-                None => self.notify("no slices planned; :slice plans them"),
+                None => self.notify(Message::NoSlicesPlanned),
             },
             Action::DiscardSlices => match self.sampler.pending.take() {
-                Some(_) => self.notify("slices discarded"),
-                None => self.notify("no slices planned; :slice plans them"),
+                Some(_) => self.notify(Message::SlicesDiscarded),
+                None => self.notify(Message::NoSlicesPlanned),
             },
 
             Action::Map { view, key, action } => {
-                let shown = command::line(
-                    &Action::Map {
-                        view,
-                        key,
-                        action: action.clone(),
-                    },
-                    None,
-                );
+                let shown = Action::Map {
+                    view,
+                    key,
+                    action: action.clone(),
+                };
                 self.keys.bind(view, key, action.map(|a| *a));
-                self.notify(shown);
+                self.notify(Message::Mapped(shown));
             }
             Action::Unmap { view, key } => {
                 if self.keys.unbind(view, key) {
-                    self.notify(format!("unmapped {key}"));
+                    self.notify(Message::Unmapped(key));
                 } else {
-                    self.notify(format!("{key} has no binding {}", command::scope(view)));
+                    self.notify(Message::NotBound { key, view });
                 }
             }
-        }
-    }
-
-    /// Whether the selection can be saved, saying why not when it cannot.
-    fn can_save(&mut self) -> bool {
-        if self.selection.is_empty() {
-            self.notify("selection is empty");
-            false
-        } else if self.conn.path().is_none_or(str::is_empty) {
-            // In memory, the playlist would be lost on exit.
-            self.notify("no library to save to; `playr scan <dir>` creates one");
-            false
-        } else {
-            true
         }
     }
 
     /// Saves the selection as `name`, asking first if that replaces a playlist.
     fn save_as(&mut self, name: &str) {
-        let name = name.trim();
-        if name.is_empty() {
-            self.notify("playlist name cannot be empty");
-        } else if self.playlists.iter().any(|p| p.name == name) {
-            self.input = Input::Confirm(Confirm::ReplacePlaylist(name.to_string()));
-        } else {
-            self.save_selection(name);
+        match self.session.save_selection(name, false) {
+            Notice::Refused(Refusal::WouldReplace(name)) => {
+                self.input = Input::Confirm(Confirm::ReplacePlaylist(name));
+            }
+            notice => self.notify(notice),
         }
     }
 
@@ -666,20 +678,8 @@ impl App {
         }
         self.playlist_state
             .selected()
-            .and_then(|i| self.playlists.get(i))
+            .and_then(|i| self.session.playlists().get(i))
             .cloned()
-    }
-
-    fn play_playlist_named(&mut self, name: &str) {
-        let Some(pl) = query::find_playlist(&self.playlists, name.trim()).cloned() else {
-            return self.notify(format!("no single playlist named \"{}\"", name.trim()));
-        };
-        let tracks = query::playlist_tracks(&self.conn, pl.id).unwrap_or_default();
-        if tracks.is_empty() {
-            return self.notify("playlist is empty");
-        }
-        self.play(tracks, 0);
-        self.notify(format!("playing \"{}\"", pl.name));
     }
 
     fn command_key(&mut self, key: KeyEvent, mut line: CommandLine) {
@@ -694,14 +694,19 @@ impl App {
                 self.history.push(&line.text);
                 match command::parse(&line.text, self.view) {
                     Ok(action) => self.perform(action),
-                    Err(e) => self.notify(e),
+                    Err(e) => self.notify(Message::Command(e)),
                 }
                 return;
             }
             // Deleting past the colon closes the prompt, as in vim.
             KeyCode::Backspace if !line.pop() => return self.input = Input::None,
             KeyCode::Tab | KeyCode::BackTab => {
-                let names: Vec<String> = self.playlists.iter().map(|p| p.name.clone()).collect();
+                let names: Vec<String> = self
+                    .session
+                    .playlists()
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect();
                 line.complete(key.code == KeyCode::Tab, self.view, &names);
             }
             KeyCode::Up => line.recall(true, &self.history),
@@ -724,7 +729,7 @@ impl App {
             KeyCode::Enter => {
                 self.input = Input::None;
                 if self.visible().is_empty() {
-                    self.notify("no matches");
+                    self.notify(Message::NoMatches);
                 }
             }
             KeyCode::Backspace => {
@@ -746,7 +751,7 @@ impl App {
         if term.is_empty() {
             self.results = None;
         } else {
-            self.results = Some(query::search(&self.conn, term).unwrap_or_default());
+            self.results = Some(self.session.search(term));
         }
         self.library_state.select(if self.visible().is_empty() {
             None
@@ -776,7 +781,7 @@ impl App {
 
     fn start_rename(&mut self) {
         let Some(from) = self.playlist_under_cursor() else {
-            return self.notify("no playlist under the cursor in the playlists view");
+            return self.notify(Message::NoPlaylistUnderCursor);
         };
         // Starts from the current name, which is usually a small edit away.
         let name = from.name.clone();
@@ -802,81 +807,42 @@ impl App {
         }
     }
 
-    /// Renames `from` to `name`, unless the name is empty, unchanged or taken.
+    /// Renames `from` to `name`; the cursor follows it to its new place.
     fn rename_to(&mut self, from: &Playlist, name: &str) {
-        let name = name.trim();
-        if name.is_empty() {
-            self.notify("playlist name cannot be empty");
-        } else if name == from.name {
-            self.notify("name unchanged");
-        } else if self.playlists.iter().any(|p| p.name == name) {
-            // Renaming onto it would have to merge or replace two playlists.
-            self.notify(format!("a playlist named \"{name}\" already exists"));
-        } else {
-            self.rename_playlist(from, name);
+        let notice = self.session.rename_playlist(from.id, name);
+        if matches!(notice, Notice::Done(_)) {
+            // The list is sorted by name, so the renamed playlist may have moved.
+            let at = self
+                .session
+                .playlists()
+                .iter()
+                .position(|p| p.id == from.id);
+            self.playlist_state.select(at);
         }
-    }
-
-    fn rename_playlist(&mut self, from: &Playlist, name: &str) {
-        if let Err(e) = query::rename_playlist(&self.conn, from.id, name) {
-            return self.notify(format!("could not rename: {e}"));
-        }
-        self.playlists = query::playlists(&self.conn).unwrap_or_default();
-        // The list is sorted by name, so the renamed playlist may have moved.
-        let at = self.playlists.iter().position(|p| p.id == from.id);
-        self.playlist_state.select(at);
-        self.notify(format!("renamed \"{}\" to \"{name}\"", from.name));
-    }
-
-    fn save_selection(&mut self, name: &str) {
-        let ids: Vec<i64> = self
-            .selection
-            .iter()
-            .map(|t| t.id)
-            .filter(|id| *id != 0)
-            .collect();
-        match query::save_playlist(&mut self.conn, name, &ids) {
-            Ok(_) => {
-                // A playlist can only hold library tracks; `playr <path>` selects others.
-                let left_out = self.selection.len() - ids.len();
-                let note = if left_out > 0 {
-                    format!(", {left_out} not in the library left out")
-                } else {
-                    String::new()
-                };
-                self.notify(format!("saved \"{name}\" ({} tracks{note})", ids.len()));
-                self.playlists = query::playlists(&self.conn).unwrap_or_default();
-            }
-            Err(e) => self.notify(format!("could not save: {e}")),
-        }
+        self.notify(notice);
     }
 
     fn confirm(&mut self, action: Confirm) {
         match action {
-            Confirm::ReplacePlaylist(name) => self.save_selection(&name),
+            Confirm::ReplacePlaylist(name) => {
+                let notice = self.session.save_selection(&name, true);
+                self.notify(notice);
+            }
             Confirm::ClearMarks(_) => {
-                let Some(path) = self.marks_for.clone() else {
-                    return;
-                };
-                match query::clear_marks(&self.conn, &path.to_string_lossy()) {
-                    Ok(_) => {
-                        self.marks.clear();
-                        self.notify("marks cleared");
-                    }
-                    Err(e) => self.notify(format!("could not clear marks: {e}")),
+                if let Some(notice) = self.session.clear_marks() {
+                    self.notify(notice);
                 }
             }
             Confirm::ClearSelection(_) => {
-                self.selection.clear();
+                let outcome = self.session.clear_selection();
                 self.selection_state.select(None);
-                self.notify("selection cleared");
+                self.notify(outcome);
             }
             Confirm::DeletePlaylist(pl) => {
-                if query::delete_playlist(&self.conn, pl.id).is_ok() {
-                    self.playlists = query::playlists(&self.conn).unwrap_or_default();
+                if let Some(notice) = self.session.delete_playlist(pl.id) {
                     self.view = View::Playlists;
                     self.select(self.playlist_state.selected().unwrap_or(0));
-                    self.notify(format!("deleted \"{}\"", pl.name));
+                    self.notify(notice);
                 }
             }
         }
@@ -885,8 +851,8 @@ impl App {
     fn len(&self) -> usize {
         match self.view {
             View::Library => self.visible().len(),
-            View::Selection => self.selection.len(),
-            View::Playlists => self.playlists.len(),
+            View::Selection => self.session.selection().len(),
+            View::Playlists => self.session.playlists().len(),
             View::Sampler => 0,
         }
     }
@@ -937,286 +903,126 @@ impl App {
             }
             View::Selection => {
                 if let Some(i) = self.selection_state.selected() {
-                    self.play(self.selection.clone(), i);
+                    self.play(self.session.selection().to_vec(), i);
                 }
             }
             View::Sampler => {}
             View::Playlists => {
-                let Some(i) = self.playlist_state.selected() else {
+                let Some(pl) = self.playlist_under_cursor() else {
                     return;
                 };
-                let Some(pl) = self.playlists.get(i) else {
-                    return;
-                };
-                let tracks = query::playlist_tracks(&self.conn, pl.id).unwrap_or_default();
-                if tracks.is_empty() {
-                    self.notify("playlist is empty");
-                    return;
-                }
-                let name = pl.name.clone();
-                self.play(tracks, 0);
-                self.notify(format!("playing \"{name}\""));
+                let notice = self.session.play_playlist(pl.id);
+                self.follow_player();
+                self.notify(notice);
             }
         }
     }
 
     /// Plays `tracks` from `index`. The selection is not touched.
     fn play(&mut self, tracks: Vec<Track>, index: usize) {
-        let paths = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
-        self.player.send(Cmd::Play(paths, index));
+        self.session.play(&tracks, index);
         self.playing = tracks;
-        self.playing_source = self.player.queue();
+        self.playing_source = self.session.player().queue();
     }
 
     /// `a`: in the library, selects the track or unselects it if it was
     /// selected; on a playlist, adds its tracks. Either way the cursor moves on.
     fn append_selection(&mut self) {
-        if self.view == View::Library {
-            return self.toggle_selected_track();
-        }
-        let added: Vec<Track> = match self.view {
-            View::Playlists => self
-                .playlist_state
-                .selected()
-                .and_then(|i| self.playlists.get(i))
-                .map(|pl| query::playlist_tracks(&self.conn, pl.id).unwrap_or_default())
-                .unwrap_or_default(),
-            View::Library | View::Selection | View::Sampler => return,
+        let outcome = match self.view {
+            View::Library => {
+                let Some(track) = self
+                    .library_state
+                    .selected()
+                    .and_then(|i| self.visible().get(i).cloned())
+                else {
+                    return;
+                };
+                self.session.toggle_selected(track)
+            }
+            View::Playlists => {
+                let Some(pl) = self.playlist_under_cursor() else {
+                    return;
+                };
+                let Some(outcome) = self.session.add_playlist_to_selection(pl.id) else {
+                    return;
+                };
+                outcome
+            }
+            View::Selection | View::Sampler => return,
         };
-        if added.is_empty() {
-            return;
-        }
-        // Skip what is already selected. Repeats within `added` stay, so a
-        // playlist that repeats a track on purpose keeps doing so.
-        let selected: HashSet<&str> = self.selection.iter().map(|t| t.path.as_str()).collect();
-        let new: Vec<Track> = added
-            .into_iter()
-            .filter(|t| !selected.contains(t.path.as_str()))
-            .collect();
-        // On to the next row either way, so a run of tracks takes one key each.
-        self.move_selection(1);
-        if new.is_empty() {
-            self.notify("already in selection");
-            return;
-        }
-        self.selection.extend(new);
-        if self.selection_state.selected().is_none() {
-            self.selection_state.select(Some(0));
-        }
-        // The tab already shows the total.
-        self.notify("added to selection");
-    }
-
-    fn toggle_selected_track(&mut self) {
-        let Some(track) = self
-            .library_state
-            .selected()
-            .and_then(|i| self.visible().get(i).cloned())
-        else {
-            return;
-        };
-        if self.selection.iter().any(|t| t.path == track.path) {
-            // Every copy, so the track's marker goes with it.
-            self.selection.retain(|t| t.path != track.path);
-            let len = self.selection.len();
-            let cursor = self
-                .selection_state
-                .selected()
-                .map(|i| i.min(len.saturating_sub(1)));
-            self.selection_state
-                .select(if len == 0 { None } else { cursor });
-            self.notify("removed from selection");
-        } else {
-            self.selection.push(track);
-            if self.selection_state.selected().is_none() {
+        // Keep the selection's cursor on a track: on the first once a track is
+        // added, and within the list when unselecting shortens it.
+        let len = self.session.selection().len();
+        match outcome {
+            Outcome::RemovedFromSelection => {
+                let cursor = self
+                    .selection_state
+                    .selected()
+                    .map(|i| i.min(len.saturating_sub(1)));
+                self.selection_state
+                    .select(if len == 0 { None } else { cursor });
+            }
+            Outcome::AddedToSelection if self.selection_state.selected().is_none() => {
                 self.selection_state.select(Some(0));
             }
-            self.notify("added to selection");
+            _ => {}
         }
         // On to the next row, so a run of tracks takes one key each.
         self.move_selection(1);
+        self.notify(outcome);
     }
 
     fn remove_from_selection(&mut self) {
-        let Some(i) = self
-            .selection_state
-            .selected()
-            .filter(|i| *i < self.selection.len())
-        else {
+        let Some(i) = self.selection_state.selected() else {
             return;
         };
-        let removed = self.selection.remove(i);
-        self.select(i);
-        self.notify(format!("removed \"{}\"", removed.display_title()));
+        if let Some(outcome) = self.session.remove_from_selection(i) {
+            self.select(i);
+            self.notify(outcome);
+        }
     }
 
     /// Moves the selected track in the selection `delta` places, keeping it selected.
     fn move_in_selection(&mut self, delta: i64) {
-        let Some(i) = self
-            .selection_state
-            .selected()
-            .filter(|i| *i < self.selection.len())
-        else {
+        let Some(i) = self.selection_state.selected() else {
             return;
         };
-        let j = i as i64 + delta;
-        if j < 0 || j >= self.selection.len() as i64 {
-            return;
+        if let Some(to) = self.session.move_in_selection(i, delta) {
+            self.selection_state.select(Some(to));
         }
-        self.selection.swap(i, j as usize);
-        self.selection_state.select(Some(j as usize));
     }
 
     fn delete_playlist(&mut self) {
-        if self.view != View::Playlists {
-            return;
+        if let Some(pl) = self.playlist_under_cursor() {
+            self.input = Input::Confirm(Confirm::DeletePlaylist(pl));
         }
-        let Some(i) = self.playlist_state.selected() else {
-            return;
-        };
-        let Some(pl) = self.playlists.get(i).cloned() else {
-            return;
-        };
-        self.input = Input::Confirm(Confirm::DeletePlaylist(pl));
-    }
-
-    /// Loads the marks for `path` if they are not the ones held.
-    fn follow_marks(&mut self, path: Option<&PathBuf>) {
-        if self.marks_for.as_ref() == path {
-            return;
-        }
-        self.marks = path
-            .and_then(|p| query::marks(&self.conn, &p.to_string_lossy()).ok())
-            .unwrap_or_default();
-        self.marks_for = path.cloned();
-    }
-
-    /// The playing track's path and source rate, read fresh rather than from
-    /// the snapshot, or a message saying nothing is playing.
-    fn playing_track(&mut self) -> Option<(PathBuf, u32)> {
-        let status = self.player.status();
-        let track = match (status.state, status.current(), status.source) {
-            (State::Playing | State::Paused, Some(path), Some(source)) => {
-                Some((path.clone(), source.rate))
-            }
-            _ => None,
-        };
-        if track.is_none() {
-            self.notify("nothing is playing");
-        }
-        track
-    }
-
-    /// Marks `at`, or the playing position, unless a mark is already within [`MARK_NEAR`].
-    fn add_mark(&mut self, at: Option<Duration>) {
-        let Some((path, rate)) = self.playing_track() else {
-            return;
-        };
-        self.follow_marks(Some(&path));
-        let at = at.unwrap_or_else(|| self.player.position());
-        if let Some(near) = self
-            .marks
-            .iter()
-            .find(|m| m.time().abs_diff(at) < MARK_NEAR)
-        {
-            return self.notify(format!("already marked at {}", fmt_time(near.time())));
-        }
-        let mark = Mark::at_time(at, rate);
-        if let Err(e) = query::add_mark(&self.conn, &path.to_string_lossy(), mark) {
-            return self.notify(format!("could not mark: {e}"));
-        }
-        self.marks.push(mark);
-        self.marks.sort_by_key(|m| m.frame);
-        // As with playlists: in memory, the mark is gone when playr exits.
-        let kept = if self.conn.path().is_none_or(str::is_empty) {
-            " (not kept: no library file)"
-        } else {
-            ""
-        };
-        self.notify(format!("marked {}{kept}", fmt_time(at)));
     }
 
     /// Cuts the playing track on another thread. Reading a long region takes
     /// seconds, so [`App::refresh`] reports the result when it arrives.
     fn export(&mut self, cut: samples::Cut) {
-        let Some(job) = self.slice_job(cut) else {
-            return;
-        };
-        let done = self.export_done.clone();
-        std::thread::spawn(move || {
-            let _ = done.send(samples::export(&job));
-        });
-        self.notify("exporting");
+        match self.session.export(cut) {
+            Ok(_) => self.notify(Outcome::ExportStarted),
+            Err(refusal) => self.notify(refusal),
+        }
     }
 
     /// Plans slices of the playing track on another thread, for the sampler
     /// view to show until they are written or discarded.
     fn plan(&mut self, cut: samples::Cut) {
-        let Some(job) = self.slice_job(cut) else {
-            return;
-        };
-        let done = self.plan_done.clone();
-        std::thread::spawn(move || {
-            let result = samples::plan(&job);
-            let _ = done.send((job, result));
-        });
-        self.sampler.planning = true;
-        self.notify("planning slices");
+        match self.session.plan_slices(cut) {
+            Ok(_) => {
+                self.sampler.planning = true;
+                self.notify(Outcome::PlanStarted);
+            }
+            Err(refusal) => self.notify(refusal),
+        }
     }
 
-    /// The job for cutting the playing track, at the current marks and position.
-    fn slice_job(&mut self, cut: samples::Cut) -> Option<samples::Job> {
-        let (path, rate) = self.playing_track()?;
-        self.follow_marks(Some(&path));
-        Some(samples::Job {
-            path,
-            rate,
-            marks: self.marks.iter().map(|m| m.frame).collect(),
-            at: Mark::at_time(self.player.position(), rate).frame,
-            cut,
-            samples: self.samples.clone(),
-        })
-    }
-
-    /// Keeps the sampler's waveform and planned slices on the playing track,
-    /// and takes in what its threads have finished. The waveform is only read
-    /// while the view is open, since reading decodes the whole track.
+    /// Keeps the sampler's waveform and planned slices on the playing track.
+    /// The waveform is only read while the view is open, since reading
+    /// decodes the whole track.
     fn follow_wave(&mut self, current: Option<&PathBuf>) {
-        while let Ok((path, result)) = self.wave_results.try_recv() {
-            let Wave::Reading { path: reading, .. } = &self.sampler.wave else {
-                continue;
-            };
-            if *reading != path {
-                continue;
-            }
-            self.sampler.wave = match result {
-                Ok(Some(peaks)) => Wave::Ready {
-                    path,
-                    peaks: Arc::new(peaks),
-                },
-                Ok(None) => Wave::None,
-                Err(error) => Wave::Failed { path, error },
-            };
-        }
-        while let Ok((job, result)) = self.plan_results.try_recv() {
-            self.sampler.planning = false;
-            if Some(&job.path) != current {
-                continue;
-            }
-            match result {
-                Ok(spans) => {
-                    let n = spans.len();
-                    self.sampler.pending = Some(Pending { job, spans });
-                    let slices = if n == 1 {
-                        "1 slice".into()
-                    } else {
-                        format!("{n} slices")
-                    };
-                    self.notify(format!("{slices} planned: enter writes, esc discards"));
-                }
-                Err(e) => self.notify(format!("slicing failed: {e}")),
-            }
-        }
         if self
             .sampler
             .pending
@@ -1225,105 +1031,21 @@ impl App {
         {
             self.sampler.pending = None;
         }
-
         if self.view != View::Sampler || self.sampler.wave.path() == current {
             return;
         }
-        if let Wave::Reading { cancel, .. } = &self.sampler.wave {
-            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        let Some(path) = current.cloned() else {
-            self.sampler.wave = Wave::None;
-            return;
-        };
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (done, stop, reading) = (self.wave_done.clone(), cancel.clone(), path.clone());
-        std::thread::spawn(move || {
-            let result = Peaks::read(&reading, &stop);
-            let _ = done.send((reading, result));
-        });
-        self.sampler.wave = Wave::Reading { path, cancel };
-    }
-
-    /// Removes the most recently added mark in the playing track: marks are a
-    /// chain, and `B` takes off the last link.
-    fn undo_mark(&mut self) {
-        let Some((path, _)) = self.playing_track() else {
-            return;
-        };
-        self.follow_marks(Some(&path));
-        match query::remove_last_mark(&self.conn, &path.to_string_lossy()) {
-            Ok(Some(mark)) => {
-                self.marks.retain(|m| m.frame != mark.frame);
-                self.notify(format!("removed mark at {}", fmt_time(mark.time())));
+        self.sampler.wave = match current.cloned() {
+            Some(path) => Wave::Reading {
+                job: self.session.read_peaks(path.clone()),
+                path,
+            },
+            None => {
+                self.session.cancel_peaks();
+                Wave::None
             }
-            Ok(None) => self.notify("no marks in this track"),
-            Err(e) => self.notify(format!("could not remove mark: {e}")),
-        }
-    }
-
-    fn ask_to_clear_marks(&mut self) {
-        let Some((path, _)) = self.playing_track() else {
-            return;
         };
-        self.follow_marks(Some(&path));
-        if self.marks.is_empty() {
-            return self.notify("no marks in this track");
-        }
-        self.input = Input::Confirm(Confirm::ClearMarks(self.marks.len()));
-    }
-
-    /// Seeks to the next mark, or back to the previous one.
-    ///
-    /// Back skips a mark less than [`MARK_BACK`] behind, as `p` restarts a
-    /// track rather than leaving it, so pressing it twice steps back twice.
-    fn jump_to_mark(&mut self, forward: bool) {
-        let Some((path, _)) = self.playing_track() else {
-            return;
-        };
-        self.follow_marks(Some(&path));
-        let at = self.player.position();
-        let mut times = self.marks.iter().map(Mark::time);
-        let target = if forward {
-            times.find(|t| *t > at + MARK_NEAR / 2)
-        } else {
-            times.rev().find(|t| *t + MARK_BACK < at)
-        };
-        match target {
-            Some(t) => {
-                self.player.send(Cmd::Seek(t));
-                self.notify(format!("mark at {}", fmt_time(t)));
-            }
-            None if forward => self.notify("no later mark"),
-            None => self.notify("no earlier mark"),
-        }
-    }
-
-    /// Moves to the next playback mode, or the previous one.
-    fn cycle_mode(&mut self, forward: bool) {
-        // Not the snapshot: it is a frame old, so quick presses would repeat a step.
-        let current = self.player.mode();
-        let mode = if forward {
-            current.next()
-        } else {
-            current.prev()
-        };
-        self.player.send(Cmd::SetMode(mode));
-        self.notify(format!("mode: {}", mode.name()));
-    }
-
-    fn nudge_volume(&mut self, delta: f32) {
-        // Not the snapshot: it is a frame old, so quick presses would repeat a step.
-        let v = (self.player.volume() + delta).clamp(0.0, 1.0);
-        self.player.send(Cmd::SetVolume(v));
     }
 }
-
-/// Marks closer than this to one another are the same mark.
-const MARK_NEAR: Duration = Duration::from_millis(500);
-/// How far past a mark playback must be before `,` returns to it rather than
-/// the one before.
-const MARK_BACK: Duration = Duration::from_secs(1);
 
 /// `path`, with the home directory shown as `~` to keep messages short.
 pub fn home_as_tilde(path: &std::path::Path) -> String {

@@ -30,6 +30,7 @@ fn short(path: &std::path::Path) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
 }
+use crate::event::{Event, EventSink};
 use convert::Converter;
 pub use order::Mode;
 use order::Order;
@@ -151,11 +152,15 @@ enum Msg {
     Cmd(Cmd),
 }
 
+/// Where the engine sends events, once a session gives it somewhere.
+type Events = Arc<Mutex<Option<EventSink>>>;
+
 /// Handle to the engine thread.
 pub struct Player {
     tx: Sender<Msg>,
     status: Arc<Mutex<Status>>,
     shared: Arc<Shared>,
+    events: Events,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -171,13 +176,13 @@ impl Player {
         let (tx, rx) = std::sync::mpsc::channel();
         let status = Arc::new(Mutex::new(Status::default()));
         let shared = Arc::new(Shared::new());
+        let events: Events = Arc::default();
 
         let handle = {
-            let status = status.clone();
-            let shared = shared.clone();
+            let (status, shared, events) = (status.clone(), shared.clone(), events.clone());
             std::thread::Builder::new()
                 .name("playr-audio".into())
-                .spawn(move || Engine::new(Box::new(backend), rx, status, shared).run())
+                .spawn(move || Engine::new(Box::new(backend), rx, status, shared, events).run())
                 .map_err(|e| output::OutputError::Build(e.to_string()))?
         };
 
@@ -185,8 +190,17 @@ impl Player {
             tx,
             status,
             shared,
+            events,
             handle: Some(handle),
         })
+    }
+
+    /// Sends the engine's events, track and state changes and playback
+    /// errors, to `sink` from now on.
+    pub fn set_events(&self, sink: EventSink) {
+        if let Ok(mut events) = self.events.lock() {
+            *events = Some(sink);
+        }
     }
 
     pub fn send(&self, cmd: Cmd) {
@@ -309,6 +323,9 @@ struct Engine {
     rx: Receiver<Msg>,
     status: Arc<Mutex<Status>>,
     shared: Arc<Shared>,
+    events: Events,
+    /// The state and index last published, to send an event when either changes.
+    published: (State, usize),
     /// Events the device reports from its own thread.
     device_events: (Sender<DeviceEvent>, Receiver<DeviceEvent>),
 
@@ -346,12 +363,15 @@ impl Engine {
         rx: Receiver<Msg>,
         status: Arc<Mutex<Status>>,
         shared: Arc<Shared>,
+        events: Events,
     ) -> Self {
         Engine {
             backend,
             rx,
             status,
             shared,
+            events,
+            published: (State::Stopped, 0),
             device_events: std::sync::mpsc::channel(),
             deferred: VecDeque::new(),
             out: None,
@@ -707,8 +727,15 @@ impl Engine {
 
     fn fail(&mut self, msg: String) {
         if let Ok(mut s) = self.status.lock() {
-            s.error = Some(msg);
+            s.error = Some(msg.clone());
             s.error_seq += 1;
+        }
+        self.emit(Event::PlaybackError(msg));
+    }
+
+    fn emit(&self, event: Event) {
+        if let Some(sink) = self.events.lock().ok().and_then(|e| e.clone()) {
+            sink(event);
         }
     }
 
@@ -1071,7 +1098,19 @@ impl Engine {
         }
     }
 
-    fn publish(&self) {
+    fn publish(&mut self) {
+        let (state, index) = self.published;
+        if self.index != index {
+            let path = self.queue.get(self.index).cloned();
+            self.emit(Event::TrackChanged {
+                index: self.index,
+                path,
+            });
+        }
+        if self.state != state {
+            self.emit(Event::StateChanged(self.state));
+        }
+        self.published = (self.state, self.index);
         let Ok(mut s) = self.status.lock() else {
             return;
         };
