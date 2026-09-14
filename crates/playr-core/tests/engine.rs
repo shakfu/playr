@@ -339,6 +339,17 @@ fn previous_with_only_unplayable_tracks_before_restarts_the_track() {
 
 #[test]
 fn the_default_output_device_plays() {
+    use cpal::traits::DeviceTrait;
+    // ALSA reports a default device on a machine with no sound card, such as
+    // a CI runner, but it offers no formats. One that offers formats playr
+    // cannot use is a failure, not a skip.
+    let formats = playr_core::audio::output::default_device()
+        .ok()
+        .and_then(|d| d.supported_output_configs().ok())
+        .map_or(0, |c| c.count());
+    if formats == 0 {
+        return skip("PLAYR_REQUIRE_DEVICE", "no output device with any format");
+    }
     let player = match Player::new() {
         Ok(p) => p,
         Err(e) => return skip("PLAYR_REQUIRE_DEVICE", &e.to_string()),
