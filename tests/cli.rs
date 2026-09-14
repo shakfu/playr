@@ -87,7 +87,8 @@ fn bad_arguments_are_refused_before_anything_runs() {
 fn each_subcommand_has_its_own_help() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("library.db");
-    for (command, text) in [("scan", "Usage: playr scan"), ("search", "--json")] {
+    // Windows names the program `playr.exe` in usage lines.
+    for (command, text) in [("scan", "scan [OPTIONS] <DIR>"), ("search", "--json")] {
         let (code, stdout, _) = output(&db, &[command, "--help"]);
         assert_eq!(code, Some(0));
         assert!(stdout.contains(text), "playr {command} --help: {stdout}");

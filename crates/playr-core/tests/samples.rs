@@ -344,11 +344,21 @@ fn onset_slices_are_written_from_the_region() {
 #[test]
 fn samples_json_names_each_slot_as_its_file_does() {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("a \"quoted\" name.wav");
+    // Windows forbids `"` in a file name, so there the backslashes in the
+    // path are what JSON must escape.
+    let name = if cfg!(windows) {
+        "a 'quoted' name.wav"
+    } else {
+        "a \"quoted\" name.wav"
+    };
+    let file = dir.path().join(name);
     source(&file, 44_100, 2, 16, 20_000);
     let out = export(&job(&file, 44_100, &[5_000], 0, Cut::Marks, dir.path())).unwrap();
     let json = std::fs::read_to_string(out.dir.join("samples.json")).unwrap();
-    let path = file.to_string_lossy().replace('"', "\\\"");
+    let path = file
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     assert_eq!(
         json,
         format!(

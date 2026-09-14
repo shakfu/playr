@@ -561,7 +561,8 @@ fn export_and_slice_choose_how_the_track_is_cut() {
 
 #[test]
 fn the_cheatsheet_lists_every_command_under_its_view() {
-    let sheet = include_str!("../../../docs/cheatsheet.md");
+    // A Windows checkout may end lines with CRLF.
+    let sheet = include_str!("../../../docs/cheatsheet.md").replace("\r\n", "\n");
     let section = |heading: &str| {
         let start = sheet
             .find(&format!("## {heading}\n"))

@@ -18,7 +18,7 @@ fn secs(s: u64) -> Duration {
 
 #[test]
 fn outcomes_are_worded() {
-    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let home = std::env::home_dir().unwrap();
     for (outcome, words) in [
         (Outcome::AddedToSelection, "added to selection"),
         (Outcome::AlreadyInSelection, "already in selection"),

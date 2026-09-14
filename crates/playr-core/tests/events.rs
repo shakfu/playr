@@ -314,7 +314,7 @@ fn opening_gathers_tracks_with_tags_from_the_library() {
             let names: Vec<&str> = playable
                 .tracks
                 .iter()
-                .map(|t| t.path.rsplit('/').next().unwrap())
+                .map(|t| Path::new(&t.path).file_name().unwrap().to_str().unwrap())
                 .collect();
             assert_eq!(names, ["001.wav", "000.wav"]);
             assert_eq!(playable.tracks[1].title.as_deref(), Some("Known"));

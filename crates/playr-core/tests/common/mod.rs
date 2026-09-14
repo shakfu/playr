@@ -9,7 +9,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::SampleFormat;
 use playr_core::audio::meter::Meter;
@@ -153,22 +153,43 @@ impl Backend for Fake {
         let alive = running.clone();
         let control = self.0.clone();
         std::thread::spawn(move || {
-            // 10 ms of audio every 10 ms, as a device pulls it.
+            // 10 ms of audio every 10 ms, as a device pulls it. The chunks are
+            // due by the clock, not by the sleeps: a busy machine wakes the
+            // thread late, and counting sleeps would play slower than real time.
+            const CHUNK: Duration = Duration::from_millis(10);
+            // Most chunks made up at one wake; a device that falls further
+            // behind skips the rest, as a real one underruns.
+            const CATCH_UP: u32 = 10;
             let mut buf = vec![0.0f32; (plan.rate / 100) as usize * plan.channels as usize];
             let mut meter = Meter::new(plan.rate, plan.channels);
+            let mut due = Instant::now();
             while alive.load(Ordering::Relaxed) {
-                if !control.stall.load(Ordering::Relaxed) {
-                    render(
-                        &mut buf,
-                        &mut consumer,
-                        &shared,
-                        &mut meter,
-                        plan.channels as u64,
-                        |v| v,
-                    );
-                    control.played.lock().unwrap().extend_from_slice(&buf);
+                let now = Instant::now();
+                if control.stall.load(Ordering::Relaxed) {
+                    due = now;
+                } else {
+                    let mut chunks = 0;
+                    while due <= now && chunks < CATCH_UP {
+                        render(
+                            &mut buf,
+                            &mut consumer,
+                            &shared,
+                            &mut meter,
+                            plan.channels as u64,
+                            |v| v,
+                        );
+                        control.played.lock().unwrap().extend_from_slice(&buf);
+                        due += CHUNK;
+                        chunks += 1;
+                    }
+                    if due <= now {
+                        due = now + CHUNK;
+                    }
                 }
-                std::thread::sleep(Duration::from_millis(10));
+                std::thread::sleep(
+                    due.saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(1)),
+                );
             }
         });
         Ok(Box::new(Running(running)))

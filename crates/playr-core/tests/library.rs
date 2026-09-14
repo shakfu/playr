@@ -472,6 +472,15 @@ fn the_indexed_file_name_drops_the_directory_and_the_last_extension() {
         ("/m/v1.0/no extension", "no extension"),
         ("/m/.hidden", ".hidden"),
         ("/m/dir.d/x", "x"),
+        // Windows paths, as canonicalized and as typed: backslashes separate.
+        (r"\\?\C:\Music\v1.0\Take.Five.flac", "Take.Five"),
+        (r"C:\Music\dir.d\x", "x"),
+        (
+            r"\\server\share\Mos Def - Mathematics.m4a",
+            "Mos Def - Mathematics",
+        ),
+        // On Unix a backslash is part of the name.
+        (r"/m/AC\DC - Back in Black.flac", r"AC\DC - Back in Black"),
     ] {
         let id = db::upsert(&conn, &untagged(path)).unwrap();
         let indexed: String = conn
@@ -481,6 +490,44 @@ fn the_indexed_file_name_drops_the_directory_and_the_last_extension() {
             .unwrap();
         assert_eq!(indexed, name, "{path}");
     }
+}
+
+#[test]
+fn a_library_whose_triggers_split_only_on_slashes_is_reindexed_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let conn = db::open(&path).unwrap();
+    let windows = r"C:\Users\Amy\Music\Take Five.flac";
+    // The triggers playr 0.5.0 and 0.5.1 made, which read only `/`.
+    let name = "COALESCE(NULLIF(rtrim(rtrim(substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1), replace(substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1), '.', '')), '.'), ''), substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1))";
+    conn.execute_batch(&format!(
+        "DROP TRIGGER tracks_ai; DROP TRIGGER tracks_au;
+         CREATE TRIGGER tracks_ai AFTER INSERT ON tracks BEGIN
+           INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, file)
+           VALUES (new.id, new.title, new.artist, new.album, new.album_artist, {name});
+         END;
+         CREATE TRIGGER tracks_au AFTER UPDATE ON tracks BEGIN
+           DELETE FROM tracks_fts WHERE rowid = old.id;
+           INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, file)
+           VALUES (new.id, new.title, new.artist, new.album, new.album_artist, {name});
+         END;"
+    ))
+    .unwrap();
+    db::upsert(&conn, &untagged(windows)).unwrap();
+    assert_eq!(
+        paths(&conn, "amy"),
+        [windows],
+        "the old triggers indexed folders"
+    );
+    drop(conn);
+
+    let conn = db::open(&path).unwrap();
+    assert!(paths(&conn, "amy").is_empty(), "a folder is still indexed");
+    assert_eq!(paths(&conn, "file:take"), [windows]);
+    // Opening again leaves the new triggers alone.
+    drop(conn);
+    let conn = db::open(&path).unwrap();
+    assert_eq!(paths(&conn, "file:take"), [windows]);
 }
 
 #[test]

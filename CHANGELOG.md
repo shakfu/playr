@@ -22,6 +22,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Fixed
 
+- On Windows, searching matched the folders a track sits in. The search index takes a file's name from its path, and read only `/` as a separator, so a Windows path went in whole and a search for `music` found every track under `C:\Users\...\Music`. A Windows path, one starting with a drive or `\\`, now has its backslashes read as separators, and a library indexed by 0.5.0 or 0.5.1 is reindexed when opened. A backslash in a Unix file name stays part of the name.
+
 - `:move +N` and `:move -N` move the track N places, as documented. They swapped it with the track N places away, so `:move +2` on A, B, C gave C, B, A rather than B, C, A. `J` and `K` move by one place, where the two agree.
 
 ## [0.5.1]

@@ -75,7 +75,7 @@ fn a_syntax_error_is_the_only_error() {
 
 #[test]
 fn the_samples_directory_defaults_to_music_and_expands_home() {
-    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let home = std::env::home_dir().unwrap();
     assert_eq!(
         Settings::default().samples,
         home.join("Music/playr/samples")

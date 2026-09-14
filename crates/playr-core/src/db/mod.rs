@@ -113,6 +113,15 @@ fn init(conn: &Connection) -> Result<()> {
         [],
         |r| r.get(0),
     )?;
+    // Triggers from playr 0.5.0 and 0.5.1 read only `/` as a separator, so on
+    // Windows they indexed a track's whole path as its file name, and a search
+    // matched the folders above it. They are replaced and the index refilled.
+    let old_triggers: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master
+                        WHERE name = 'tracks_ai' AND instr(sql, ':\\') = 0)",
+        [],
+        |r| r.get(0),
+    )?;
     if old_index {
         conn.execute_batch(
             "DROP TRIGGER IF EXISTS tracks_ai;
@@ -120,9 +129,14 @@ fn init(conn: &Connection) -> Result<()> {
              DROP TRIGGER IF EXISTS tracks_au;
              DROP TABLE tracks_fts;",
         )?;
+    } else if old_triggers {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS tracks_ai;
+             DROP TRIGGER IF EXISTS tracks_au;",
+        )?;
     }
     conn.execute_batch(include_str!("schema.sql"))?;
-    if old_index {
+    if old_index || old_triggers {
         // Updating every row in place fires the new trigger, which indexes it.
         conn.execute_batch("BEGIN; UPDATE tracks SET path = path; COMMIT;")?;
     }
