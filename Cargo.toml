@@ -2,7 +2,7 @@
 members = ["crates/playr-core", "crates/playr-app"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -11,8 +11,8 @@ homepage = "https://github.com/shakfu/playr"
 
 # Versions shared by more than one crate, so the crates cannot drift apart.
 [workspace.dependencies]
-playr-core = { path = "crates/playr-core", version = "0.5.0" }
-playr-app = { path = "crates/playr-app", version = "0.5.0" }
+playr-core = { path = "crates/playr-core", version = "0.5.1" }
+playr-app = { path = "crates/playr-app", version = "0.5.1" }
 cpal = "0.18.2"
 hound = "3.5"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
@@ -33,6 +33,7 @@ description = "A minimal TUI music player that plays local files and contacts no
 readme = "README.md"
 keywords = ["music", "player", "tui", "audio", "flac"]
 categories = ["multimedia::audio", "command-line-utilities"]
+exclude = ["docs/dev/"]
 
 [features]
 default = []

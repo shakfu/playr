@@ -639,9 +639,10 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     assert_eq!(said(&app), msg(Refusal::NoLaterMark));
 
     // A mark added last but earlier in the track: `B` removes it, not 0:30.
-    key(&mut app, KeyCode::Left, KeyModifiers::SHIFT);
-    key(&mut app, KeyCode::Right, KeyModifiers::NONE);
-    let _ = seconds(&mut app);
+    // An absolute seek, marked as soon as it lands: relative seeks and sleeps
+    // add up to more than the second the check allows on a slow machine.
+    command(&mut app, "seek 5");
+    refresh_until(&mut app, |s| (5.0..5.5).contains(&s.position.as_secs_f64()));
     press(&mut app, 'b');
     assert_eq!(mark_seconds(&app), Some(("Marked", 5)));
     press(&mut app, 'B');

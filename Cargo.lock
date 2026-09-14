@@ -1550,7 +1550,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "playr"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "clap",
  "cpal",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "playr-app"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "cpal",
  "hound",
@@ -1580,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "playr-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "cpal",
  "hound",

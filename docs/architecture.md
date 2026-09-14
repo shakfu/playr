@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, current as of playr 0.5.0. Steps 1 to 7 of the split are done; step 8 is deferred. The terminal is the only frontend today.
+Design note, current as of playr 0.5.1. Steps 1 to 7 of the split are done; step 8 is deferred. The terminal is the only frontend today.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
