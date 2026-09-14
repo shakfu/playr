@@ -41,15 +41,27 @@ Notable changes to playr. Format follows [Keep a Changelog][https://keepachangel
 
   A key under `[keys.VIEW]` wins in that view. The defaults are a settings file too, `src/ui/settings.toml`, read by the same code; a user file applies on top of it. TOML over a file of `:` commands because editors highlight and check it, and it gives colours a natural table later; the cost is the `toml` crate. Any bad setting stops playr before it starts, with every error listed by line. Starting anyway and showing the first error was the alternative, but a skipped binding is easy to miss. `:map` and `:unmap` change keys while playr runs.
 
+- Samples. `:slice region` writes the region between the marks either side of the playhead as a WAV file. `:slice marks` cuts the whole track at every mark, `:slice N` cuts the region into N equal parts, and `:slice onsets [S]` cuts it where hits start, with onset detection taken from rtrack. `S` runs from 0 to 1, and without it `onset_sensitivity` in `settings.toml` applies; it is read when a slice runs, so a key bound to `slice onsets` follows the setting. Each export is a new directory under `samples` in `settings.toml`, `~/Music/playr/samples` by default, laid out as rtrack's sample bank: `000-name_S00.wav` and so on, with a `samples.json` recording each slice's source frames.
+
+  Slices are read from the source file, not captured from the output, so volume and varispeed do not reach them. Files are 24-bit at the source's rate and channel count, which copies 16- and 24-bit sources exactly; resampling or mixing to stereo, as rtrack's own render does, would have changed the audio for no gain in rtrack. Writing WAV adds the `hound` crate.
+
+- A sampler view, `4`, showing the playing track's waveform with its marks, playhead and region. Three displays of the same data switch with `w`: a rectified envelope in eighth blocks, with each column's RMS level inside its peak level; the same bars on a dB scale from -48 dBFS, where a linear scale would squeeze RMS into the bottom rows; and a symmetric waveform in Braille, to see its shape. dB is a display rather than a scale for every display because a centred Braille waveform has no readable log scale. RMS is drawn because a mastered track's peaks sit near full scale in almost every column of an overview, so peak alone shows a flat block; RMS still shows its sections. `z` and `Z` zoom around the playhead down to 64 frames a column, and `0` shows the whole track. In this view `:slice` plans slices and draws their edges, and enter writes exactly those slices or esc discards them; elsewhere `:slice` still writes at once.
+
+  Peaks are read from the file on a thread, only while the view is open, as a pyramid of min, max and mean square with 32 frames at its finest scale. A column's peaks are gathered from whole buckets and columns start on bucket boundaries, so a hit never shows in the column before it. The waveform glyphs are the only characters in the interface outside ASCII.
+
 ### Changed
 
-- `?` lists the keys as bound, grouped by view, with the command each key runs. It showed a fixed list before, which a remapped key would contradict. The bottom line's help hint names whichever key opens it.
+- `?` lists the keys that work in the view you are in, as bound, with the command each key runs: the view's own keys, then those for every view that it does not rebind. It showed a fixed list of every key before, which a remapped key would contradict. `:help` still lists every command, grouped by view, so commands of other views stay findable. The bottom line's help hint names whichever key opens the list in this view.
 
 - A key with Ctrl or Alt held, or Shift on a key that is not a character, only runs a binding that names that chord. Before, most chords ran the plain key's action, so Ctrl-M cycled the mode as `M` does.
 
 - The key and command lists scroll with `j` and `k`; any other key closes them. The key list already ran past the bottom of a 24-row terminal.
 
 - `esc` clears a search only in the library, where the results are shown. `a` in the selection and `d` in the library did nothing and are now unbound.
+
+### Fixed
+
+- Search finds untagged files. The index held only title, artist, album and album artist, so a file with no tags had nothing indexed, though the list showed it by its file name. The index now has a `file` column, the file name without folder or extension, which `file:` also searches. A library from an earlier playr has its index rebuilt on first open; the schema version is unchanged, so earlier playr can still open it.
 
 ## [0.3.3]
 

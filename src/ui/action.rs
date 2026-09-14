@@ -81,6 +81,17 @@ pub enum Action {
     NextMark,
     PrevMark,
 
+    /// Write slices of the playing track to the samples directory, or in the
+    /// sampler view, plan them to be written.
+    Slice(Slicing),
+    /// Zoom the sampler view.
+    Zoom(Zoom),
+    /// Show the waveform this way, or switch to the other way when `None`.
+    Display(Option<super::sampler::Display>),
+    /// Write the slices planned in the sampler view.
+    WriteSlices,
+    DiscardSlices,
+
     /// Bind `key` in one view, or in every view, to an action or to nothing.
     Map {
         view: Option<View>,
@@ -93,6 +104,26 @@ pub enum Action {
         view: Option<View>,
         key: Key,
     },
+}
+
+/// A zoom step in the sampler view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zoom {
+    In,
+    Out,
+    /// Back to the whole track.
+    All,
+}
+
+/// How `:slice` cuts the playing track.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Slicing {
+    Region,
+    Marks,
+    Equal(usize),
+    /// At onsets, with this sensitivity, or with `onset_sensitivity` from the
+    /// settings when `None`.
+    Onsets(Option<f32>),
 }
 
 /// A key with its Ctrl, Alt and Shift modifiers, as a binding names it.

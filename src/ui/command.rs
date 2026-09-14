@@ -3,9 +3,11 @@
 
 use std::time::Duration;
 
-use super::action::{Action, Key};
+use super::action::{Action, Key, Slicing, Zoom};
+use super::sampler::Display;
 use super::View;
 use crate::audio::Mode;
+use crate::samples::MAX_SLICES;
 
 /// A `:` command: its name, what may follow it, what it does, and the one
 /// view it works in, if it is not every view.
@@ -34,15 +36,15 @@ const fn only(view: View, name: &'static str, args: &'static str, help: &'static
     }
 }
 
-use View::{Library, Playlists, Selection};
+use View::{Library, Playlists, Sampler, Selection};
 
 /// Every `:` command, grouped by view. A command may be typed as any prefix
 /// that names only it among those that work in the current view.
 pub const COMMANDS: &[Command] = &[
     any("help", "", "list these commands"),
-    any("keys", "", "list the keys"),
+    any("keys", "", "list the keys for this view"),
     any("quit", "", "quit"),
-    any("view", "VIEW", "library, selection or playlists"),
+    any("view", "VIEW", "library, selection, playlists or sampler"),
     any("next-view", "", "switch to the next view"),
     any("down", "[N]", "move the cursor down N rows, default 1"),
     any("up", "[N]", "move the cursor up N rows, default 1"),
@@ -74,13 +76,18 @@ pub const COMMANDS: &[Command] = &[
     any(
         "mode",
         "MODE | + | -",
-        "normal, shuffle, repeat, repeat-one; or cycle",
+        "normal, shuffle, repeat, repeat-one, + or -",
     ),
     any("mark", "[TIME]", "mark the playing position, or a time"),
     any("unmark", "", "undo the last mark"),
     any("delmarks", "", "clear all marks in this track; asks y/n"),
     any("next-mark", "", "seek to the next mark"),
     any("prev-mark", "", "seek to the previous mark"),
+    any(
+        "slice",
+        "region|marks|N|onsets [S]",
+        "write samples from the region or the track",
+    ),
     any(
         "map",
         "[VIEW] KEY COMMAND",
@@ -105,6 +112,20 @@ pub const COMMANDS: &[Command] = &[
     ),
     only(Playlists, "delete", "", "delete the playlist; asks y/n"),
     only(Playlists, "rename", "[NAME]", "rename the playlist"),
+    only(
+        Sampler,
+        "zoom",
+        "+ | - | all",
+        "zoom in, out, or to the whole track",
+    ),
+    only(
+        Sampler,
+        "display",
+        "[envelope|db|braille]",
+        "draw the waveform another way",
+    ),
+    only(Sampler, "write", "", "write the slices :slice planned"),
+    only(Sampler, "discard", "", "discard the slices :slice planned"),
 ];
 
 const MODES: &[(&str, Mode)] = &[
@@ -118,6 +139,7 @@ const VIEWS: &[(&str, View)] = &[
     ("library", Library),
     ("selection", Selection),
     ("playlists", Playlists),
+    ("sampler", Sampler),
 ];
 
 /// The name of `view` as commands spell it.
@@ -245,6 +267,18 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         ClearMarks => "delmarks".into(),
         NextMark => "next-mark".into(),
         PrevMark => "prev-mark".into(),
+        Zoom(super::action::Zoom::In) => "zoom +".into(),
+        Zoom(super::action::Zoom::Out) => "zoom -".into(),
+        Zoom(super::action::Zoom::All) => "zoom all".into(),
+        Display(None) => "display".into(),
+        Display(Some(d)) => format!("display {}", d.name()),
+        WriteSlices => "write".into(),
+        DiscardSlices => "discard".into(),
+        Slice(Slicing::Region) => "slice region".into(),
+        Slice(Slicing::Marks) => "slice marks".into(),
+        Slice(Slicing::Equal(n)) => format!("slice {n}"),
+        Slice(Slicing::Onsets(None)) => "slice onsets".into(),
+        Slice(Slicing::Onsets(Some(s))) => format!("slice onsets {}", number(f64::from(*s))),
         Map { view, key, action } => {
             let target = match action {
                 Some(a) => line(a, *view),
@@ -486,6 +520,35 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "delmarks" => nothing(Action::ClearMarks),
         "next-mark" => nothing(Action::NextMark),
         "prev-mark" => nothing(Action::PrevMark),
+        "zoom" => match rest {
+            "+" => Ok(Action::Zoom(Zoom::In)),
+            "-" => Ok(Action::Zoom(Zoom::Out)),
+            "all" => Ok(Action::Zoom(Zoom::All)),
+            _ => Err(usage()),
+        },
+        "display" => match rest {
+            "" => Ok(Action::Display(None)),
+            "envelope" => Ok(Action::Display(Some(Display::Envelope))),
+            "db" => Ok(Action::Display(Some(Display::Decibels))),
+            "braille" => Ok(Action::Display(Some(Display::Braille))),
+            _ => Err(usage()),
+        },
+        "write" => nothing(Action::WriteSlices),
+        "discard" => nothing(Action::DiscardSlices),
+        "slice" => match first_word(rest) {
+            ("region", "") => Ok(Action::Slice(Slicing::Region)),
+            ("marks", "") => Ok(Action::Slice(Slicing::Marks)),
+            ("onsets", "") => Ok(Action::Slice(Slicing::Onsets(None))),
+            ("onsets", s) => match s.parse::<f32>() {
+                Ok(s) if (0.0..=1.0).contains(&s) => Ok(Action::Slice(Slicing::Onsets(Some(s)))),
+                _ => Err("onset sensitivity is 0 to 1".into()),
+            },
+            (n, "") if n.parse::<usize>().is_ok() => match n.parse::<usize>() {
+                Ok(n) if (2..=MAX_SLICES).contains(&n) => Ok(Action::Slice(Slicing::Equal(n))),
+                _ => Err(format!("slices are 2 to {MAX_SLICES}")),
+            },
+            _ => Err(usage()),
+        },
         "map" => {
             let (view, key, target) = binding(rest)?;
             if target.is_empty() {

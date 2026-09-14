@@ -23,26 +23,35 @@ CREATE TABLE IF NOT EXISTS tracks (
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
 
+-- The search index. It keeps its own copy of the text, rather than reading
+-- `tracks`, so it can hold a column `tracks` has no copy of: the file name
+-- without its directory or extension, which is all an untagged file has.
+-- The name is worked out here, in SQL, so an older playr that adds rows to
+-- `tracks` still keeps the index current. In the expression, `rtrim` with
+-- every character but `/` strips a path back to its directory, and the same
+-- with `.` strips a name back to its last dot; a name that is all extension,
+-- such as `.hidden`, is kept whole.
 CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
-  title, artist, album, album_artist,
-  content='tracks', content_rowid='id', tokenize='unicode61'
+  title, artist, album, album_artist, file, tokenize='unicode61'
 );
 
 CREATE TRIGGER IF NOT EXISTS tracks_ai AFTER INSERT ON tracks BEGIN
-  INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
-  VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+  INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, file)
+  VALUES (new.id, new.title, new.artist, new.album, new.album_artist,
+          COALESCE(NULLIF(rtrim(rtrim(substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1), replace(substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1), '.', '')), '.'), ''),
+                   substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1)));
 END;
 
 CREATE TRIGGER IF NOT EXISTS tracks_ad AFTER DELETE ON tracks BEGIN
-  INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
-  VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+  DELETE FROM tracks_fts WHERE rowid = old.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
-  INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
-  VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
-  INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
-  VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+  DELETE FROM tracks_fts WHERE rowid = old.id;
+  INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, file)
+  VALUES (new.id, new.title, new.artist, new.album, new.album_artist,
+          COALESCE(NULLIF(rtrim(rtrim(substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1), replace(substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1), '.', '')), '.'), ''),
+                   substr(new.path, length(rtrim(new.path, replace(new.path, '/', ''))) + 1)));
 END;
 
 CREATE TABLE IF NOT EXISTS playlists (

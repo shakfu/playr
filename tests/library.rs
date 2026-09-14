@@ -415,3 +415,139 @@ fn marks_are_undone_in_the_order_they_were_added() {
         "undid another track's mark"
     );
 }
+
+/// A row as an untagged file gives it: a path and nothing else.
+fn untagged(path: &str) -> Track {
+    Track {
+        path: path.into(),
+        mtime: 1,
+        size: 100,
+        ..Default::default()
+    }
+}
+
+fn paths(conn: &rusqlite::Connection, input: &str) -> Vec<String> {
+    let mut p: Vec<String> = query::search(conn, input)
+        .unwrap_or_else(|e| panic!("{input:?} raised {e}"))
+        .into_iter()
+        .map(|t| t.path)
+        .collect();
+    p.sort();
+    p
+}
+
+#[test]
+fn an_untagged_track_is_found_by_its_file_name() {
+    let conn = seeded();
+    let single = "/m/_singles/Mos Def - Mathematics.m4a";
+    db::upsert(&conn, &untagged(single)).unwrap();
+    for input in ["Mos def", "mos", "Math", "file:mathematics", "\"mos def\""] {
+        assert_eq!(paths(&conn, input), [single], "{input:?}");
+    }
+    // The extension and the directories are not part of the name.
+    assert!(paths(&conn, "m4a").is_empty());
+    assert!(paths(&conn, "singles").is_empty());
+    // A field limits the term to the file name; tags do not match it.
+    assert!(paths(&conn, "file:evans").is_empty());
+    // Words from the name and from tags combine as any two words do.
+    db::upsert(
+        &conn,
+        &track(
+            "/m/Sunday Take 2.flac",
+            "Gloria's Step",
+            "Bill Evans",
+            "Sunday",
+        ),
+    )
+    .unwrap();
+    assert_eq!(paths(&conn, "evans take"), ["/m/Sunday Take 2.flac"]);
+}
+
+#[test]
+fn the_indexed_file_name_drops_the_directory_and_the_last_extension() {
+    let conn = db::open_memory().unwrap();
+    for (path, name) in [
+        ("/m/Mos Def - Mathematics.m4a", "Mos Def - Mathematics"),
+        ("/m/v1.0/Take.Five.flac", "Take.Five"),
+        ("/m/v1.0/no extension", "no extension"),
+        ("/m/.hidden", ".hidden"),
+        ("/m/dir.d/x", "x"),
+    ] {
+        let id = db::upsert(&conn, &untagged(path)).unwrap();
+        let indexed: String = conn
+            .query_row("SELECT file FROM tracks_fts WHERE rowid = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(indexed, name, "{path}");
+    }
+}
+
+#[test]
+fn a_library_with_the_old_index_is_reindexed_with_file_names_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let conn = db::open(&path).unwrap();
+    db::upsert(&conn, &untagged("/m/Mos Def - Mathematics.m4a")).unwrap();
+    db::upsert(
+        &conn,
+        &track("/m/a.flac", "Waltz for Debby", "Bill Evans", "Sunday"),
+    )
+    .unwrap();
+    // Put back the index and triggers playr 0.3 created, as such a library has.
+    conn.execute_batch(
+        "DROP TRIGGER tracks_ai; DROP TRIGGER tracks_ad; DROP TRIGGER tracks_au;
+         DROP TABLE tracks_fts;
+         CREATE VIRTUAL TABLE tracks_fts USING fts5(
+           title, artist, album, album_artist,
+           content='tracks', content_rowid='id', tokenize='unicode61');
+         CREATE TRIGGER tracks_ai AFTER INSERT ON tracks BEGIN
+           INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
+           VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+         END;
+         CREATE TRIGGER tracks_ad AFTER DELETE ON tracks BEGIN
+           INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
+           VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+         END;
+         CREATE TRIGGER tracks_au AFTER UPDATE ON tracks BEGIN
+           INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
+           VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+           INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
+           VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+         END;
+         INSERT INTO tracks_fts(tracks_fts) VALUES ('rebuild');",
+    )
+    .unwrap();
+    assert!(
+        paths(&conn, "mos").is_empty(),
+        "the old index already had names"
+    );
+    drop(conn);
+
+    let conn = db::open(&path).unwrap();
+    assert_eq!(paths(&conn, "mos"), ["/m/Mos Def - Mathematics.m4a"]);
+    assert_eq!(paths(&conn, "artist:evans"), ["/m/a.flac"]);
+    // New rows and deletions keep the new index current.
+    db::upsert(&conn, &untagged("/m/Gang Starr - Full Clip.m4a")).unwrap();
+    assert_eq!(paths(&conn, "gang"), ["/m/Gang Starr - Full Clip.m4a"]);
+    conn.execute("DELETE FROM tracks WHERE path = '/m/a.flac'", [])
+        .unwrap();
+    assert!(paths(&conn, "evans").is_empty());
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        version,
+        db::SCHEMA_VERSION,
+        "the version moved, locking out older playr"
+    );
+
+    // Opening again does not rebuild or duplicate anything.
+    drop(conn);
+    let conn = db::open(&path).unwrap();
+    assert_eq!(paths(&conn, "mos"), ["/m/Mos Def - Mathematics.m4a"]);
+    let rows: i64 = conn
+        .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 2);
+}

@@ -23,6 +23,8 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Marks: `b` marks a moment in a track, `B` undoes the last mark, `,` and `.` seek between marks, and marks are kept in the library
 
+- Samples: `:slice` writes regions between marks, equal parts or onset slices as lossless WAV files that rtrack loads as a sample bank
+
 - Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
 
 - Volume as a float gain applied before quantisation
@@ -53,7 +55,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Scans commit every 500 files, so an interrupted scan keeps its progress
 
-- Full-text search over title, artist, album and album artist, or within one of them with `artist:evans`
+- Full-text search over title, artist, album, album artist and file name, or within one of them with `artist:evans`
 
 - Search results play directly, in library order
 
@@ -61,7 +63,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 **Interface**
 
-- Three views: library, selection, playlists
+- Four views: library, selection, playlists, and a sampler showing the playing track's waveform
 
 - Search filters as you type
 
@@ -77,7 +79,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Vim-style `:` commands for every action, with Tab completion and a history; they also take arguments such as `:seek 1:23` or `:playlist late night`
 
-- `?` lists every key; the bottom line shows messages, speed, volume, and a level meter
+- `?` lists the keys for the view you are in; the bottom line shows messages, speed, volume, and a level meter
 
 - The level meter reads momentary loudness in LUFS (ITU-R BS.1770, 400 ms) and holds the sample peak for 1.5 s. It measures the recording before the volume setting
 
@@ -124,7 +126,7 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 
 | keys                     | action                                      |
 |--------------------------|---------------------------------------------|
-| `tab`, `1` `2` `3`       | switch to library, selection or playlists   |
+| `tab`, `1` `2` `3` `4`   | switch view; `4` is the sampler             |
 | `j` `k`, up/down         | move                                        |
 | `g` `G`, home/end        | jump to first or last                       |
 | page up/down             | move by ten                                 |
@@ -150,12 +152,12 @@ Rescanning only re-reads files whose size or modification time changed, and drop
 | `\`                      | back to normal speed                        |
 | `+` `-`                  | volume                                      |
 | `:`                      | type a command; see [Commands](#commands)   |
-| `?`                      | list every key                              |
+| `?`                      | list the keys for this view                 |
 | `q`                      | quit                                        |
 
-Searching filters as you type, across title, artist, album and album artist. Pressing enter on the results plays them.
+Searching filters as you type, across title, artist, album, album artist and the file name without its folder or extension. The file name is what finds an untagged file, which the list shows by that name. Pressing enter on the results plays them.
 
-Every word must match, as the start of a word. Prefix a word with a field to match it in that field alone: `title:`, `artist:`, `album:`, or `albumartist:`. Quote words to match them together in order, as in `artist:"bill evans"`; unquoted, a field applies only to the word it is attached to. A prefix that is not one of these fields is searched as text, so `op:1` still finds a title with a colon in it.
+Every word must match, as the start of a word. Prefix a word with a field to match it in that field alone: `title:`, `artist:`, `album:`, `albumartist:`, or `file:`. Quote words to match them together in order, as in `artist:"bill evans"`; unquoted, a field applies only to the word it is attached to. A prefix that is not one of these fields is searched as text, so `op:1` still finds a title with a colon in it.
 
 Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
 
@@ -180,6 +182,45 @@ Marks form a chain: `B` removes the mark added most recently, then the one befor
 
 Marks are stored in the library by file path and source frame, so they survive a rescan and stay exact at any playback speed. Without a library file they last until playr exits. A mark lands slightly after the moment you meant, by your reaction time.
 
+### Samples
+
+`:slice` writes parts of the playing track as WAV files, for rtrack or any sampler. Marks set the regions. The region is the span between the marks either side of the playhead, from the start of the track or to its end where there is no mark on that side.
+
+| command             | writes                                                               |
+|---------------------|----------------------------------------------------------------------|
+| `:slice region`     | the region                                                           |
+| `:slice marks`      | the whole track, cut at every mark                                   |
+| `:slice N`          | the region in N equal parts, 2 to 256                                |
+| `:slice onsets [S]` | the region, cut where hits start; `S` from 0 to 1, higher finds more |
+
+Each export writes a new directory, named after the track, under `samples` in [`settings.toml`](#configuration), by default `~/Music/playr/samples`. A second export of `amen.flac` goes to `amen-2`. The directory holds:
+
+- `000-amen_S00.wav`, `001-amen_S01.wav`, and so on, one file per slice, in the layout rtrack loads as a sample bank.
+- `samples.json`, with the source file and each slice's start and end frame.
+
+Slices are read from the source file, so volume and speed do not apply. They are 24-bit WAV at the source's sample rate and channel count; 16- and 24-bit sources are copied bit for bit. Without `S`, `:slice onsets` uses `onset_sensitivity` from `settings.toml`, 0.5 by default. Onset detection is rtrack's: a hit within 50 ms of the region's start stays in the first slice, and each slice starts up to 10 ms before its hit. It reads the region into memory, up to about 23 minutes at 48 kHz. Export runs in the background, and the bottom line reports when it is done.
+
+For MP3 and AAC, frame positions follow playr's decoder. Another decoder can count the codec's encoder delay differently and place the same slice up to a few thousand frames away.
+
+### Sampler view
+
+`4` opens a view of the playing track's waveform, read from the file the first time the view opens for that track. Marks show as `|` under it, the playhead as `^`, and the region between the marks either side of the playhead in the accent colour. The detail line gives the region's times to the millisecond.
+
+| key     | command                 | does                                              |
+|---------|-------------------------|---------------------------------------------------|
+| `z` `Z` | `:zoom +`, `:zoom -`    | zoom in or out, centred on the playhead           |
+| `0`     | `:zoom all`             | show the whole track                              |
+| `w`     | `:display`              | switch display: envelope, dB, Braille             |
+| `enter` | `:write`                | write the slices planned                          |
+| `esc`   | `:discard`              | discard them                                      |
+
+- **Displays.** The envelope draws each column as two bars in eighth blocks: its RMS level in the bright colour, inside its peak level in a darker one. The waveform is folded, with negative samples counted by their size, so the bars use the full height. RMS shows loudness, such as a verse against a chorus, where a mastered track's peaks are near full scale everywhere; peak shows where each hit starts. The Braille display draws the waveform around a centre line, two dots across and four down a cell, which shows its shape. Both scale to the loudest sample in the track.
+- **dB.** The dB display draws the same bars on a scale from -48 dBFS to full scale, not scaled to the track. A linear scale puts RMS 12 dB below full scale a quarter of the way up; this puts it three quarters of the way, which spreads out quiet passages and the level changes between sections. Levels below -48 dB draw nothing.
+- **Zoom.** Each step halves the time a column shows, down to 64 frames, 1.5 ms at 44.1 kHz. Columns start on the 32-frame buckets the peaks are kept in, so a column never shows a neighbour's hit.
+- **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track. Outside the view, `:slice` writes at once.
+
+The waveform glyphs are the view's only characters outside ASCII. Marks are still placed at the playhead, and a region cannot be heard on its own yet; both are planned.
+
 ### Varispeed
 
 `[` and `]` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
@@ -195,18 +236,20 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 playr reads `$XDG_CONFIG_HOME/playr/settings.toml`, or `~/.config/playr/settings.toml`, when it starts. `--settings <path>` reads another file instead. The file is optional, and it is read on top of the defaults in [`src/ui/settings.toml`](src/ui/settings.toml), so it only needs what it changes. Copying the defaults file whole is also valid.
 
 ```toml
-volume = 60          # percent, 0 to 100
-mode = "shuffle"     # normal, shuffle, repeat or repeat-one
-speed = -3           # semitones, -12 to 12
+volume = 60                        # percent, 0 to 100
+mode = "shuffle"                   # normal, shuffle, repeat or repeat-one
+speed = -3                         # semitones, -12 to 12
+onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
+samples = "~/Music/playr/samples"  # where :slice writes
 
-[keys]               # every view
+[keys]                             # every view
 right = "seek +10"
 shift-right = "seek +60"
 ctrl-s = "save"
 q = "nop"
 "?" = "help"
 
-[keys.selection]     # one view: library, selection or playlists
+[keys.selection]                   # one view: library, selection, playlists or sampler
 x = "remove"
 ```
 
@@ -216,7 +259,7 @@ x = "remove"
 - Keys are named by their character (`j`, `J`), or as `space`, `enter`, `esc`, `tab`, `backtab`, `backspace`, `delete`, `insert`, `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, or `f1` to `f12`. Prefix `ctrl-`, `alt-` or `shift-` for a chord; a chord only matches a binding that names it. TOML needs quotes around a key that is not a letter, digit, `-` or `_`, such as `"?"`.
 - `ctrl-c` always quits, and the keys inside prompts and help lists cannot be changed.
 
-Any error stops playr before it starts, and every bad setting is listed with its line number. `?` lists the keys as bound. `:map` and `:unmap` change keys until playr exits.
+Any error stops playr before it starts, and every bad setting is listed with its line number. `?` lists the keys as bound in the view you are in. `:map` and `:unmap` change keys until playr exits.
 
 ## Formats
 

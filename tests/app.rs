@@ -1005,3 +1005,330 @@ fn map_and_unmap_change_keys_while_running() {
         Some("d has no binding in the selection view")
     );
 }
+
+#[test]
+fn export_commands_write_slices_of_the_playing_track_in_the_background() {
+    use playr::ui::config::Config;
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 20.0);
+    let samples = dir.path().join("samples");
+    let settings = format!("samples = {:?}", samples.to_str().unwrap());
+    let track = Track {
+        path: file.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let mut app = App::configured(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track],
+        Config::parse(&settings).unwrap(),
+    );
+    refresh_until(&mut app, |s| s.position > Duration::from_millis(100));
+
+    // Marks at 5 s and 10 s, then back inside them.
+    command(&mut app, "mark 0:05");
+    command(&mut app, "mark 0:10");
+    command(&mut app, "seek 0:07");
+    std::thread::sleep(Duration::from_millis(300));
+    command(&mut app, "slice region");
+    assert_eq!(app.screen().message, Some("exporting"));
+    let first = samples.join("long");
+    assert_eq!(
+        wait_for_export(&mut app),
+        format!("exported 1 slice to {}", first.display())
+    );
+    let wav = first.join("000-long_S00.wav");
+    assert_eq!(hound::WavReader::open(&wav).unwrap().duration(), 5 * 8000);
+
+    command(&mut app, "slice marks");
+    assert_eq!(
+        wait_for_export(&mut app),
+        format!("exported 3 slices to {}", samples.join("long-2").display())
+    );
+
+    command(&mut app, "stop");
+    refresh_until(&mut app, |s| s.status.state == playr::audio::State::Stopped);
+    command(&mut app, "slice 4");
+    assert_eq!(app.screen().message, Some("nothing is playing"));
+}
+
+#[test]
+fn paths_under_home_are_shown_from_tilde() {
+    use playr::ui::home_as_tilde;
+    use std::path::{Path, PathBuf};
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    assert_eq!(
+        home_as_tilde(&home.join("Music/playr/samples/amen")),
+        "~/Music/playr/samples/amen"
+    );
+    assert_eq!(home_as_tilde(Path::new("/opt/cuts")), "/opt/cuts");
+}
+
+/// The message an export reports, once it has.
+fn wait_for_export(app: &mut App) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        app.refresh();
+        let message = app.screen().message.unwrap_or_default().to_string();
+        if message.starts_with("export") && message != "exporting" {
+            return message;
+        }
+        assert!(std::time::Instant::now() < deadline, "no report");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn slice_onsets_uses_the_setting_unless_given_a_sensitivity() {
+    use playr::ui::config::Config;
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    // Noise at -40 dB with a hit 10 dB louder: found at sensitivity 1, not 0.
+    let file = dir.path().join("soft.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44_100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&file, spec).unwrap();
+    for i in 0..88_200 {
+        let amp = if (20_000..24_000).contains(&i) {
+            1036
+        } else {
+            328
+        };
+        w.write_sample(if i % 2 == 0 { amp } else { -amp } as i16)
+            .unwrap();
+    }
+    w.finalize().unwrap();
+
+    for (setting, typed, slices) in [
+        (0.0, "slice onsets", "1 slice"),
+        (0.0, "slice onsets 1", "2 slices"),
+        (1.0, "slice onsets", "2 slices"),
+        (1.0, "slice onsets 0", "1 slice"),
+    ] {
+        let settings = format!(
+            "onset_sensitivity = {setting:.1}\nsamples = {:?}",
+            dir.path().join("samples").to_str().unwrap()
+        );
+        let track = Track {
+            path: file.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let mut app = App::configured(
+            db::open_memory().unwrap(),
+            common::fake_player().0,
+            vec![track],
+            Config::parse(&settings).unwrap(),
+        );
+        refresh_until(&mut app, |s| s.position > Duration::from_millis(50));
+        command(&mut app, typed);
+        let message = wait_for_export(&mut app);
+        assert!(
+            message.starts_with(&format!("exported {slices} to")),
+            "{typed:?} with onset_sensitivity {setting}: {message}"
+        );
+    }
+}
+
+/// Refreshes until `done` holds for the sampler's state, or five seconds pass.
+fn wait_for_sampler(app: &mut App, done: impl Fn(&playr::ui::sampler::Sampler) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        app.refresh();
+        if done(app.screen().sampler) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "sampler never got there"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn wave_of(sampler: &playr::ui::sampler::Sampler) -> Option<(String, u64)> {
+    match &sampler.wave {
+        playr::ui::sampler::Wave::Ready { path, peaks } => Some((
+            path.file_name().unwrap().to_string_lossy().into_owned(),
+            peaks.frames,
+        )),
+        _ => None,
+    }
+}
+
+#[test]
+fn the_sampler_reads_the_waveform_once_opened_and_follows_the_track() {
+    use playr::ui::View;
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let tracks: Vec<Track> = [("a.wav", 3.0), ("b.wav", 4.0)]
+        .iter()
+        .map(|(name, secs)| {
+            let file = dir.path().join(name);
+            common::silence(&file, 8000, *secs);
+            Track {
+                path: file.to_string_lossy().into_owned(),
+                ..Default::default()
+            }
+        })
+        .collect();
+    let mut app = App::with_selection(db::open_memory().unwrap(), common::fake_player().0, tracks);
+    refresh_until(&mut app, |s| s.position > Duration::from_millis(50));
+    app.refresh();
+    assert!(
+        matches!(app.screen().sampler.wave, playr::ui::sampler::Wave::None),
+        "read before the view opened"
+    );
+
+    press(&mut app, '4');
+    assert_eq!(app.screen().view, View::Sampler);
+    wait_for_sampler(&mut app, |s| wave_of(s).is_some());
+    assert_eq!(
+        wave_of(app.screen().sampler),
+        Some(("a.wav".into(), 24_000))
+    );
+
+    press(&mut app, 'n');
+    wait_for_sampler(&mut app, |s| {
+        wave_of(s).is_some_and(|(name, _)| name == "b.wav")
+    });
+    assert_eq!(
+        wave_of(app.screen().sampler),
+        Some(("b.wav".into(), 32_000))
+    );
+}
+
+#[test]
+fn zoom_and_display_keys_work_only_in_the_sampler() {
+    use playr::ui::sampler::Display;
+    let (mut app, _dir) = app();
+    press(&mut app, 'z');
+    assert_eq!(app.screen().sampler.zoom, 0, "z zoomed outside the sampler");
+
+    press(&mut app, '4');
+    press(&mut app, 'z');
+    press(&mut app, 'z');
+    assert_eq!(app.screen().sampler.zoom, 2);
+    press(&mut app, 'Z');
+    assert_eq!(app.screen().sampler.zoom, 1);
+    press(&mut app, '0');
+    assert_eq!(app.screen().sampler.zoom, 0);
+    press(&mut app, 'Z');
+    assert_eq!(app.screen().sampler.zoom, 0);
+
+    press(&mut app, 'w');
+    assert_eq!(app.screen().sampler.display, Display::Decibels);
+    assert_eq!(app.screen().message, Some("display: db"));
+    press(&mut app, 'w');
+    assert_eq!(app.screen().sampler.display, Display::Braille);
+    assert_eq!(app.screen().message, Some("display: braille"));
+    command(&mut app, "display db");
+    assert_eq!(app.screen().sampler.display, Display::Decibels);
+    press(&mut app, 'w');
+    press(&mut app, 'w');
+    command(&mut app, "display envelope");
+    assert_eq!(app.screen().sampler.display, Display::Envelope);
+    command(&mut app, "zoom all");
+    press(&mut app, '1');
+    command(&mut app, "zoom +");
+    assert_eq!(
+        app.screen().message,
+        Some(":zoom works in the sampler view")
+    );
+}
+
+#[test]
+fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
+    use playr::ui::config::Config;
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let samples = dir.path().join("samples");
+    let tracks: Vec<Track> = ["long.wav", "next.wav"]
+        .iter()
+        .map(|name| {
+            let file = dir.path().join(name);
+            common::silence(&file, 8000, 20.0);
+            Track {
+                path: file.to_string_lossy().into_owned(),
+                ..Default::default()
+            }
+        })
+        .collect();
+    let settings = format!("samples = {:?}", samples.to_str().unwrap());
+    let mut app = App::configured(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        tracks,
+        Config::parse(&settings).unwrap(),
+    );
+    refresh_until(&mut app, |s| s.position > Duration::from_millis(50));
+    command(&mut app, "mark 0:05");
+    command(&mut app, "mark 0:10");
+    command(&mut app, "seek 0:07");
+    refresh_until(&mut app, |s| s.position > Duration::from_secs(6));
+    press(&mut app, '4');
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(
+        app.screen().message,
+        Some("no slices planned; :slice plans them")
+    );
+
+    command(&mut app, "slice 4");
+    assert_eq!(app.screen().message, Some("planning slices"));
+    wait_for_sampler(&mut app, |s| s.pending.is_some());
+    let spans = app.screen().sampler.pending.as_ref().unwrap().spans.clone();
+    assert_eq!(
+        spans,
+        [
+            (40_000, Some(50_000)),
+            (50_000, Some(60_000)),
+            (60_000, Some(70_000)),
+            (70_000, Some(80_000))
+        ]
+    );
+    assert_eq!(
+        app.screen().message,
+        Some("4 slices planned: enter writes, esc discards")
+    );
+    assert!(!samples.exists(), "planning wrote files");
+
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(app.screen().sampler.pending.is_none());
+    let first = samples.join("long");
+    assert_eq!(
+        wait_for_export(&mut app),
+        format!("exported 4 slices to {}", first.display())
+    );
+    let lengths: Vec<u32> = (0..4)
+        .map(|i| {
+            let file = first.join(format!("{i:03}-long_S{i:02}.wav"));
+            hound::WavReader::open(file).unwrap().duration()
+        })
+        .collect();
+    assert_eq!(lengths, [10_000; 4]);
+
+    command(&mut app, "slice marks");
+    wait_for_sampler(&mut app, |s| s.pending.is_some());
+    key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(app.screen().message, Some("slices discarded"));
+    assert!(
+        !samples.join("long-2").exists(),
+        "discarded slices were written"
+    );
+
+    // A plan belongs to its track.
+    command(&mut app, "slice 2");
+    wait_for_sampler(&mut app, |s| s.pending.is_some());
+    press(&mut app, 'n');
+    wait_for_sampler(&mut app, |s| s.pending.is_none());
+
+    // Outside the sampler, :slice writes at once, as before.
+    press(&mut app, '1');
+    command(&mut app, "slice region");
+    assert!(wait_for_export(&mut app).starts_with("exported 1 slice to"));
+}

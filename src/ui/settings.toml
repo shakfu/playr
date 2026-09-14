@@ -9,6 +9,10 @@ volume = 100
 mode = "normal"
 # Semitones, -12 to 12.
 speed = 0
+# How readily :slice onsets finds hits, 0 to 1; higher finds more.
+onset_sensitivity = 0.5
+# Where :slice writes, one directory per slicing. ~ is your home.
+samples = "~/Music/playr/samples"
 
 # Keys for every view. Each value is a : command; "nop" makes a key do nothing.
 [keys]
@@ -19,6 +23,7 @@ tab = "next-view"
 1 = "view library"
 2 = "view selection"
 3 = "view playlists"
+4 = "view sampler"
 j = "down"
 down = "down"
 shift-down = "down"
@@ -74,3 +79,11 @@ c = "clear"
 a = "add"
 d = "delete"
 r = "rename"
+
+[keys.sampler]
+z = "zoom +"
+Z = "zoom -"
+0 = "zoom all"
+w = "display"
+enter = "write"
+esc = "discard"

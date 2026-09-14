@@ -33,6 +33,7 @@ walkdir = "2.5.0"
 # Already built for ratatui; used to size columns in terminal cells.
 unicode-width = "0.2.2"
 toml = { version = "1.1", default-features = false, features = ["parse", "preserve_order"] }
+hound = "3.5"
 
 [dev-dependencies]
 tempfile = "3"

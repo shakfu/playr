@@ -10,39 +10,41 @@ A command works in every view, or only in the view named by its heading. Typed i
 - A leading `+` or `-` makes a number relative: `:seek +10`, `:volume -5`, `:speed +1`. Without a sign it is absolute.
 - `NAME` and `QUERY` run to the end of the line, so spaces need no quotes.
 - `[ ]` marks an optional argument. Without it, `:search`, `:save` and `:rename` open their prompt.
+- `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
 
 ## Every view
 
-| command                        | key                     | does                                          |
-|--------------------------------|-------------------------|-----------------------------------------------|
-| `:help`                        |                         | list these commands                           |
-| `:keys`                        | `?`                     | list the keys                                 |
-| `:quit`                        | `q`                     | quit                                          |
-| `:view VIEW`                   | `1` `2` `3`             | library, selection or playlists               |
-| `:next-view`                   | `tab`                   | switch to the next view                       |
-| `:down [N]`                    | `j`, down, page down    | move the cursor down N rows, default 1        |
-| `:up [N]`                      | `k`, up, page up        | move the cursor up N rows, default 1          |
-| `:first`                       | `g`, home               | move the cursor to the first row              |
-| `:last`                        | `G`, end                | move the cursor to the last row               |
-| `:play`                        | `enter`                 | play the list in view from the cursor         |
-| `:search [QUERY]`              | `/`                     | search the library; no query opens /          |
-| `:playlist NAME`               |                         | play a saved playlist                         |
-| `:save [NAME]`                 | `s`                     | save the selection as a playlist              |
-| `:pause`                       | `space`                 | play or pause                                 |
-| `:next`                        | `n`                     | next track                                    |
-| `:prev`                        | `p`                     | previous track                                |
-| `:stop`                        | `x`                     | stop                                          |
-| `:seek TIME \| +TIME \| -TIME` | left, right, with shift | seek to a time, or by one: 1:23, +10          |
-| `:volume PERCENT \| +N \| -N`  | `+` `-`                 | set the volume, or change it: 60, +10         |
-| `:speed N \| +N \| -N`         | `[` `]` `\`             | set varispeed in semitones, or change it      |
-| `:mode MODE \| + \| -`         | `m` `M`                 | normal, shuffle, repeat, repeat-one; or cycle |
-| `:mark [TIME]`                 | `b`                     | mark the playing position, or a time          |
-| `:unmark`                      | `B`                     | undo the last mark                            |
-| `:delmarks`                    | `C`                     | clear all marks in this track; asks y/n       |
-| `:next-mark`                   | `.`                     | seek to the next mark                         |
-| `:prev-mark`                   | `,`                     | seek to the previous mark                     |
-| `:map [VIEW] KEY COMMAND`      |                         | bind a key, in one view or in all             |
-| `:unmap [VIEW] KEY`            |                         | remove a key binding                          |
+| command                               | key                     | does                                        |
+|---------------------------------------|-------------------------|---------------------------------------------|
+| `:help`                               |                         | list these commands                         |
+| `:keys`                               | `?`                     | list the keys for this view                 |
+| `:quit`                               | `q`                     | quit                                        |
+| `:view VIEW`                          | `1` `2` `3` `4`         | library, selection, playlists or sampler    |
+| `:next-view`                          | `tab`                   | switch to the next view                     |
+| `:down [N]`                           | `j`, down, page down    | move the cursor down N rows, default 1      |
+| `:up [N]`                             | `k`, up, page up        | move the cursor up N rows, default 1        |
+| `:first`                              | `g`, home               | move the cursor to the first row            |
+| `:last`                               | `G`, end                | move the cursor to the last row             |
+| `:play`                               | `enter`                 | play the list in view from the cursor       |
+| `:search [QUERY]`                     | `/`                     | search the library; no query opens /        |
+| `:playlist NAME`                      |                         | play a saved playlist                       |
+| `:save [NAME]`                        | `s`                     | save the selection as a playlist            |
+| `:pause`                              | `space`                 | play or pause                               |
+| `:next`                               | `n`                     | next track                                  |
+| `:prev`                               | `p`                     | previous track                              |
+| `:stop`                               | `x`                     | stop                                        |
+| `:seek TIME \| +TIME \| -TIME`        | left, right, with shift | seek to a time, or by one: 1:23, +10        |
+| `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the volume, or change it: 60, +10       |
+| `:speed N \| +N \| -N`                | `[` `]` `\`             | set varispeed in semitones, or change it    |
+| `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |
+| `:mark [TIME]`                        | `b`                     | mark the playing position, or a time        |
+| `:unmark`                             | `B`                     | undo the last mark                          |
+| `:delmarks`                           | `C`                     | clear all marks in this track; asks y/n     |
+| `:next-mark`                          | `.`                     | seek to the next mark                       |
+| `:prev-mark`                          | `,`                     | seek to the previous mark                   |
+| `:slice region\|marks\|N\|onsets [S]` |                         | write samples from the region or the track  |
+| `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |
+| `:unmap [VIEW] KEY`                   |                         | remove a key binding                        |
 
 ## Library
 
@@ -66,6 +68,17 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:add`           | `a` | add the playlist's tracks to the selection |
 | `:delete`        | `d` | delete the playlist; asks y/n              |
 | `:rename [NAME]` | `r` | rename the playlist                        |
+
+## Sampler
+
+| command                            | key         | does                                |
+|------------------------------------|-------------|-------------------------------------|
+| `:zoom + \| - \| all`              | `z` `Z` `0` | zoom in, out, or to the whole track |
+| `:display [envelope\|db\|braille]` | `w`         | draw the waveform another way       |
+| `:write`                           | `enter`     | write the slices :slice planned     |
+| `:discard`                         | `esc`       | discard the slices :slice planned   |
+
+In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them.
 
 ## Typing commands
 

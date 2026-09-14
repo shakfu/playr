@@ -7,9 +7,11 @@ pub mod action;
 pub mod command;
 pub mod config;
 pub mod render;
+pub mod sampler;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,15 +22,27 @@ use rusqlite::Connection;
 use crate::audio::{Cmd, Player, State, Status};
 use crate::db::query::{self, Mark, Playlist};
 use crate::db::Track;
-use action::{Action, Keymap};
+use crate::samples::{self, Exported};
+use crate::wave::Peaks;
+use action::{Action, Keymap, Slicing};
 use command::{CommandLine, History};
 use config::Config;
+use sampler::{Pending, Sampler, Wave};
+
+/// What an export thread reports.
+type ExportResult = Result<Exported, String>;
+/// What a waveform thread reports: the track, and its peaks unless cancelled.
+type WaveResult = (PathBuf, Result<Option<Peaks>, String>);
+/// What a planning thread reports: the job planned, and its slices.
+type PlanResult = (samples::Job, Result<Vec<samples::Span>, String>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Library,
     Selection,
     Playlists,
+    /// The playing track's waveform, for marking and slicing it.
+    Sampler,
 }
 
 impl View {
@@ -36,7 +50,8 @@ impl View {
         match self {
             View::Library => View::Selection,
             View::Selection => View::Playlists,
-            View::Playlists => View::Library,
+            View::Playlists => View::Sampler,
+            View::Sampler => View::Library,
         }
     }
 
@@ -45,6 +60,7 @@ impl View {
             View::Library => "Library",
             View::Selection => "Selection",
             View::Playlists => "Playlists",
+            View::Sampler => "Sampler",
         }
     }
 }
@@ -121,6 +137,18 @@ pub struct App {
     /// `:` command lines entered this session.
     history: History,
     keys: Keymap,
+    /// Where exports are written.
+    samples: PathBuf,
+    /// For `:slice onsets` without a sensitivity.
+    onset_sensitivity: f32,
+    /// Where export threads send their results, and where `refresh` reads them.
+    export_done: Sender<ExportResult>,
+    export_results: Receiver<ExportResult>,
+    sampler: Sampler,
+    wave_done: Sender<WaveResult>,
+    wave_results: Receiver<WaveResult>,
+    plan_done: Sender<PlanResult>,
+    plan_results: Receiver<PlanResult>,
     /// Rows the key or command list is scrolled by.
     help_scroll: usize,
     message: Option<(String, Instant)>,
@@ -157,6 +185,8 @@ pub struct Screen<'a> {
     pub playlists: &'a [Playlist],
     pub input: &'a Input,
     pub keys: &'a Keymap,
+    /// The sampler view's state; drawing clamps its zoom.
+    pub sampler: &'a mut Sampler,
     /// Rows the key or command list is scrolled by; drawing clamps it.
     pub help_scroll: &'a mut usize,
     pub message: Option<&'a str>,
@@ -205,6 +235,9 @@ impl App {
         tracks: Vec<Track>,
         config: Config,
     ) -> Self {
+        let (export_done, export_results) = mpsc::channel();
+        let (wave_done, wave_results) = mpsc::channel();
+        let (plan_done, plan_results) = mpsc::channel();
         let mut app = App {
             conn,
             player,
@@ -221,6 +254,15 @@ impl App {
             input: Input::None,
             history: History::default(),
             keys: config.keys,
+            samples: config.samples,
+            onset_sensitivity: config.onset_sensitivity,
+            export_done,
+            export_results,
+            sampler: Sampler::default(),
+            wave_done,
+            wave_results,
+            plan_done,
+            plan_results,
             help_scroll: 0,
             message: None,
             quit: false,
@@ -302,6 +344,7 @@ impl App {
             playlists: &self.playlists,
             input: &self.input,
             keys: &self.keys,
+            sampler: &mut self.sampler,
             help_scroll: &mut self.help_scroll,
             message: self.message.as_ref().map(|(m, _)| m.as_str()),
             library_state: &mut self.library_state,
@@ -347,6 +390,19 @@ impl App {
         let current = self.snapshot.status.current().cloned();
         self.follow_marks(current.as_ref());
         self.snapshot.marks = self.marks.iter().map(Mark::time).collect();
+        self.follow_wave(current.as_ref());
+        while let Ok(result) = self.export_results.try_recv() {
+            match result {
+                Ok(out) => {
+                    let slices = match out.slices.len() {
+                        1 => "1 slice".to_string(),
+                        n => format!("{n} slices"),
+                    };
+                    self.notify(format!("exported {slices} to {}", home_as_tilde(&out.dir)));
+                }
+                Err(e) => self.notify(format!("export failed: {e}")),
+            }
+        }
         let seq = self.snapshot.status.error_seq;
         if seq > self.seen_error {
             let missed = seq - self.seen_error - 1;
@@ -515,6 +571,46 @@ impl App {
             Action::ClearMarks => self.ask_to_clear_marks(),
             Action::NextMark => self.jump_to_mark(true),
             Action::PrevMark => self.jump_to_mark(false),
+
+            Action::Slice(slicing) => {
+                let cut = match slicing {
+                    Slicing::Region => samples::Cut::Region,
+                    Slicing::Marks => samples::Cut::Marks,
+                    Slicing::Equal(n) => samples::Cut::Equal(n),
+                    Slicing::Onsets(s) => samples::Cut::Onsets(s.unwrap_or(self.onset_sensitivity)),
+                };
+                // The sampler view shows slices before they are written.
+                if self.view == View::Sampler {
+                    self.plan(cut);
+                } else {
+                    self.export(cut);
+                }
+            }
+            Action::Zoom(zoom) => {
+                self.sampler.zoom = match zoom {
+                    action::Zoom::In => self.sampler.zoom + 1,
+                    action::Zoom::Out => self.sampler.zoom.saturating_sub(1),
+                    action::Zoom::All => 0,
+                }
+            }
+            Action::Display(display) => {
+                self.sampler.display = display.unwrap_or(self.sampler.display.next());
+                self.notify(format!("display: {}", self.sampler.display.name()));
+            }
+            Action::WriteSlices => match self.sampler.pending.take() {
+                Some(Pending { job, spans }) => {
+                    let done = self.export_done.clone();
+                    std::thread::spawn(move || {
+                        let _ = done.send(samples::write(&job, &spans));
+                    });
+                    self.notify("exporting");
+                }
+                None => self.notify("no slices planned; :slice plans them"),
+            },
+            Action::DiscardSlices => match self.sampler.pending.take() {
+                Some(_) => self.notify("slices discarded"),
+                None => self.notify("no slices planned; :slice plans them"),
+            },
 
             Action::Map { view, key, action } => {
                 let shown = command::line(
@@ -791,6 +887,7 @@ impl App {
             View::Library => self.visible().len(),
             View::Selection => self.selection.len(),
             View::Playlists => self.playlists.len(),
+            View::Sampler => 0,
         }
     }
 
@@ -798,11 +895,15 @@ impl App {
         match self.view {
             View::Library => &mut self.library_state,
             View::Selection => &mut self.selection_state,
-            View::Playlists => &mut self.playlist_state,
+            // Never moved: the sampler has no rows, and `select` leaves it.
+            View::Playlists | View::Sampler => &mut self.playlist_state,
         }
     }
 
     fn select(&mut self, i: usize) {
+        if self.view == View::Sampler {
+            return;
+        }
         let len = self.len();
         if len == 0 {
             self.state_mut().select(None);
@@ -839,6 +940,7 @@ impl App {
                     self.play(self.selection.clone(), i);
                 }
             }
+            View::Sampler => {}
             View::Playlists => {
                 let Some(i) = self.playlist_state.selected() else {
                     return;
@@ -879,7 +981,7 @@ impl App {
                 .and_then(|i| self.playlists.get(i))
                 .map(|pl| query::playlist_tracks(&self.conn, pl.id).unwrap_or_default())
                 .unwrap_or_default(),
-            View::Library | View::Selection => return,
+            View::Library | View::Selection | View::Sampler => return,
         };
         if added.is_empty() {
             return;
@@ -1034,6 +1136,115 @@ impl App {
         self.notify(format!("marked {}{kept}", fmt_time(at)));
     }
 
+    /// Cuts the playing track on another thread. Reading a long region takes
+    /// seconds, so [`App::refresh`] reports the result when it arrives.
+    fn export(&mut self, cut: samples::Cut) {
+        let Some(job) = self.slice_job(cut) else {
+            return;
+        };
+        let done = self.export_done.clone();
+        std::thread::spawn(move || {
+            let _ = done.send(samples::export(&job));
+        });
+        self.notify("exporting");
+    }
+
+    /// Plans slices of the playing track on another thread, for the sampler
+    /// view to show until they are written or discarded.
+    fn plan(&mut self, cut: samples::Cut) {
+        let Some(job) = self.slice_job(cut) else {
+            return;
+        };
+        let done = self.plan_done.clone();
+        std::thread::spawn(move || {
+            let result = samples::plan(&job);
+            let _ = done.send((job, result));
+        });
+        self.sampler.planning = true;
+        self.notify("planning slices");
+    }
+
+    /// The job for cutting the playing track, at the current marks and position.
+    fn slice_job(&mut self, cut: samples::Cut) -> Option<samples::Job> {
+        let (path, rate) = self.playing_track()?;
+        self.follow_marks(Some(&path));
+        Some(samples::Job {
+            path,
+            rate,
+            marks: self.marks.iter().map(|m| m.frame).collect(),
+            at: Mark::at_time(self.player.position(), rate).frame,
+            cut,
+            samples: self.samples.clone(),
+        })
+    }
+
+    /// Keeps the sampler's waveform and planned slices on the playing track,
+    /// and takes in what its threads have finished. The waveform is only read
+    /// while the view is open, since reading decodes the whole track.
+    fn follow_wave(&mut self, current: Option<&PathBuf>) {
+        while let Ok((path, result)) = self.wave_results.try_recv() {
+            let Wave::Reading { path: reading, .. } = &self.sampler.wave else {
+                continue;
+            };
+            if *reading != path {
+                continue;
+            }
+            self.sampler.wave = match result {
+                Ok(Some(peaks)) => Wave::Ready {
+                    path,
+                    peaks: Arc::new(peaks),
+                },
+                Ok(None) => Wave::None,
+                Err(error) => Wave::Failed { path, error },
+            };
+        }
+        while let Ok((job, result)) = self.plan_results.try_recv() {
+            self.sampler.planning = false;
+            if Some(&job.path) != current {
+                continue;
+            }
+            match result {
+                Ok(spans) => {
+                    let n = spans.len();
+                    self.sampler.pending = Some(Pending { job, spans });
+                    let slices = if n == 1 {
+                        "1 slice".into()
+                    } else {
+                        format!("{n} slices")
+                    };
+                    self.notify(format!("{slices} planned: enter writes, esc discards"));
+                }
+                Err(e) => self.notify(format!("slicing failed: {e}")),
+            }
+        }
+        if self
+            .sampler
+            .pending
+            .as_ref()
+            .is_some_and(|p| Some(&p.job.path) != current)
+        {
+            self.sampler.pending = None;
+        }
+
+        if self.view != View::Sampler || self.sampler.wave.path() == current {
+            return;
+        }
+        if let Wave::Reading { cancel, .. } = &self.sampler.wave {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let Some(path) = current.cloned() else {
+            self.sampler.wave = Wave::None;
+            return;
+        };
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (done, stop, reading) = (self.wave_done.clone(), cancel.clone(), path.clone());
+        std::thread::spawn(move || {
+            let result = Peaks::read(&reading, &stop);
+            let _ = done.send((reading, result));
+        });
+        self.sampler.wave = Wave::Reading { path, cancel };
+    }
+
     /// Removes the most recently added mark in the playing track: marks are a
     /// chain, and `B` takes off the last link.
     fn undo_mark(&mut self) {
@@ -1113,6 +1324,15 @@ const MARK_NEAR: Duration = Duration::from_millis(500);
 /// How far past a mark playback must be before `,` returns to it rather than
 /// the one before.
 const MARK_BACK: Duration = Duration::from_secs(1);
+
+/// `path`, with the home directory shown as `~` to keep messages short.
+pub fn home_as_tilde(path: &std::path::Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home.and_then(|h| path.strip_prefix(h).ok().map(|rest| rest.to_path_buf())) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
 
 /// The character `key` types, or `None` for any other key and for a Ctrl or
 /// Alt chord, which is a command rather than text.

@@ -28,6 +28,10 @@ pub struct Config {
     pub mode: Mode,
     /// Semitones.
     pub speed: i32,
+    /// Where exported slices are written.
+    pub samples: PathBuf,
+    /// The onset sensitivity `:slice onsets` uses when given none, 0 to 1.
+    pub onset_sensitivity: f32,
 }
 
 impl Default for Config {
@@ -37,6 +41,8 @@ impl Default for Config {
             volume: 1.0,
             mode: Mode::Normal,
             speed: 0,
+            samples: PathBuf::new(),
+            onset_sensitivity: 0.5,
         };
         if let Err(errors) = config.apply(DEFAULT_SETTINGS) {
             panic!("bad default settings: {errors:?}");
@@ -124,6 +130,17 @@ impl Config {
                     }
                     _ => fail(span, "speed is a whole number from -12 to 12".into()),
                 },
+                ("onset_sensitivity", v) => match number(v) {
+                    Some(n) if (0.0..=1.0).contains(&n) => self.onset_sensitivity = n as f32,
+                    _ => fail(span, "onset_sensitivity is a number from 0 to 1".into()),
+                },
+                ("samples", DeValue::String(s)) => match expand_home(s) {
+                    Some(path) => self.samples = path,
+                    None => fail(
+                        span,
+                        "samples must be an absolute path or start with ~/".into(),
+                    ),
+                },
                 ("keys", DeValue::Table(keys)) => {
                     for (key, target) in keys {
                         match target.get_ref() {
@@ -138,7 +155,7 @@ impl Config {
                                 None => fail(
                                     key.span(),
                                     format!(
-                                        "[keys.{}] is not a view; views: library, selection, playlists",
+                                        "[keys.{}] is not a view; views: library, selection, playlists, sampler",
                                         key.get_ref()
                                     ),
                                 ),
@@ -151,7 +168,7 @@ impl Config {
                         }
                     }
                 }
-                ("mode" | "keys", v) => {
+                ("mode" | "samples" | "keys", v) => {
                     fail(span, format!("{} cannot be {}", name.get_ref(), kind(v)))
                 }
                 (other, _) => fail(name.span(), format!("unknown setting: {other}")),
@@ -188,6 +205,15 @@ impl Config {
         self.keys.bind(view, key, action);
         Ok(())
     }
+}
+
+/// `path` with a leading `~/` replaced by the home directory, if it is then absolute.
+fn expand_home(path: &str) -> Option<PathBuf> {
+    let path = match path.strip_prefix("~/") {
+        Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
+        None => PathBuf::from(path),
+    };
+    path.is_absolute().then_some(path)
 }
 
 /// `$XDG_CONFIG_HOME/playr/settings.toml`, else `~/.config/playr/settings.toml`.

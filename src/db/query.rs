@@ -50,6 +50,7 @@ const FIELDS: &[(&str, &str)] = &[
     ("album", "album"),
     ("albumartist", "album_artist"),
     ("album_artist", "album_artist"),
+    ("file", "file"),
 ];
 
 /// Splits search input into terms: whitespace separates them except inside

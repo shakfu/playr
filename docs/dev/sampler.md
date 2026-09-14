@@ -1,6 +1,6 @@
 # Exposing playback to sampling tools
 
-Design note, not implemented. Written 2026-09-13 against playr 0.2.0.
+Design note. Written 2026-09-13 against playr 0.2.0. Since 0.4.0, marked regions can be exported as files (README, Samples); the mark event file and OSC below are not implemented.
 
 The goal: hearing a passage in playr, a user can hand it to a tool that samples well. playr itself does not become a sampler. It exposes enough for another tool to take the sample.
 

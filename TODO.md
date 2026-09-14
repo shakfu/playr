@@ -8,13 +8,28 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 
 - [ ] **A-B loop between marks.** Loop the stretch between the marks either side of the playing position, for practice with varispeed. Marks are already source frames; the loop is an engine change.
 
-- [ ] **Marks for sampling tools.** Hand a marked passage to another tool. `docs/dev/sampler.md` sets out the data model and weighs a JSON Lines file against OSC. Marks already record path and source frame.
+- [ ] **Live marks for sampling tools.** Slices can be exported as files. Handing a marked passage to a running tool, such as SuperCollider, is not done: `docs/dev/sampler.md` weighs a JSON Lines file against OSC.
+
+- [ ] **Sampler: mark editing.** A cursor in the sampler view, independent of the playhead; select a mark and nudge it by a column, a millisecond or a frame; snap to a zero crossing or the nearest onset; delete one mark. `MARK_NEAR` refuses marks within 500 ms of each other, which is too coarse at the sampler's zoom.
+
+- [ ] **Sampler: audition and loop.** Play the region, or the slice under the cursor, once or looped. Needs sample-accurate looping in the engine, without reopening the device.
+
+- [ ] **Sampler: loop points.** Write loop points to `samples.json` as `loop_start`, `loop_end` and `loop_enabled`, which rtrack reads.
+
+- [ ] **Waveform cache.** The sampler decodes the whole track each time a new track is shown there. Peaks are about 8 MB for a 4-minute track and could be kept per file.
+
+- [ ] **Slice edges.** Slices start and end on whatever sample falls there. rtrack snaps loop points to zero crossings; the same for slice edges, or a short fade, would remove clicks at the cost of a slice that is no longer an exact copy.
 
 - [ ] **Gapless across a sample-rate change.** A rate change rebuilds the output stream and leaves a gap. Fixing it means resampling both sides to a common rate, which trades a gap for a conversion. Worth a flag, not a default.
 
 - [ ] **ReplayGain.** Read `REPLAYGAIN_*` and `R128_*` tags and apply track or album gain. Tag reading is already there; this is a gain stage and a preference.
 
 - [ ] **Crossfade.** Needs two decoders and a mixer stage.
+
+## Sampler
+
+- [ ] The arrow movement which works well in the play mode, is not granular enough in sampler mode. It should change to snapping-to-zero in sampler mode.
+
 
 ## Output
 
@@ -53,6 +68,18 @@ What is missing, roughly in the order it is worth doing. Items marked **upstream
 - [ ] **Relative rows from 0.1.0.** A 0.1.0 scan with a relative path stored relative rows. Rescanning adds absolute duplicates, and pruning never matches the old rows. A one-off cleanup would delete them, and their playlist entries with them.
 
 ## Interface
+
+- [ ] **Command-line parsing.** Arguments are parsed by hand in `main.rs`. `--db` and `--settings` are taken from anywhere in the arguments, but `--help` and unknown flags are only noticed as the first argument. Found with the current build:
+
+  | command | result |
+  |-|-|
+  | `playr scan --help` | scans a directory named `--help`, and creates the library if there is none |
+  | `playr search --help` | searches for the text `--help` |
+  | `playr search rock --db` | fails with `--db needs a path`: a search cannot contain `--db` or `--settings` |
+  | `playr playlists --bogus` | ignores the unknown flag |
+  | `playr formats extra` | ignores the extra argument |
+
+  Replace it with [clap](https://docs.rs/clap)'s derive API: one struct per subcommand gives per-subcommand `--help`, errors for unknown flags and extra arguments, and `--` to pass a search that looks like a flag. `clap_complete` and `clap_mangen` would then generate shell completions and the man page that Packaging lists as missing. A smaller parser such as `lexopt` fixes the parsing without generating help, completions or a man page. The CLI belongs to the terminal frontend in `docs/dev/architecture.md`, so this can happen before or after that split.
 
 - [ ] **Colours.** Not configurable. `render.rs` uses 16 colours directly; they need named roles, such as accent and dim, before a `[colors]` table in `settings.toml` could set them.
 

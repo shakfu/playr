@@ -104,7 +104,28 @@ fn init(conn: &Connection) -> Result<()> {
             )),
         ));
     }
+    // An index from before file names were searchable reads its text from
+    // `tracks`, and its triggers write only four columns. Both are replaced,
+    // and the index refilled once the schema has made the new ones.
+    let old_index: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'tracks_fts')
+           AND NOT EXISTS (SELECT 1 FROM pragma_table_info('tracks_fts') WHERE name = 'file')",
+        [],
+        |r| r.get(0),
+    )?;
+    if old_index {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS tracks_ai;
+             DROP TRIGGER IF EXISTS tracks_ad;
+             DROP TRIGGER IF EXISTS tracks_au;
+             DROP TABLE tracks_fts;",
+        )?;
+    }
     conn.execute_batch(include_str!("schema.sql"))?;
+    if old_index {
+        // Updating every row in place fires the new trigger, which indexes it.
+        conn.execute_batch("BEGIN; UPDATE tracks SET path = path; COMMIT;")?;
+    }
     if version < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }

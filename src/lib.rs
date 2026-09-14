@@ -5,5 +5,7 @@
 
 pub mod audio;
 pub mod db;
+pub mod samples;
 pub mod scan;
 pub mod ui;
+pub mod wave;

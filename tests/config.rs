@@ -88,7 +88,7 @@ fn an_empty_file_gives_the_defaults() {
         (config.volume, config.mode, config.speed),
         (1.0, Mode::Normal, 0)
     );
-    assert_eq!(Keymap::default().bindings().len(), 55);
+    assert_eq!(Keymap::default().bindings().len(), 62);
 }
 
 #[test]
@@ -179,7 +179,7 @@ x = "delete"
             "line 8: not a key: zz",
             "line 9: x must be a command string, not an integer",
             "line 10: a key cannot run :map or :unmap",
-            "line 12: [keys.queue] is not a view; views: library, selection, playlists",
+            "line 12: [keys.queue] is not a view; views: library, selection, playlists, sampler",
             "line 16: :delete works in the playlists view; put x under [keys.playlists]",
         ]
     );
@@ -187,6 +187,52 @@ x = "delete"
     assert_eq!(syntax.len(), 1);
     assert!(syntax[0].starts_with("line 2: "), "{syntax:?}");
     assert!(Config::parse("keys = 1").unwrap_err()[0].contains("keys cannot be an integer"));
+}
+
+#[test]
+fn the_samples_directory_defaults_to_music_and_expands_home() {
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    assert_eq!(Config::default().samples, home.join("Music/playr/samples"));
+    let config = Config::parse("samples = \"~/loops\"").unwrap();
+    assert_eq!(config.samples, home.join("loops"));
+    let config = Config::parse("samples = \"/tmp/cuts\"").unwrap();
+    assert_eq!(config.samples, std::path::PathBuf::from("/tmp/cuts"));
+    assert_eq!(
+        Config::parse("samples = \"cuts\"").unwrap_err(),
+        ["line 1: samples must be an absolute path or start with ~/"]
+    );
+    assert_eq!(
+        Config::parse("samples = 3").unwrap_err(),
+        ["line 1: samples cannot be an integer"]
+    );
+}
+
+#[test]
+fn onset_sensitivity_defaults_to_the_middle_and_stays_in_range() {
+    assert_eq!(Config::default().onset_sensitivity, 0.5);
+    assert_eq!(
+        Config::parse("onset_sensitivity = 0.8")
+            .unwrap()
+            .onset_sensitivity,
+        0.8
+    );
+    assert_eq!(
+        Config::parse("onset_sensitivity = 1")
+            .unwrap()
+            .onset_sensitivity,
+        1.0
+    );
+    for bad in [
+        "onset_sensitivity = 1.5",
+        "onset_sensitivity = -0.1",
+        "onset_sensitivity = \"high\"",
+    ] {
+        assert_eq!(
+            Config::parse(bad).unwrap_err(),
+            ["line 1: onset_sensitivity is a number from 0 to 1"],
+            "{bad}"
+        );
+    }
 }
 
 #[test]

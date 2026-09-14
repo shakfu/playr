@@ -5,6 +5,7 @@ use playr::db::query::Playlist;
 use playr::db::Track;
 use playr::ui::action::Keymap;
 use playr::ui::render::{self, scroll_offset};
+use playr::ui::sampler::Sampler;
 use playr::ui::{Input, Screen, Snapshot, View};
 use ratatui::backend::TestBackend;
 use ratatui::widgets::ListState;
@@ -41,6 +42,7 @@ struct Case<'a> {
     help_scroll: usize,
     /// The key map; the defaults when unset.
     keys: Option<&'a Keymap>,
+    sampler: Sampler,
 }
 
 impl<'a> Case<'a> {
@@ -60,6 +62,7 @@ impl<'a> Case<'a> {
             selected: None,
             help_scroll: 0,
             keys: None,
+            sampler: Sampler::default(),
         }
     }
 
@@ -100,6 +103,11 @@ impl<'a> Case<'a> {
 
     fn selected(mut self, i: usize) -> Self {
         self.selected = Some(i);
+        self
+    }
+
+    fn sampler(mut self, sampler: Sampler) -> Self {
+        self.sampler = sampler;
         self
     }
 
@@ -170,6 +178,7 @@ impl<'a> Case<'a> {
                     playlists: self.playlists,
                     input: self.input,
                     keys,
+                    sampler: &mut self.sampler,
                     help_scroll: &mut self.help_scroll,
                     message: self.message,
                     library_state: &mut ls,
@@ -232,6 +241,7 @@ fn invisible_cells(
                 playlists,
                 input: &Input::None,
                 keys: &Keymap::default(),
+                sampler: &mut Sampler::default(),
                 help_scroll: &mut 0,
                 message: None,
                 library_state: &mut ls,
@@ -590,41 +600,86 @@ fn a_message_shares_the_bottom_line_with_the_indicators() {
 }
 
 #[test]
-fn help_lists_every_key_with_its_command_by_view() {
+fn help_lists_the_keys_that_work_in_the_view() {
+    use playr::ui::action::Key;
     let input = Input::Help;
+    let keys = Keymap::default();
+    for view in [
+        View::Library,
+        View::Selection,
+        View::Playlists,
+        View::Sampler,
+    ] {
+        let joined = Case::new(view, &stopped())
+            .input(&input)
+            .size(100, 80)
+            .text();
+        let name = format!("{view:?}").to_lowercase();
+        assert!(
+            joined.contains(&format!("Keys in the {name} view")),
+            "{joined}"
+        );
+        // Rows by their text inside the popup border.
+        let rows: Vec<&str> = joined
+            .lines()
+            .filter_map(|l| l.split('\u{2502}').nth(2))
+            .map(str::trim)
+            .collect();
+        let row_for = |command: &str| {
+            rows.iter()
+                .find(|r| r.ends_with(&format!(" :{command}")))
+                .copied()
+        };
+        for b in keys.bindings() {
+            let Some(action) = keys.lookup(b.key, view) else {
+                continue;
+            };
+            let command = playr::ui::command::line(action, Some(view));
+            let row = row_for(&command)
+                .unwrap_or_else(|| panic!(":{command} missing from {name} help:\n{joined}"));
+            if b.view == Some(view) || keys.lookup(b.key, view) == b.action.as_ref() {
+                assert!(
+                    row.split_whitespace().any(|w| w == b.key.to_string()),
+                    "{} not on the row for :{command} in {name}: {row:?}",
+                    b.key
+                );
+            }
+        }
+        // Another view's keys are not listed, nor a key this view rebinds.
+        match view {
+            View::Library => assert!(row_for("remove").is_none() && row_for("write").is_none()),
+            View::Sampler => {
+                assert!(
+                    row_for("play").is_none(),
+                    "enter shown as :play in the sampler"
+                );
+                assert!(row_for("write").unwrap().starts_with("enter"));
+                assert!(joined.contains("in the sampler view"));
+            }
+            _ => {}
+        }
+    }
+    // Keys that run the same command share its row.
     let joined = Case::new(View::Library, &stopped())
         .input(&input)
         .size(100, 80)
         .text();
-    let keys = Keymap::default();
-    for b in keys.bindings() {
-        let command = playr::ui::command::line(b.action.as_ref().unwrap(), b.view);
-        let row = joined
-            .lines()
-            // The command ends its row, so `:down` does not match `:down 10`.
-            .find(|l| {
-                l.split('\u{2502}')
-                    .any(|cell| cell.trim_end().ends_with(&format!(" :{command}")))
-            })
-            .unwrap_or_else(|| panic!(":{command} missing from key help:\n{joined}"));
-        assert!(
-            row.split_whitespace().any(|w| w == b.key.to_string()),
-            "{} not on the row for :{command}: {row:?}",
-            b.key
-        );
-    }
-    // Keys that run the same command share its row.
     assert!(joined.contains(" j down shift-down "), "{joined}");
 
-    // The key list is narrower than its title; the popup widens to show it.
-    let short = Case::new(View::Library, &stopped())
+    // A key bound to nothing is not listed.
+    let mut silenced = Keymap::default();
+    silenced.bind(None, Key::parse("q").unwrap(), None);
+    let joined = Case::new(View::Library, &stopped())
         .input(&input)
-        .size(80, 24)
+        .keys(&silenced)
+        .size(100, 80)
         .text();
-    assert!(
-        short.contains("Keys: j k scroll, any other key closes"),
-        "{short}"
-    );
+    assert!(!joined.contains(":quit"), "{joined}");
+    let listed_q = joined
+        .lines()
+        .filter_map(|l| l.split('\u{2502}').nth(2))
+        .any(|row| row.split_whitespace().any(|w| w == "q"));
+    assert!(!listed_q, "q is listed though bound to nothing:\n{joined}");
 }
 
 #[test]
@@ -645,6 +700,11 @@ fn the_help_hint_names_the_key_bound_to_the_key_list() {
     keys.bind(None, Key::parse("f1").unwrap(), Some(Action::Help));
     assert!(hint(&keys).ends_with("f1 help"), "{}", hint(&keys));
     keys.unbind(None, Key::parse("f1").unwrap());
+    assert!(!hint(&keys).contains("help"), "{}", hint(&keys));
+
+    // A view that rebinds the key has no hint there.
+    let mut keys = Keymap::default();
+    keys.bind(Some(View::Library), Key::parse("?").unwrap(), None);
     assert!(!hint(&keys).contains("help"), "{}", hint(&keys));
 }
 
@@ -858,7 +918,12 @@ fn panes_do_not_repeat_the_tabs() {
         name: "late".into(),
         len: 1,
     }];
-    for view in [View::Library, View::Selection, View::Playlists] {
+    for view in [
+        View::Library,
+        View::Selection,
+        View::Playlists,
+        View::Sampler,
+    ] {
         let lines = Case::new(view, &stopped())
             .all(&tracks)
             .selection(&tracks)
@@ -1055,4 +1120,303 @@ fn marks_show_under_the_progress_bar_where_they_fall() {
         !lines.iter().any(|l| l.contains('^')),
         "marks drawn without a duration"
     );
+}
+
+// --- sampler ---
+
+/// Paused at `position` in `path`, with marks at `marks`.
+fn sampling(path: &str, position: Duration, marks: &[Duration]) -> Snapshot {
+    let mut snapshot = stopped();
+    snapshot.status.state = State::Paused;
+    snapshot.status.queue = std::sync::Arc::from(vec![std::path::PathBuf::from(path)]);
+    snapshot.position = position;
+    snapshot.marks = marks.to_vec();
+    snapshot
+}
+
+/// Four seconds at 1,600 frames a second, so 100 ms columns fall on whole
+/// peak buckets: quiet to 2 s, full scale to 3 s, then silence.
+fn sampler_with(path: &str, display: playr::ui::sampler::Display) -> Sampler {
+    let data: Vec<f32> = (0..6400)
+        .map(|i| match i {
+            0..3200 => 0.1,
+            3200..4800 => -1.0,
+            _ => 0.0,
+        })
+        .collect();
+    Sampler {
+        wave: playr::ui::sampler::Wave::Ready {
+            path: path.into(),
+            peaks: std::sync::Arc::new(playr::wave::Peaks::from_interleaved(&data, 1, 1600)),
+        },
+        display,
+        ..Sampler::default()
+    }
+}
+
+/// Characters 1..=40 of `line`: the 40 columns inside the pane's borders.
+fn columns(line: &str) -> Vec<char> {
+    line.chars().skip(1).take(40).collect()
+}
+
+#[test]
+fn the_sampler_draws_the_envelope_with_marks_region_and_playhead() {
+    use playr::ui::sampler::Display;
+    let ms = Duration::from_millis;
+    let snapshot = sampling("/m/t.wav", ms(1500), &[ms(1000), ms(2500)]);
+    // 42 columns: 40 inside the borders, 100 frames or 100 ms each.
+    let case = || {
+        Case::new(View::Sampler, &snapshot)
+            .sampler(sampler_with("/m/t.wav", Display::Envelope))
+            .size(42, 20)
+    };
+    let lines = case().render();
+    // The title is cut at this width; the full one is checked wider.
+    assert!(
+        lines[1].contains("envelope  0:00.000-0:04.000  1 col = 10"),
+        "{:?}",
+        lines[1]
+    );
+    for (display, name) in [
+        (Display::Envelope, "envelope"),
+        (Display::Braille, "braille"),
+    ] {
+        let wide = Case::new(View::Sampler, &snapshot)
+            .sampler(sampler_with("/m/t.wav", display))
+            .size(100, 20)
+            .render();
+        assert!(
+            wide.iter()
+                .any(|l| l.contains("region 0:01.000-0:02.500 (1.500 s)  marks 2")),
+            "{wide:?}"
+        );
+        assert!(
+            wide[1].contains(&format!("{name}  0:00.000-0:04.000  1 col = 60 ms  t.wav")),
+            "{:?}",
+            wide[1]
+        );
+    }
+    // Rows 2 to 12 are the waveform, 13 the axis, 14 the detail line.
+    let full = '\u{2588}';
+    let top = columns(&lines[2]);
+    assert!(top[20..30].iter().all(|&c| c == full), "{top:?}");
+    assert!(
+        top[..20].iter().chain(&top[30..]).all(|&c| c == ' '),
+        "{top:?}"
+    );
+    let bottom = columns(&lines[12]);
+    assert!(bottom[..30].iter().all(|&c| c == full), "{bottom:?}");
+    assert!(bottom[30..].iter().all(|&c| c == ' '), "{bottom:?}");
+
+    let axis = columns(&lines[13]);
+    let marked: Vec<(usize, char)> = axis
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c != ' ')
+        .map(|(i, c)| (i, *c))
+        .collect();
+    assert_eq!(marked, [(10, '|'), (15, '^'), (25, '|')]);
+    assert!(
+        lines[14]
+            .trim_start_matches('\u{2502}')
+            .starts_with("region 0:01.000-0:02.500 (1.500 s)"),
+        "{:?}",
+        lines[14]
+    );
+
+    // The playhead column is yellow; inside the region the waveform is the
+    // accent colour, and outside it dim.
+    use ratatui::style::Color;
+    let buf = case().buffer();
+    let fg = |column: u16| buf[(1 + column, 12)].fg;
+    assert_eq!(fg(15), Color::Yellow);
+    assert_eq!(fg(12), Color::Cyan);
+    assert_eq!(fg(28), Color::Gray);
+}
+
+#[test]
+fn planned_slices_are_drawn_before_they_are_written() {
+    use playr::ui::sampler::{Display, Pending};
+    let ms = Duration::from_millis;
+    let snapshot = sampling("/m/t.wav", ms(1500), &[ms(1000), ms(2500)]);
+    let mut sampler = sampler_with("/m/t.wav", Display::Envelope);
+    sampler.pending = Some(Pending {
+        job: playr::samples::Job {
+            path: "/m/t.wav".into(),
+            rate: 1600,
+            marks: vec![1600, 4000],
+            at: 2400,
+            cut: playr::samples::Cut::Equal(2),
+            samples: "/tmp".into(),
+        },
+        spans: vec![(1600, Some(2880)), (2880, Some(4000))],
+    });
+    let lines = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler)
+        .size(42, 20)
+        .render();
+    let axis = columns(&lines[13]);
+    // The edge at 1.8 s shows; edges on a mark show the mark.
+    assert_eq!(axis[18], '+');
+    assert_eq!((axis[10], axis[25]), ('|', '|'));
+    assert!(
+        lines[14]
+            .trim_start_matches('\u{2502}')
+            .starts_with("2 slices planned: enter writes, esc d"),
+        "{:?}",
+        lines[14]
+    );
+}
+
+#[test]
+fn the_braille_display_draws_the_same_waveform_around_a_centre_line() {
+    use playr::ui::sampler::Display;
+    let snapshot = sampling("/m/t.wav", Duration::ZERO, &[]);
+    let lines = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler_with("/m/t.wav", Display::Braille))
+        .size(42, 20)
+        .render();
+    for line in &lines[2..13] {
+        assert!(
+            columns(line)
+                .iter()
+                .all(|c| ('\u{2800}'..='\u{28ff}').contains(c)),
+            "not Braille: {line:?}"
+        );
+    }
+    // Full scale reaches the bottom dots of the lowest row; 0.1 does not.
+    let bottom = columns(&lines[12]);
+    let bits = |c: char| c as u32 - 0x2800;
+    assert_eq!(
+        bits(bottom[25]) & 0xc0,
+        0xc0,
+        "loud column misses the bottom"
+    );
+    assert_eq!(bits(bottom[5]), 0, "quiet column reaches the bottom");
+    let top = columns(&lines[2]);
+    assert_eq!(bits(top[25]), 0, "a negative-only column reaches the top");
+}
+
+#[test]
+fn the_sampler_says_why_there_is_no_waveform() {
+    use playr::ui::sampler::Wave;
+    let idle = Case::new(View::Sampler, &stopped()).text();
+    assert!(idle.contains("Nothing is playing"), "{idle}");
+
+    let snapshot = sampling("/m/t.wav", Duration::ZERO, &[]);
+    let reading = Sampler {
+        wave: Wave::Reading {
+            path: "/m/t.wav".into(),
+            cancel: Default::default(),
+        },
+        ..Sampler::default()
+    };
+    let text = Case::new(View::Sampler, &snapshot).sampler(reading).text();
+    assert!(text.contains("Reading the waveform"), "{text}");
+
+    // Peaks of another track are not drawn for this one.
+    let stale = sampler_with("/m/other.wav", playr::ui::sampler::Display::Envelope);
+    let text = Case::new(View::Sampler, &snapshot).sampler(stale).text();
+    assert!(text.contains("Reading the waveform"), "{text}");
+
+    let failed = Sampler {
+        wave: Wave::Failed {
+            path: "/m/t.wav".into(),
+            error: "no decodable audio track".into(),
+        },
+        ..Sampler::default()
+    };
+    let text = Case::new(View::Sampler, &snapshot).sampler(failed).text();
+    assert!(
+        text.contains("Cannot read the waveform: no decodable audio track"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_short_sampler_view_keeps_its_axis_and_detail_lines() {
+    let ms = Duration::from_millis;
+    let snapshot = sampling("/m/t.wav", ms(1500), &[ms(1000)]);
+    for height in [7, 8, 9] {
+        let text = Case::new(View::Sampler, &snapshot)
+            .sampler(sampler_with(
+                "/m/t.wav",
+                playr::ui::sampler::Display::Envelope,
+            ))
+            .size(42, height)
+            .text();
+        assert!(text.contains("region 0:01.000"), "height {height}:\n{text}");
+    }
+}
+
+#[test]
+fn the_envelope_shades_rms_inside_the_peak() {
+    use playr::ui::sampler::{Display, Wave};
+    use ratatui::style::Color;
+    // A full-scale square wave has RMS equal to its peak; a sine's RMS is
+    // 0.707 of its peak. Four seconds at 1,600 frames a second.
+    let data: Vec<f32> = (0..6400)
+        .map(|i| {
+            let phase = (i % 32) as f32 / 32.0;
+            if i < 3200 {
+                if phase < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            } else {
+                (std::f32::consts::TAU * phase).sin()
+            }
+        })
+        .collect();
+    let sampler = Sampler {
+        wave: Wave::Ready {
+            path: "/m/t.wav".into(),
+            peaks: std::sync::Arc::new(playr::wave::Peaks::from_interleaved(&data, 1, 1600)),
+        },
+        display: Display::Envelope,
+        ..Sampler::default()
+    };
+    // No marks: the whole track is the region. The playhead is at column 0.
+    let snapshot = sampling("/m/t.wav", Duration::ZERO, &[]);
+    let buf = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler)
+        .size(42, 20)
+        .buffer();
+    // Rows 2 to 12 are the waveform: 11 rows, 88 eighths.
+    let cell = |column: u16, row: u16| &buf[(1 + column, row)];
+    for row in 2..=12 {
+        assert_eq!(cell(10, row).symbol(), "\u{2588}", "square wave, row {row}");
+        assert_eq!(cell(10, row).fg, Color::Cyan, "square wave, row {row}");
+    }
+    // The sine: RMS fills 62 of 88 eighths, 7 full rows and 6 eighths; the
+    // peak fills the rest in the darker shade.
+    assert_eq!(cell(30, 2).fg, Color::Indexed(30), "peak above the RMS");
+    assert_eq!(cell(30, 12).fg, Color::Cyan, "RMS at the bottom");
+    assert_eq!(cell(30, 5).symbol(), "\u{2586}");
+    assert_eq!(
+        (cell(30, 5).fg, cell(30, 5).bg),
+        (Color::Cyan, Color::Indexed(30))
+    );
+    assert_eq!(cell(30, 4).symbol(), "\u{2588}");
+    assert_eq!(cell(30, 4).fg, Color::Indexed(30));
+}
+
+#[test]
+fn the_db_display_draws_levels_from_minus_48_db() {
+    use playr::ui::sampler::Display;
+    let snapshot = sampling("/m/t.wav", Duration::ZERO, &[]);
+    let lines = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler_with("/m/t.wav", Display::Decibels))
+        .size(100, 20)
+        .render();
+    assert!(lines[1].contains("db  0:00.000-0:04.000"), "{:?}", lines[1]);
+    // The quiet part is -20 dB: 28 of 48 dB, so 51 of the 88 eighths in 11
+    // rows. On the linear scale it would fill 9.
+    let column = |row: usize| lines[row].chars().nth(2).unwrap();
+    for row in 7..=12 {
+        assert_eq!(column(row), '\u{2588}', "row {row}");
+    }
+    assert_eq!(column(6), '\u{2583}');
+    assert_eq!(column(5), ' ');
 }

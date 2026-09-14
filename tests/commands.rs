@@ -59,7 +59,7 @@ fn view_commands_work_only_in_their_view() {
         (Playlists, "rename  dawn ", Action::RenameTo("dawn".into())),
     ] {
         assert_eq!(parse(line, view), Ok(action), "{line:?}");
-        for other in [Library, Selection, Playlists]
+        for other in [Library, Selection, Playlists, View::Sampler]
             .into_iter()
             .filter(|v| *v != view)
         {
@@ -100,7 +100,7 @@ fn a_unique_prefix_names_a_command_and_an_ambiguous_one_lists_the_choices() {
     );
     assert_eq!(
         lib("s"),
-        Err("ambiguous command s: search, save, stop, seek, speed".into())
+        Err("ambiguous command s: search, save, stop, seek, speed, slice".into())
     );
     // Only the commands usable here count: `de` is `delmarks` unless `delete` works too.
     assert_eq!(lib("de"), Ok(Action::ClearMarks));
@@ -117,7 +117,7 @@ fn every_command_parses_in_its_views_and_names_only_itself() {
     for c in COMMANDS {
         let views = match c.view {
             Some(v) => vec![v],
-            None => vec![Library, Selection, Playlists],
+            None => vec![Library, Selection, Playlists, View::Sampler],
         };
         for view in views {
             let result = parse(c.name, view);
@@ -201,7 +201,7 @@ fn mode_and_view_take_a_name_or_its_prefix() {
     assert_eq!(lib("view p"), Ok(Action::ShowView(Playlists)));
     assert_eq!(
         lib("view queue"),
-        Err("views: library, selection, playlists".into())
+        Err("views: library, selection, playlists, sampler".into())
     );
     assert_eq!(
         lib("mode"),
@@ -255,7 +255,12 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     );
     assert_eq!(
         completions("vi ", Library, &playlists),
-        ["view library", "view selection", "view playlists"]
+        [
+            "view library",
+            "view selection",
+            "view playlists",
+            "view sampler"
+        ]
     );
     // Playlist names match without regard to case.
     assert_eq!(
@@ -407,7 +412,7 @@ fn every_default_key_runs_a_command_usable_in_its_views() {
         let action = b.action.clone().expect("no default binds a key to nothing");
         let views = match b.view {
             Some(v) => vec![v],
-            None => vec![Library, Selection, Playlists],
+            None => vec![Library, Selection, Playlists, View::Sampler],
         };
         let text = line(&action, b.view);
         if action == Action::StartCommand {
@@ -504,6 +509,55 @@ fn command_lines_round_trip_through_parse() {
 }
 
 #[test]
+fn export_and_slice_choose_how_the_track_is_cut() {
+    use playr::ui::action::Slicing;
+    for (text, cut) in [
+        ("slice region", Slicing::Region),
+        ("slice marks", Slicing::Marks),
+        ("slice 16", Slicing::Equal(16)),
+        ("slice onsets", Slicing::Onsets(None)),
+        ("slice onsets 0.8", Slicing::Onsets(Some(0.8))),
+    ] {
+        assert_eq!(lib(text), Ok(Action::Slice(cut)), "{text}");
+        for view in [Selection, Playlists] {
+            assert_eq!(
+                parse(text, view),
+                Ok(Action::Slice(cut)),
+                "{text} in {view:?}"
+            );
+        }
+    }
+    assert_eq!(
+        line(&Action::Slice(Slicing::Onsets(Some(0.5))), None),
+        "slice onsets 0.5"
+    );
+    assert_eq!(line(&Action::Slice(Slicing::Equal(8)), None), "slice 8");
+    assert_eq!(
+        line(&Action::Slice(Slicing::Onsets(None)), None),
+        "slice onsets"
+    );
+    assert_eq!(lib("slice 1"), Err("slices are 2 to 256".into()));
+    assert_eq!(lib("slice 257"), Err("slices are 2 to 256".into()));
+    assert_eq!(
+        lib("slice onsets 2"),
+        Err("onset sensitivity is 0 to 1".into())
+    );
+    assert_eq!(
+        lib("slice"),
+        Err("usage: :slice region|marks|N|onsets [S]".into())
+    );
+    assert_eq!(
+        lib("slice bars"),
+        Err("usage: :slice region|marks|N|onsets [S]".into())
+    );
+    assert_eq!(
+        lib("slice region 2"),
+        Err("usage: :slice region|marks|N|onsets [S]".into())
+    );
+    assert_eq!(lib("export"), Err("unknown command: export".into()));
+}
+
+#[test]
 fn the_cheatsheet_lists_every_command_under_its_view() {
     let sheet = include_str!("../docs/cheatsheet.md");
     let section = |heading: &str| {
@@ -519,6 +573,7 @@ fn the_cheatsheet_lists_every_command_under_its_view() {
             Some(Library) => "Library",
             Some(Selection) => "Selection",
             Some(Playlists) => "Playlists",
+            Some(View::Sampler) => "Sampler",
         };
         let usage = format!("`:{} {}", c.name, c.args.replace('|', "\\|"));
         let usage = format!("{}`", usage.trim_end());
