@@ -1446,16 +1446,29 @@ version = "0.4.0"
 dependencies = [
  "cpal",
  "hound",
+ "playr-core",
+ "ratatui",
+ "rtrb",
+ "rusqlite",
+ "tempfile",
+ "toml",
+ "unicode-width",
+ "walkdir",
+]
+
+[[package]]
+name = "playr-core"
+version = "0.4.0"
+dependencies = [
+ "cpal",
+ "hound",
  "lofty",
  "opus",
- "ratatui",
  "rtrb",
  "rubato",
  "rusqlite",
  "symphonia",
  "tempfile",
- "toml",
- "unicode-width",
  "walkdir",
 ]
 

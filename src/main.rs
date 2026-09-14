@@ -3,9 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use playr::audio::Player;
-use playr::db::{self, Track};
-use playr::{scan, ui};
+use playr::ui;
+use playr_core::audio::Player;
+use playr_core::db::{self, Track};
+use playr_core::scan;
 
 const USAGE: &str = "\
 playr - a minimal TUI music player

@@ -6,8 +6,8 @@
 mod common;
 
 use common::{have_ffmpeg, skip};
-use playr::audio::decode::AudioStream;
-use playr::audio::output::remap_channels;
+use playr_core::audio::decode::AudioStream;
+use playr_core::audio::output::remap_channels;
 use std::path::Path;
 use std::process::Command;
 

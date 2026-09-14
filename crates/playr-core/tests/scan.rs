@@ -3,8 +3,8 @@
 mod common;
 
 use common::have_ffmpeg;
-use playr::db::{self, query, Track};
-use playr::scan;
+use playr_core::db::{self, query, Track};
+use playr_core::scan;
 use std::path::Path;
 use std::process::Command;
 

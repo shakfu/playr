@@ -2,10 +2,10 @@
 
 use std::time::Duration;
 
-use playr::audio::Mode;
 use playr::ui::action::{Action, Key, Keymap};
 use playr::ui::command::{completions, line, parse, CommandLine, History, COMMANDS, HISTORY_LEN};
 use playr::ui::View::{self, Library, Playlists, Selection};
+use playr_core::audio::Mode;
 
 fn secs(s: f64) -> Duration {
     Duration::from_secs_f64(s)

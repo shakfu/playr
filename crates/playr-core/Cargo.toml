@@ -1,0 +1,30 @@
+[package]
+name = "playr-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "playr's audio engine, library, scanner and sample export, with no interface"
+keywords = ["music", "audio", "player", "flac"]
+categories = ["multimedia::audio"]
+
+[features]
+default = []
+# Opus decoding via libopus, which needs cmake to build. See the playr crate.
+opus = ["dep:opus"]
+
+[dependencies]
+symphonia = { version = "0.6.1", features = ["all"] }
+cpal.workspace = true
+rubato = "5.0.0"
+opus = { version = "0.4.0", optional = true }
+rtrb.workspace = true
+rusqlite.workspace = true
+lofty = "0.25.1"
+walkdir.workspace = true
+hound.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

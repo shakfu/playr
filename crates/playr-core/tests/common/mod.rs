@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cpal::SampleFormat;
-use playr::audio::meter::Meter;
-use playr::audio::output::{render, Backend, DeviceEvent, OutputError, Plan, Shared};
-use playr::audio::{Player, Spec};
+use playr_core::audio::meter::Meter;
+use playr_core::audio::output::{render, Backend, DeviceEvent, OutputError, Plan, Shared};
+use playr_core::audio::{Player, Spec};
 
 /// Reports a test skipped for want of `what`, or fails it when `var` is set.
 ///

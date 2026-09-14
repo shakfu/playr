@@ -265,7 +265,7 @@ Any error stops playr before it starts, and every bad setting is listed with its
 
 Decoded: FLAC, ALAC, MP3, MP1, MP2, AAC-LC, Vorbis, PCM and ADPCM, in WAV, AIFF, CAF, MP4/M4A, MKV/WebM, OGG and raw FLAC containers. Opus as well, when built with `--features opus`.
 
-Opus is decoded by playr itself, in both OGG and WebM. Symphonia 0.6 demuxes Opus but ships no decoder, so `src/audio/opus.rs` supplies one on top of libopus via the `opus` crate and registers it in a custom codec registry. Mono and stereo only; multistream surround is not handled.
+Opus is decoded by playr itself, in both OGG and WebM. Symphonia 0.6 demuxes Opus but ships no decoder, so `crates/playr-core/src/audio/opus.rs` supplies one on top of libopus via the `opus` crate and registers it in a custom codec registry. Mono and stereo only; multistream surround is not handled.
 
 Tags are not read from CAF, MKV or WebM files. Those are indexed under their file names, and MKV and WebM files also show no duration.
 
@@ -289,7 +289,7 @@ Volume is a float gain applied before quantisation.
 make test
 ```
 
-`make test` runs the suite twice, with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, so they need no audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
+`make test` runs the suite for both crates in the workspace, `playr-core` and `playr`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, so they need no audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
 
 Opus output was checked against `ffmpeg` by decoding the same file both ways: identical frame counts and 138.7 dB SNR, with no alignment offset.
 

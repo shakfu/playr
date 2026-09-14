@@ -1,11 +1,7 @@
 //! playr: a minimal TUI music player.
 //!
-//! The library half (scan, database, audio, interface state) is exposed so it can be
-//! tested and driven headlessly; `main.rs` adds the CLI and TUI.
+//! The terminal interface, over the engine and library in `playr-core`. It is a
+//! library as well as a binary so the interface can be tested headlessly;
+//! `main.rs` adds the command line.
 
-pub mod audio;
-pub mod db;
-pub mod samples;
-pub mod scan;
 pub mod ui;
-pub mod wave;

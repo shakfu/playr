@@ -19,14 +19,14 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
-use crate::audio::{Cmd, Player, State, Status};
-use crate::db::query::{self, Mark, Playlist};
-use crate::db::Track;
-use crate::samples::{self, Exported};
-use crate::wave::Peaks;
 use action::{Action, Keymap, Slicing};
 use command::{CommandLine, History};
 use config::Config;
+use playr_core::audio::{Cmd, Player, State, Status};
+use playr_core::db::query::{self, Mark, Playlist};
+use playr_core::db::Track;
+use playr_core::samples::{self, Exported};
+use playr_core::wave::Peaks;
 use sampler::{Pending, Sampler, Wave};
 
 /// What an export thread reports.

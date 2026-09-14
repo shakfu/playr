@@ -11,15 +11,15 @@ release:
 	@cargo build --release
 
 test:
-	@cargo test
-	@cargo test --features opus
+	@cargo test --workspace
+	@cargo test --workspace --features opus
 
 fmt:
 	@cargo fmt
 
 clippy:
-	@cargo clippy --all-targets -- -D warnings
-	@cargo clippy --all-targets --features opus -- -D warnings
+	@cargo clippy --workspace --all-targets -- -D warnings
+	@cargo clippy --workspace --all-targets --features opus -- -D warnings
 
 run:
 	@cargo run --release

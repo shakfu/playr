@@ -6,8 +6,8 @@ use std::time::Duration;
 use super::action::{Action, Key, Slicing, Zoom};
 use super::sampler::Display;
 use super::View;
-use crate::audio::Mode;
-use crate::samples::MAX_SLICES;
+use playr_core::audio::Mode;
+use playr_core::samples::MAX_SLICES;
 
 /// A `:` command: its name, what may follow it, what it does, and the one
 /// view it works in, if it is not every view.

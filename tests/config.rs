@@ -1,9 +1,9 @@
 //! Key names, the key map, and the settings file.
 
-use playr::audio::Mode;
 use playr::ui::action::{Action, Key, Keymap};
 use playr::ui::config::{Config, DEFAULT_SETTINGS};
 use playr::ui::View::{Library, Playlists, Selection};
+use playr_core::audio::Mode;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn key(text: &str) -> Key {

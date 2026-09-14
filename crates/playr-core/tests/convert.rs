@@ -1,9 +1,9 @@
 //! Conversion across a track change, without an output device.
 
 use cpal::SampleFormat;
-use playr::audio::convert::Converter;
-use playr::audio::output::Plan;
-use playr::audio::{speed_for, Spec};
+use playr_core::audio::convert::Converter;
+use playr_core::audio::output::Plan;
+use playr_core::audio::{speed_for, Spec};
 
 const STEREO_44K: Plan = Plan {
     rate: 44100,

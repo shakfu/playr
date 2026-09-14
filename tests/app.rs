@@ -1,9 +1,11 @@
 //! Key handling. `App` owns a `Player`, which plays to the fake device in `common`.
 
+// The fake audio device and WAV writers live with playr-core's tests.
+#[path = "../crates/playr-core/tests/common/mod.rs"]
 mod common;
 
-use playr::db::{self, query, Track};
 use playr::ui::{App, Input};
+use playr_core::db::{self, query, Track};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn press(app: &mut App, c: char) {
@@ -450,7 +452,7 @@ fn a_toggles_a_track_and_moves_the_cursor_down() {
 
 #[test]
 fn m_cycles_the_playback_mode_and_says_which() {
-    use playr::audio::Mode;
+    use playr_core::audio::Mode;
     let (mut app, _dir) = app();
     let mode = |app: &mut App| {
         app.refresh();
@@ -659,8 +661,8 @@ fn command_text(app: &mut App) -> Option<String> {
 
 #[test]
 fn colon_commands_do_what_their_keys_do() {
-    use playr::audio::Mode;
     use playr::ui::View;
+    use playr_core::audio::Mode;
     let (mut app, _dir) = app();
 
     command(&mut app, "mode shuffle");
@@ -922,8 +924,8 @@ fn help_lists_scroll_with_j_and_k_and_other_keys_close_them() {
 
 #[test]
 fn the_config_sets_keys_and_startup_before_anything_plays() {
-    use playr::audio::Mode;
     use playr::ui::config::Config;
+    use playr_core::audio::Mode;
     let config =
         Config::parse("volume = 30\nmode = 'repeat'\n[keys.selection]\nctrl-x = 'remove'").unwrap();
     let tracks: Vec<Track> = ["/m/a.flac", "/m/b.flac"]
@@ -1049,7 +1051,9 @@ fn export_commands_write_slices_of_the_playing_track_in_the_background() {
     );
 
     command(&mut app, "stop");
-    refresh_until(&mut app, |s| s.status.state == playr::audio::State::Stopped);
+    refresh_until(&mut app, |s| {
+        s.status.state == playr_core::audio::State::Stopped
+    });
     command(&mut app, "slice 4");
     assert_eq!(app.screen().message, Some("nothing is playing"));
 }

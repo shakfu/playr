@@ -1,4 +1,4 @@
-use playr::db::{self, query, Track};
+use playr_core::db::{self, query, Track};
 
 fn track(path: &str, title: &str, artist: &str, album: &str) -> Track {
     Track {

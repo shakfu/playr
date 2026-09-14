@@ -51,6 +51,8 @@ Notable changes to playr. Format follows [Keep a Changelog][https://keepachangel
 
 ### Changed
 
+- The code is a Cargo workspace of two crates. `playr-core` holds the audio engine, library, scanner, sample export and waveform peaks, and depends on no terminal crate; `playr` is the terminal interface and command line. This is the first step of `docs/dev/architecture.md`, which splits out a core an egui or Tauri frontend could share. Library API: `playr::audio`, `playr::db`, `playr::scan`, `playr::samples` and `playr::wave` are now `playr_core::audio` and so on.
+
 - `?` lists the keys that work in the view you are in, as bound, with the command each key runs: the view's own keys, then those for every view that it does not rebind. It showed a fixed list of every key before, which a remapped key would contradict. `:help` still lists every command, grouped by view, so commands of other views stay findable. The bottom line's help hint names whichever key opens the list in this view.
 
 - A key with Ctrl or Alt held, or Shift on a key that is not a character, only runs a binding that names that chord. Before, most chords ran the plain key's action, so Ctrl-M cycled the mode as `M` does.

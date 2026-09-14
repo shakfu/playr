@@ -1,12 +1,12 @@
 //! Rendering tests against a headless backend. No audio device involved.
 
-use playr::audio::{Spec, State, Status};
-use playr::db::query::Playlist;
-use playr::db::Track;
 use playr::ui::action::Keymap;
 use playr::ui::render::{self, scroll_offset};
 use playr::ui::sampler::Sampler;
 use playr::ui::{Input, Screen, Snapshot, View};
+use playr_core::audio::{Spec, State, Status};
+use playr_core::db::query::Playlist;
+use playr_core::db::Track;
 use ratatui::backend::TestBackend;
 use ratatui::widgets::ListState;
 use ratatui::Terminal;
@@ -1060,7 +1060,7 @@ fn selected_tracks_are_marked_in_the_library_but_not_in_the_selection() {
 
 #[test]
 fn the_mode_shows_on_the_bottom_line_unless_normal() {
-    use playr::audio::Mode;
+    use playr_core::audio::Mode;
     let normal = Case::new(View::Library, &stopped()).text();
     assert!(
         !normal.contains("normal"),
@@ -1147,7 +1147,7 @@ fn sampler_with(path: &str, display: playr::ui::sampler::Display) -> Sampler {
     Sampler {
         wave: playr::ui::sampler::Wave::Ready {
             path: path.into(),
-            peaks: std::sync::Arc::new(playr::wave::Peaks::from_interleaved(&data, 1, 1600)),
+            peaks: std::sync::Arc::new(playr_core::wave::Peaks::from_interleaved(&data, 1, 1600)),
         },
         display,
         ..Sampler::default()
@@ -1241,12 +1241,12 @@ fn planned_slices_are_drawn_before_they_are_written() {
     let snapshot = sampling("/m/t.wav", ms(1500), &[ms(1000), ms(2500)]);
     let mut sampler = sampler_with("/m/t.wav", Display::Envelope);
     sampler.pending = Some(Pending {
-        job: playr::samples::Job {
+        job: playr_core::samples::Job {
             path: "/m/t.wav".into(),
             rate: 1600,
             marks: vec![1600, 4000],
             at: 2400,
-            cut: playr::samples::Cut::Equal(2),
+            cut: playr_core::samples::Cut::Equal(2),
             samples: "/tmp".into(),
         },
         spans: vec![(1600, Some(2880)), (2880, Some(4000))],
@@ -1372,7 +1372,7 @@ fn the_envelope_shades_rms_inside_the_peak() {
     let sampler = Sampler {
         wave: Wave::Ready {
             path: "/m/t.wav".into(),
-            peaks: std::sync::Arc::new(playr::wave::Peaks::from_interleaved(&data, 1, 1600)),
+            peaks: std::sync::Arc::new(playr_core::wave::Peaks::from_interleaved(&data, 1, 1600)),
         },
         display: Display::Envelope,
         ..Sampler::default()

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{fake_player, levels, Control};
-use playr::audio::{Cmd, Mode, Player, State, Status};
+use playr_core::audio::{Cmd, Mode, Player, State, Status};
 
 const RATE: u32 = 44100;
 

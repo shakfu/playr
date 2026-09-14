@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, not implemented. Written 2026-09-14 against playr 0.4.0, unreleased.
+Design note. Written 2026-09-14 against playr 0.4.0, unreleased. Step 1 is done: the workspace and `crates/playr-core`. The section Today describes the code before it.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -197,7 +197,7 @@ Each step leaves `make test` passing and changes no behaviour.
 
 | step | change | size |
 |-|-|-|
-| 1 | Cargo workspace. Move `audio`, `db`, `scan`, `samples` and `wave` and their tests into playr-core | small; imports only |
+| 1 | Done. Cargo workspace. Move `audio`, `db`, `scan`, `samples` and `wave` and their tests into playr-core | small; imports only |
 | 2 | `Outcome` and `Refusal` in the core; the terminal words them in `notice_text`; tests assert variants | medium; about 60 message sites |
 | 3 | `Session` in the core. Move library state and the operations above into it with explicit arguments; `App` holds a `Session` | large; most of `ui/mod.rs` and the app tests |
 | 4 | `Event` and `EventSink`. Workers and the engine push events; `App` drains one channel instead of three | medium |

@@ -11,8 +11,8 @@ use super::action::Keymap;
 use super::command::{self, view_name, COMMANDS};
 use super::sampler::{self, Display, Fill, Wave};
 use super::{fmt_time, state_glyph, Input, Screen, Snapshot, View};
-use crate::audio::State;
-use crate::db::Track;
+use playr_core::audio::State;
+use playr_core::db::Track;
 
 const ACCENT: Color = Color::Cyan;
 const DIM: Color = Color::DarkGray;
@@ -214,7 +214,7 @@ fn draw_sampler(app: &mut Screen<'_>, f: &mut Frame, area: Rect) {
     let rows = inner.height.saturating_sub(2) as usize;
 
     let marks: Vec<u64> = app.snapshot.marks.iter().map(|&d| frame_of(d)).collect();
-    let (region_start, region_end) = crate::samples::region(&marks, at);
+    let (region_start, region_end) = playr_core::samples::region(&marks, at);
     let region_end = region_end.unwrap_or(peaks.frames);
     let column_of = |frame: u64| {
         (frame >= start && frame < start + per_column * width as u64)
@@ -882,14 +882,14 @@ fn indicators(
     }
     // Mode and speed show only when not normal, so the usual case stays uncluttered.
     let mode = snapshot.status.mode;
-    if mode != crate::audio::Mode::Normal {
+    if mode != playr_core::audio::Mode::Normal {
         spans.push(Span::styled(
             format!("{}  ", mode.name()),
             Style::default().fg(Color::Yellow),
         ));
     }
     if semitones != 0 {
-        let speed = crate::audio::speed_for(semitones);
+        let speed = playr_core::audio::speed_for(semitones);
         spans.push(Span::styled(
             format!("{speed:.2}x ({semitones:+} st)  "),
             Style::default().fg(Color::Yellow),

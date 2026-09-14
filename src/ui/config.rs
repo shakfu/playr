@@ -14,7 +14,7 @@ use toml::Spanned;
 use super::action::{Key, Keymap};
 use super::command::{self, view_name};
 use super::View;
-use crate::audio::Mode;
+use playr_core::audio::Mode;
 
 /// The default settings, as shipped.
 pub const DEFAULT_SETTINGS: &str = include_str!("settings.toml");

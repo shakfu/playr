@@ -1,12 +1,33 @@
-[package]
-name = "playr"
+[workspace]
+members = ["crates/playr-core"]
+
+[workspace.package]
 version = "0.4.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
-description = "A minimal TUI music player that plays local files and contacts nothing"
 repository = "https://github.com/shakfu/playr"
 homepage = "https://github.com/shakfu/playr"
+
+# Versions shared by more than one crate, so the crates cannot drift apart.
+[workspace.dependencies]
+playr-core = { path = "crates/playr-core", version = "0.4.0" }
+cpal = "0.18.2"
+hound = "3.5"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+walkdir = "2.5.0"
+rtrb = "0.4.0"
+tempfile = "3"
+
+[package]
+name = "playr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A minimal TUI music player that plays local files and contacts nothing"
 readme = "README.md"
 keywords = ["music", "player", "tui", "audio", "flac"]
 categories = ["multimedia::audio", "command-line-utilities"]
@@ -18,25 +39,23 @@ default = []
 # cmake, which nothing else here requires. Without it playr reports Opus files
 # as undecodable and moves on, exactly as it does for WMA or DSD.
 # Enable with: cargo build --features opus
-opus = ["dep:opus"]
+opus = ["playr-core/opus"]
 
 [dependencies]
-symphonia = { version = "0.6.1", features = ["all"] }
-cpal = "0.18.2"
-rubato = "5.0.0"
-opus = { version = "0.4.0", optional = true }
-rtrb = "0.4.0"
+playr-core.workspace = true
 ratatui = "0.30.2"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
-lofty = "0.25.1"
-walkdir = "2.5.0"
+rusqlite.workspace = true
+walkdir.workspace = true
 # Already built for ratatui; used to size columns in terminal cells.
 unicode-width = "0.2.2"
 toml = { version = "1.1", default-features = false, features = ["parse", "preserve_order"] }
-hound = "3.5"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
+hound.workspace = true
+# The fake audio device in playr-core's test helpers, which the app tests share.
+cpal.workspace = true
+rtrb.workspace = true
 
 [profile.release]
 opt-level = 3

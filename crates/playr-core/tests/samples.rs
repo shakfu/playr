@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use playr::samples::{
+use playr_core::samples::{
     equal_spans, export, onsets, region, spans_at, Cut, Exported, Job, MAX_SLICES,
 };
 

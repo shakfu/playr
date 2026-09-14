@@ -4,7 +4,7 @@
 mod common;
 
 use common::{fake_player, levels, silence, skip};
-use playr::audio::{Cmd, Player, State, Status};
+use playr_core::audio::{Cmd, Player, State, Status};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -411,7 +411,7 @@ fn a_track_that_opens_but_fails_its_first_packet_is_skipped() {
     }
     let bytes = std::fs::read(&broken).unwrap();
     std::fs::write(&broken, &bytes[..bytes.len() * 6 / 10]).unwrap();
-    let mut probe = playr::audio::decode::AudioStream::open(&broken).expect("no longer opens");
+    let mut probe = playr_core::audio::decode::AudioStream::open(&broken).expect("no longer opens");
     assert!(
         probe.next_chunk().is_err(),
         "the first packet no longer fails"

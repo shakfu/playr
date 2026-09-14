@@ -1,6 +1,6 @@
 //! Play order in each mode, without an engine.
 
-use playr::audio::order::{Mode, Order};
+use playr_core::audio::order::{Mode, Order};
 
 /// The next `n` tracks from `first`, following natural track ends.
 fn run(order: &mut Order, first: usize, n: usize) -> Vec<usize> {

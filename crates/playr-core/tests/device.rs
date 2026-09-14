@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{fake_player as player, levels, silence, tone, Control};
-use playr::audio::output::DeviceEvent;
-use playr::audio::{Cmd, Player, State, Status};
+use playr_core::audio::output::DeviceEvent;
+use playr_core::audio::{Cmd, Player, State, Status};
 
 /// Polls until `done` or five seconds pass, and returns the last status.
 fn wait_for(player: &Player, done: impl Fn(&Status) -> bool) -> Status {

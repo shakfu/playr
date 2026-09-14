@@ -1,8 +1,8 @@
 //! Output format choice, against device capabilities built by hand.
 
 use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig, SupportedStreamConfigRange};
-use playr::audio::output::{choose, Plan};
-use playr::audio::Spec;
+use playr_core::audio::output::{choose, Plan};
+use playr_core::audio::Spec;
 
 const CD: Spec = Spec {
     rate: 44100,

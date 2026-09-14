@@ -1,6 +1,6 @@
 //! Loudness metering against ITU-R BS.1770-4 and EBU Tech 3341.
 
-use playr::audio::meter::{k_weighting, Meter, SILENCE_LUFS};
+use playr_core::audio::meter::{k_weighting, Meter, SILENCE_LUFS};
 
 /// Feeds `secs` of a stereo 1 kHz sine at `dbfs` peak, and returns the last
 /// momentary loudness. `channels` says which of the two carry it.

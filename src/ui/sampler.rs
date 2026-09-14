@@ -14,11 +14,11 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::samples::{Job, Span};
-use crate::wave::Peaks;
+use playr_core::samples::{Job, Span};
+use playr_core::wave::Peaks;
 
 /// Fewest frames a column shows, so a Braille dot still covers whole buckets.
-pub const MIN_FRAMES_PER_COLUMN: u64 = 2 * crate::wave::BUCKET;
+pub const MIN_FRAMES_PER_COLUMN: u64 = 2 * playr_core::wave::BUCKET;
 
 /// How the waveform is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -117,7 +117,7 @@ pub struct Sampler {
 /// Columns start on whole peak buckets, so each column's peaks hold its own
 /// frames and no others; a track too short for that is shown frame by frame.
 pub fn window(frames: u64, width: u64, zoom: u32, at: u64) -> (u64, u64, u32) {
-    let bucket = crate::wave::BUCKET;
+    let bucket = playr_core::wave::BUCKET;
     let width = width.max(1);
     let fit = frames.div_ceil(width).max(1);
     if fit < MIN_FRAMES_PER_COLUMN {

@@ -1,4 +1,4 @@
-use playr::audio::resample::Resample;
+use playr_core::audio::resample::Resample;
 
 /// Interleaved stereo sine at `freq` Hz.
 fn sine(rate: u32, freq: f32, frames: usize) -> Vec<f32> {

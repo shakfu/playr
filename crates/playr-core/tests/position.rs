@@ -2,7 +2,7 @@
 //!
 //! These are pure calculations, so they need no audio device.
 
-use playr::audio::{speed_for, track_position};
+use playr_core::audio::{speed_for, track_position};
 use std::time::Duration;
 
 const RATE: u32 = 44100;

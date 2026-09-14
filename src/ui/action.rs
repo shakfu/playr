@@ -14,7 +14,7 @@ use std::time::Duration;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::View;
-use crate::audio::Mode;
+use playr_core::audio::Mode;
 
 /// One thing the interface can do.
 #[derive(Debug, Clone, PartialEq)]
