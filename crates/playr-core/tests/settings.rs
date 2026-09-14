@@ -82,8 +82,12 @@ fn the_samples_directory_defaults_to_music_and_expands_home() {
     );
     let settings = parse("samples = \"~/loops\"").unwrap();
     assert_eq!(settings.samples, home.join("loops"));
-    let settings = parse("samples = \"/tmp/cuts\"").unwrap();
-    assert_eq!(settings.samples, std::path::PathBuf::from("/tmp/cuts"));
+    // An absolute path as the platform writes one: `C:\...` on Windows, where
+    // `/tmp/cuts` has no drive and is not absolute. A TOML literal string
+    // keeps the backslashes.
+    let cuts = std::env::temp_dir().join("cuts");
+    let settings = parse(&format!("samples = '{}'", cuts.display())).unwrap();
+    assert_eq!(settings.samples, cuts);
     assert_eq!(
         parse("samples = \"cuts\"").unwrap_err(),
         ["line 1: samples must be an absolute path or start with ~/"]

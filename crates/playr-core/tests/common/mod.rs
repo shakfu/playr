@@ -95,8 +95,11 @@ fn write_wav(path: &Path, rate: u32, pcm: Vec<u8>) {
 pub struct Control {
     /// When set, opening a stream fails.
     pub refuse_open: AtomicBool,
-    /// When set, streams stop calling back, as a hung device does.
+    /// When set, streams stop calling back, as a hung device does. Set it with
+    /// [`Control::stall`], which waits until the device has stopped.
     pub stall: AtomicBool,
+    /// Passes the device's thread has made while stalled.
+    stalled_passes: AtomicUsize,
     /// Streams opened so far.
     pub opened: AtomicUsize,
     /// Every sample played, interleaved.
@@ -106,6 +109,17 @@ pub struct Control {
 }
 
 impl Control {
+    /// Stalls the device, returning once its thread has passed through a turn
+    /// stalled, so no callback already under way can act on what comes next.
+    pub fn stall(&self) {
+        let seen = self.stalled_passes.load(Ordering::Relaxed);
+        self.stall.store(true, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.stalled_passes.load(Ordering::Relaxed) <= seen && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     pub fn send(&self, event: DeviceEvent) {
         let events = self.events.lock().unwrap();
         events
@@ -167,9 +181,13 @@ impl Backend for Fake {
                 let now = Instant::now();
                 if control.stall.load(Ordering::Relaxed) {
                     due = now;
+                    control.stalled_passes.fetch_add(1, Ordering::Relaxed);
                 } else {
                     let mut chunks = 0;
-                    while due <= now && chunks < CATCH_UP {
+                    // The stall is checked before each chunk: a device told to
+                    // stall must not go on to honour a seek it was sent after.
+                    while due <= now && chunks < CATCH_UP && !control.stall.load(Ordering::Relaxed)
+                    {
                         render(
                             &mut buf,
                             &mut consumer,

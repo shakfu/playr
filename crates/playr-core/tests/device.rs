@@ -140,7 +140,7 @@ fn a_seek_while_paused_moves_the_position_and_stays_paused() {
 #[test]
 fn a_seek_reopens_a_device_that_has_stopped_calling_back() {
     let (player, control, _dir) = playing();
-    control.stall.store(true, Ordering::Relaxed);
+    control.stall();
     player.send(Cmd::Seek(Duration::from_secs(1)));
 
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -156,7 +156,7 @@ fn a_seek_reopens_a_device_that_has_stopped_calling_back() {
 #[test]
 fn a_seek_whose_stalled_device_cannot_be_reopened_stops_playback() {
     let (player, control, _dir) = playing();
-    control.stall.store(true, Ordering::Relaxed);
+    control.stall();
     control.refuse_open.store(true, Ordering::Relaxed);
     player.send(Cmd::Seek(Duration::from_secs(1)));
 

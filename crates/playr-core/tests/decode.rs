@@ -38,18 +38,16 @@ fn encode(path: &Path, rate: u32, args: &[&str]) -> Result<(), String> {
     Err(stderr.lines().next().unwrap_or("ffmpeg failed").to_string())
 }
 
-/// The frames ffmpeg's own decoder gets from `path`, as 16-bit stereo.
-fn reference_frames(path: &Path) -> Result<usize, String> {
-    let out = Command::new("ffmpeg")
-        .args(["-v", "error", "-i"])
-        .arg(path)
-        .args(["-f", "s16le", "-ac", "2", "-"])
+/// Whether this ffmpeg has the encoder named `name`.
+fn has_encoder(name: &str) -> bool {
+    Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
         .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
-    }
-    Ok(out.stdout.len() / 4)
+        .is_ok_and(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .any(|word| word == name)
+        })
 }
 
 /// Decodes the whole file, returning `(rate, channels, frames, peak)`.
@@ -80,22 +78,23 @@ fn decodes_the_formats_this_build_claims_to_support() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
+    // Vorbis from libvorbis, which real Ogg files come from, when this ffmpeg
+    // has it: its end trim makes an Ogg file decode to exactly its length.
+    // ffmpeg's own experimental encoder stamps the end inconsistently across
+    // versions, 56 frames long with 9.0 and 968 short with 4.4, and playr
+    // follows the stamp as ffmpeg 9.0's decoder does; 4.4's decoder ignores it.
+    let (vorbis, ogg_tolerance): (&[&str], usize) = if has_encoder("libvorbis") {
+        (&["-c:a", "libvorbis"], 0)
+    } else {
+        (&["-c:a", "vorbis", "-strict", "experimental"], 1024)
+    };
     // (file name, source rate, ffmpeg args, tolerance in frames)
     let cases: &[(&str, u32, &[&str], usize)] = &[
         ("t.wav", 44100, &["-c:a", "pcm_s16le"], 0),
         ("t.flac", 44100, &["-c:a", "flac"], 0),
         ("hi.flac", 96000, &["-c:a", "flac"], 0),
         ("t.aiff", 44100, &["-c:a", "pcm_s16be"], 0),
-        // The built-in encoder: libvorbis is optional, and some ffmpeg builds
-        // lack it. How much padding it marks as audio differs between ffmpeg
-        // versions, 56 frames more in 9.0 and 968 fewer in 4.4, so Vorbis is
-        // held to what ffmpeg's own decoder makes of the same file, below.
-        (
-            "t.ogg",
-            44100,
-            &["-c:a", "vorbis", "-strict", "experimental"],
-            0,
-        ),
+        ("t.ogg", 44100, vorbis, ogg_tolerance),
         ("t.mp3", 44100, &["-c:a", "libmp3lame", "-b:a", "192k"], 0),
         // AAC has no gapless support upstream, so encoder delay and padding
         // survive into the decoded output.
@@ -109,14 +108,11 @@ fn decodes_the_formats_this_build_claims_to_support() {
             &["-c:a", "libopus", "-b:a", "128k"],
             648,
         ),
-        // Matroska does not carry Vorbis's end trim, so padding the Ogg file
-        // drops stays: 256 frames past ffmpeg's decode with ffmpeg 9.0.
-        (
-            "vorbis.webm",
-            48000,
-            &["-c:a", "vorbis", "-strict", "experimental"],
-            1024,
-        ),
+        // Matroska carries no Vorbis end trim, so the encoder's padding, or
+        // its short stamp, stays: 832 frames over with libvorbis in ffmpeg
+        // 4.4, 256 over and 768 under with the experimental encoder in 9.0
+        // and 4.4.
+        ("vorbis.webm", 48000, vorbis, 1024),
     ];
 
     for (name, rate, args, tolerance) in cases {
@@ -137,11 +133,7 @@ fn decodes_the_formats_this_build_claims_to_support() {
 
         assert_eq!(got_rate, *rate, "{name}: wrong sample rate");
         assert_eq!(ch, 2, "{name}: wrong channel count");
-        let expected = if name.contains("vorbis") || name.ends_with(".ogg") {
-            reference_frames(&path).unwrap_or_else(|e| panic!("ffmpeg cannot decode {name}: {e}"))
-        } else {
-            (*rate as usize) * 2
-        };
+        let expected = (*rate as usize) * 2;
         let diff = frames.abs_diff(expected);
         assert!(
             diff <= *tolerance,
