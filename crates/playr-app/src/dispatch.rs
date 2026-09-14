@@ -29,6 +29,20 @@ pub enum Confirm {
     ClearMarks(usize),
 }
 
+impl Confirm {
+    /// The question asked before the action, without how to answer it.
+    pub fn question(&self) -> String {
+        match self {
+            Confirm::DeletePlaylist(p) => format!("delete playlist \"{}\"?", p.name),
+            Confirm::ReplacePlaylist(name) => {
+                format!("replace playlist \"{name}\" with the selection?")
+            }
+            Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection?"),
+            Confirm::ClearMarks(n) => format!("clear all {n} marks from this track?"),
+        }
+    }
+}
+
 /// Text a frontend collects before an action can happen.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
@@ -167,6 +181,14 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             Some(pl) => rename(f, &pl, &name),
             None => f.notify(Message::NoPlaylistUnderCursor),
         },
+        Action::Scan(dir) => match f.session_mut().scan(dir.clone()) {
+            Ok(_) => f.notify(Outcome::ScanStarted { dir }.into()),
+            Err(refusal) => f.notify(refusal.into()),
+        },
+        Action::Open(paths) => {
+            f.session_mut().open(paths);
+            f.notify(Outcome::Opening.into());
+        }
         Action::PlayPlaylist(name) => {
             let notice = f.session_mut().play_playlist_named(&name);
             f.notify(notice.into());

@@ -1,9 +1,10 @@
 //! `:` commands: parsing a command line into an [`Action`], and the prompt
 //! that edits one, with Tab completion and a history recalled by the arrows.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::action::{Action, Key, Slicing, Zoom};
+use crate::action::{Action, Key, Keymap, Slicing, Zoom};
 use crate::{Display, View};
 use playr_core::audio::Mode;
 use playr_core::samples::MAX_SLICES;
@@ -53,6 +54,8 @@ pub const COMMANDS: &[Command] = &[
     any("search", "[QUERY]", "search the library; no query opens /"),
     any("playlist", "NAME", "play a saved playlist"),
     any("save", "[NAME]", "save the selection as a playlist"),
+    any("scan", "DIR", "add a directory to the library"),
+    any("open", "PATH", "play a file or directory, and select it"),
     any("pause", "", "play or pause"),
     any("next", "", "next track"),
     any("prev", "", "previous track"),
@@ -235,6 +238,11 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         StartRename => "rename".into(),
         RenameTo(name) => format!("rename {name}"),
         PlayPlaylist(name) => format!("playlist {name}"),
+        Scan(dir) => format!("scan {}", dir.display()),
+        Open(paths) => {
+            let paths: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+            format!("open {}", paths.join(" "))
+        }
         TogglePause => "pause".into(),
         Next => "next".into(),
         Prev => "prev".into(),
@@ -329,6 +337,18 @@ fn signed(text: &str) -> Option<(f64, &str)> {
         Some(b'+') => Some((1.0, &text[1..])),
         Some(b'-') => Some((-1.0, &text[1..])),
         _ => None,
+    }
+}
+
+/// The path `text` names, unquoted, with a leading `~` as the home directory.
+/// A relative path stays relative, to the directory playr started in.
+fn path(text: &str) -> PathBuf {
+    let text = unquote(text);
+    let home = || std::env::home_dir().unwrap_or_default();
+    match text.strip_prefix('~') {
+        Some("") => home(),
+        Some(rest) if rest.starts_with('/') => home().join(&rest[1..]),
+        _ => PathBuf::from(text),
     }
 }
 
@@ -456,6 +476,9 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "search" => Ok(Action::Search(rest.to_string())),
         "playlist" if rest.is_empty() => Err(usage()),
         "playlist" => Ok(Action::PlayPlaylist(unquote(rest).to_string())),
+        "scan" | "open" if rest.is_empty() => Err(usage()),
+        "scan" => Ok(Action::Scan(path(rest))),
+        "open" => Ok(Action::Open(vec![path(rest)])),
         "save" if rest.is_empty() => Ok(Action::StartSave),
         "save" => Ok(Action::SaveAs(unquote(rest).to_string())),
         "pause" => nothing(Action::TogglePause),
@@ -648,6 +671,13 @@ pub struct CommandLine {
 }
 
 impl CommandLine {
+    /// Replaces the text, as a frontend's text field edits it, ending any
+    /// completion or recall in progress.
+    pub fn replace(&mut self, text: &str) {
+        self.text = text.to_string();
+        self.settle();
+    }
+
     pub fn push(&mut self, c: char) {
         self.text.push(c);
         self.settle();
@@ -724,4 +754,58 @@ impl CommandLine {
             None => self.text = draft,
         }
     }
+}
+
+/// The keys that work in `view`: its own bindings, then those for every view
+/// that it does not rebind. Keys that run the same command share a row, and a
+/// key bound to nothing is left out. A heading row has no command.
+pub fn key_rows(keys: &Keymap, view: View) -> Vec<(String, String)> {
+    let rebound = |key| {
+        keys.bindings()
+            .iter()
+            .any(|b| b.view == Some(view) && b.key == key)
+    };
+    let mut rows = Vec::new();
+    for (scope, heading) in [
+        (Some(view), format!("in the {} view", view_name(view))),
+        (None, "in every view".to_string()),
+    ] {
+        let mut group: Vec<(String, String)> = Vec::new();
+        let bindings = keys
+            .bindings()
+            .iter()
+            .filter(|b| b.view == scope && (scope.is_some() || !rebound(b.key)));
+        for b in bindings {
+            let Some(action) = &b.action else {
+                continue;
+            };
+            let command = format!(":{}", line(action, Some(view)));
+            match group.iter_mut().find(|(_, c)| *c == command) {
+                Some((k, _)) => *k = format!("{k} {}", b.key),
+                None => group.push((b.key.to_string(), command)),
+            }
+        }
+        if !group.is_empty() {
+            rows.push((heading, String::new()));
+            rows.extend(group);
+        }
+    }
+    rows
+}
+
+/// Every command and what it does, grouped by the view it works in, those
+/// for every view first. A heading row has no description.
+pub fn command_rows() -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    let mut group = None;
+    for c in COMMANDS {
+        if rows.is_empty() || c.view != group {
+            group = c.view;
+            let heading = c.view.map_or("in every view", view_name);
+            rows.push((heading.to_string(), String::new()));
+        }
+        let usage = format!(":{} {}", c.name, c.args);
+        rows.push((usage.trim_end().to_string(), c.help.to_string()));
+    }
+    rows
 }

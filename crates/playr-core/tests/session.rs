@@ -107,10 +107,11 @@ fn the_selection_is_edited_by_track_and_by_index() {
         "no such playlist"
     );
 
+    // c moves two places; a and b keep their order.
     assert_eq!(session.move_in_selection(0, 2), Some(2));
     assert_eq!(
         paths(session.selection()),
-        ["/m/b.flac", "/m/a.flac", "/m/c.flac"]
+        ["/m/a.flac", "/m/b.flac", "/m/c.flac"]
     );
     assert_eq!(session.move_in_selection(0, -1), None);
     assert_eq!(session.move_in_selection(2, 1), None);
@@ -118,7 +119,7 @@ fn the_selection_is_edited_by_track_and_by_index() {
 
     assert_eq!(
         session.remove_from_selection(1),
-        Some(Outcome::RemovedTrack { title: "A".into() })
+        Some(Outcome::RemovedTrack { title: "B".into() })
     );
     assert_eq!(session.remove_from_selection(5), None);
     assert_eq!(session.clear_selection(), Outcome::SelectionCleared);

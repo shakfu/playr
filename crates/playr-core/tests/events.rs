@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use playr_core::audio::{Cmd, State};
 use playr_core::db::{self, Track};
-use playr_core::event::{Event, EventSink};
+use playr_core::event::{Event, EventSink, SCAN_PROGRESS_EVERY};
+use playr_core::notice::Refusal;
 use playr_core::samples::Cut;
 use playr_core::session::Session;
 use playr_core::wave::Peaks;
@@ -200,4 +201,126 @@ fn a_superseded_peaks_read_sends_nothing() {
             .all(|e| !matches!(e, Event::Peaks { job, .. } if job == first)),
         "the cancelled read reported"
     );
+}
+
+/// `n` short WAV files under `dir`, some in a subdirectory.
+fn music(dir: &Path, n: usize) {
+    for i in 0..n {
+        let sub = if i % 2 == 0 { "" } else { "disc 2/" };
+        let path = dir.join(format!("{sub}{i:03}.wav"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        common::silence(&path, 8000, 0.05);
+    }
+}
+
+#[test]
+fn a_scan_reports_progress_then_what_it_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs, SCAN_PROGRESS_EVERY + 20);
+    let (sink, events) = channel();
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+
+    let job = session.scan(songs.clone()).unwrap();
+    assert_eq!(
+        session.scan(songs.clone()),
+        Err(Refusal::ScanRunning),
+        "a second scan started"
+    );
+    let seen = until(&events, |e| matches!(e, Event::Scanned { .. }));
+    assert!(
+        seen.iter().any(|e| matches!(
+            e,
+            Event::ScanProgress { job: j, seen, .. } if *j == job && *seen == SCAN_PROGRESS_EVERY
+        )),
+        "{seen:?}"
+    );
+    match seen.last().unwrap() {
+        Event::Scanned {
+            job: j,
+            dir,
+            result,
+        } => {
+            assert_eq!((*j, dir), (job, &songs));
+            let report = result.as_ref().unwrap();
+            assert_eq!(report.stats.added, SCAN_PROGRESS_EVERY + 20);
+            assert_eq!(report.total, SCAN_PROGRESS_EVERY + 20);
+        }
+        _ => unreachable!(),
+    }
+    assert!(session.tracks().is_empty(), "read before being told");
+    session.scanned();
+    assert_eq!(session.tracks().len(), SCAN_PROGRESS_EVERY + 20);
+
+    // Finished, so another may start; a file is not a directory.
+    assert!(session.scan(songs.clone()).is_ok());
+    let file = songs.join("000.wav");
+    assert_eq!(
+        session.scan(file.clone()),
+        Err(Refusal::NotADirectory(file))
+    );
+}
+
+#[test]
+fn a_scan_from_a_library_in_memory_creates_the_file_and_moves_to_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs, 3);
+    let (sink, events) = channel();
+    let mut session = Session::new(db::open_memory().unwrap(), common::fake_player().0, sink);
+    assert_eq!(session.scan(songs.clone()), Err(Refusal::NoLibraryPath));
+
+    let library = dir.path().join("new/library.db");
+    session.set_library_path(library.clone());
+    session.scan(songs).unwrap();
+    until(&events, |e| matches!(e, Event::Scanned { .. }));
+    assert!(library.exists());
+    assert!(!session.has_library_file());
+    session.scanned();
+    assert!(session.has_library_file());
+    assert_eq!(session.tracks().len(), 3);
+}
+
+#[test]
+fn opening_gathers_tracks_with_tags_from_the_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs, 3);
+    let (sink, events) = channel();
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let known = songs.join("000.wav").canonicalize().unwrap();
+    db::upsert(
+        &conn,
+        &Track {
+            title: Some("Known".into()),
+            mtime: 1,
+            size: 1,
+            ..track(&known)
+        },
+    )
+    .unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+
+    let job = session.open(vec![
+        songs.join("disc 2"),
+        known.clone(),
+        dir.path().join("gone.wav"),
+    ]);
+    let seen = until(&events, |e| matches!(e, Event::Opened { .. }));
+    match seen.last().unwrap() {
+        Event::Opened { job: j, playable } => {
+            assert_eq!(*j, job);
+            let names: Vec<&str> = playable
+                .tracks
+                .iter()
+                .map(|t| t.path.rsplit('/').next().unwrap())
+                .collect();
+            assert_eq!(names, ["001.wav", "000.wav"]);
+            assert_eq!(playable.tracks[1].title.as_deref(), Some("Known"));
+            assert_eq!(playable.problems.len(), 1);
+            assert!(playable.problems[0].contains("gone.wav"), "{playable:?}");
+        }
+        _ => unreachable!(),
+    }
 }

@@ -171,7 +171,7 @@ The event sink sends to the model's channel and calls `ctx.request_repaint()`, s
 
 ## Testing
 
-- **Model:** the terminal's app tests move with the logic into `playr-app` and drive `Model` without drawing, as `crates/playr-app/tests/dispatch.rs` does now.
+- **Model:** `crates/playr-app/tests/model.rs` drives `Model` without drawing. The terminal's key-driven tests in `tests/app.rs` stay with the terminal and cover the same logic through keys.
 - **UI:** `egui_kittest` 0.36 runs the GUI headless and finds widgets by their accessibility labels: click Play, check the model's state, check the message.
 - **Parity:** one table in `playr-gui` maps each control to the `Action` it performs. A test checks that every `Action` variant has a control or a key binding, with a named list of the variants that deliberately have neither. A new `Action` then fails the test until the GUI can reach it.
 - **Screenshots:** `egui_kittest` can compare rendered images; keep that to the sampler view, where the drawing is the feature.
@@ -181,14 +181,49 @@ The event sink sends to the model's channel and calls `ctx.request_repaint()`, s
 | step | change | size |
 |-|-|-|
 | 1 | CI: `make test` on Linux, macOS and Windows on every push | small |
-| 2 | Move the shared model into `playr-app`; the terminal wraps it; no behaviour change | large |
-| 3 | `:scan DIR` as a session job with progress events, and `:open PATH...`; the terminal gains both | medium |
-| 4 | `playr-gui`: window, tabs, library table, search, transport bar, messages, keys | medium |
-| 5 | Selection and playlists, dialogs, command bar, key and command lists, parity test | medium |
+| 2 | Done. Move the shared model into `playr-app`; the terminal wraps it; no behaviour change | large |
+| 3 | Done. `:scan DIR` as a session job with progress events, and `:open PATH...`; the terminal gains both | medium |
+| 4 | Done. `playr-gui`: window, tabs, library table, search, transport bar, messages, keys | medium |
+| 5 | Done. Selection and playlists, dialogs, command bar, key and command lists, parity test | medium |
 | 6 | Sampler view: waveform, zoom, click to seek and mark, slicing | medium |
 | 7 | Packaging: release archives for `playr-gui`, macOS bundle, Windows icon, Linux desktop file | small |
 
-Step 2 carries the risk, as step 3 of the core split did: it moves most of `src/ui/mod.rs`.
+Step 2 carried the risk, as step 3 of the core split did: it moved most of `src/ui/mod.rs`.
+
+### Where step 5 differs from the sketch
+
+- **Controls are tables.** `playr_gui::controls` lists each menu, row menu and button with its action; the window draws them from the tables and the parity test reads the same tables. Controls whose value comes from use, such as a slider or a dragged row, are named in `WITH_VALUES`.
+- **The parity test** (`crates/playr-gui/tests/parity.rs`) takes one of each `Action`, with a `match` that has no wildcard so a new action stops it compiling, and checks each is performed by a control, a default key binding, or a named exception: `Search`, `SaveAs` and `RenameTo` go through the search field and the name dialog's model calls, `PlayPlaylist` is a row's `Activate`, and `Map` and `Unmap` are typed.
+- **A dragged selection row moves, and so does `:move`.** The session swapped a track with the one N places away. For one place that is a move; for a drag across several rows it is not, so `move_in_selection` now moves the track and the tracks between keep their order. `:move +N` changes to match its description.
+- **Only keys a binding used are withheld from widgets.** Withholding every key stopped Escape closing a row's menu.
+- **The command bar edits the model's `CommandLine`.** Tab, Shift-Tab and the arrows are taken before the field sees them, and the field locks focus so Tab completes instead of moving on. Completions for the text so far show above the bar.
+- **Shift-click on the progress bar marks there** (`MarkAt`); a plain click seeks.
+- **Not yet:** the sampler view, CJK fonts, packaging, and a context menu for the sampler's slices.
+
+### Where step 4 differs from the sketch
+
+- **More than the library.** The selection and playlists views are tables too, and the confirmation, name and key and command list dialogs exist in a plain form, because a key can open any of them and the window would otherwise have no way to answer or close it. Step 5 adds their context menus, row dragging, command completion and history, and the parity test.
+- **Keys.** A character comes from egui's text event, which heeds Shift and the layout; a named key or a Ctrl or Alt chord comes from its key event. A key a binding takes is removed from the frame's events, so the `:` that opens the command bar is not typed into it. Once a prompt is open, keys go to its field. Bindings pause only while one of the window's text fields has focus: a focused slider still moves with the arrow keys as they also seek.
+- **Escape is read before a text field is drawn.** An egui text field takes the key when it gives up focus, so a check after the field never sees it.
+- **Shared with the terminal:** tab titles (`View::title`), the confirmation question (`Confirm::question`), the key and command lists (`command::key_rows`, `command_rows`), the meter's scale and zones (`playr_app::meter`), the now-playing label (`model::now_playing`), and `Model::waking`, whose event sink wakes egui.
+- **Not yet:** file dialogs and dropped files (`:open` and `:scan` work from the command bar), the sampler view, CJK fonts, and packaging. The Linux window libraries in the CI workflows are egui's usual list, not yet confirmed by a run.
+- **Tests:** `crates/playr-gui/tests/window.rs` drives the window headless with `egui_kittest`: tabs, keys, clicks, a confirmation, the search field and the command bar. `tests/keys.rs` covers turning egui key events into bindings.
+
+### Where step 3 differs from the sketch
+
+- **`:open` takes one path.** A path runs to the end of the line, so it can hold spaces without quotes, as a playlist name does. `Action::Open` holds a list, so a GUI's file dialog and dropped files open several at once.
+- **Opened tracks join the selection.** They are added to its end and played, and the selection view shows them with the cursor on the first, as `playr <path>` does on an empty selection. Replacing the selection would lose tracks collected for a playlist.
+- **A scan can start from an in-memory library.** The terminal tells the session where the library file goes; the scan creates it, and the session moves onto it once the scan finishes. Marks added before that, which were never saved, are lost.
+- **Writes during a scan can wait.** A mark or a playlist saved while a scan commits a batch waits for it, for up to rusqlite's 5 s busy timeout and then fails, and the interface pauses meanwhile. This follows from SQLite's locking; it has not been measured. Smaller batches, or WAL mode, would shorten the wait; neither is done.
+
+### Where step 2 differs from the sketch
+
+- **Typed text is shared too.** `Model` holds the whole `Input`, including a search or name being typed and the `:` line, not only which prompt is open. An egui `TextEdit` edits a `String` in place, so the GUI can edit the model's text directly, and both frontends show the same prompt state.
+- **Finishing a prompt is a model call.** `answer`, `run_command`, `search_as_typed`, `end_search`, `save_as` and `rename_to` do what the terminal's key handlers did on enter or esc, so a GUI's OK and Cancel buttons do the same.
+- **The help list's scroll stays in the terminal.** The model only records that a list is open; the terminal starts its scroll at 0 whenever no list is open.
+- **Message expiry is the frontend's call.** `Model::expire_message` runs where the terminal's loop cleared the message before. Expiring inside `refresh` would change when a message disappears in tests that refresh for seconds.
+- **The confirmation question stays in the terminal.** `ui::confirm_prompt` ends in "(y/n)", which only fits a key prompt; a dialog words it without.
+- **No repaint hook yet.** The model's event sink sends to a channel only. The GUI needs it to call `ctx.request_repaint()` as well; `Model::new` gains that in step 4.
 
 ## Open questions
 

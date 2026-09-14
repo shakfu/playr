@@ -124,6 +124,8 @@ Without it, Opus files are reported as undecodable and skipped, the same as WMA 
 
 ## Use
 
+A desktop window is in progress: `make gui`, or `cargo run --release -p playr-gui`, opens it with the same options, keys and `:` commands as the terminal. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport and the level meter; the sampler view is not in it yet. [docs/dev/gui.md](docs/dev/gui.md) tracks what is left.
+
 ```sh
 playr scan ~/music          # index a directory
 playr                       # browse the library
@@ -138,7 +140,7 @@ playr formats               # show what this build can decode
 
 `playr <command> --help` describes each command. A search that starts with `-` goes after `--`, as in `playr search -- -ology`. `--json` prints an array with one object per track, holding every library column, `null` for a missing tag, and `duration_ms` in milliseconds; no match prints `[]` and exits with status 1. Bad arguments exit with status 2.
 
-The library lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan` creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
+The library lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan`, or `:scan` inside playr, creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
 
 Rescanning only re-reads files whose size or modification time changed, and drops rows under the scanned directory whose files are gone. Rows elsewhere are kept, so a scan made while a drive is unmounted does not empty its playlists.
 
@@ -255,6 +257,8 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 ### Commands
 
 `:` opens a command line: `:seek 1:23`, `:volume 60`, `:playlist late night`. Every key's action has a command, and commands also take arguments no key can, such as a time or a name. Some commands work only in one view, as `:remove` in the selection. Tab completes, up recalls earlier lines, and `:help` lists every command. [docs/cheatsheet.md](docs/cheatsheet.md) has the full list.
+
+`:scan ~/music` adds a directory to the library without leaving playr. It runs in the background and counts files on the bottom line; once it finishes, the library view shows the new tracks. Saving a playlist or a mark while a scan runs waits for the scan to finish writing its current batch of 500 files, and fails with "database is locked" if that takes more than 5 seconds. `:open ~/music/some/album` plays a file or directory, as `playr <path>` does, and adds its tracks to the end of the selection.
 
 ## Configuration
 

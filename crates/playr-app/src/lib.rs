@@ -6,7 +6,8 @@
 //! frontend implements over its own cursors and prompts. The `:` command
 //! language and key bindings over a key type of its own are here too, with
 //! the `[keys]` tables of the settings file, so a terminal and a GUI read the
-//! same commands and bindings.
+//! same commands and bindings. [`model::Model`] is the interface's state,
+//! which both frontends draw, and [`message::text`] words every message.
 //! `docs/architecture.md` sets out the design.
 
 pub mod action;
@@ -14,6 +15,9 @@ pub mod command;
 pub mod config;
 pub mod dispatch;
 pub mod message;
+pub mod meter;
+pub mod model;
+pub mod sampler;
 
 /// A part of the interface that scopes key bindings and commands. A terminal
 /// shows one at a time; a GUI maps its panels or focus onto them.
@@ -27,6 +31,24 @@ pub enum View {
 }
 
 impl View {
+    /// The views in tab order.
+    pub const ALL: [View; 4] = [
+        View::Library,
+        View::Selection,
+        View::Playlists,
+        View::Sampler,
+    ];
+
+    /// The view's name on its tab.
+    pub fn title(self) -> &'static str {
+        match self {
+            View::Library => "Library",
+            View::Selection => "Selection",
+            View::Playlists => "Playlists",
+            View::Sampler => "Sampler",
+        }
+    }
+
     /// The view `next-view` switches to after this one.
     pub fn next(self) -> Self {
         match self {

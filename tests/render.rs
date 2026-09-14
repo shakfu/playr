@@ -1,9 +1,9 @@
 //! Rendering tests against a headless backend. No audio device involved.
 
 use playr::ui::render::{self, scroll_offset};
-use playr::ui::sampler::Sampler;
 use playr::ui::{Drawn, Input, Lists, Screen, Scroll, Snapshot, View};
 use playr_app::action::Keymap;
+use playr_app::sampler::Sampler;
 use playr_core::audio::{Spec, State, Status};
 use playr_core::db::query::Playlist;
 use playr_core::db::Track;
@@ -928,24 +928,6 @@ fn the_meter_never_overflows_a_narrow_terminal() {
     }
 }
 
-#[test]
-fn a_peak_is_held_then_released() {
-    use playr::ui::{hold_peak, PEAK_HOLD};
-    use std::time::Instant;
-    let start = Instant::now();
-    let held = hold_peak(None, 0.9, start);
-    assert_eq!(held, Some((0.9, start)));
-    // A lower reading inside the hold keeps the peak.
-    let soon = start + PEAK_HOLD / 2;
-    assert_eq!(hold_peak(held, 0.2, soon), held);
-    // A higher one replaces it at once.
-    assert_eq!(hold_peak(held, 0.95, soon), Some((0.95, soon)));
-    // Once the hold has passed, the current reading shows.
-    let later = start + PEAK_HOLD;
-    assert_eq!(hold_peak(held, 0.2, later), Some((0.2, later)));
-    assert_eq!(hold_peak(held, 0.0, later), None);
-}
-
 // --- pane titles ---
 
 #[test]
@@ -1174,7 +1156,7 @@ fn sampling(path: &str, position: Duration, marks: &[Duration]) -> Snapshot {
 
 /// Four seconds at 1,600 frames a second, so 100 ms columns fall on whole
 /// peak buckets: quiet to 2 s, full scale to 3 s, then silence.
-fn sampler_with(path: &str, display: playr::ui::sampler::Display) -> Sampler {
+fn sampler_with(path: &str, display: playr_app::sampler::Display) -> Sampler {
     let data: Vec<f32> = (0..6400)
         .map(|i| match i {
             0..3200 => 0.1,
@@ -1183,7 +1165,7 @@ fn sampler_with(path: &str, display: playr::ui::sampler::Display) -> Sampler {
         })
         .collect();
     Sampler {
-        wave: playr::ui::sampler::Wave::Ready {
+        wave: playr_app::sampler::Wave::Ready {
             path: path.into(),
             peaks: std::sync::Arc::new(playr_core::wave::Peaks::from_interleaved(&data, 1, 1600)),
         },
@@ -1199,7 +1181,7 @@ fn columns(line: &str) -> Vec<char> {
 
 #[test]
 fn the_sampler_draws_the_envelope_with_marks_region_and_playhead() {
-    use playr::ui::sampler::Display;
+    use playr_app::sampler::Display;
     let ms = Duration::from_millis;
     let snapshot = sampling("/m/t.wav", ms(1500), &[ms(1000), ms(2500)]);
     // 42 columns: 40 inside the borders, 100 frames or 100 ms each.
@@ -1274,7 +1256,7 @@ fn the_sampler_draws_the_envelope_with_marks_region_and_playhead() {
 
 #[test]
 fn planned_slices_are_drawn_before_they_are_written() {
-    use playr::ui::sampler::Display;
+    use playr_app::sampler::Display;
     use playr_core::samples::Plan;
     let ms = Duration::from_millis;
     let snapshot = sampling("/m/t.wav", ms(1500), &[ms(1000), ms(2500)]);
@@ -1309,7 +1291,7 @@ fn planned_slices_are_drawn_before_they_are_written() {
 
 #[test]
 fn the_braille_display_draws_the_same_waveform_around_a_centre_line() {
-    use playr::ui::sampler::Display;
+    use playr_app::sampler::Display;
     let snapshot = sampling("/m/t.wav", Duration::ZERO, &[]);
     let lines = Case::new(View::Sampler, &snapshot)
         .sampler(sampler_with("/m/t.wav", Display::Braille))
@@ -1338,7 +1320,7 @@ fn the_braille_display_draws_the_same_waveform_around_a_centre_line() {
 
 #[test]
 fn the_sampler_says_why_there_is_no_waveform() {
-    use playr::ui::sampler::Wave;
+    use playr_app::sampler::Wave;
     let idle = Case::new(View::Sampler, &stopped()).text();
     assert!(idle.contains("Nothing is playing"), "{idle}");
 
@@ -1354,7 +1336,7 @@ fn the_sampler_says_why_there_is_no_waveform() {
     assert!(text.contains("Reading the waveform"), "{text}");
 
     // Peaks of another track are not drawn for this one.
-    let stale = sampler_with("/m/other.wav", playr::ui::sampler::Display::Envelope);
+    let stale = sampler_with("/m/other.wav", playr_app::sampler::Display::Envelope);
     let text = Case::new(View::Sampler, &snapshot).sampler(stale).text();
     assert!(text.contains("Reading the waveform"), "{text}");
 
@@ -1380,7 +1362,7 @@ fn a_short_sampler_view_keeps_its_axis_and_detail_lines() {
         let text = Case::new(View::Sampler, &snapshot)
             .sampler(sampler_with(
                 "/m/t.wav",
-                playr::ui::sampler::Display::Envelope,
+                playr_app::sampler::Display::Envelope,
             ))
             .size(42, height)
             .text();
@@ -1390,7 +1372,7 @@ fn a_short_sampler_view_keeps_its_axis_and_detail_lines() {
 
 #[test]
 fn the_envelope_shades_rms_inside_the_peak() {
-    use playr::ui::sampler::{Display, Wave};
+    use playr_app::sampler::{Display, Wave};
     use ratatui::style::Color;
     // A full-scale square wave has RMS equal to its peak; a sine's RMS is
     // 0.707 of its peak. Four seconds at 1,600 frames a second.
@@ -1443,7 +1425,7 @@ fn the_envelope_shades_rms_inside_the_peak() {
 
 #[test]
 fn drawing_returns_the_zoom_clamped_to_the_track() {
-    use playr::ui::sampler::Display;
+    use playr_app::sampler::Display;
     let zoomed = |zoom| Sampler {
         zoom,
         ..sampler_with("/m/t.wav", Display::Envelope)
@@ -1469,7 +1451,7 @@ fn drawing_returns_the_zoom_clamped_to_the_track() {
 
 #[test]
 fn the_db_display_draws_levels_from_minus_48_db() {
-    use playr::ui::sampler::Display;
+    use playr_app::sampler::Display;
     let snapshot = sampling("/m/t.wav", Duration::ZERO, &[]);
     let lines = Case::new(View::Sampler, &snapshot)
         .sampler(sampler_with("/m/t.wav", Display::Decibels))

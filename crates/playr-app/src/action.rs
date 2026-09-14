@@ -9,6 +9,7 @@
 //! defaults built.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::View;
@@ -53,6 +54,10 @@ pub enum Action {
     StartRename,
     RenameTo(String),
     PlayPlaylist(String),
+    /// Scan a directory into the library, in the background.
+    Scan(PathBuf),
+    /// Play files or directories, adding them to the selection.
+    Open(Vec<PathBuf>),
 
     TogglePause,
     Next,

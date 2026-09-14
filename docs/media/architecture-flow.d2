@@ -7,8 +7,7 @@ terminal: "playr (terminal)" {
   input: "key event\n(crossterm)"
   key_of: "ui::key_of"
   prompt: ": prompt"
-  app: "ui::App\n(Frontend)"
-  channel: "event channel"
+  app: "ui::App"
   render: "render::draw"
 }
 
@@ -16,6 +15,8 @@ app: "playr-app" {
   keymap: "Keymap::lookup"
   parse: "command::parse"
   dispatch
+  model: "Model\n(Frontend)"
+  channel: "event channel"
 }
 
 core: "playr-core" {
@@ -27,16 +28,17 @@ core: "playr-core" {
 
 terminal.input -> terminal.key_of
 terminal.key_of -> app.keymap: "Key"
-terminal.prompt -> app.parse: "line"
+terminal.prompt -> app.parse: "Model::run_command"
 app.keymap -> app.dispatch: "Action"
 app.parse -> app.dispatch: "Action"
 app.dispatch -> core.session: "operations with explicit arguments"
 core.session -> app.dispatch: "Notice"
-app.dispatch -> terminal.app: "notify, prompt, confirm,\npresent, set_cursor"
+app.dispatch -> app.model: "notify, prompt, confirm,\npresent, set_cursor"
 core.session -> core.jobs: "starts"
 core.jobs -> core.sink: "Peaks, Planned, Exported"
 core.engine -> core.sink: "TrackChanged, StateChanged,\nPlaybackError"
-core.sink -> terminal.channel: "Event"
-terminal.channel -> terminal.app: "drained each frame"
+core.sink -> app.channel: "Event"
+app.channel -> app.model: "drained by refresh"
+terminal.app -> app.model: "refresh, perform, answer"
 terminal.app -> terminal.render: "&Screen"
 terminal.render -> terminal.app: "Drawn"

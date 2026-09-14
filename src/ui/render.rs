@@ -7,12 +7,15 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, 
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use super::sampler::{self, Display, Fill, Wave};
+use super::sampler::{self as glyphs, Fill};
 use super::{
-    confirm_prompt, fmt_time, state_glyph, view_title, Drawn, Input, Screen, Scroll, Snapshot, View,
+    confirm_prompt, state_glyph, view_title, Drawn, Input, Screen, Scroll, Snapshot, View,
 };
-use playr_app::action::{Action, Keymap};
-use playr_app::command::{self, view_name, COMMANDS};
+use playr_app::action::Action;
+use playr_app::command::{self, view_name};
+use playr_app::message::fmt_time;
+use playr_app::sampler::{self, Display, Wave};
+use playr_app::{meter, model};
 use playr_core::audio::State;
 use playr_core::db::Track;
 
@@ -52,66 +55,21 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
     draw_bar(app, f, bar);
     drawn.help_scroll = match app.input {
         Input::Help => {
-            let rows = key_rows(app.keys, app.view);
+            let rows = command::key_rows(app.keys, app.view);
             let rows: Vec<(&str, &str)> =
                 rows.iter().map(|(k, c)| (k.as_str(), c.as_str())).collect();
             let name = format!("Keys in the {} view", view_name(app.view));
             draw_help(f, f.area(), &name, &rows, app.help_scroll)
         }
         Input::CommandHelp => {
-            let mut rows: Vec<(String, &str)> = Vec::new();
-            let mut group = None;
-            for c in COMMANDS {
-                if rows.is_empty() || c.view != group {
-                    group = c.view;
-                    let heading = c.view.map_or("in every view", view_name);
-                    rows.push((heading.to_string(), ""));
-                }
-                rows.push((format!(":{} {}", c.name, c.args), c.help));
-            }
-            let rows: Vec<(&str, &str)> = rows.iter().map(|(k, h)| (k.trim_end(), *h)).collect();
+            let rows = command::command_rows();
+            let rows: Vec<(&str, &str)> =
+                rows.iter().map(|(k, h)| (k.as_str(), h.as_str())).collect();
             draw_help(f, f.area(), "Commands", &rows, app.help_scroll)
         }
         _ => app.help_scroll,
     };
     drawn
-}
-
-/// The keys that work in `view`: its own bindings, then those for every view
-/// that it does not rebind. Keys that run the same command share a row, and a
-/// key bound to nothing is left out. A heading row has no command.
-fn key_rows(keys: &Keymap, view: View) -> Vec<(String, String)> {
-    let rebound = |key| {
-        keys.bindings()
-            .iter()
-            .any(|b| b.view == Some(view) && b.key == key)
-    };
-    let mut rows = Vec::new();
-    for (scope, heading) in [
-        (Some(view), format!("in the {} view", view_name(view))),
-        (None, "in every view".to_string()),
-    ] {
-        let mut group: Vec<(String, String)> = Vec::new();
-        let bindings = keys
-            .bindings()
-            .iter()
-            .filter(|b| b.view == scope && (scope.is_some() || !rebound(b.key)));
-        for b in bindings {
-            let Some(action) = &b.action else {
-                continue;
-            };
-            let command = format!(":{}", command::line(action, Some(view)));
-            match group.iter_mut().find(|(_, c)| *c == command) {
-                Some((k, _)) => *k = format!("{k} {}", b.key),
-                None => group.push((b.key.to_string(), command)),
-            }
-        }
-        if !group.is_empty() {
-            rows.push((heading, String::new()));
-            rows.extend(group);
-        }
-    }
-    rows
 }
 
 /// A list of keys or commands and what they do, centred over everything else.
@@ -263,7 +221,7 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
                     })
                 })
                 .collect();
-            sampler::envelope_rows(&columns, rows)
+            glyphs::envelope_rows(&columns, rows)
                 .iter()
                 .map(|row| {
                     runs(row.iter().enumerate().map(|(c, cell)| {
@@ -298,7 +256,7 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
                         .map_or((1.0, -1.0), |e| (e.min / loudest, e.max / loudest))
                 })
                 .collect();
-            sampler::braille_rows(&extents, rows)
+            glyphs::braille_rows(&extents, rows)
                 .iter()
                 .map(|row| {
                     runs(
@@ -691,20 +649,7 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         vertical: 0,
     }));
 
-    // Prefer the tagged title from the playing list over the bare file name.
-    let label = app
-        .playing
-        .get(status.index)
-        .map(|t| format!("{} - {}", t.display_title(), t.display_artist()))
-        .or_else(|| {
-            status.current().map(|p| {
-                p.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-        })
-        .unwrap_or_else(|| "nothing playing".into());
+    let label = model::now_playing(app.playing, status).unwrap_or_else(|| "nothing playing".into());
 
     let mut spans = vec![
         Span::styled(
@@ -823,31 +768,20 @@ fn draw_marks(app: &Screen<'_>, f: &mut Frame, area: Rect) {
     );
 }
 
-/// Lowest level the loudness bar shows, in dB relative to full scale.
-const METER_FLOOR_DB: f32 = -40.0;
 /// Cells in the volume bar.
 const VOLUME_CELLS: usize = 10;
 
 /// Cells of `cells` that a level of `db` fills, from the floor to full scale.
 fn meter_cells(db: f32, cells: usize) -> usize {
-    let fraction = (db - METER_FLOOR_DB) / -METER_FLOOR_DB;
-    (fraction * cells as f32).round().clamp(0.0, cells as f32) as usize
+    (meter::fraction(db) * cells as f32).round() as usize
 }
-
-/// Where the bar turns yellow: the EBU R68 digital alignment level.
-const YELLOW_FROM_DB: f32 = -18.0;
-/// Where the bar turns red: a conventional headroom mark.
-const RED_FROM_DB: f32 = -6.0;
 
 /// Colour of cell `i` of `cells`, by the level at its centre, as on an LED meter.
 fn zone_colour(i: usize, cells: usize) -> Color {
-    let db = METER_FLOOR_DB * (1.0 - (i as f32 + 0.5) / cells as f32);
-    if db >= RED_FROM_DB {
-        Color::Red
-    } else if db >= YELLOW_FROM_DB {
-        Color::Yellow
-    } else {
-        Color::Green
+    match meter::zone(meter::level_at((i as f32 + 0.5) / cells as f32)) {
+        meter::Zone::Red => Color::Red,
+        meter::Zone::Yellow => Color::Yellow,
+        meter::Zone::Green => Color::Green,
     }
 }
 
@@ -880,8 +814,7 @@ fn level_bar(loudness: Option<f32>, peak: Option<f32>, cells: usize) -> Line<'st
 fn level_readout(loudness: Option<f32>, peak: Option<f32>) -> Vec<Span<'static>> {
     let lufs = loudness.map_or("   --".into(), |l| format!("{l:>5.1}"));
     let pk = peak.map_or("   --".into(), |p| format!("{p:>5.1}"));
-    // At full scale the source itself is clipping; playr's gain never exceeds 1.
-    let clipping = peak.is_some_and(|p| p >= -0.1);
+    let clipping = peak.is_some_and(meter::clipping);
     vec![
         Span::styled(format!("{lufs} LUFS  "), Style::default().fg(DIM)),
         Span::styled(

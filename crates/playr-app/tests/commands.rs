@@ -100,7 +100,7 @@ fn a_unique_prefix_names_a_command_and_an_ambiguous_one_lists_the_choices() {
     );
     assert_eq!(
         lib("s"),
-        Err("ambiguous command s: search, save, stop, seek, speed, slice".into())
+        Err("ambiguous command s: search, save, scan, stop, seek, speed, slice".into())
     );
     // Only the commands usable here count: `de` is `delmarks` unless `delete` works too.
     assert_eq!(lib("de"), Ok(Action::ClearMarks));
@@ -502,6 +502,8 @@ fn command_lines_round_trip_through_parse() {
         "map shift-right seek +60",
         "map selection ctrl-x nop",
         "unmap playlists f5",
+        "scan /music/new arrivals",
+        "open /music/a.flac",
     ] {
         let action = parse(text, Library).unwrap();
         assert_eq!(line(&action, Some(Library)), text);
@@ -582,4 +584,22 @@ fn the_cheatsheet_lists_every_command_under_its_view() {
             "{usage} missing from the {heading} section of docs/cheatsheet.md"
         );
     }
+}
+
+#[test]
+fn scan_and_open_take_a_path_with_home_as_tilde() {
+    let home = std::env::home_dir().unwrap();
+    assert_eq!(
+        lib("scan ~/music/new arrivals"),
+        Ok(Action::Scan(home.join("music/new arrivals")))
+    );
+    assert_eq!(
+        lib("open \"/music/a b.flac\""),
+        Ok(Action::Open(vec!["/music/a b.flac".into()]))
+    );
+    assert_eq!(lib("open ~"), Ok(Action::Open(vec![home.clone()])));
+    // Only `~` and `~/` name the home directory; `~bob` is a relative path.
+    assert_eq!(lib("scan ~bob"), Ok(Action::Scan("~bob".into())));
+    assert_eq!(lib("scan"), Err("usage: :scan DIR".into()));
+    assert_eq!(lib("open"), Err("usage: :open PATH".into()));
 }

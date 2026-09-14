@@ -10,6 +10,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 - A leading `+` or `-` makes a number relative: `:seek +10`, `:volume -5`, `:speed +1`. Without a sign it is absolute.
 - `NAME` and `QUERY` run to the end of the line, so spaces need no quotes.
 - `[ ]` marks an optional argument. Without it, `:search`, `:save` and `:rename` open their prompt.
+- `PATH` and `DIR` run to the end of the line; a leading `~` is the home directory, and a relative path is relative to where playr started. `:scan` runs in the background, reports progress on the bottom line, and creates the library if there is none. `:open` adds the files to the end of the selection and plays them.
 - `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
 
 ## Every view
@@ -29,6 +30,8 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:search [QUERY]`                     | `/`                     | search the library; no query opens /        |
 | `:playlist NAME`                      |                         | play a saved playlist                       |
 | `:save [NAME]`                        | `s`                     | save the selection as a playlist            |
+| `:scan DIR`                           |                         | add a directory to the library              |
+| `:open PATH`                          |                         | play a file or directory, and select it     |
 | `:pause`                              | `space`                 | play or pause                               |
 | `:next`                               | `n`                     | next track                                  |
 | `:prev`                               | `p`                     | previous track                              |

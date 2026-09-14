@@ -12,6 +12,7 @@ categories = ["multimedia::audio"]
 
 [dependencies]
 playr-core.workspace = true
+rusqlite.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -19,4 +20,3 @@ tempfile.workspace = true
 cpal.workspace = true
 rtrb.workspace = true
 hound.workspace = true
-rusqlite.workspace = true

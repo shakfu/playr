@@ -1,7 +1,7 @@
 INSTALL_DIR := $(HOME)/.local/bin
 DIAGRAMS := $(patsubst %.d2,%.svg,$(wildcard docs/media/*.d2))
 
-.PHONY: all build release test fmt clippy run clean install diagrams
+.PHONY: all build release test fmt clippy run gui clean install diagrams
 
 all: build
 
@@ -24,6 +24,10 @@ clippy:
 
 run:
 	@cargo run --release
+
+# The desktop window, still in progress; see docs/dev/gui.md.
+gui:
+	@cargo run --release -p playr-gui
 
 install: release
 	@install -d $(INSTALL_DIR)

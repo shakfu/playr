@@ -11,7 +11,11 @@ use std::sync::Arc;
 
 use crate::audio::State;
 use crate::samples::{Exported, Plan};
+use crate::scan::{Playable, ScanReport};
 use crate::wave::Peaks;
+
+/// How many files a scan sees between [`Event::ScanProgress`] events.
+pub const SCAN_PROGRESS_EVERY: usize = 100;
 
 /// Names a piece of background work, so its event can be matched to it.
 pub type JobId = u64;
@@ -51,4 +55,20 @@ pub enum Event {
         job: JobId,
         result: Result<Exported, String>,
     },
+    /// A scan has seen `seen` files so far, `added` of them new or changed.
+    /// Sent every [`SCAN_PROGRESS_EVERY`] files.
+    ScanProgress {
+        job: JobId,
+        seen: usize,
+        added: usize,
+    },
+    /// A scan of `dir` finished. The session reads the library again once
+    /// told with `Session::scanned`.
+    Scanned {
+        job: JobId,
+        dir: PathBuf,
+        result: Result<ScanReport, String>,
+    },
+    /// Paths given to `Session::open` are gathered into tracks to play.
+    Opened { job: JobId, playable: Playable },
 }

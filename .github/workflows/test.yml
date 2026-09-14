@@ -30,9 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install ALSA headers and ffmpeg
+      # ALSA for playback; the rest for the desktop window's windowing libraries.
+      - name: Install ALSA headers, window libraries and ffmpeg
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev ffmpeg
 
       - name: Install ffmpeg
         if: runner.os == 'macOS'
@@ -58,8 +59,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install ALSA headers
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Install ALSA headers and window libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:

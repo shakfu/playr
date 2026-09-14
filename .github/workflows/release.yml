@@ -49,8 +49,9 @@ jobs:
           name: notes
           path: notes.md
 
-      - name: Install ALSA headers
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # `make test` builds the desktop window too, which needs its windowing libraries.
+      - name: Install ALSA headers and window libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
       - uses: dtolnay/rust-toolchain@stable
 

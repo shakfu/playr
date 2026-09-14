@@ -154,7 +154,9 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     // `ratatui::init` panics without a terminal; report it instead, since
     // running playr from a pipe or a service is an easy mistake to make.
     let mut terminal = ratatui::try_init().map_err(|e| format!("playr needs a terminal: {e}"))?;
-    let app = ui::App::configured(conn, player, start, config);
+    let mut app = ui::App::configured(conn, player, start, config);
+    // `:scan` creates the library here when there is none yet.
+    app.set_library_path(db_path);
     let result = app.run(&mut terminal);
     ratatui::restore();
     result?;
@@ -238,68 +240,19 @@ fn cmd_scan(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Expands the command line into a track list.
-///
-/// Directories are walked recursively. Tags come from the library when the file
-/// is already known, and are read from disk otherwise, so playing an unscanned
-/// directory still shows titles rather than file names.
+/// The tracks the paths on the command line name, with each problem reported.
 fn collect_paths(
     conn: &rusqlite::Connection,
-    args: &[PathBuf],
+    paths: &[PathBuf],
 ) -> Result<Vec<Track>, Box<dyn std::error::Error>> {
-    let mut files: Vec<PathBuf> = Vec::new();
-    for arg in args {
-        // Canonical, to match the library's keys: `playr .` must find the
-        // rows `playr scan ~/music` wrote.
-        let Ok(path) = arg.canonicalize() else {
-            eprintln!("playr: no such file: {}", arg.display());
-            continue;
-        };
-        if path.is_dir() {
-            let mut found: Vec<PathBuf> = Vec::new();
-            for entry in walkdir::WalkDir::new(path).follow_links(false) {
-                match entry {
-                    Ok(e) if e.file_type().is_file() && scan::is_audio(e.path()) => {
-                        found.push(e.into_path())
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("playr: cannot read {e}"),
-                }
-            }
-            found.sort();
-            files.extend(found);
-        } else if path.is_file() {
-            files.push(path);
-        } else {
-            eprintln!("playr: no such file: {}", arg.display());
-        }
+    let found = scan::playable(paths, |key| db::query::by_path(conn, key).ok().flatten());
+    for problem in &found.problems {
+        eprintln!("playr: {problem}");
     }
-    // The queue carries paths as text, so a lossy name would open nothing.
-    files.retain(|p| {
-        let ok = p.to_str().is_some();
-        if !ok {
-            eprintln!("playr: skipping a path that is not UTF-8: {}", p.display());
-        }
-        ok
-    });
-    if files.is_empty() {
+    if found.tracks.is_empty() {
         return Err("nothing playable in those paths".into());
     }
-
-    Ok(files
-        .into_iter()
-        .map(|p| {
-            let key = p.to_string_lossy().into_owned();
-            db::query::by_path(conn, &key)
-                .ok()
-                .flatten()
-                .or_else(|| scan::read_track(&p))
-                .unwrap_or(Track {
-                    path: key,
-                    ..Default::default()
-                })
-        })
-        .collect())
+    Ok(found.tracks)
 }
 
 fn print_formats() {

@@ -1,0 +1,29 @@
+[package]
+name = "playr-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A desktop window for playr, with the terminal interface's features"
+keywords = ["music", "audio", "player", "gui"]
+categories = ["multimedia::audio"]
+# Not published until it has the terminal's features; see docs/dev/gui.md.
+publish = false
+
+[dependencies]
+playr-core.workspace = true
+playr-app.workspace = true
+eframe = "0.36.2"
+egui_extras = "0.36.2"
+clap = { version = "4.6", features = ["derive"] }
+rusqlite.workspace = true
+rfd = "0.17"
+
+[dev-dependencies]
+cpal.workspace = true
+egui_kittest = { version = "0.36.2", features = ["eframe"] }
+hound.workspace = true
+rtrb.workspace = true
+tempfile.workspace = true

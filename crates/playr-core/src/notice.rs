@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::audio::Mode;
+use crate::scan::ScanReport;
 
 /// A report of one operation.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +78,25 @@ pub enum Outcome {
         dir: PathBuf,
         slices: usize,
     },
+    ScanStarted {
+        dir: PathBuf,
+    },
+    /// A scan in progress has seen `seen` files, `added` of them new or changed.
+    Scanning {
+        seen: usize,
+        added: usize,
+    },
+    Scanned {
+        dir: PathBuf,
+        report: ScanReport,
+    },
+    /// Paths are being gathered to play.
+    Opening,
+    /// `tracks` gathered and playing; `skipped` paths could not be.
+    Opened {
+        tracks: usize,
+        skipped: usize,
+    },
 }
 
 /// Why an operation did nothing.
@@ -101,6 +121,11 @@ pub enum Refusal {
     NoMarks,
     NoLaterMark,
     NoEarlierMark,
+    /// The session has no library file set, so a scan has nowhere to write.
+    NoLibraryPath,
+    NotADirectory(PathBuf),
+    /// One scan at a time: a second would write the same file.
+    ScanRunning,
 }
 
 /// An operation that can fail, for [`Notice::Failed`].
@@ -113,6 +138,8 @@ pub enum Task {
     ClearMarks,
     Slice,
     Export,
+    Scan,
+    Open,
 }
 
 impl From<Outcome> for Notice {

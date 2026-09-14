@@ -5,15 +5,12 @@ direction: down
 
 playr: "playr (terminal frontend)" {
   main: "main.rs\nclap command line"
-  app: "ui::App\nimplements Frontend"
+  app: "ui::App\nkeys to Model calls"
   render: "ui::render\ndraw(&Screen) -> Drawn"
   sampler: "ui::sampler\nwaveform glyphs"
-  notice: "ui::notice::text\nwords every Message"
 }
 
-gui: "playr-gui (egui frontend)\nnot built" {
-  style.stroke-dash: 3
-}
+gui: "playr-gui (egui frontend)\nin progress"
 
 tauri: "playr-tauri (Tauri backend)\nnot built" {
   style.stroke-dash: 3
@@ -24,7 +21,9 @@ app: "playr-app" {
   command: "command\n: parser, completion, history"
   config: "config\n[keys] tables"
   dispatch: "dispatch\nFrontend, dispatch"
-  message: "message\nMessage"
+  message: "message\nMessage, text"
+  model: "model\nModel: Frontend"
+  sampler: "sampler\nwave, zoom, window"
 }
 
 core: "playr-core" {
@@ -41,12 +40,8 @@ core: "playr-core" {
 
 playr -> app: "actions, commands, keys"
 playr -> core: "Session, types"
-gui -> app: "actions, commands, keys" {
-  style.stroke-dash: 3
-}
-gui -> core: "Session, types" {
-  style.stroke-dash: 3
-}
+gui -> app: "actions, commands, keys"
+gui -> core: "Session, types"
 tauri -> core: "serde feature (step 8)" {
   style.stroke-dash: 3
 }

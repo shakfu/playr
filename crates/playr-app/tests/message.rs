@@ -1,15 +1,14 @@
-//! The words the terminal shows for each message.
+//! The words every frontend shows for each message.
 //!
 //! Tests elsewhere assert on messages as data; this is the one place their
 //! wording is checked, so changing a phrase changes one line here.
 
 use std::time::Duration;
 
-use playr::ui::notice::{text, Message};
-use playr::ui::sampler::Display;
-use playr::ui::View;
 use playr_app::action::Key;
 use playr_app::command::parse;
+use playr_app::message::{fmt_time, home_as_tilde, text, Message};
+use playr_app::{Display, View};
 use playr_core::audio::Mode;
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
 
@@ -114,6 +113,61 @@ fn outcomes_are_worded() {
 }
 
 #[test]
+fn scans_and_opened_files_are_worded() {
+    use playr_core::scan::{ScanReport, ScanStats};
+    let home = std::env::home_dir().unwrap();
+    let report = ScanReport {
+        stats: ScanStats {
+            seen: 1200,
+            added: 300,
+            skipped: 899,
+            failed: 1,
+        },
+        removed: 2,
+        total: 5000,
+    };
+    for (outcome, words) in [
+        (
+            Outcome::ScanStarted {
+                dir: home.join("music"),
+            },
+            "scanning ~/music",
+        ),
+        (
+            Outcome::Scanning {
+                seen: 1200,
+                added: 300,
+            },
+            "scanning: 1200 files, 300 added",
+        ),
+        (
+            Outcome::Scanned {
+                dir: home.join("music"),
+                report,
+            },
+            "scanned ~/music: 300 added, 2 removed, 1 unreadable; 5000 tracks",
+        ),
+        (Outcome::Opening, "opening"),
+        (
+            Outcome::Opened {
+                tracks: 1,
+                skipped: 0,
+            },
+            "playing 1 track",
+        ),
+        (
+            Outcome::Opened {
+                tracks: 12,
+                skipped: 2,
+            },
+            "playing 12 tracks; 2 skipped",
+        ),
+    ] {
+        assert_eq!(text(&outcome.into()), words);
+    }
+}
+
+#[test]
 fn refusals_are_worded() {
     for (refusal, words) in [
         (Refusal::NothingPlaying, "nothing is playing"),
@@ -140,6 +194,12 @@ fn refusals_are_worded() {
         (Refusal::NoMarks, "no marks in this track"),
         (Refusal::NoLaterMark, "no later mark"),
         (Refusal::NoEarlierMark, "no earlier mark"),
+        (Refusal::NoLibraryPath, "no library file to scan into"),
+        (
+            Refusal::NotADirectory("/opt/nothing".into()),
+            "not a directory: /opt/nothing",
+        ),
+        (Refusal::ScanRunning, "a scan is already running"),
     ] {
         assert_eq!(text(&refusal.into()), words);
     }
@@ -160,6 +220,8 @@ fn failures_and_playback_errors_are_worded() {
     assert_eq!(failed(Task::ClearMarks), "could not clear marks: disk full");
     assert_eq!(failed(Task::Slice), "slicing failed: disk full");
     assert_eq!(failed(Task::Export), "export failed: disk full");
+    assert_eq!(failed(Task::Scan), "scan failed: disk full");
+    assert_eq!(failed(Task::Open), "could not open: disk full");
 
     let playback = |missed| {
         text(&Message::Core(Notice::PlaybackError {
@@ -210,4 +272,22 @@ fn terminal_messages_are_worded() {
     ] {
         assert_eq!(text(&message), words);
     }
+}
+
+#[test]
+fn paths_under_home_are_shown_from_tilde() {
+    use std::path::Path;
+    let home = std::env::home_dir().unwrap();
+    assert_eq!(
+        home_as_tilde(&home.join("Music/playr/samples/amen")),
+        "~/Music/playr/samples/amen"
+    );
+    assert_eq!(home_as_tilde(Path::new("/opt/cuts")), "/opt/cuts");
+}
+
+#[test]
+fn times_are_minutes_and_seconds_then_hours() {
+    assert_eq!(fmt_time(Duration::from_millis(59_999)), "0:59");
+    assert_eq!(fmt_time(secs(754)), "12:34");
+    assert_eq!(fmt_time(secs(3723)), "1:02:03");
 }

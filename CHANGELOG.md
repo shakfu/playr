@@ -2,6 +2,26 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- A desktop window, `playr-gui`, in progress. It opens with the terminal's options, key bindings and `:` commands, and draws the library, selection and playlists as tables, with search, the transport, marks, volume, speed, mode and the level meter. Menus and a right-click menu on each row reach every action a key does; selection rows drag to a new place; File opens files and folders or adds a folder to the library, and files dropped on the window play; the command bar completes with Tab and recalls with the arrows. The sampler view and packaging are still to come; `docs/dev/gui.md` tracks them. It is built with egui's own dark style and wraps the same `Model` as the terminal, so a click does what the key does. Library API: `View::ALL` and `View::title`, `Confirm::question`, `command::key_rows` and `command_rows`, `playr_app::meter`, `model::now_playing`, `Model::waking` and `CommandLine::replace`.
+
+- `:scan DIR` adds a directory to the library without leaving playr, and `:open PATH` plays a file or directory. A scan runs in the background, counts files on the bottom line, and creates the library if playr started without one; the library view shows the new tracks when it finishes. `:open` adds the tracks to the end of the selection and plays them, as `playr <path>` does, so tracks already collected for a playlist are kept. Both exist so a GUI user who never opens a terminal can build a library and play files, and the terminal has them too so the two frontends do the same things.
+
+  Saving a mark or a playlist during a scan waits while the scan commits its current batch of 500 files, and fails after 5 s. Library API: `Session::scan`, `scanned`, `open` and `set_library_path`; `Event::ScanProgress`, `Scanned` and `Opened`; `scan::scan_into` and `scan::playable`; `App::set_library_path`.
+
+### Changed
+
+- The interface's state is shared, the first step of a GUI frontend (`docs/dev/gui.md`). `playr_app::model::Model` holds what the terminal's `App` held apart from drawing: the session, views and cursors, search results, the list playing, prompts and questions with their typed text, the message, the sampler's state and the per-frame snapshot. It implements `Frontend`, and `App` wraps it, so a GUI built on it does what a key does in the terminal. Nothing a user sees changes.
+
+  Library API: `ui::notice::text` is `playr_app::message::text`, with `fmt_time` and `home_as_tilde`; `ui::Snapshot`, `ui::Input`, `hold_peak` and `PEAK_HOLD` are in `playr_app::model`, and `ui` re-exports `Input` and `Snapshot`; `ui::sampler`'s `Sampler`, `Wave`, `window`, `fmt_frames`, `db_height`, `DB_FLOOR` and `MIN_FRAMES_PER_COLUMN` are in `playr_app::sampler`, and `ui::sampler` keeps the glyph code; `App` no longer implements `Frontend`.
+
+### Fixed
+
+- `:move +N` and `:move -N` move the track N places, as documented. They swapped it with the track N places away, so `:move +2` on A, B, C gave C, B, A rather than B, C, A. `J` and `K` move by one place, where the two agree.
+
 ## [0.5.1]
 
 ### Added

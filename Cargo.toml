@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/playr-core", "crates/playr-app"]
+members = ["crates/playr-core", "crates/playr-app", "crates/playr-gui"]
 
 [workspace.package]
 version = "0.5.1"

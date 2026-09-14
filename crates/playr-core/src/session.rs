@@ -16,11 +16,13 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 use crate::audio::{Cmd, Mode, Player, State};
+use crate::db;
 use crate::db::query::{self, Mark, Playlist};
 use crate::db::Track;
 use crate::event::{Event, EventSink, JobId};
 use crate::notice::{Notice, Outcome, Refusal, Task};
 use crate::samples::{self, Cut, Job, Plan};
+use crate::scan;
 use crate::wave::Peaks;
 
 /// Marks closer than this to one another are the same mark.
@@ -48,6 +50,10 @@ pub struct Session {
     next_job: JobId,
     /// Stops the peaks read in progress, which a newer read replaces.
     reading: Option<Arc<AtomicBool>>,
+    /// The library file a scan writes to.
+    library: Option<PathBuf>,
+    /// Set while a scan runs.
+    scanning: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -55,6 +61,7 @@ impl Session {
     /// from the engine and from background work go to `events`.
     pub fn new(conn: Connection, player: Player, events: EventSink) -> Session {
         player.set_events(events.clone());
+        let library = conn.path().filter(|p| !p.is_empty()).map(PathBuf::from);
         let mut session = Session {
             conn,
             player,
@@ -67,6 +74,8 @@ impl Session {
             events,
             next_job: 1,
             reading: None,
+            library,
+            scanning: Arc::default(),
         };
         session.reload();
         session
@@ -75,6 +84,12 @@ impl Session {
     /// Sets the directory exported slices are written under.
     pub fn set_samples_dir(&mut self, dir: PathBuf) {
         self.samples = dir;
+    }
+
+    /// Sets the library file a scan writes to, for a session over an
+    /// in-memory library. A session over a file scans into that file.
+    pub fn set_library_path(&mut self, path: PathBuf) {
+        self.library = Some(path);
     }
 
     /// Reads the library's tracks and playlists again.
@@ -235,7 +250,9 @@ impl Session {
         if index >= self.selection.len() || to >= self.selection.len() {
             return None;
         }
-        self.selection.swap(index, to);
+        // Moved, not swapped: the tracks between keep their order.
+        let track = self.selection.remove(index);
+        self.selection.insert(to, track);
         Some(to)
     }
 
@@ -535,6 +552,66 @@ impl Session {
                 result: samples::export(&work),
             })
         }))
+    }
+
+    /// Scans `dir` into the library file, creating it if there is none.
+    /// Sends [`Event::ScanProgress`] as it goes and finishes with
+    /// [`Event::Scanned`], after which the frontend calls [`Session::scanned`].
+    pub fn scan(&mut self, dir: PathBuf) -> Result<JobId, Refusal> {
+        let Some(library) = self.library.clone() else {
+            return Err(Refusal::NoLibraryPath);
+        };
+        if !dir.is_dir() {
+            return Err(Refusal::NotADirectory(dir));
+        }
+        if self.scanning.swap(true, Ordering::Relaxed) {
+            return Err(Refusal::ScanRunning);
+        }
+        let (scanning, events) = (self.scanning.clone(), self.events.clone());
+        Ok(self.spawn(move |job| {
+            let result = scan::scan_into(&library, &dir, |stats| {
+                if stats.seen % crate::event::SCAN_PROGRESS_EVERY == 0 {
+                    events(Event::ScanProgress {
+                        job,
+                        seen: stats.seen,
+                        added: stats.added,
+                    });
+                }
+            });
+            scanning.store(false, Ordering::Relaxed);
+            Some(Event::Scanned { job, dir, result })
+        }))
+    }
+
+    /// Takes in a finished scan: reads the library again, from its file if
+    /// the session was running without one. Marks added to a library that was
+    /// only in memory are not in the file, and are gone.
+    pub fn scanned(&mut self) {
+        if !self.has_library_file() {
+            if let Some(conn) = self.library.as_deref().and_then(|p| db::open(p).ok()) {
+                self.conn = conn;
+                self.marks_for = None;
+                self.marks.clear();
+            }
+        }
+        self.reload();
+    }
+
+    /// Gathers `paths`, files and directories, into tracks to play, with tags
+    /// from the library where it has them. Finishes with [`Event::Opened`].
+    pub fn open(&mut self, paths: Vec<PathBuf>) -> JobId {
+        let library = self.library.clone().filter(|_| self.has_library_file());
+        self.spawn(move |job| {
+            let conn = library.and_then(|p| db::open(&p).ok());
+            let known = |key: &str| {
+                conn.as_ref()
+                    .and_then(|c| query::by_path(c, key).ok().flatten())
+            };
+            Some(Event::Opened {
+                job,
+                playable: scan::playable(&paths, known),
+            })
+        })
     }
 
     // --- slices ---

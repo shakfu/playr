@@ -4,9 +4,9 @@
 #[path = "../crates/playr-core/tests/common/mod.rs"]
 mod common;
 
-use playr::ui::notice::Message;
 use playr::ui::{App, Input};
 use playr_app::action::Key;
+use playr_app::message::Message;
 use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1125,18 +1125,6 @@ fn export_commands_write_slices_of_the_playing_track_in_the_background() {
     assert_eq!(said(&app), msg(Refusal::NothingPlaying));
 }
 
-#[test]
-fn paths_under_home_are_shown_from_tilde() {
-    use playr::ui::home_as_tilde;
-    use std::path::{Path, PathBuf};
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
-    assert_eq!(
-        home_as_tilde(&home.join("Music/playr/samples/amen")),
-        "~/Music/playr/samples/amen"
-    );
-    assert_eq!(home_as_tilde(Path::new("/opt/cuts")), "/opt/cuts");
-}
-
 /// The directory and slice count an export reports, or its error, once it has.
 fn wait_for_export(app: &mut App) -> Result<(std::path::PathBuf, usize), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1210,7 +1198,7 @@ fn slice_onsets_uses_the_setting_unless_given_a_sensitivity() {
 }
 
 /// Refreshes until `done` holds for the sampler's state, or five seconds pass.
-fn wait_for_sampler(app: &mut App, done: impl Fn(&playr::ui::sampler::Sampler) -> bool) {
+fn wait_for_sampler(app: &mut App, done: impl Fn(&playr_app::sampler::Sampler) -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         app.refresh();
@@ -1225,9 +1213,9 @@ fn wait_for_sampler(app: &mut App, done: impl Fn(&playr::ui::sampler::Sampler) -
     }
 }
 
-fn wave_of(sampler: &playr::ui::sampler::Sampler) -> Option<(String, u64)> {
+fn wave_of(sampler: &playr_app::sampler::Sampler) -> Option<(String, u64)> {
     match &sampler.wave {
-        playr::ui::sampler::Wave::Ready { path, peaks } => Some((
+        playr_app::sampler::Wave::Ready { path, peaks } => Some((
             path.file_name().unwrap().to_string_lossy().into_owned(),
             peaks.frames,
         )),
@@ -1255,7 +1243,7 @@ fn the_sampler_reads_the_waveform_once_opened_and_follows_the_track() {
     refresh_until(&mut app, |s| s.position > Duration::from_millis(50));
     app.refresh();
     assert!(
-        matches!(app.screen().sampler.wave, playr::ui::sampler::Wave::None),
+        matches!(app.screen().sampler.wave, playr_app::sampler::Wave::None),
         "read before the view opened"
     );
 
@@ -1279,7 +1267,7 @@ fn the_sampler_reads_the_waveform_once_opened_and_follows_the_track() {
 
 #[test]
 fn zoom_and_display_keys_work_only_in_the_sampler() {
-    use playr::ui::sampler::Display;
+    use playr_app::sampler::Display;
     let (mut app, _dir) = app();
     press(&mut app, 'z');
     assert_eq!(app.screen().sampler.zoom, 0, "z zoomed outside the sampler");

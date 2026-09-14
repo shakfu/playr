@@ -8,7 +8,7 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::prelude::ItemKey;
 use lofty::probe::Probe;
 use rusqlite::Connection;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// Extensions offered to the decoder. A superset of what is guaranteed to play:
@@ -35,6 +35,23 @@ pub struct ScanStats {
     pub skipped: usize,
     /// Files that could not be read, and directories that could not be listed.
     pub failed: usize,
+}
+
+/// What a scan into a library found, and how many tracks the library holds after it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScanReport {
+    pub stats: ScanStats,
+    /// Rows under the directory whose files are gone, removed.
+    pub removed: usize,
+    /// Tracks in the library once the scan is done.
+    pub total: usize,
+}
+
+/// Files gathered to play, and what could not be gathered, in words.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Playable {
+    pub tracks: Vec<Track>,
+    pub problems: Vec<String>,
 }
 
 /// Reads tags and stream properties from `path` into a `Track`.
@@ -179,4 +196,81 @@ where
         tx.commit()?;
     }
     Ok(stats)
+}
+
+/// Scans `dir` into the library file at `library`, creating it if there is
+/// none, and removes rows under `dir` whose files are gone. `progress` is
+/// called per file seen.
+pub fn scan_into(
+    library: &Path,
+    dir: &Path,
+    mut progress: impl FnMut(&ScanStats),
+) -> Result<ScanReport, String> {
+    let fail = |e: rusqlite::Error| format!("{}: {e}", library.display());
+    let mut conn = db::open(library).map_err(fail)?;
+    let stats = scan_dir(&mut conn, dir, |s, _| progress(s)).map_err(fail)?;
+    let removed = db::prune_missing(&conn, dir).map_err(fail)?;
+    let total = db::query::count(&conn).map_err(fail)? as usize;
+    Ok(ScanReport {
+        stats,
+        removed,
+        total,
+    })
+}
+
+/// The tracks to play for `paths`: files as given, and the audio files under
+/// directories, recursively and sorted. Tags come from `known` when it has the
+/// file, as the library does, and are read from disk otherwise, so an
+/// unscanned directory still shows titles rather than file names.
+pub fn playable(paths: &[PathBuf], known: impl Fn(&str) -> Option<Track>) -> Playable {
+    let mut problems = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for arg in paths {
+        // Canonical, to match the library's keys: `playr .` must find the
+        // rows `playr scan ~/music` wrote.
+        let Ok(path) = arg.canonicalize() else {
+            problems.push(format!("no such file: {}", arg.display()));
+            continue;
+        };
+        if path.is_dir() {
+            let mut found: Vec<PathBuf> = Vec::new();
+            for entry in WalkDir::new(path).follow_links(false) {
+                match entry {
+                    Ok(e) if e.file_type().is_file() && is_audio(e.path()) => {
+                        found.push(e.into_path())
+                    }
+                    Ok(_) => {}
+                    Err(e) => problems.push(format!("cannot read {e}")),
+                }
+            }
+            found.sort();
+            files.extend(found);
+        } else if path.is_file() {
+            files.push(path);
+        } else {
+            problems.push(format!("no such file: {}", arg.display()));
+        }
+    }
+    // The queue carries paths as text, so a lossy name would open nothing.
+    files.retain(|p| {
+        let ok = p.to_str().is_some();
+        if !ok {
+            problems.push(format!(
+                "skipping a path that is not UTF-8: {}",
+                p.display()
+            ));
+        }
+        ok
+    });
+    let tracks = files
+        .into_iter()
+        .map(|p| {
+            let key = p.to_string_lossy().into_owned();
+            known(&key).or_else(|| read_track(&p)).unwrap_or(Track {
+                path: key,
+                ..Default::default()
+            })
+        })
+        .collect();
+    Playable { tracks, problems }
 }
