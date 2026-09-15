@@ -4,7 +4,8 @@
 //! test reads them, so a control cannot perform one thing and be counted as
 //! another.
 
-use playr_app::action::{Action, Slicing, Zoom};
+use playr_app::action::{Action, Nudge, Slicing, Zoom};
+use playr_app::sampler::Edge;
 use playr_app::{Display, Theme, View};
 
 /// A button or menu item.
@@ -108,6 +109,28 @@ pub const SAMPLER_BAR: &[Control] = &[
     control("Envelope", Action::Display(Some(Display::Envelope))),
     control("dB", Action::Display(Some(Display::Decibels))),
     control("Waveform", Action::Display(Some(Display::Braille))),
+];
+
+/// Buttons setting the range to slice, under the waveform.
+pub const RANGE_BAR: &[Control] = &[
+    control("Range in", Action::RangeIn),
+    control("Range out", Action::RangeOut),
+    control("Clear range", Action::SetRange(None)),
+];
+
+/// Choosing a range end and moving it a column, under the waveform.
+pub const EDGE_BAR: &[Control] = &[
+    control("Move start", Action::PickEdge(Edge::Start)),
+    control("Move end", Action::PickEdge(Edge::End)),
+    control("Earlier", Action::MoveEdge(Nudge::Columns(-1))),
+    control("Later", Action::MoveEdge(Nudge::Columns(1))),
+];
+
+/// Buttons slicing the region or range, under the waveform; beside them, a
+/// count and a sensitivity choose equal and onset slices.
+pub const SLICE_BAR: &[Control] = &[
+    control("Slice region", Action::Slice(Slicing::Region)),
+    control("Slice at marks", Action::Slice(Slicing::Marks)),
     control("Write slices", Action::WriteSlices),
     control("Discard slices", Action::DiscardSlices),
 ];
@@ -127,6 +150,9 @@ pub const TABLES: &[&[Control]] = &[
     SELECTION_BAR,
     PLAYLIST_ROW,
     SAMPLER_BAR,
+    RANGE_BAR,
+    EDGE_BAR,
+    SLICE_BAR,
 ];
 
 /// Actions whose value comes from how a control is used, by name: a slider's
@@ -141,6 +167,9 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
         "a shift-click on the progress bar or the waveform",
     ),
     ("Zoom", "the mouse wheel over the waveform"),
+    ("SetRange", "a drag across the waveform"),
+    ("Snap", "the sampler's Snap to zero tick box"),
+    ("Loop", "the sampler's Loop range tick box"),
     ("MoveTrack", "a selection row dragged to another place"),
     ("Add", "a library row's tick box"),
     ("Activate", "a double click on a row"),

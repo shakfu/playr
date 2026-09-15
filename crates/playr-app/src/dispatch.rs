@@ -7,6 +7,7 @@
 //! playback and the frontend for what changes only the interface.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use playr_core::audio::Cmd;
 use playr_core::db::query::Playlist;
@@ -15,9 +16,11 @@ use playr_core::event::JobId;
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_core::samples::{Cut, Plan};
 use playr_core::session::Session;
+use playr_core::wave::Peaks;
 
 use crate::action::{Action, Keymap, Slicing, Zoom};
 use crate::message::Message;
+use crate::sampler::{self, Sampler};
 use crate::{Display, Theme, View};
 
 /// A destructive action held until the listener confirms it.
@@ -117,6 +120,10 @@ pub trait Frontend {
     fn confirm(&mut self, question: Confirm);
     fn prompt(&mut self, prompt: Prompt);
     fn present(&mut self, presentation: Presentation);
+
+    /// The sampler view's state.
+    fn sampler(&self) -> &Sampler;
+    fn sampler_mut(&mut self) -> &mut Sampler;
 
     /// Slices of the playing track are being planned, as background job `job`.
     fn planning(&mut self, job: JobId);
@@ -222,7 +229,10 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Prev => f.session().send(Cmd::Prev),
         Action::Stop => f.session().send(Cmd::Stop),
         Action::SeekBy(seconds) => f.session().send(Cmd::SeekBy(seconds)),
-        Action::SeekTo(at) => f.session().send(Cmd::Seek(at)),
+        Action::SeekTo(at) => {
+            let at = snapped(f, at);
+            f.session().send(Cmd::Seek(at));
+        }
         Action::VolumeBy(delta) => f.session().volume_by(delta),
         Action::SetVolume(v) => f.session().send(Cmd::SetVolume(v)),
         Action::SpeedBy(semitones) => f.session().send(Cmd::SpeedBy(semitones)),
@@ -236,14 +246,8 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             f.notify(notice.into());
         }
 
-        Action::Mark => {
-            let notice = f.session_mut().add_mark(None);
-            f.notify(notice.into());
-        }
-        Action::MarkAt(at) => {
-            let notice = f.session_mut().add_mark(Some(at));
-            f.notify(notice.into());
-        }
+        Action::Mark => mark(f, None),
+        Action::MarkAt(at) => mark(f, Some(at)),
         Action::UndoMark => {
             let notice = f.session_mut().undo_mark();
             f.notify(notice.into());
@@ -265,6 +269,124 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Zoom(zoom) => f.present(Presentation::Zoom(zoom)),
         Action::Display(display) => f.present(Presentation::Display(display)),
         Action::Theme(theme) => f.present(Presentation::Theme(theme)),
+        Action::Nudge(nudge) => match (peaks(f), f.sampler().scale) {
+            (Some(peaks), Some(scale)) => {
+                let from = sampler::frame_of(f.session().player().position(), peaks.rate);
+                let to = sampler::nudge(&peaks, from, scale.frames(nudge), f.sampler().snap);
+                f.session()
+                    .send(Cmd::Seek(sampler::time_of(to, peaks.rate)));
+            }
+            _ => f.notify(Message::NoWaveform),
+        },
+        Action::Loop(on) => {
+            let status = f.session().player().status();
+            let on = on.unwrap_or(status.looping.is_none());
+            if !on {
+                f.session().send(Cmd::Loop(None));
+                return f.notify(Message::Loop(false));
+            }
+            let Some(range) = f.sampler().range(status.current()) else {
+                return f.notify(Message::NoRangeToLoop);
+            };
+            f.session().send(Cmd::Loop(Some(range)));
+            // Looping is for hearing the range, so a paused track plays.
+            if status.state == playr_core::audio::State::Paused {
+                f.session().send(Cmd::TogglePause);
+            }
+            f.notify(Message::Loop(true));
+        }
+        Action::PickEdge(edge) => {
+            f.sampler_mut().edge = edge;
+            f.notify(Message::Edge(edge));
+        }
+        Action::MoveEdge(nudge) => {
+            let status = f.session().player().status();
+            let Some(path) = status.current().cloned() else {
+                return f.notify(Refusal::NothingPlaying.into());
+            };
+            let (Some(peaks), Some(scale)) = (peaks(f), f.sampler().scale) else {
+                return f.notify(Message::NoWaveform);
+            };
+            let edge = f.sampler().edge;
+            let (start, end) = f.sampler().range_ends(Some(&path));
+            let from = match edge {
+                sampler::Edge::Start => start,
+                sampler::Edge::End => end,
+            };
+            let Some(from) = from else {
+                return f.notify(Message::NoEdge(edge));
+            };
+            let to = sampler::nudge(&peaks, from, scale.frames(nudge), f.sampler().snap);
+            // An end stops a frame short of the other, so the range stays.
+            match edge {
+                sampler::Edge::Start => {
+                    let to = end.map_or(to, |e| to.min(e.saturating_sub(1)));
+                    f.sampler_mut().set_range_start(&path, to);
+                }
+                sampler::Edge::End => {
+                    let to = start.map_or(to, |s| to.max(s + 1));
+                    f.sampler_mut().set_range_end(&path, to);
+                }
+            }
+            follow_loop(f);
+            let (start, end) = f.sampler().range_ends(Some(&path));
+            f.notify(Message::Range {
+                start,
+                end,
+                rate: peaks.rate,
+            });
+        }
+        Action::Snap(on) => {
+            let on = on.unwrap_or(!f.sampler().snap);
+            f.sampler_mut().snap = on;
+            f.notify(Message::Snap(on));
+        }
+        Action::RangeIn | Action::RangeOut => {
+            let (path, rate) = match f.session().playing_track() {
+                Ok(track) => track,
+                Err(refusal) => return f.notify(refusal.into()),
+            };
+            let at = sampler::frame_of(snapped(f, f.session().player().position()), rate);
+            if action == Action::RangeIn {
+                f.sampler_mut().set_range_start(&path, at);
+            } else {
+                f.sampler_mut().set_range_end(&path, at);
+            }
+            let (start, end) = f.sampler().range_ends(Some(&path));
+            follow_loop(f);
+            f.notify(Message::Range { start, end, rate });
+        }
+        Action::SetRange(times) => {
+            let (path, rate) = match f.session().playing_track() {
+                Ok(track) => track,
+                Err(refusal) => return f.notify(refusal.into()),
+            };
+            let Some((a, b)) = times else {
+                f.sampler_mut().range = None;
+                follow_loop(f);
+                return f.notify(Message::Range {
+                    start: None,
+                    end: None,
+                    rate,
+                });
+            };
+            let frame = |t| sampler::frame_of(snapped(f, t), rate);
+            let (a, b) = (frame(a), frame(b));
+            if a == b {
+                return f.notify(Message::EmptyRange);
+            }
+            f.sampler_mut().range = Some(sampler::Range {
+                path,
+                start: Some(a.min(b)),
+                end: Some(a.max(b)),
+            });
+            follow_loop(f);
+            f.notify(Message::Range {
+                start: Some(a.min(b)),
+                end: Some(a.max(b)),
+                rate,
+            });
+        }
         Action::WriteSlices => match f.take_plan() {
             Some(plan) => {
                 f.session_mut().write_slices(plan);
@@ -272,8 +394,10 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             }
             None => f.notify(Message::NoSlicesPlanned),
         },
+        // Escape backs out a step: planned slices first, then the range.
         Action::DiscardSlices => match f.take_plan() {
             Some(_) => f.notify(Message::SlicesDiscarded),
+            None if f.sampler().range.is_some() => dispatch(Action::SetRange(None), f),
             None => f.notify(Message::NoSlicesPlanned),
         },
 
@@ -474,7 +598,55 @@ fn add(f: &mut impl Frontend) {
 
 /// Plans slices of the playing track in the sampler view, which shows them
 /// before they are written; elsewhere, writes them at once.
+/// The playing track's peaks, once the sampler view has read them.
+fn peaks(f: &impl Frontend) -> Option<std::sync::Arc<Peaks>> {
+    let status = f.session().player().status();
+    sampler::peaks_of(f.sampler(), status.current()).ok()
+}
+
+/// `at`, moved to the nearest zero crossing when the sampler view shows with
+/// snap on and its waveform read; otherwise as it is.
+fn snapped(f: &impl Frontend, at: Duration) -> Duration {
+    if f.view() != View::Sampler || !f.sampler().snap {
+        return at;
+    }
+    match peaks(f) {
+        Some(peaks) => sampler::time_of(
+            sampler::snap(&peaks, sampler::frame_of(at, peaks.rate)),
+            peaks.rate,
+        ),
+        None => at,
+    }
+}
+
+/// Keeps a running loop on the range as it changes; a range cleared or left
+/// with one end stops it.
+fn follow_loop(f: &impl Frontend) {
+    let status = f.session().player().status();
+    if status.looping.is_some() {
+        let range = f.sampler().range(status.current());
+        f.session().send(Cmd::Loop(range));
+    }
+}
+
+/// Marks `at`, or the position now. In the sampler view the mark may snap,
+/// and may fall as close as a frame to another, where fine cuts need it.
+fn mark(f: &mut impl Frontend, at: Option<Duration>) {
+    let notice = if f.view() == View::Sampler {
+        let at = at.unwrap_or_else(|| f.session().player().position());
+        let at = snapped(f, at);
+        f.session_mut().add_mark_within(Some(at), Duration::ZERO)
+    } else {
+        f.session_mut().add_mark(at)
+    };
+    f.notify(notice.into());
+}
+
 fn slice(f: &mut impl Frontend, slicing: Slicing) {
+    let range = {
+        let status = f.session().player().status();
+        f.sampler().range(status.current())
+    };
     let cut = match slicing {
         Slicing::Region => Cut::Region,
         Slicing::Marks => Cut::Marks,
@@ -482,7 +654,7 @@ fn slice(f: &mut impl Frontend, slicing: Slicing) {
         Slicing::Onsets(s) => Cut::Onsets(s.unwrap_or(f.onset_sensitivity())),
     };
     if f.view() == View::Sampler {
-        match f.session_mut().plan_slices(cut) {
+        match f.session_mut().plan_slices(cut, range) {
             Ok(job) => {
                 f.planning(job);
                 f.notify(Outcome::PlanStarted.into());
@@ -490,7 +662,7 @@ fn slice(f: &mut impl Frontend, slicing: Slicing) {
             Err(refusal) => f.notify(refusal.into()),
         }
     } else {
-        match f.session_mut().export(cut) {
+        match f.session_mut().export(cut, range) {
             Ok(_) => f.notify(Outcome::ExportStarted.into()),
             Err(refusal) => f.notify(refusal.into()),
         }

@@ -118,8 +118,20 @@ fn background_work_reports_once_under_its_job() {
         _ => unreachable!(),
     }
 
+    let detail = session.read_detail(file.clone(), 8000, 1_000, 3_000);
+    let seen = until(&events, |e| matches!(e, Event::Detail { .. }));
+    match seen.last().unwrap() {
+        Event::Detail { job, track, result } => {
+            assert_eq!((*job, track), (detail, &file));
+            let read = result.as_ref().unwrap();
+            assert_eq!((read.start, read.end), (1_000, 3_000));
+            assert_eq!(read.range(1_000, 3_000).map(|e| e.max), Some(0.0));
+        }
+        _ => unreachable!(),
+    }
+
     session.add_mark(Some(Duration::from_secs(4)));
-    let planning = session.plan_slices(Cut::Marks).unwrap();
+    let planning = session.plan_slices(Cut::Marks, None).unwrap();
     assert_ne!(planning, peaks, "two jobs shared an id");
     let seen = until(&events, |e| matches!(e, Event::Planned { .. }));
     let plan = match seen.last().unwrap() {
@@ -145,7 +157,7 @@ fn background_work_reports_once_under_its_job() {
         _ => unreachable!(),
     }
 
-    let exporting = session.export(Cut::Region).unwrap();
+    let exporting = session.export(Cut::Region, None).unwrap();
     let seen = until(&events, |e| matches!(e, Event::Exported { .. }));
     assert!(
         matches!(seen.last(), Some(Event::Exported { job, result: Ok(_) }) if *job == exporting)

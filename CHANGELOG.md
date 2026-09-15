@@ -2,7 +2,35 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.3]
+## [0.7.0]
+
+### Added
+
+- Fine movement in the sampler view. There the arrows move the playhead a column, and with shift a tenth of the view, so a step follows zoom; elsewhere they still seek 5 and 30 s. `:snap`, on `S`, moves nudges, marks, seeks and range ends made in the view to the nearest zero crossing within 10 ms, where the channels' mean changes sign. Marks made in the view may be a frame apart, where 500 ms elsewhere blocked close hits. A step that follows zoom was chosen over a fixed `:step` setting, so zooming in is the one way to go finer. Sign bits are kept with the peaks, 1.3 MB for a 4-minute track, so a snap does not decode. The window has a Snap to zero tick box, and its arrows nudge too. Library API: `Action::Nudge`, `Snap`; `Nudge`; `sampler::Scale`, `snap`, `nudge`, `frame_of`, `time_of`, `SNAP_WITHIN`; `Layout::columns`; `Model::set_scale`; `Drawn::scale`; `Message::NoWaveform`, `Snap`; `Peaks::crossing`; `Session::add_mark_within`.
+
+  ```
+  :nudge +1    :nudge -10%    :snap on
+  ```
+
+- Deeper zoom in the sampler view: to one frame a cell in the terminal, and to 16 points a frame in the window, where the line display draws each frame's channels' mean around a zero line, with a dot per frame. Past the 64 frames a column the peaks hold, the view decodes the frames it shows, and 2 s either side, in the background; the window says "reading frames" until they arrive. Decoding on demand was chosen over finer peaks, which would take 4 to 32 times their memory for every track. A nudge moves at least a frame. Library API: `sampler::DetailRead`; `DETAIL_BELOW`, replacing `MIN_FRAMES_PER_COLUMN`; `DETAIL_MARGIN`; `window` and `Layout::new` take the most columns a frame; `Layout::per_frame`, `detail`, `with_detail`; `Scale::start`, `per_frame`, `shown`, `needs_detail`; `Sampler::detail`; `wave::Detail`; `Session::read_detail`; `Event::Detail`.
+
+- A range to slice in the sampler view, set with `<` and `>` at the playhead, `:range START END`, or a drag across the window's waveform, and cleared with backspace. With both ends set, every cut uses it in place of the region between marks, and `:slice marks` cuts at the marks inside it. It lasts until the track changes and is not saved. Under the window's waveform, buttons set and clear it, and slice the region or range whole, at marks, into a chosen count of equal parts, or at onsets with a sensitivity slider. Library API: `Action::RangeIn`, `RangeOut`, `SetRange`; `sampler::Range`; `Sampler::range`, `range_ends`, `set_range_start`, `set_range_end`; `Layout::with_range`; `Frontend::sampler`, `sampler_mut`; `Message::Range`, `EmptyRange`; `Job::range`; `Session::slice_job`, `plan_slices` and `export` take a range.
+
+- Looping the range in the sampler view. `l` or `:loop` plays it over and over, returning from its end to its start sample-exactly and without a gap, and starts a paused track. Moving either end moves the loop at once; in the window, a drag from a range's edge moves that edge, and a Loop range tick box sets it. `esc` now clears the range when no slices are planned, which ends a loop. The engine loops rather than the frontend seeking at the end, which would leave a gap and miss the end. Library API: `Cmd::Loop`; `Status::looping`; `Action::Loop`; `Message::Loop`, `NoRangeToLoop`.
+
+  ```
+  :range 1:02 1:04.5    :loop on
+  ```
+
+- Moving one end of the range a column at a time, for setting a loop's ends while it plays, when the playhead will not stay still for `<` and `>`. `[` or `]` picks the start or end, drawn reversed in the terminal and thicker in the window, and `{` `}` move it earlier or later, snapping when snap is on; an end stops a frame short of the other. Picking an end, then moving it, was chosen over a pair of keys for each end, so one pair moves either end. The window has Move start, Move end, Earlier and Later. Library API: `Action::PickEdge`, `MoveEdge`; `sampler::Edge`; `Sampler::edge`; `Message::Edge`, `NoEdge`.
+
+  ```
+  :edge end    :edge -4    :edge +10%
+  ```
+
+### Changed
+
+- Varispeed moved from `[` and `]` to `(` and `)`, in every view, so the sampler view can use the brackets for the range's ends. `\` still returns to normal speed. A `[keys]` table in `settings.toml` can bind the brackets back outside the sampler view.
 
 ### Fixed
 
@@ -112,17 +140,25 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
   What a frontend gets from `playr-core`:
   - `notice::Notice`: what an operation did, or why it refused, as data. Each frontend words it; the terminal's text is unchanged.
+
   - `session::Session`: the library, player, selection, playlists and marks, driven with a track, a selection index or a playlist id, never a cursor. Replacing a playlist is refused with `Refusal::WouldReplace` until the frontend asks and saves again with `replace` set.
+
   - `event::EventSink`: track changes, state changes, playback errors, and the end of each background job, so a frontend with no frame loop, such as a Tauri app, can forward events as they arrive.
+
   - `settings::Settings`: the file's top-level keys. Tables a frontend names, such as `[keys]`, are handed back to it, so a frontend with no key bindings does not need `playr-app` to read the file.
 
   `playr-app` holds `Action`, the `:` command language, key bindings over its own `Key` type, the `[keys]` tables, and `dispatch`, which does an action through a `Frontend` trait. A second Rust frontend implements `Frontend` over its own cursors and prompts and gets every key binding and `:` command.
 
 - Library API, following the split:
+
   - `playr::audio`, `playr::db` and `playr::scan` are `playr_core::audio`, `playr_core::db` and `playr_core::scan`.
+
   - `playr::ui::action`, `command` and `config` are `playr_app::action`, `command` and `config`. `View` and `Confirm` are defined in `playr_app`.
+
   - `Config` holds `settings: Settings` and `keys`, in place of `volume`, `mode` and `speed`. `DEFAULT_SETTINGS` is split into `playr_core::settings::DEFAULT_SETTINGS` and `playr_app::config::DEFAULT_KEYS`.
+
   - `render::draw` takes `&Screen` and writes no state. It returns `Drawn`, the cursors, scroll and zoom it clamped to the frame, for `App::drawn` to store. `Screen` holds `lists: Lists` in place of three `ListState`s, and `help_scroll` by value; `Screen::new` fills in defaults; `App::screen` takes `&self`.
+
   - New: `App::message` returns the message showing; `ui::key_of` turns a terminal key event into a `Key`; `Mode::NAMES` lists the mode names.
 
 ### Fixed

@@ -24,6 +24,23 @@ pub enum Message {
     NoPlaylistUnderCursor,
     Display(Display),
     Theme(Theme),
+    /// A nudge came before the sampler view showed a waveform.
+    NoWaveform,
+    Snap(bool),
+    /// The sampler's range, as set, in frames at `rate`.
+    Range {
+        start: Option<u64>,
+        end: Option<u64>,
+        rate: u32,
+    },
+    EmptyRange,
+    Loop(bool),
+    /// A loop was asked for with no range set.
+    NoRangeToLoop,
+    /// Edge moves now shift this end of the range.
+    Edge(crate::sampler::Edge),
+    /// An edge move found no such end of the range to move.
+    NoEdge(crate::sampler::Edge),
     /// A `map` command took effect; holds the `Action::Map`.
     Mapped(Action),
     Unmapped(Key),
@@ -96,6 +113,27 @@ pub fn text(message: &Message) -> String {
         }
         Message::Display(display) => format!("display: {}", display.name()),
         Message::Theme(theme) => format!("theme: {}", theme.name()),
+        Message::NoWaveform => "no waveform to move along yet".into(),
+        Message::Snap(on) => format!("snap to zero crossings: {}", if *on { "on" } else { "off" }),
+        Message::Range { start, end, rate } => {
+            let at = |f: &u64| crate::sampler::fmt_frames(*f, *rate);
+            match (start, end) {
+                (Some(a), Some(b)) => format!(
+                    "range {}-{} ({:.3} s)",
+                    at(a),
+                    at(b),
+                    (b - a) as f64 / *rate as f64
+                ),
+                (Some(a), None) => format!("range from {}", at(a)),
+                (None, Some(b)) => format!("range to {}", at(b)),
+                (None, None) => "range cleared".into(),
+            }
+        }
+        Message::EmptyRange => "the range is empty".into(),
+        Message::Loop(on) => format!("loop: {}", if *on { "on" } else { "off" }),
+        Message::NoRangeToLoop => "no range to loop: set one with < and >, or drag".into(),
+        Message::Edge(edge) => format!("moving the range {}", edge.name()),
+        Message::NoEdge(edge) => format!("no range {} to move: set it with < or >", edge.name()),
         Message::Mapped(map) => command::line(map, None),
         Message::Unmapped(key) => format!("unmapped {key}"),
         Message::NotBound { key, view } => {

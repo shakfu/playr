@@ -45,7 +45,7 @@ pub struct Gui {
     shown: Input,
     /// The view and cursor row shown last frame, to scroll to a row a key moved to.
     cursor: (View, Option<usize>),
-    wheel: sampler::Wheel,
+    sampler: sampler::State,
     /// The theme last handed to egui.
     theme: Option<Theme>,
 }
@@ -59,7 +59,7 @@ impl Gui {
             name: String::new(),
             shown: Input::None,
             cursor: (View::Library, None),
-            wheel: sampler::Wheel::default(),
+            sampler: sampler::State::default(),
             theme: None,
         }
     }
@@ -403,7 +403,7 @@ impl Gui {
             View::Library | View::Selection => views::tracks(&self.model, ui, view, scroll),
             View::Playlists => views::playlists(&self.model, ui, scroll),
             View::Sampler => {
-                for action in sampler::show(&mut self.model, ui, &mut self.wheel) {
+                for action in sampler::show(&mut self.model, ui, &mut self.sampler) {
                     self.perform(action);
                 }
                 None

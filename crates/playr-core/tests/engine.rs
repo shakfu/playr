@@ -599,3 +599,117 @@ fn a_track_change_before_a_seek_is_discarded_keeps_the_next_track_whole() {
         "the second track played for {second_secs:.2} s"
     );
 }
+
+/// Writes 16-bit stereo at 8 kHz whose left channel counts frames from 1, so
+/// a played sample names its frame and silence reads as 0.
+fn counting(path: &Path, frames: i32) {
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: 8_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    for f in 0..frames {
+        w.write_sample((f + 1) as i16).unwrap();
+        w.write_sample(0i16).unwrap();
+    }
+    w.finalize().unwrap();
+}
+
+/// The frames the device has played since sample `from`, as the counting
+/// track names them, without silence.
+fn heard(control: &common::Control, from: usize) -> Vec<i64> {
+    let played = control.played.lock().unwrap();
+    played[from.min(played.len())..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|f| (f[0] * 32_768.0).round() as i64)
+        .filter(|&v| v > 0)
+        .collect()
+}
+
+/// Waits until `done` holds for what has been heard since `from`.
+fn until_heard(control: &common::Control, from: usize, done: impl Fn(&[i64]) -> bool) -> Vec<i64> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let seen = heard(control, from);
+        if done(&seen) {
+            return seen;
+        }
+        assert!(Instant::now() < deadline, "heard {} frames", seen.len());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Every frame from the first `first` on follows the one before, or returns
+/// from `last` to `first`.
+fn assert_loops(seen: &[i64], first: i64, last: i64) {
+    let from = seen
+        .iter()
+        .position(|&v| v == first)
+        .expect("never reached the loop");
+    for pair in seen[from..].windows(2) {
+        assert!(
+            pair[1] == pair[0] + 1 || (pair[0] == last && pair[1] == first),
+            "{pair:?} in a loop of {first}..={last}"
+        );
+    }
+}
+
+#[test]
+fn a_loop_repeats_its_frames_exactly_and_follows_new_bounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("count.wav");
+    counting(&file, 24_000);
+    let (player, control) = fake_player();
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+
+    // Frames 8,000 to 8,399 carry 8,001 to 8,400; the playhead is before them.
+    player.send(Cmd::Loop(Some((8_000, 8_400))));
+    let returns = |seen: &[i64]| seen.windows(2).filter(|p| p == &[8_400, 8_001]).count();
+    let seen = until_heard(&control, 0, |s| returns(s) >= 5);
+    assert_loops(&seen, 8_001, 8_400);
+    assert_eq!(player.status().looping, Some((8_000, 8_400)));
+    let at = player.position().as_secs_f64();
+    assert!((1.0..1.05).contains(&at), "position {at}");
+
+    // Narrower bounds apply once the audio decoded under the old ones is gone.
+    player.send(Cmd::Loop(Some((8_100, 8_300))));
+    std::thread::sleep(Duration::from_millis(300));
+    let from = control.played.lock().unwrap().len();
+    let seen = until_heard(&control, from, |s| {
+        s.windows(2).filter(|p| p == &[8_300, 8_101]).count() >= 5
+    });
+    assert_loops(&seen, 8_101, 8_300);
+
+    // Off: playback runs on past the end.
+    player.send(Cmd::Loop(None));
+    until_heard(&control, from, |s| s.iter().any(|&v| v > 9_000));
+    assert_eq!(player.status().looping, None);
+}
+
+#[test]
+fn a_loop_past_the_end_returns_from_the_end_and_a_new_track_ends_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.wav"), dir.path().join("b.wav"));
+    counting(&a, 8_000);
+    counting(&b, 8_000);
+    let (player, control) = fake_player();
+    player.send(Cmd::Play(vec![a, b], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+    // Asked past the end, it ends there: 7,801 to 8,000, again and again.
+    player.send(Cmd::Loop(Some((7_800, 99_000))));
+    let seen = until_heard(&control, 0, |s| {
+        s.windows(2).filter(|p| p == &[8_000, 7_801]).count() >= 5
+    });
+    assert_loops(&seen, 7_801, 8_000);
+    let status = wait_for(&player, |s| s.looping == Some((7_800, 8_000)));
+    assert_eq!((status.looping, status.index), (Some((7_800, 8_000)), 0));
+
+    player.send(Cmd::Next);
+    let status = wait_for(&player, |s| s.index == 1);
+    assert_eq!((status.index, status.looping), (1, None));
+}

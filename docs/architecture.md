@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, current as of playr 0.6.2. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal and the desktop window, `playr-gui`.
+Design note, current as of playr 0.7.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal and the desktop window, `playr-gui`.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -19,10 +19,15 @@ The two candidates put different demands on the core. The design takes the stric
 So the core:
 
 1. Depends on no presentation crate: no `ratatui`, `crossterm`, `egui` or `tauri`.
+
 2. Takes explicit arguments. An operation names what it acts on, by track, index, id or path, never "the row under the cursor".
+
 3. Returns data, not text. Outcomes and refusals are enums; a frontend words them.
+
 4. Pushes events. Work that finishes later, and changes a frontend did not cause, reach it through one sink. A frame loop may also poll.
+
 5. Is `Send`. A Tauri app wraps `Session` in a `Mutex`; an egui app owns it.
+
 6. Serialises behind a cargo feature, `serde`, which only a Tauri or daemon frontend turns on. Not built yet; see step 8.
 
 ## Crates
@@ -38,8 +43,11 @@ playr-tauri   Tauri backend      -----------------> playr-core [serde]
 The Rust frontends also depend on `playr-core` directly, for `Session` and the types `dispatch` passes; the arrows show only where each frontend gets its interaction from. `playr-gui` is described in `docs/dev/gui.md`; `playr-tauri` does not exist. `[serde]` is step 8.
 
 - **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
+
 - **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state) and `sampler` (the sampler view's state and column geometry). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
+
 - **playr-gui** (`crates/playr-gui`): the desktop window, with egui. It wraps `Model` as the terminal does.
+
 - **playr** (the root crate): the terminal. The command line in `src/main.rs`, and `src/ui`: `App` over the shared `Model`, key handling, drawing and the sampler's glyphs.
 
 Views (library, selection, playlists, sampler) are a presentation idea, so they are not in the core. `playr_app::View` names them as scopes for key bindings and view-scoped commands; a GUI maps its panels or focus onto them, or ignores them.
@@ -117,11 +125,17 @@ impl Session {
 Conventions:
 
 - **Tracks, not ids.** `play` and `toggle_selected` take `Track`s. Files given on the command line are played and selected without being in the library, so they have no id. Playlists, which only hold library tracks, are named by id.
+
 - **Confirmation by refusal.** The core never asks a question. `save_selection(name, false)` over an existing playlist returns `Refusal::WouldReplace(name)`; the frontend asks in its own way and calls again with `replace: true`. `check_save` and `marks_to_clear` let a frontend refuse or word a question before it prompts.
+
 - **Silent no-ops stay silent.** `delete_playlist` and `clear_marks` return `Option<Notice>`, `None` when there was nothing to act on.
+
 - **Plans are values.** `Event::Planned` carries a `Plan`. The frontend shows it and passes it back to `write_slices`, or drops it; discarding needs no call. `export` plans and writes in one job, for a frontend that shows no plan.
+
 - **A scan writes through its own connection.** It opens the library file on its thread, creating it when the session runs on an in-memory library, and a frontend calls `scanned` on `Event::Scanned` to read the result, which moves such a session onto the file. A scan never removes tracks; `prune` does, on its own connection too. One scan or prune runs at a time. A scan reads each batch of 500 files before its transaction opens, so a write on the session's connection waits only while a batch's rows are inserted.
+
 - **Opening reads tags off the frontend's thread.** `open` walks directories and reads tags on a job, since a large directory takes seconds, and reports what it gathered and what it could not; the terminal's `playr <path>` uses the same `scan::playable`.
+
 - **A superseded job sends nothing.** A peaks read replaced by another stops, rather than sending an event a frontend must recognise as stale.
 
 `Session` is `Send`.
@@ -166,8 +180,11 @@ pub enum Event {
 ```
 
 - `TrackChanged::path` is `None` when the engine moves to an index its queue does not hold, as when the queue is empty.
+
 - `Planned` carries its `track`, so a frontend can drop a plan, or its failure, for a track no longer playing.
+
 - `event::ignore()` is a sink for a session nobody watches.
+
 - The player's `Status` keeps `error` and `error_seq`, so a frontend may poll for playback errors instead of listening.
 
 Each frontend adapts the sink:
@@ -182,7 +199,7 @@ Position, loudness and peak level change continuously, so they are not events. A
 
 ### Settings
 
-`settings.toml` is one file. `playr_core::settings::Settings` owns the top-level keys: `volume`, `mode`, `speed`, `samples` and `onset_sensitivity`. Each frontend owns the tables it names: `playr-app` owns `[keys]`, and a GUI might own `[gui]`.
+`settings.toml` is one file. `playr_core::settings::Settings` owns the top-level keys: `volume`, `mode`, `speed`, `samples` and `onset_sensitivity`. Each frontend owns the tables it names: `playr-app` owns `[keys]`, and the top-level `theme` that both of its frontends read; a GUI might own `[gui]`.
 
 ```rust
 impl Settings {
@@ -195,10 +212,15 @@ impl Errors<'_> {
 ```
 
 - `apply` applies the core's keys, reports unknown names, and returns the entries named in `tables` whole, whatever their type.
+
 - The frontend reads those entries and adds its own errors to the same `Errors`. `finish` sorts by byte offset, so the core's errors and the frontend's list by line. A callback per table was the alternative; it would have made the frontend's errors borrow the core's parser state.
+
 - The core re-exports `toml`, so a frontend reads the entries with the version the core parsed them with.
+
 - `mode` takes a full name, in any case, from `Mode::NAMES`. Prefix matching belongs to the command language, and a prefix saved in a file stops parsing once a new mode shares it.
+
 - The defaults are settings files too: `crates/playr-core/src/settings.toml` and `crates/playr-app/src/keys.toml`.
+
 - `settings::default_path` gives `$XDG_CONFIG_HOME/playr/settings.toml`, else `~/.config/playr/settings.toml`.
 
 ## playr-app
@@ -219,6 +241,8 @@ pub trait Frontend {
     fn listed(&self) -> &[Track];                                        // library or search results
     fn set_results(&mut self, results: Option<Vec<Track>>) -> Option<Vec<Track>>;
     fn onset_sensitivity(&self) -> f32;
+    fn sampler(&self) -> &Sampler;                                       // range, snap, scale, edge
+    fn sampler_mut(&mut self) -> &mut Sampler;
 
     fn notify(&mut self, message: Message);
     fn confirm(&mut self, question: Confirm);
@@ -237,23 +261,37 @@ pub fn rename(f: &mut impl Frontend, from: &Playlist, name: &str);       // afte
 ```
 
 - **Keyed by view.** A frontend reports one cursor row per view, and `dispatch` looks the row up in the session's lists or in `listed`. Reporting the track or playlist under the cursor instead would have made each frontend repeat that lookup.
+
 - **Search results are the frontend's.** The library view shows `listed`, so `dispatch` can search and clear a search without owning presentation state.
+
 - **Effects split by kind.** `prompt` for text to collect, `confirm` for a yes or no, `present` for the rest, and `planning`/`take_plan` for slices shown before writing.
+
 - **No state in `dispatch`.** The frontend owns the session and the key map and lends them through `session`, `session_mut` and `keys`.
+
 - **`Message`** wraps a core `Notice` and adds what is about the interface: cancelled prompts, key bindings, display and theme changes, command errors. `View`, `Display`, `Theme` and `Confirm` live here with the actions that produce them.
+
 - **`Key`** is playr-app's own type: a code and modifiers, with names and parsing. A frontend converts its key events to it; an egui app would convert `egui::Key`.
+
 - **`model::Model`** is the interface's state, and implements `Frontend`: the session, the view and each view's cursor, search results, the list playing, the open prompt or question with any text typed into it, the message and when it expires, the sampler's state and a per-frame `Snapshot` with the held peak. `refresh` samples the player and drains events; `perform` does an action; `answer`, `run_command`, `search_as_typed`, `end_search`, `save_as` and `rename_to` finish what a prompt collected. Both Rust frontends wrap it, so what a key does and what a control does cannot differ. A frontend keeps only drawing state: scroll offsets, focus, glyphs.
-- **`config::Config`** holds `settings: Settings` and `keys: Keymap`. It reads `[keys]` from what `Settings::apply` hands back; each binding is a `:` command string checked by the command parser.
+
+- **`config::Config`** holds `settings: Settings`, `keys: Keymap` and `theme: Theme`. It reads `[keys]` and `theme` from what `Settings::apply` hands back; each binding is a `:` command string checked by the command parser.
 
 ## playr, the terminal
 
 - **`ui::App`** wraps a `Model`. It turns key events into model calls, keeps each list's scroll offset and the help list's scroll, and asks the model to expire its message each loop. Key events convert with `ui::key_of`, a function rather than a `From` impl, because the orphan rule forbids a foreign trait between two foreign types.
+
 - **Events** go to a channel the model drains each frame. Playback errors come from `Event::PlaybackError`.
+
 - **Cursors** are `Scroll { row, offset }`, one per list in `Lists`: the row from the model, the offset from `App`. `ListState` is built per frame.
-- **Drawing writes no state.** `render::draw(&Screen, frame)` returns `Drawn`: each list's cursor and scroll, the help scroll and the sampler zoom, clamped to what fits. `App::drawn` stores it for the next key. Clamping in the key handlers was the alternative, but they do not know the terminal size or the help list's length.
+
+- **Drawing writes no state.** `render::draw(&Screen, frame)` returns `Drawn`: each list's cursor and scroll, the help scroll, and the sampler's zoom, clamped to what fits, and the columns it drew, which nudges count in. `App::drawn` stores it for the next key. Clamping in the key handlers was the alternative, but they do not know the terminal size or the help list's length.
+
 - **`Screen`** borrows what drawing reads; `Screen::new` fills in defaults, so tests set only what they check.
+
 - **Words** come from `playr_app::message::text`, except the confirmation question, `ui::confirm_prompt`, which names the `y` key.
+
 - **The sampler's glyphs** are in `ui::sampler`: eighth blocks and Braille. Its state and geometry are in `playr_app::sampler`.
+
 - **The command line** is parsed with clap in `src/main.rs`. `playr search --json` builds its objects with `serde_json::json!` over `Track`'s fields, not a derive, since the core has no `serde` feature yet.
 
 ## How an action runs
@@ -267,11 +305,17 @@ Sources: `docs/media/architecture-crates.d2` and `docs/media/architecture-flow.d
 ## Tests that hold the design
 
 - `crates/playr-core/tests/session.rs` drives `Session` with no frontend.
+
 - `crates/playr-core/tests/events.rs` receives engine and job events through a sink, as a frontend would.
+
 - `crates/playr-core/tests/settings.rs` reads settings with no frontend, and with named tables handed back.
+
 - `crates/playr-app/tests/dispatch.rs` drives `dispatch` through a frontend with no drawing: plain fields for cursors, logs for output. It is the evidence a second frontend can reuse `dispatch`.
+
 - `crates/playr-app/tests/model.rs` drives `Model` with no drawing and no key events, as a GUI's controls would.
+
 - `tests/render.rs` checks what `render::draw` returns as well as what it draws.
+
 - `tests/keys.rs` covers `key_of`.
 
 ## Steps
@@ -292,14 +336,21 @@ Each step left `make test` passing. Only step 7 changed behaviour: the `mode` pr
 ## Open issues
 
 - **One cursor per view.** `dispatch` assumes each view has at most one chosen row. An egui app with several panels open at once, or with several rows selected, has to map its selection onto that, or `Frontend` grows. Adding, removing and moving tracks all read the single row.
+
 - **Two frontends cannot share one settings file.** A table no frontend named is an error, so a file with both `[keys]` and a GUI's `[gui]` stops each frontend on the other's table. A list of tables every frontend knows, ignored unless named, would fix it; nothing needs it until a second frontend has a table.
+
 - **No playback snapshot in the core.** `Model` assembles a `Snapshot` from `Session::player()` and `marks_for`, and holds the peak level. A Tauri backend, which skips `playr-app`, needs the same values on a timer and would repeat that. A `Session::playback()` returning them, and a narrower `Transport` in place of `send(Cmd)`, would serve both.
+
 - **`serde` formats are unset.** Step 8 must choose how `Duration`, non-UTF-8 paths and enums serialise, and skip or summarise `Event::Peaks`. `playr search --json` already fixes the field names of a track, so the derive on `Track` must match them.
+
 - **`Session` does not apply `Settings`.** `Model::new` sends volume, mode and speed and sets the samples directory: four calls a frontend that skips `playr-app` repeats. `onset_sensitivity` stays in `Model`, which hands it to `dispatch`.
 
 ## Decisions left open
 
 - **One process.** The terminal and the window never run at once; `playr_app::instance` holds a per-user lock. Each `Session` checks names and marks against its own copy of the library, so a second writer would act on stale data.
+
 - **Daemon.** A daemon holding the `Session`, with frontends as clients over a socket, would let a terminal and a GUI control one playback at once, and fits the OSC option in [Sampling](sampler.md#not-built-yet). It costs a protocol and a process to manage. The in-process `Session` does not rule it out: a daemon wraps it, and the `serde` feature is its wire format.
+
 - **Library loading.** `Session::tracks` returns the whole library in memory. At 100,000 tracks a GUI table wants pages or a query per scroll; the API would add `tracks_page(offset, count)` then.
+
 - **cpal versions.** rtrack uses cpal 0.15 and playr 0.18. A waveform crate shared with rtrack must not depend on cpal.

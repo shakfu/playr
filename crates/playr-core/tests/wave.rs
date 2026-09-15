@@ -2,7 +2,7 @@
 
 use std::sync::atomic::AtomicBool;
 
-use playr_core::wave::{Peaks, BUCKET};
+use playr_core::wave::{Detail, Peaks, BUCKET};
 
 /// Deterministic noise in -1..1.
 fn noise(len: usize, channels: usize) -> Vec<f32> {
@@ -13,6 +13,70 @@ fn noise(len: usize, channels: usize) -> Vec<f32> {
             (seed >> 8) as f32 / (1u32 << 23) as f32 - 1.0
         })
         .collect()
+}
+
+#[test]
+fn a_crossing_is_the_nearest_sign_change_of_the_channels_mean() {
+    // Channel 0 changes sign every 100 frames; channel 1 is small and
+    // negative, so the mean crosses where channel 0 does, one frame later on
+    // the way up, where 0.0 + -0.1 is still below zero.
+    let frames = 1_000;
+    let data: Vec<f32> = (0..frames)
+        .flat_map(|f| {
+            let left = if f / 100 % 2 == 0 { 0.5 } else { -0.5 };
+            let left = if f % 200 == 0 && f > 0 { 0.05 } else { left };
+            [left, -0.1]
+        })
+        .collect();
+    let peaks = Peaks::from_interleaved(&data, 2, 8_000);
+    // Crossings at 100, 201, 300, 401 ... 801, 900.
+    assert_eq!(peaks.crossing(0, 999, 90), Some(100));
+    assert_eq!(peaks.crossing(0, 999, 160), Some(201));
+    assert_eq!(peaks.crossing(0, 999, 150), Some(100));
+    // Only within the frames given, so a nudge can require one ahead of it.
+    assert_eq!(peaks.crossing(101, 999, 100), Some(201));
+    assert_eq!(peaks.crossing(0, 99, 50), None);
+    // Frame 0 has no frame before it; bounds past the end are clamped.
+    assert_eq!(peaks.crossing(0, 5_000, 998), Some(900));
+}
+
+#[test]
+fn detail_reads_exact_frames_from_where_it_seeks() {
+    // 16-bit stereo at 8 kHz: the left channel counts frames, the right half as fast.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("count.wav");
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: 8_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&file, spec).unwrap();
+    for f in 0..20_000i32 {
+        w.write_sample(f as i16).unwrap();
+        w.write_sample((f / 2) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+    let at = |v: i32| v as f32 / 32_768.0;
+
+    let detail = Detail::read(&file, 8_000, 12_345, 12_445).unwrap();
+    assert!(detail.covers(12_345, 12_445) && !detail.covers(12_344, 12_400));
+    assert_eq!(detail.mean(12_345), Some((at(12_345) + at(6_172)) / 2.0));
+    assert_eq!(detail.mean(12_445), None, "past what was read");
+    let e = detail.range(12_400, 12_402).unwrap();
+    assert_eq!((e.min, e.max), (at(6_200), at(12_401)));
+
+    // Asked past the end: it holds what there is and still covers the ask.
+    let tail = Detail::read(&file, 8_000, 19_990, 21_000).unwrap();
+    assert!(tail.covers(19_990, 21_000));
+    assert_eq!(tail.range(19_990, 21_000).unwrap().max, at(19_999));
+    assert_eq!(tail.range(20_000, 21_000), None);
+}
+
+#[test]
+fn silence_has_no_crossing() {
+    let peaks = Peaks::from_interleaved(&[0.0; 500], 1, 8_000);
+    assert_eq!(peaks.crossing(0, 499, 250), None);
 }
 
 #[test]

@@ -285,13 +285,33 @@ fn marks_need_something_playing() {
     assert_eq!(session.seek_to_mark(true), Refusal::NothingPlaying.into());
     assert_eq!(session.marks_to_clear(), Err(Refusal::NothingPlaying));
     assert_eq!(
-        session.slice_job(Cut::Region).map(|_| ()),
+        session.slice_job(Cut::Region, None).map(|_| ()),
         Err(Refusal::NothingPlaying)
     );
     assert_eq!(
         session.clear_marks(Path::new("/m/a.flac")),
         None,
         "no marks to clear"
+    );
+}
+
+#[test]
+fn marks_can_be_allowed_closer_but_never_on_the_same_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, _file) = playing(dir.path());
+    let ms = Duration::from_millis;
+    session.add_mark(Some(ms(5_000)));
+    assert_eq!(
+        session.add_mark_within(Some(ms(5_100)), Duration::ZERO),
+        Notice::Done(Outcome::Marked {
+            at: ms(5_100),
+            kept: true
+        })
+    );
+    // 8 kHz: 5.1001 s rounds to the same frame as 5.1 s.
+    assert_eq!(
+        session.add_mark_within(Some(Duration::from_micros(5_100_010)), Duration::ZERO),
+        Refusal::AlreadyMarked { at: ms(5_100) }.into()
     );
 }
 
@@ -334,12 +354,15 @@ fn marks_are_added_undone_cleared_and_sought_on_the_playing_track() {
         Outcome::AtMark { at: secs(5) }.into()
     );
 
-    let job = session.slice_job(Cut::Equal(2)).unwrap();
+    let job = session.slice_job(Cut::Equal(2), None).unwrap();
     session.set_samples_dir("/tmp/cuts".into());
-    let job_after = session.slice_job(Cut::Region).unwrap();
+    let job_after = session
+        .slice_job(Cut::Region, Some((8_000, 16_000)))
+        .unwrap();
     assert_eq!((job.path.clone(), job.rate), (file.clone(), 8000));
     assert_eq!(job.marks, [40_000, 120_000]);
     assert_eq!(job_after.samples, PathBuf::from("/tmp/cuts"));
+    assert_eq!((job.range, job_after.range), (None, Some((8_000, 16_000))));
 
     assert_eq!(
         session.clear_marks(&file),

@@ -7,10 +7,15 @@ A command works in every view, or only in the view named by its heading. Typed i
 ## Arguments
 
 - `TIME` is seconds, `m:ss` or `h:mm:ss`, as in `90`, `1:23`, `1:02:03`.
+
 - A leading `+` or `-` makes a number relative: `:seek +10`, `:volume -5`, `:speed +1`. Without a sign it is absolute.
+
 - `NAME` and `QUERY` run to the end of the line, so spaces need no quotes.
+
 - `[ ]` marks an optional argument. Without it, `:search`, `:save` and `:rename` open their prompt.
+
 - `PATH` and `DIR` run to the end of the line; a leading `~` is the home directory, and a relative path is relative to where playr started. `:scan` runs in the background, reports progress on the bottom line, and creates the library if there is none. It keeps tracks whose files are gone, and counts them; `:prune` removes them, their places in playlists, and the marks of missing files under `DIR`, after asking. `:open` adds the files to the end of the selection and plays them.
+
 - `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
 
 ## Every view
@@ -39,7 +44,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:stop`                               | `x`                     | stop                                        |
 | `:seek TIME \| +TIME \| -TIME`        | left, right, with shift | seek to a time, or by one: 1:23, +10        |
 | `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the volume, or change it: 60, +10       |
-| `:speed N \| +N \| -N`                | `[` `]` `\`             | set varispeed in semitones, or change it    |
+| `:speed N \| +N \| -N`                | `(` `)` `\`             | set varispeed in semitones, or change it    |
 | `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |
 | `:mark [TIME]`                        | `b`                     | mark the playing position, or a time        |
 | `:unmark`                             | `B`                     | undo the last mark                          |
@@ -76,18 +81,28 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 ## Sampler
 
-| command                            | key         | does                                |
-|------------------------------------|-------------|-------------------------------------|
-| `:zoom + \| - \| all`              | `z` `Z` `0` | zoom in, out, or to the whole track |
-| `:display [envelope\|db\|braille]` | `w`         | draw the waveform another way       |
-| `:write`                           | `enter`     | write the slices :slice planned     |
-| `:discard`                         | `esc`       | discard the slices :slice planned   |
+| command                            | key                     | does                                   |
+|------------------------------------|-------------------------|----------------------------------------|
+| `:zoom + \| - \| all`              | `z` `Z` `0`             | zoom in, out, or to the whole track    |
+| `:display [envelope\|db\|braille]` | `w`                     | draw the waveform another way          |
+| `:nudge +N \| -N \| +N% \| -N%`     | left, right, with shift | move N columns, or N% of the view      |
+| `:snap [on\|off]`                  | `S`                     | snap moves and marks to zero crossings |
+| `:in`                              | `<`                     | start the range at the playhead        |
+| `:out`                             | `>`                     | end the range at the playhead          |
+| `:range [START END]`               | `backspace`             | set the range to slice, or clear it    |
+| `:loop [on\|off]`                  | `l`                     | play the range over and over           |
+| `:edge start\|end \| +N \| -N \| +N%` | `[` `]`, then `{` `}`   | pick a range end, or move it N columns |
+| `:write`                           | `enter`                 | write the slices :slice planned        |
+| `:discard`                         | `esc`                   | discard planned slices, else the range |
 
-In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them.
+In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; `[` or `]` picks an end, shown reversed, for `{` and `}` to move while it loops. `esc` clears the range once no slices are planned.
 
 ## Typing commands
 
 - A command, mode or view can be shortened to a prefix that names only one of those usable in the current view: `:vol 60`, `:mode shuf`.
-- Tab completes command names usable in the current view, then the argument of `:mode`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
+
+- Tab completes command names usable in the current view, then the argument of `:edge`, `:loop`, `:mode`, `:snap`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
+
 - Up recalls earlier lines that start with the typed text; down returns towards it. The history holds 100 lines and lasts until playr exits.
+
 - Enter runs the line, `esc` cancels, and backspace on an empty line closes the prompt.

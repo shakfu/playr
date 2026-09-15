@@ -105,6 +105,9 @@ pub enum Cmd {
     SetSpeed(i32),
     /// Change how playback moves through the list. See [`Mode`].
     SetMode(Mode),
+    /// Play source frames `start..end` of the current track over and over,
+    /// or play on for `None`. A playhead outside them starts at `start`.
+    Loop(Option<(u64, u64)>),
     Quit,
 }
 
@@ -136,6 +139,8 @@ pub struct Status {
     /// How playback moves through the list. Like `queue`, only
     /// [`Player::send`] writes it, so it is current as soon as `send` returns.
     pub mode: Mode,
+    /// The source frames looping in the current track, end exclusive.
+    pub looping: Option<(u64, u64)>,
 }
 
 impl Status {
@@ -221,6 +226,11 @@ impl Player {
             Cmd::SetMode(mode) => {
                 status.mode = mode;
                 Msg::Cmd(Cmd::SetMode(mode))
+            }
+            // Set here too, so a toggle sees it at once; the engine may shorten it.
+            Cmd::Loop(bounds) => {
+                status.looping = bounds;
+                Msg::Cmd(Cmd::Loop(bounds))
             }
             cmd => Msg::Cmd(cmd),
         };
@@ -314,6 +324,14 @@ struct Flush {
     offset: u64,
 }
 
+/// A stretch of one track played over and over, in its source frames.
+#[derive(Clone, Copy)]
+struct Loop {
+    index: usize,
+    start: u64,
+    end: u64,
+}
+
 /// A track queued behind the current one whose format needs a new stream.
 struct Staged {
     stream: AudioStream,
@@ -352,8 +370,13 @@ struct Engine {
 
     /// Total frames written into the ring since the stream was opened.
     written: u64,
-    /// `(output frame at which it starts, queue index, duration)` per track.
-    marks: VecDeque<(u64, usize, Option<Duration>)>,
+    /// `(output frame at which it starts, queue index, duration, position
+    /// offset)` per stretch of audio: a track, or a loop's return to its start,
+    /// whose offset is that start in output frames.
+    marks: VecDeque<(u64, usize, Option<Duration>, u64)>,
+    /// The source frame `stream` decodes next.
+    decoded: u64,
+    looping: Option<Loop>,
     /// Next track, held back because it needs a different output format.
     staged: Option<Staged>,
     /// A seek whose pre-seek audio the device has not yet discarded.
@@ -389,6 +412,8 @@ impl Engine {
             semitones: 0,
             written: 0,
             marks: VecDeque::new(),
+            decoded: 0,
+            looping: None,
             staged: None,
             flush: None,
             carry: Vec::new(),
@@ -517,6 +542,7 @@ impl Engine {
             Cmd::SpeedReset => self.set_semitones(0),
             Cmd::SetSpeed(semitones) => self.set_semitones(semitones),
             Cmd::SetMode(mode) => self.set_mode(mode),
+            Cmd::Loop(bounds) => self.set_loop(bounds),
             Cmd::Quit => {}
         }
     }
@@ -581,6 +607,7 @@ impl Engine {
     }
 
     fn teardown(&mut self) {
+        self.looping = None;
         self.stream = None;
         self.conv = None;
         self.staged = None;
@@ -627,8 +654,9 @@ impl Engine {
         self.conv = Some(Converter::new(spec, plan, self.speed()));
         let duration = stream.duration();
         self.stream = Some(stream);
+        self.decoded = (first.len() / spec.channels.max(1) as usize) as u64;
         self.marks.clear();
-        self.marks.push_back((0, i, duration));
+        self.marks.push_back((0, i, duration, 0));
         self.shared.track_start.store(0, Ordering::Relaxed);
         // A new track starts from its own beginning, not a previous seek.
         self.shared.position_offset.store(0, Ordering::Relaxed);
@@ -774,7 +802,7 @@ impl Engine {
         if mode == self.order.mode() {
             return;
         }
-        let current = self.marks.front().map_or(self.index, |(_, i, _)| *i);
+        let current = self.marks.front().map_or(self.index, |m| m.1);
         self.order.set_mode(mode, current);
         let chosen = self.marks.len() > 1 || self.staged.is_some() || self.stream.is_none();
         if chosen && !self.marks.is_empty() {
@@ -804,7 +832,7 @@ impl Engine {
     /// the end, so that moves on as reaching the end would.
     fn seek_to(&mut self, pos: Duration) {
         match self.marks.front() {
-            Some(&(_, audible, Some(duration))) if pos >= duration => self.played_out(audible),
+            Some(&(_, audible, Some(duration), _)) if pos >= duration => self.played_out(audible),
             _ => self.seek(pos),
         }
     }
@@ -834,7 +862,7 @@ impl Engine {
     /// then played the next track from this one's position, under this one's
     /// title, and played it again from the start afterwards.
     fn seek(&mut self, pos: Duration) {
-        let Some(&(_, audible, _)) = self.marks.front() else {
+        let Some(&(_, audible, _, _)) = self.marks.front() else {
             return;
         };
         let src = if self.marks.len() > 1 || self.stream.is_none() {
@@ -860,6 +888,7 @@ impl Engine {
             }
             conv.src()
         };
+        self.decoded = (pos.as_secs_f64() * src.rate as f64).round() as u64;
         // Rebuilt rather than reused: it carries filter state from before the
         // seek, and its ratio may have changed with the playback speed.
         if let Some(plan) = self.out.as_ref().map(|o| o.plan) {
@@ -872,7 +901,7 @@ impl Engine {
         let idx = self.index;
         self.written = 0;
         self.marks.clear();
-        self.marks.push_back((0, idx, dur));
+        self.marks.push_back((0, idx, dur, 0));
 
         // The device discards the pre-seek audio in its callback; nothing is
         // pushed until it has. Reopening the device instead cost a gap and
@@ -1000,10 +1029,13 @@ impl Engine {
                 return;
             };
 
-            match stream.next_chunk() {
-                Ok(Some(chunk)) => {
-                    let chunk = chunk.to_vec();
-                    self.convert_and_carry(&chunk);
+            match stream.next_chunk().map(|c| c.map(<[f32]>::to_vec)) {
+                Ok(Some(chunk)) => self.take_chunk(&chunk),
+                // A loop running past the track's end returns from there,
+                // unless it has just returned and found nothing to play.
+                Ok(None) if self.loop_here().is_some_and(|l| self.decoded != l.start) => {
+                    let l = self.loop_here().expect("checked");
+                    self.wrap(l);
                 }
                 Ok(None) => {
                     // `stage_from` ends the conversion, unless the next track continues it.
@@ -1014,7 +1046,7 @@ impl Engine {
                     }
                 }
                 Err(e) => {
-                    let playing = self.marks.back().map(|(_, i, _)| *i).unwrap_or(self.index);
+                    let playing = self.marks.back().map(|m| m.1).unwrap_or(self.index);
                     if let Some(path) = self.queue.get(playing).cloned() {
                         self.fail(format!("{}: {e}", short(&path)));
                     }
@@ -1033,7 +1065,7 @@ impl Engine {
     ///
     /// Bad files are skipped in a loop; see [`Engine::open_from`].
     fn stage_next(&mut self) {
-        let last = self.marks.back().map_or(self.index, |(_, i, _)| *i);
+        let last = self.marks.back().map_or(self.index, |m| m.1);
         match self.order.successor(last, false) {
             Some(next) => self.stage_from(next),
             None => self.finish_track(),
@@ -1071,8 +1103,9 @@ impl Engine {
                 self.finish_track();
                 self.conv = Some(Converter::new(spec, plan, speed));
             }
-            self.marks.push_back((self.written, next, duration));
+            self.marks.push_back((self.written, next, duration, 0));
             self.stream = Some(stream);
+            self.decoded = (first.len() / spec.channels.max(1) as usize) as u64;
             self.convert_and_carry(&first);
         } else {
             self.finish_track();
@@ -1102,15 +1135,105 @@ impl Engine {
         let duration = staged.stream.duration();
         self.index = staged.index;
         self.stream = Some(staged.stream);
+        self.decoded = (staged.first.len() / staged.spec.channels.max(1) as usize) as u64;
         self.written = 0;
         self.marks.clear();
-        self.marks.push_back((0, staged.index, duration));
+        self.marks.push_back((0, staged.index, duration, 0));
         self.shared.track_start.store(0, Ordering::Relaxed);
         // A new track starts from its own beginning, not a previous seek.
         self.shared.position_offset.store(0, Ordering::Relaxed);
         self.convert_and_carry(&staged.first);
         if let Some(o) = &self.out {
             o.play();
+        }
+    }
+
+    /// Converts a decoded chunk into `carry`. A chunk reaching the loop's end
+    /// is cut there, and the decoder returns to the loop's start.
+    fn take_chunk(&mut self, chunk: &[f32]) {
+        let channels = self
+            .conv
+            .as_ref()
+            .map_or(1, |c| c.src().channels.max(1) as usize);
+        let frames = (chunk.len() / channels) as u64;
+        match self.loop_here() {
+            Some(l) if self.decoded < l.end && self.decoded + frames >= l.end => {
+                let keep = (l.end - self.decoded) as usize * channels;
+                self.convert_and_carry(&chunk[..keep]);
+                self.wrap(l);
+            }
+            _ => {
+                self.decoded += frames;
+                self.convert_and_carry(chunk);
+            }
+        }
+    }
+
+    /// The loop, when it is on the track being decoded.
+    fn loop_here(&self) -> Option<Loop> {
+        let decoding = self.marks.back().map_or(self.index, |m| m.1);
+        self.looping
+            .filter(|l| l.index == decoding && self.stream.is_some())
+    }
+
+    /// Returns the decoder to `l`'s start, and marks the output frame where
+    /// the device reaches it, so the position jumps back as it is heard.
+    fn wrap(&mut self, l: Loop) {
+        let (Some(stream), Some(conv), Some(out)) =
+            (self.stream.as_mut(), self.conv.as_ref(), self.out.as_ref())
+        else {
+            return;
+        };
+        let rate = conv.src().rate.max(1);
+        let at = Duration::from_secs_f64(l.start as f64 / rate as f64);
+        if stream.seek(at).is_err() {
+            self.looping = None;
+            return;
+        }
+        self.decoded = l.start;
+        let duration = stream.duration();
+        let heard = self.written + (self.carry.len() / out.plan.channels.max(1) as usize) as u64;
+        let output_rate = self.shared.position_rate.load(Ordering::Relaxed) as f64;
+        let offset = (at.as_secs_f64() * output_rate) as u64;
+        self.marks.push_back((heard, l.index, duration, offset));
+    }
+
+    /// Loops `bounds` of the audible track, or stops looping.
+    ///
+    /// The decoder runs ahead of the device, so it may already have passed a
+    /// new end, or returned under the old bounds. Seeking to the position then
+    /// discards that audio, at the cost of a short gap.
+    fn set_loop(&mut self, bounds: Option<(u64, u64)>) {
+        let (Some(&(_, audible, duration, _)), Some(conv)) = (self.marks.front(), &self.conv)
+        else {
+            self.looping = None;
+            return;
+        };
+        let rate = conv.src().rate.max(1);
+        let ahead = self.marks.len() > 1 || self.stream.is_none() || self.staged.is_some();
+        let at = self.elapsed();
+        let Some((start, end)) = bounds else {
+            if self.looping.take().is_some() && ahead {
+                self.seek(at);
+            }
+            return;
+        };
+        let frame = |d: Duration| (d.as_secs_f64() * rate as f64).round() as u64;
+        let end = end.min(duration.map_or(u64::MAX, frame));
+        if start >= end {
+            self.looping = None;
+            return;
+        }
+        self.looping = Some(Loop {
+            index: audible,
+            start,
+            end,
+        });
+        let now = frame(at);
+        if now < start || now >= end {
+            self.seek(Duration::from_secs_f64(start as f64 / rate as f64));
+        } else if ahead || self.decoded >= end {
+            self.seek(at);
         }
     }
 
@@ -1141,11 +1264,14 @@ impl Engine {
                 break;
             }
             self.marks.pop_front();
-            let (start, idx, _) = self.marks[0];
+            let (start, idx, _, offset) = self.marks[0];
             self.index = idx;
             self.shared.track_start.store(start, Ordering::Relaxed);
-            // A new track starts from its own beginning, not a previous seek.
-            self.shared.position_offset.store(0, Ordering::Relaxed);
+            // A new track starts from its own beginning; a loop, from its start.
+            self.shared.position_offset.store(offset, Ordering::Relaxed);
+            if self.looping.is_some_and(|l| l.index != idx) {
+                self.looping = None;
+            }
         }
     }
 
@@ -1168,7 +1294,11 @@ impl Engine {
         s.state = self.state;
         // `queue` is written by `Player::send`; the engine's may be older.
         s.index = self.index;
-        s.duration = self.marks.front().and_then(|(_, _, d)| *d);
+        s.duration = self.marks.front().and_then(|m| m.2);
+        s.looping = self
+            .looping
+            .filter(|l| l.index == self.index)
+            .map(|l| (l.start, l.end));
         s.source = self.conv.as_ref().map(Converter::src);
         s.output_rate = self.out.as_ref().map(|o| o.plan.rate).unwrap_or(0);
         s.resampling = self.conv.as_ref().is_some_and(Converter::resampling);

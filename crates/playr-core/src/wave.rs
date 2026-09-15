@@ -1,12 +1,16 @@
 //! Waveform peaks: the lowest and highest sample and the mean square in each
 //! stretch of a track, kept at several scales so a view at any zoom reads a
-//! few values a column.
+//! few values a column, and the sign of every frame, for snapping to zero
+//! crossings.
 //!
 //! The finest scale holds one entry per [`BUCKET`] frames, across all channels;
 //! each coarser scale halves the count. An entry is 12 bytes, so a 4-minute
 //! track at 44.1 kHz keeps about 4 MB at the finest scale and as much again
 //! above it. Peaks show where a signal reaches; the mean square gives its RMS,
 //! which shows loudness where a mastered track's peaks are all near full scale.
+//!
+//! Signs take a bit a frame, about 1.3 MB for the same track. Kept over
+//! decoding around each snap, which would stall the interface on a slow seek.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +43,8 @@ pub struct Peaks {
     pub frames: u64,
     /// `levels[k]` holds one entry per `BUCKET << k` frames.
     levels: Vec<Vec<Entry>>,
+    /// Bit `f` is set where the channels' mean at frame `f` is 0 or more.
+    signs: Vec<u64>,
 }
 
 impl Peaks {
@@ -103,6 +109,23 @@ impl Peaks {
         total.extent()
     }
 
+    /// The zero crossing nearest `near` among frames `lo..=hi`: a frame whose
+    /// channels' mean has the other sign from the frame before it.
+    pub fn crossing(&self, lo: u64, hi: u64, near: u64) -> Option<u64> {
+        let (lo, hi) = (lo.max(1), hi.min(self.frames.saturating_sub(1)));
+        if lo > hi {
+            return None;
+        }
+        let near = near.clamp(lo, hi);
+        let positive = |f: u64| self.signs[(f / 64) as usize] >> (f % 64) & 1 == 1;
+        let crosses = |f: u64| positive(f) != positive(f - 1);
+        (0..=(hi - lo)).find_map(|d| {
+            let after = near.checked_add(d).filter(|&f| f <= hi && crosses(f));
+            let before = near.checked_sub(d).filter(|&f| f >= lo && crosses(f));
+            after.or(before)
+        })
+    }
+
     /// The largest sample magnitude in the track, for scaling a view.
     pub fn loudest(&self) -> f32 {
         self.levels
@@ -110,6 +133,82 @@ impl Peaks {
             .into_iter()
             .flatten()
             .fold(0.0f32, |m, e| m.max(-e.min).max(e.max))
+    }
+}
+
+/// Frames of one stretch of a track, decoded for a view too fine for its peaks,
+/// which widen every range to whole buckets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Detail {
+    pub rate: u32,
+    /// The first frame held.
+    pub start: u64,
+    /// The end asked for, exclusive; the track may end before it.
+    pub end: u64,
+    channels: usize,
+    /// Interleaved.
+    samples: Vec<f32>,
+}
+
+impl Detail {
+    /// Frames from `start` of interleaved `samples` with `channels` channels,
+    /// asked for up to `end`.
+    pub fn from_interleaved(
+        samples: Vec<f32>,
+        channels: usize,
+        rate: u32,
+        start: u64,
+        end: u64,
+    ) -> Detail {
+        Detail {
+            rate,
+            start,
+            end,
+            channels: channels.max(1),
+            samples,
+        }
+    }
+
+    /// Decodes frames `start..end` of the track at `path`, which counts frames
+    /// at `rate`. Seeks there first, so a few seconds take milliseconds.
+    pub fn read(path: &Path, rate: u32, start: u64, end: u64) -> Result<Detail, String> {
+        let (samples, channels) = crate::samples::read_frames(path, rate, start, end)?;
+        Ok(Detail::from_interleaved(
+            samples, channels, rate, start, end,
+        ))
+    }
+
+    /// Whether frames `a..b` are within what was asked for.
+    pub fn covers(&self, a: u64, b: u64) -> bool {
+        a >= self.start && b <= self.end
+    }
+
+    /// The extremes and RMS of frames `a..b` across every channel, exactly,
+    /// or `None` if none of them are held.
+    pub fn range(&self, a: u64, b: u64) -> Option<Extent> {
+        let held = (self.samples.len() / self.channels) as u64;
+        let a = a.max(self.start) - self.start;
+        let b = (b.max(self.start) - self.start).min(held);
+        if a >= b {
+            return None;
+        }
+        let samples = &self.samples[a as usize * self.channels..b as usize * self.channels];
+        let (min, max, squares) = samples.iter().fold(
+            (f32::INFINITY, f32::NEG_INFINITY, 0.0f64),
+            |(lo, hi, sq), &s| (lo.min(s), hi.max(s), sq + f64::from(s) * f64::from(s)),
+        );
+        Some(Extent {
+            min,
+            max,
+            rms: (squares / samples.len() as f64).sqrt() as f32,
+        })
+    }
+
+    /// The channels' mean at `frame`, the signal a snap finds crossings in.
+    pub fn mean(&self, frame: u64) -> Option<f32> {
+        let i = frame.checked_sub(self.start)? as usize * self.channels;
+        let frame = self.samples.get(i..i + self.channels)?;
+        Some(frame.iter().sum::<f32>() / self.channels as f32)
     }
 }
 
@@ -162,6 +261,7 @@ struct Builder {
     rate: u32,
     frames: u64,
     base: Vec<Entry>,
+    signs: Vec<u64>,
     /// The bucket being filled: extremes, sum of squares, and frames in it.
     min: f32,
     max: f32,
@@ -175,6 +275,7 @@ impl Builder {
             rate,
             frames: 0,
             base: Vec::new(),
+            signs: Vec::new(),
             min: f32::INFINITY,
             max: f32::NEG_INFINITY,
             squares: 0.0,
@@ -186,10 +287,18 @@ impl Builder {
         let per_channel = 1.0 / channels as f64;
         for frame in samples.chunks_exact(channels) {
             let mut square = 0.0f64;
+            let mut sum = 0.0f64;
             for &s in frame {
                 self.min = self.min.min(s);
                 self.max = self.max.max(s);
                 square += f64::from(s) * f64::from(s);
+                sum += f64::from(s);
+            }
+            if self.frames.is_multiple_of(64) {
+                self.signs.push(0);
+            }
+            if sum >= 0.0 {
+                *self.signs.last_mut().expect("pushed") |= 1 << (self.frames % 64);
             }
             self.squares += square * per_channel;
             self.filled += 1;
@@ -235,6 +344,7 @@ impl Builder {
             rate: self.rate,
             frames,
             levels,
+            signs: self.signs,
         }
     }
 }

@@ -25,6 +25,8 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Samples: `:slice` writes regions between marks, equal parts or onset slices as lossless WAV files that rtrack loads as a sample bank
 
+- Sampler view: zoom to single frames, nudge the playhead and snap it to zero crossings, and set a range to slice or loop, with its ends moved while it loops
+
 - Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
 
 - Volume as a float gain applied before quantisation
@@ -65,6 +67,8 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Four views: library, selection, playlists, and a sampler showing the playing track's waveform
 
+- Dark and light themes; the terminal takes its colours from its own theme, and honours `NO_COLOR`
+
 - Search filters as you type
 
 - A selection to collect tracks into, edit and save as a playlist; it does not change what plays, and its tracks are marked `+` in the library
@@ -94,13 +98,17 @@ playr is two programs: `playr`, the terminal interface, and `playr-gui`, a deskt
 Each [GitHub release](https://github.com/shakfu/playr/releases) has prebuilt archives, with Opus, for:
 
 - Linux: x86_64 and arm64, glibc 2.35 or later
+
 - macOS: arm64 and x86_64, 11.0 or later
+
 - Windows: x86_64
 
 Each archive holds both programs, with `SHA256SUMS` in the release for checking them. Put `playr` on your `PATH`; the window needs one more step on macOS and Linux:
 
 - **macOS:** the window is `playr.app`; move it to `Applications`. It is not signed or notarized, so macOS refuses to open it once downloaded with a browser; allow it under System Settings, Privacy & Security, or run `xattr -dr com.apple.quarantine playr.app`.
+
 - **Linux:** copy `playr-gui` onto your `PATH`, `playr.desktop` to `~/.local/share/applications`, and `playr.png` to `~/.local/share/icons/hicolor/256x256/apps`, and playr is listed among your applications.
+
 - **Windows:** run `playr-gui.exe`; it opens without a console window.
 
 ### From a clone
@@ -202,7 +210,7 @@ File, Add folder to library scans a directory, as `playr scan` does, and File, O
 | `,` `.`                  | seek to the previous or next mark           |
 | `B`                      | undo the last mark                          |
 | `C`                      | clear all marks in this track; asks y/n     |
-| `[` `]`                  | varispeed down or up, one semitone a press  |
+| `(` `)`                  | varispeed down or up, one semitone a press  |
 | `\`                      | back to normal speed                        |
 | `+` `-`                  | volume                                      |
 | `:`                      | type a command; see [Commands](#commands)   |
@@ -230,15 +238,15 @@ A mode applies to whatever list is playing: the library, search results, the sel
 
 ### Marks
 
-`b` marks the playing position in the current track. Marks show as `^` under the progress bar. `.` seeks to the next mark and `,` to the previous one; within a second after a mark, `,` goes to the one before it, so pressing it twice steps back twice. A mark within half a second of an existing one is not added again.
+`b` marks the playing position in the current track. Marks show as `^` under the progress bar. `.` seeks to the next mark and `,` to the previous one; within a second after a mark, `,` goes to the one before it, so pressing it twice steps back twice. A mark within half a second of an existing one is not added again, except in the sampler view, where marks may be a frame apart.
 
 Marks form a chain: `B` removes the mark added most recently, then the one before, whatever their positions in the track. `C` clears all of the track's marks; it asks first, and only `y` confirms.
 
-Marks are stored in the library by file path and source frame, so they survive a rescan and stay exact at any playback speed. Without a library file they last until playr exits. A mark lands slightly after the moment you meant, by your reaction time.
+Marks are stored in the library by file path and source frame, so they survive a rescan and stay exact at any playback speed. Without a library file they last until playr exits. A mark lands slightly after the moment you meant, by your reaction time; in the sampler view, nudging and snapping place one exactly.
 
 ### Samples
 
-`:slice` writes parts of the playing track as WAV files, for rtrack or any sampler. Marks set the regions. The region is the span between the marks either side of the playhead, from the start of the track or to its end where there is no mark on that side.
+`:slice` writes parts of the playing track as WAV files, for rtrack or any sampler. Marks set the regions. The region is the span between the marks either side of the playhead, from the start of the track or to its end where there is no mark on that side. In the [sampler view](#sampler-view) a range can replace it.
 
 ![Slicing a Boards of Canada record is a good use of an afternoon.](https://raw.githubusercontent.com/shakfu/playr/main/docs/media/waveform.png)
 
@@ -253,6 +261,7 @@ Marks are stored in the library by file path and source frame, so they survive a
 Each export writes a new directory, named after the track, under `samples` in [`settings.toml`](#configuration), by default `~/Music/playr/samples`. A second export of `amen.flac` goes to `amen-2`. The directory holds:
 
 - `000-amen_S00.wav`, `001-amen_S01.wav`, and so on, one file per slice, in the layout rtrack loads as a sample bank.
+
 - `samples.json`, with the source file and each slice's start and end frame.
 
 Slices are read from the source file, so volume and speed do not apply. They are 24-bit WAV at the source's sample rate and channel count; 16- and 24-bit sources are copied bit for bit. Without `S`, `:slice onsets` uses `onset_sensitivity` from `settings.toml`, 0.5 by default. Onset detection is rtrack's: a hit within 50 ms of the region's start stays in the first slice, and each slice starts up to 10 ms before its hit. It reads the region into memory, up to about 23 minutes at 48 kHz. Export runs in the background, and the bottom line reports when it is done.
@@ -270,19 +279,38 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `z` `Z` | `:zoom +`, `:zoom -`    | zoom in or out, centred on the playhead           |
 | `0`     | `:zoom all`             | show the whole track                              |
 | `w`     | `:display`              | switch display: Braille, envelope, dB             |
+| left, right | `:nudge -1`, `:nudge +1` | move the playhead a column                   |
+| shift-left, shift-right | `:nudge -10%`, `:nudge +10%` | move it a tenth of the view      |
+| `S`     | `:snap`                 | snap to zero crossings, on or off                 |
+| `<` `>` | `:in`, `:out`           | start or end the range at the playhead            |
+| backspace | `:range`              | clear the range; `:range 1:02 1:04.5` sets one    |
+| `l`     | `:loop`                 | play the range over and over, or stop             |
+| `[` `]` | `:edge start`, `:edge end` | choose the range end to move, shown reversed   |
+| `{` `}` | `:edge -1`, `:edge +1`  | move that end a column earlier or later           |
 | `enter` | `:write`                | write the slices planned                          |
-| `esc`   | `:discard`              | discard them                                      |
+| `esc`   | `:discard`              | discard them, or with none planned, clear the range |
 
 - **Displays.** The envelope draws each column as two bars in eighth blocks: its RMS level in the bright colour, inside its peak level in a darker one. The waveform is folded, with negative samples counted by their size, so the bars use the full height. RMS shows loudness, such as a verse against a chorus, where a mastered track's peaks are near full scale everywhere; peak shows where each hit starts. The Braille display, which the view starts with, draws the waveform around a centre line, two dots across and four down a cell, which shows its shape. Both scale to the loudest sample in the track.
+
 - **dB.** The dB display draws the same bars on a scale from -48 dBFS to full scale, not scaled to the track. A linear scale puts RMS 12 dB below full scale a quarter of the way up; this puts it three quarters of the way, which spreads out quiet passages and the level changes between sections. Levels below -48 dB draw nothing.
-- **Zoom.** Each step halves the time a column shows, down to 64 frames, 1.5 ms at 44.1 kHz. Columns start on the 32-frame buckets the peaks are kept in, so a column never shows a neighbour's hit.
+
+- **Zoom.** Each step halves the time a column shows, down to one frame a cell; the window goes on to 16 points a frame. Down to 64 frames, 1.5 ms at 44.1 kHz, columns start on the 32-frame buckets the peaks are kept in, so a column never shows a neighbour's hit. Closer than that, the view reads the frames it shows, and 2 s either side, in the background; until they arrive, each column shows its bucket's peaks. At a frame a column the window's line display draws each frame's channels' mean around a zero line, with a dot per frame once frames are 4 points apart, so a crossing can be picked out by eye.
+
 - **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track. Outside the view, `:slice` writes at once.
 
-The waveform glyphs are the view's only characters outside ASCII. Marks are still placed at the playhead, and a region cannot be heard on its own yet; both are planned.
+- **Nudging.** The arrows move the playhead a column, and with shift a tenth of the view, so zooming in makes each step finer, down to one frame. Outside this view they seek 5 and 30 s. Pause first to place a point without hearing each step.
+
+- **Snap.** With `:snap on`, shown as `snap` in the title, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms: a frame where the channels' mean changes sign. A nudge snaps only past where it started, so repeated nudges walk from crossing to crossing. Where no crossing is within reach, as in silence, the point stays.
+
+- **Range.** `<` and `>` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge moves that edge.
+
+- **Loop.** `l` plays the range over and over, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `<` or `>`, with `{` or `}` after `[` or `]` picks it, with `:range` or a drag, moves the loop at once; clearing the range, a new track or `l` again ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
+
+The waveform glyphs are the view's only characters outside ASCII. Marks are placed at the playhead, or in the window at a shift-click.
 
 ### Varispeed
 
-`[` and `]` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
+`(` and `)` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
 
 This is not the pitch-preserving speed change of a podcast app. That is time-stretching, which needs a phase vocoder; this is a change of resampling ratio, which is what varispeed means.
 
@@ -316,9 +344,13 @@ x = "remove"
 ```
 
 - Each key's value is a `:` command, as listed in [docs/cheatsheet.md](docs/cheatsheet.md). `"nop"` makes a key do nothing, and `"command"` opens the `:` prompt.
+
 - A key under `[keys.VIEW]` wins in that view over the same key under `[keys]`.
+
 - A key under `[keys]` needs a command that works in every view. `d = "remove"` there is refused, with the table to put it in.
+
 - Keys are named by their character (`j`, `J`), or as `space`, `enter`, `esc`, `tab`, `backtab`, `backspace`, `delete`, `insert`, `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, or `f1` to `f12`. Prefix `ctrl-`, `alt-` or `shift-` for a chord; a chord only matches a binding that names it. TOML needs quotes around a key that is not a letter, digit, `-` or `_`, such as `"?"`.
+
 - `ctrl-c` always quits, and the keys inside prompts and help lists cannot be changed.
 
 Any error stops playr before it starts, and every bad setting is listed with its line number. `?` lists the keys as bound in the view you are in. `:map` and `:unmap` change keys until playr exits.

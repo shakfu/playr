@@ -3,8 +3,11 @@
 What is missing, grouped by priority:
 
 - **Critical:** loses data, or blocks the next release.
+
 - **High:** a gap most users meet.
+
 - **Medium:** improves an area that already works.
+
 - **Low:** niche, large for its benefit, or blocked **upstream**, which marks items not fixable here without replacing a dependency.
 
 ## High
@@ -23,11 +26,9 @@ What is missing, grouped by priority:
 
 ### Sampler
 
-- [ ] **Finer movement in the sampler view.** The arrow keys seek by 5 and 30 s, which suits playback but not placing a mark at the sampler's zoom. In the sampler view they should move to the next or previous zero crossing instead.
+- [ ] **Mark editing.** A cursor in the sampler view, independent of the playhead; select a mark and nudge it; snap it to the nearest onset; delete one mark; drag a mark in the window.
 
-- [ ] **Mark editing.** A cursor in the sampler view, independent of the playhead; select a mark and nudge it by a column, a millisecond or a frame; snap to a zero crossing or the nearest onset; delete one mark; drag a mark in the window. `MARK_NEAR` refuses marks within 500 ms of each other, which is too coarse at the sampler's zoom.
-
-- [ ] **Audition and loop.** Play the region, or the slice under the cursor, once or looped. Needs sample-accurate looping in the engine, without reopening the device.
+- [ ] **Audition.** Play the region, range or the planned slice under the cursor once, then stop. The engine loops a range; playing one once needs it to stop at the end instead of returning.
 
 ### Library
 
@@ -41,7 +42,7 @@ What is missing, grouped by priority:
 
 ### Playback
 
-- [ ] **A-B loop between marks.** Loop the stretch between the marks either side of the playing position, for practice with varispeed. Marks are already source frames; the loop is an engine change.
+- [ ] **Loop the region.** The sampler view loops a range. One key setting the range to the region between the marks around the playhead would loop that too, for practice with varispeed, from any view.
 
 - [ ] **ReplayGain.** Read `REPLAYGAIN_*` and `R128_*` tags and apply track or album gain. Tag reading is already there; this is a gain stage and a preference.
 

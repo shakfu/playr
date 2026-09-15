@@ -17,6 +17,8 @@ fn a_key_press_matches_the_name_a_binding_uses() {
     // Terminals report the shifted character, often with Shift set as well.
     assert_eq!(event(KeyCode::Char('J'), KeyModifiers::SHIFT), key("J"));
     assert_eq!(event(KeyCode::Char('?'), KeyModifiers::SHIFT), key("?"));
+    assert_eq!(event(KeyCode::Char('<'), KeyModifiers::SHIFT), key("<"));
+    assert_ne!(key("<"), key(","), "shift-comma is its own key");
     assert_eq!(event(KeyCode::Char(' '), KeyModifiers::NONE), key("space"));
     assert_eq!(
         event(KeyCode::Char('S'), KeyModifiers::CONTROL),

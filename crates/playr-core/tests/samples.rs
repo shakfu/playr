@@ -42,6 +42,7 @@ fn job(path: &Path, rate: u32, marks: &[u64], at: u64, cut: Cut, samples: &Path)
         marks: marks.to_vec(),
         at,
         cut,
+        range: None,
         samples: samples.to_path_buf(),
     }
 }
@@ -204,6 +205,38 @@ fn equal_slices_cover_the_region_or_the_rest_of_the_track() {
         )),
         Err("the region is too short for 3 slices".into())
     );
+}
+
+#[test]
+fn a_range_replaces_the_region_for_every_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("src.wav");
+    source(&file, 48_000, 2, 24, 100_003);
+    let marks = [1_000, 30_000, 45_000, 61_000];
+    let ranged = |cut| Job {
+        range: Some((20_000, 60_000)),
+        ..job(&file, 48_000, &marks, 5_000, cut, dir.path())
+    };
+
+    let out = export(&ranged(Cut::Region)).unwrap();
+    assert_eq!(out.slices, [(20_000, 60_000)]);
+    assert_exact(&out, 2, 24);
+    let out = export(&ranged(Cut::Equal(4))).unwrap();
+    assert_eq!(assert_exact(&out, 2, 24), [10_000; 4]);
+    assert_eq!(out.slices[0].0, 20_000);
+    // Only the marks inside the range cut it, from its start to its end.
+    let out = export(&ranged(Cut::Marks)).unwrap();
+    assert_eq!(
+        out.slices,
+        [(20_000, 30_000), (30_000, 45_000), (45_000, 60_000)]
+    );
+    assert_exact(&out, 2, 24);
+
+    let empty = Job {
+        range: Some((2_000, 29_000)),
+        ..job(&file, 48_000, &marks, 5_000, Cut::Marks, dir.path())
+    };
+    assert_eq!(export(&empty), Err("no marks in the range".into()));
 }
 
 /// A mono buffer of `len` frames with a decaying burst at each onset.

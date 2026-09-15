@@ -60,6 +60,14 @@ fn every_action() -> Vec<Action> {
         Action::Slice(Slicing::Region),
         Action::Zoom(Zoom::In),
         Action::Display(None),
+        Action::Nudge(playr_app::action::Nudge::Columns(1)),
+        Action::Snap(None),
+        Action::RangeIn,
+        Action::RangeOut,
+        Action::SetRange(None),
+        Action::Loop(None),
+        Action::PickEdge(playr_app::sampler::Edge::Start),
+        Action::MoveEdge(playr_app::action::Nudge::Columns(1)),
         Action::WriteSlices,
         Action::DiscardSlices,
         Action::Theme(Theme::System),
@@ -121,6 +129,14 @@ fn every_action() -> Vec<Action> {
             | Action::Slice(_)
             | Action::Zoom(_)
             | Action::Display(_)
+            | Action::Nudge(_)
+            | Action::Snap(_)
+            | Action::RangeIn
+            | Action::RangeOut
+            | Action::SetRange(_)
+            | Action::Loop(_)
+            | Action::PickEdge(_)
+            | Action::MoveEdge(_)
             | Action::WriteSlices
             | Action::DiscardSlices
             | Action::Theme(_)

@@ -32,6 +32,7 @@ struct Headless {
     shown: Vec<Presentation>,
     plan: Option<Plan>,
     planning: bool,
+    sampler: playr_app::sampler::Sampler,
 }
 
 fn slot(view: View) -> Option<usize> {
@@ -89,6 +90,12 @@ impl Frontend for Headless {
     fn present(&mut self, presentation: Presentation) {
         self.shown.push(presentation);
     }
+    fn sampler(&self) -> &playr_app::sampler::Sampler {
+        &self.sampler
+    }
+    fn sampler_mut(&mut self) -> &mut playr_app::sampler::Sampler {
+        &mut self.sampler
+    }
     fn planning(&mut self, _job: JobId) {
         self.planning = true;
     }
@@ -129,6 +136,7 @@ fn headless() -> (Headless, tempfile::TempDir) {
         shown: Vec::new(),
         plan: None,
         planning: false,
+        sampler: Default::default(),
     };
     (frontend, dir)
 }

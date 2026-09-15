@@ -272,6 +272,46 @@ fn terminal_messages_are_worded() {
         ),
         (Message::Display(Display::Decibels), "display: db"),
         (Message::Theme(Theme::Light), "theme: light"),
+        (Message::Snap(true), "snap to zero crossings: on"),
+        (Message::NoWaveform, "no waveform to move along yet"),
+        (Message::EmptyRange, "the range is empty"),
+        (Message::Loop(true), "loop: on"),
+        (
+            Message::Edge(playr_app::sampler::Edge::End),
+            "moving the range end",
+        ),
+        (
+            Message::NoEdge(playr_app::sampler::Edge::Start),
+            "no range start to move: set it with < or >",
+        ),
+        (
+            Message::NoRangeToLoop,
+            "no range to loop: set one with < and >, or drag",
+        ),
+        (
+            Message::Range {
+                start: Some(8_000),
+                end: Some(20_000),
+                rate: 8_000,
+            },
+            "range 0:01.000-0:02.500 (1.500 s)",
+        ),
+        (
+            Message::Range {
+                start: Some(8_000),
+                end: None,
+                rate: 8_000,
+            },
+            "range from 0:01.000",
+        ),
+        (
+            Message::Range {
+                start: None,
+                end: None,
+                rate: 8_000,
+            },
+            "range cleared",
+        ),
         (
             Message::Mapped(parse("map selection ctrl-x clear", View::Library).unwrap()),
             "map selection ctrl-x clear",

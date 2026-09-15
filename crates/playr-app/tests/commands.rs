@@ -131,6 +131,60 @@ fn every_command_parses_in_its_views_and_names_only_itself() {
 }
 
 #[test]
+fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
+    use playr_app::action::Nudge;
+    let s = |line: &str| parse(line, View::Sampler);
+    assert_eq!(s("nudge +1"), Ok(Action::Nudge(Nudge::Columns(1))));
+    assert_eq!(s("nudge 3"), Ok(Action::Nudge(Nudge::Columns(3))));
+    assert_eq!(s("nudge -10%"), Ok(Action::Nudge(Nudge::Percent(-10))));
+    assert_eq!(s("snap"), Ok(Action::Snap(None)));
+    assert_eq!(s("snap off"), Ok(Action::Snap(Some(false))));
+    assert_eq!(s("in"), Ok(Action::RangeIn));
+    assert_eq!(s("out"), Ok(Action::RangeOut));
+    assert_eq!(s("range"), Ok(Action::SetRange(None)));
+    assert_eq!(s("loop"), Ok(Action::Loop(None)));
+    assert_eq!(s("loop off"), Ok(Action::Loop(Some(false))));
+    // Either order; the range is kept start first.
+    assert_eq!(
+        s("range 2.25 1:01"),
+        Ok(Action::SetRange(Some((secs(2.25), secs(61.0)))))
+    );
+    for bad in [
+        "nudge 0",
+        "nudge +",
+        "nudge x%",
+        "snap maybe",
+        "range 1",
+        "in 2",
+        "loop 3",
+    ] {
+        assert!(s(bad).is_err(), "{bad:?} parsed");
+    }
+    assert_eq!(s("range 1 1"), Err("the range is empty".into()));
+    assert!(lib("nudge +1").unwrap_err().contains("sampler view"));
+    for text in [
+        "nudge +4",
+        "nudge -10%",
+        "snap on",
+        "range 1.5 2.25",
+        "in",
+        "out",
+        "range",
+        "loop on",
+        "edge end",
+        "edge -3",
+        "edge +10%",
+    ] {
+        let action = s(text).unwrap();
+        assert_eq!(line(&action, Some(View::Sampler)), text);
+    }
+    assert_eq!(
+        completions("snap o", View::Sampler, &[]),
+        ["snap on", "snap off"]
+    );
+}
+
+#[test]
 fn the_cursor_moves_by_a_count_of_rows() {
     assert_eq!(lib("down"), Ok(Action::Cursor(1)));
     assert_eq!(lib("down 10"), Ok(Action::Cursor(10)));
@@ -406,6 +460,34 @@ fn default_keys_map_to_actions_by_view() {
     assert_eq!(default_key("\\", Library), Some(Action::SetSpeed(0)));
     // Chords are bound only where named, so Ctrl-M is not `M`.
     assert_eq!(default_key("ctrl-m", Library), None);
+    // The sampler's arrows and range keys; the marks keys beside them stay.
+    assert_eq!(
+        default_key("right", View::Sampler),
+        Some(Action::Nudge(playr_app::action::Nudge::Columns(1)))
+    );
+    assert_eq!(default_key("right", Library), Some(Action::SeekBy(5)));
+    assert_eq!(default_key("<", View::Sampler), Some(Action::RangeIn));
+    assert_eq!(default_key(">", View::Sampler), Some(Action::RangeOut));
+    assert_eq!(default_key(",", View::Sampler), Some(Action::PrevMark));
+    assert_eq!(default_key("<", Library), None);
+    assert_eq!(default_key("l", View::Sampler), Some(Action::Loop(None)));
+    assert_eq!(
+        default_key("esc", View::Sampler),
+        Some(Action::DiscardSlices)
+    );
+    // Brackets pick and move a range end in the sampler; parentheses change speed.
+    use playr_app::sampler::Edge;
+    assert_eq!(
+        default_key("[", View::Sampler),
+        Some(Action::PickEdge(Edge::Start))
+    );
+    assert_eq!(
+        default_key("}", View::Sampler),
+        Some(Action::MoveEdge(playr_app::action::Nudge::Columns(1)))
+    );
+    assert_eq!(default_key("[", Library), None);
+    assert_eq!(default_key("(", Library), Some(Action::SpeedBy(-1)));
+    assert_eq!(default_key(")", View::Sampler), Some(Action::SpeedBy(1)));
 }
 
 /// Every default binding is a command line that parses back to its action,

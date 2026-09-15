@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::action::{Action, Key, Keymap, Slicing, Zoom};
+use crate::action::{Action, Key, Keymap, Nudge, Slicing, Zoom};
 use crate::{Display, Theme, View};
 use playr_core::audio::Mode;
 use playr_core::samples::MAX_SLICES;
@@ -128,8 +128,40 @@ pub const COMMANDS: &[Command] = &[
         "[envelope|db|braille]",
         "draw the waveform another way",
     ),
+    only(
+        Sampler,
+        "nudge",
+        "+N | -N | +N% | -N%",
+        "move N columns, or N% of the view",
+    ),
+    only(
+        Sampler,
+        "snap",
+        "[on|off]",
+        "snap moves and marks to zero crossings",
+    ),
+    only(Sampler, "in", "", "start the range at the playhead"),
+    only(Sampler, "out", "", "end the range at the playhead"),
+    only(
+        Sampler,
+        "range",
+        "[START END]",
+        "set the range to slice, or clear it",
+    ),
+    only(Sampler, "loop", "[on|off]", "play the range over and over"),
+    only(
+        Sampler,
+        "edge",
+        "start|end | +N | -N | +N%",
+        "pick a range end, or move it N columns",
+    ),
     only(Sampler, "write", "", "write the slices :slice planned"),
-    only(Sampler, "discard", "", "discard the slices :slice planned"),
+    only(
+        Sampler,
+        "discard",
+        "",
+        "discard planned slices, else the range",
+    ),
 ];
 
 const MODES: &[(&str, Mode)] = &Mode::NAMES;
@@ -279,6 +311,21 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Zoom(crate::action::Zoom::All) => "zoom all".into(),
         Display(None) => "display".into(),
         Display(Some(d)) => format!("display {}", d.name()),
+        Nudge(crate::action::Nudge::Columns(n)) => format!("nudge {n:+}"),
+        Nudge(crate::action::Nudge::Percent(n)) => format!("nudge {n:+}%"),
+        Snap(None) => "snap".into(),
+        Snap(Some(true)) => "snap on".into(),
+        Snap(Some(false)) => "snap off".into(),
+        RangeIn => "in".into(),
+        RangeOut => "out".into(),
+        SetRange(None) => "range".into(),
+        PickEdge(edge) => format!("edge {}", edge.name()),
+        MoveEdge(crate::action::Nudge::Columns(n)) => format!("edge {n:+}"),
+        MoveEdge(crate::action::Nudge::Percent(n)) => format!("edge {n:+}%"),
+        Loop(None) => "loop".into(),
+        Loop(Some(true)) => "loop on".into(),
+        Loop(Some(false)) => "loop off".into(),
+        SetRange(Some((a, b))) => format!("range {} {}", time(a), time(b)),
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
         Theme(t) => format!("theme {}", t.name()),
@@ -316,6 +363,21 @@ fn choose<T: Copy>(word: &str, table: &[(&str, T)], what: &str) -> Result<T, Str
         Err(e) if e.starts_with("unknown") => Err(listed()),
         Err(e) => Err(e),
     }
+}
+
+/// Parses `+N`, `-N`, `+N%` or `-N%`, a sign optional, as a nudge.
+fn nudge(text: &str) -> Option<Nudge> {
+    let (text, percent) = match text.strip_suffix('%') {
+        Some(text) => (text, true),
+        None => (text, false),
+    };
+    let (sign, digits) = signed(text).unwrap_or((1.0, text));
+    let n = digits.parse::<i64>().ok().filter(|&n| n > 0)? * sign as i64;
+    Some(if percent {
+        Nudge::Percent(n)
+    } else {
+        Nudge::Columns(n)
+    })
 }
 
 /// Parses `90`, `1:23`, `1:02:03` or `83.5` as a time into a track.
@@ -558,6 +620,37 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             _ => Err(usage()),
         },
         "theme" => choose(rest, THEMES, "theme").map(Action::Theme),
+        "nudge" => nudge(rest).map(Action::Nudge).ok_or_else(usage),
+        "edge" => match rest {
+            "start" => Ok(Action::PickEdge(crate::sampler::Edge::Start)),
+            "end" => Ok(Action::PickEdge(crate::sampler::Edge::End)),
+            _ => nudge(rest).map(Action::MoveEdge).ok_or_else(usage),
+        },
+        "snap" => match rest {
+            "" => Ok(Action::Snap(None)),
+            "on" => Ok(Action::Snap(Some(true))),
+            "off" => Ok(Action::Snap(Some(false))),
+            _ => Err(usage()),
+        },
+        "loop" => match rest {
+            "" => Ok(Action::Loop(None)),
+            "on" => Ok(Action::Loop(Some(true))),
+            "off" => Ok(Action::Loop(Some(false))),
+            _ => Err(usage()),
+        },
+        "in" => nothing(Action::RangeIn),
+        "out" => nothing(Action::RangeOut),
+        "range" if rest.is_empty() => Ok(Action::SetRange(None)),
+        "range" => match rest.split_whitespace().collect::<Vec<_>>()[..] {
+            [a, b] => {
+                let (a, b) = (parse_time(a)?, parse_time(b)?);
+                if a == b {
+                    return Err("the range is empty".into());
+                }
+                Ok(Action::SetRange(Some((a.min(b), a.max(b)))))
+            }
+            _ => Err(usage()),
+        },
         "write" => nothing(Action::WriteSlices),
         "discard" => nothing(Action::DiscardSlices),
         "slice" => match first_word(rest) {
@@ -613,7 +706,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
 /// What Tab can complete `text` to in `view`, as whole command lines.
 ///
 /// The first word completes to the names of commands that work in `view`.
-/// After `mode`, `theme` or `view` the argument completes to its choices, and after
+/// After `edge`, `loop`, `mode`, `snap`, `theme` or `view` the argument completes to its choices, and after
 /// `playlist` or `rename` to the names in `playlists`.
 pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> {
     let Some((word, rest)) = text.split_once(' ') else {
@@ -629,6 +722,8 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
     let choices: Vec<String> = match command.name {
         "mode" => MODES.iter().map(|m| m.0.to_string()).collect(),
         "theme" => THEMES.iter().map(|t| t.0.to_string()).collect(),
+        "snap" | "loop" => vec!["on".into(), "off".into()],
+        "edge" => vec!["start".into(), "end".into()],
         "view" => VIEWS.iter().map(|v| v.0.to_string()).collect(),
         "playlist" | "rename" => playlists.to_vec(),
         _ => Vec::new(),

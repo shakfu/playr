@@ -34,13 +34,14 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
         lists: app.lists,
         help_scroll: app.help_scroll,
         zoom: app.sampler.zoom,
+        scale: None,
     };
     draw_tabs(app, f, tabs_area);
     match app.view {
         View::Library => drawn.lists.library = draw_library(app, f, body),
         View::Selection => drawn.lists.selection = draw_selection(app, f, body),
         View::Playlists => drawn.lists.playlists = draw_playlists(app, f, body),
-        View::Sampler => drawn.zoom = draw_sampler(app, f, body),
+        View::Sampler => (drawn.zoom, drawn.scale) = draw_sampler(app, f, body),
     }
     draw_bar(app, f, bar);
     drawn.help_scroll = match app.input {
@@ -144,8 +145,9 @@ fn draw_help(
 
 /// The playing track's waveform, with its region, marks, playhead and any
 /// slices planned, above an axis row marking them and a line of detail.
-/// Returns the zoom, clamped to what the track and width allow.
-fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
+/// Returns the zoom, clamped to what the track and width allow, and the
+/// columns drawn.
+fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sampler::Scale>) {
     let p = app.palette();
     let current = app.snapshot.status.current();
     let name = current
@@ -164,7 +166,7 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
                 Paragraph::new(hint).style(Style::default().fg(p.dim)),
                 inner,
             );
-            return app.sampler.zoom;
+            return (app.sampler.zoom, None);
         }
     };
 
@@ -175,22 +177,33 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
         app.sampler.zoom,
         app.snapshot.position,
         &app.snapshot.marks,
-    );
+        // A cell is the finest a terminal can place a frame.
+        1,
+    )
+    .with_range(app.sampler.range_ends(current))
+    .with_detail(app.sampler.detail(current));
     let zoom = layout.zoom;
+    let scale = Some(layout.columns());
     // The file name last: it is the longest part, and the bar below names the
     // track too, so a narrow terminal cuts it rather than the view's scale.
     let title = format!(
-        "{}  {}  1 col = {}  {}",
+        "{}  {}  1 col = {}{}{}  {}",
         app.sampler.display.name(),
         layout.shown(),
         layout.scale(),
+        if app.sampler.snap { "  snap" } else { "" },
+        if app.snapshot.status.looping.is_some() {
+            "  loop"
+        } else {
+            ""
+        },
         name.as_deref().unwrap_or(""),
     );
     let block = list_block(p, &title);
     let inner = block.inner(area);
     f.render_widget(block, area);
     if inner.height == 0 {
-        return zoom;
+        return (zoom, scale);
     }
     let width = inner.width as usize;
     let rows = inner.height.saturating_sub(2) as usize;
@@ -237,6 +250,10 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
             let extents: Vec<(f32, f32)> = (0..width)
                 .flat_map(|c| {
                     let (a, b) = layout.span_of(c);
+                    // A cell of one frame shows it in both dot columns.
+                    if b - a < 2 {
+                        return [(a, b), (a, b)];
+                    }
                     let mid = a + (b - a).div_ceil(2);
                     [(a, mid), (mid, b)]
                 })
@@ -255,11 +272,26 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
         }
     };
 
-    // Planned slice edges, then marks, then the playhead: the later wins a column.
+    // Planned slice edges, the range's ends, marks, then the playhead: the
+    // later wins a column.
     let mut axis: Vec<(char, Style)> = vec![(' ', Style::default()); width];
     if let Some(pending) = &app.sampler.pending {
         for c in sampler::edges(pending).filter_map(|e| layout.column_of(e)) {
             axis[c] = ('+', Style::default().fg(p.edge));
+        }
+    }
+    // The end that edge keys move is reversed.
+    let (start, end) = layout.range;
+    for (frame, glyph, edge) in [
+        (start, '[', sampler::Edge::Start),
+        (end, ']', sampler::Edge::End),
+    ] {
+        if let Some(c) = frame.and_then(|e| layout.column_of(e)) {
+            let style = Style::default().fg(p.accent);
+            axis[c] = match edge == app.sampler.edge {
+                true => (glyph, style.add_modifier(Modifier::REVERSED)),
+                false => (glyph, style),
+            };
         }
     }
     for c in layout.marks.iter().filter_map(|&m| layout.column_of(m)) {
@@ -288,7 +320,7 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> u32 {
         Paragraph::new(lines.split_off(skip.min(lines.len()))),
         inner,
     );
-    zoom
+    (zoom, scale)
 }
 
 /// A line of styled characters, with each run of one style in one span.

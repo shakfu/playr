@@ -372,20 +372,26 @@ impl Session {
     /// Marks `at` in the playing track, or its position now, unless a mark is
     /// already within [`MARK_NEAR`].
     pub fn add_mark(&mut self, at: Option<Duration>) -> Notice {
+        self.add_mark_within(at, MARK_NEAR)
+    }
+
+    /// As [`Session::add_mark`], refusing a mark within `near` of another, or
+    /// on the same frame.
+    pub fn add_mark_within(&mut self, at: Option<Duration>, near: Duration) -> Notice {
         let (path, rate) = match self.playing_track() {
             Ok(track) => track,
             Err(refusal) => return refusal.into(),
         };
         self.marks_for(Some(&path));
         let at = at.unwrap_or_else(|| self.player.position());
-        if let Some(near) = self
+        let mark = Mark::at_time(at, rate);
+        if let Some(other) = self
             .marks
             .iter()
-            .find(|m| m.time().abs_diff(at) < MARK_NEAR)
+            .find(|m| m.frame == mark.frame || m.time().abs_diff(at) < near)
         {
-            return Refusal::AlreadyMarked { at: near.time() }.into();
+            return Refusal::AlreadyMarked { at: other.time() }.into();
         }
-        let mark = Mark::at_time(at, rate);
         if let Err(e) = query::add_mark(&self.conn, &path.to_string_lossy(), mark) {
             return Notice::Failed {
                 task: Task::Mark,
@@ -510,6 +516,15 @@ impl Session {
         })
     }
 
+    /// Decodes frames `start..end` of `track`, which counts frames at `rate`,
+    /// for a view too close for its peaks. Finishes with [`Event::Detail`].
+    pub fn read_detail(&mut self, track: PathBuf, rate: u32, start: u64, end: u64) -> JobId {
+        self.spawn(move |job| {
+            let result = crate::wave::Detail::read(&track, rate, start, end).map(Arc::new);
+            Some(Event::Detail { job, track, result })
+        })
+    }
+
     /// Stops the peaks read in progress, if there is one.
     pub fn cancel_peaks(&mut self) {
         if let Some(cancel) = self.reading.take() {
@@ -519,8 +534,8 @@ impl Session {
 
     /// Plans slices of the playing track, `cut`'s way. Finishes with
     /// [`Event::Planned`]; nothing is written.
-    pub fn plan_slices(&mut self, cut: Cut) -> Result<JobId, Refusal> {
-        let job = self.slice_job(cut)?;
+    pub fn plan_slices(&mut self, cut: Cut, range: Option<(u64, u64)>) -> Result<JobId, Refusal> {
+        let job = self.slice_job(cut, range)?;
         Ok(self.spawn(move |id| {
             let result = samples::plan(&job).map(|spans| Plan {
                 job: job.clone(),
@@ -546,8 +561,8 @@ impl Session {
 
     /// Plans and writes slices of the playing track at once, `cut`'s way.
     /// Finishes with [`Event::Exported`].
-    pub fn export(&mut self, cut: Cut) -> Result<JobId, Refusal> {
-        let work = self.slice_job(cut)?;
+    pub fn export(&mut self, cut: Cut, range: Option<(u64, u64)>) -> Result<JobId, Refusal> {
+        let work = self.slice_job(cut, range)?;
         Ok(self.spawn(move |job| {
             Some(Event::Exported {
                 job,
@@ -665,8 +680,8 @@ impl Session {
     // --- slices ---
 
     /// The job for cutting the playing track `cut`'s way, at its marks and
-    /// position now.
-    pub fn slice_job(&mut self, cut: Cut) -> Result<Job, Refusal> {
+    /// position now, or within `range`.
+    pub fn slice_job(&mut self, cut: Cut, range: Option<(u64, u64)>) -> Result<Job, Refusal> {
         let (path, rate) = self.playing_track()?;
         let marks = self
             .marks_for(Some(&path))
@@ -679,6 +694,7 @@ impl Session {
             marks,
             at: Mark::at_time(self.player.position(), rate).frame,
             cut,
+            range,
             samples: self.samples.clone(),
         })
     }

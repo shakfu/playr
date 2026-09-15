@@ -93,6 +93,23 @@ pub enum Action {
     Zoom(Zoom),
     /// Show the waveform this way, or switch to the other way when `None`.
     Display(Option<crate::Display>),
+    /// Move the playhead along the sampler view's waveform.
+    Nudge(Nudge),
+    /// Snap the sampler view's moves and marks to zero crossings, or switch
+    /// when `None`.
+    Snap(Option<bool>),
+    /// Start the sampler's range at the playhead.
+    RangeIn,
+    /// End the sampler's range at the playhead.
+    RangeOut,
+    /// Set the sampler's range, or clear it for `None`.
+    SetRange(Option<(Duration, Duration)>),
+    /// Play the range over and over, or stop; switch when `None`.
+    Loop(Option<bool>),
+    /// Choose which end of the range edge moves shift.
+    PickEdge(crate::sampler::Edge),
+    /// Move the chosen end of the range, as a nudge moves the playhead.
+    MoveEdge(Nudge),
     /// Write the slices planned in the sampler view.
     WriteSlices,
     DiscardSlices,
@@ -120,6 +137,15 @@ pub enum Zoom {
     Out,
     /// Back to the whole track.
     All,
+}
+
+/// A move of the playhead in the sampler view; negative is back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nudge {
+    /// This many columns.
+    Columns(i64),
+    /// This percentage of the columns shown.
+    Percent(i64),
 }
 
 /// How `:slice` cuts the playing track.

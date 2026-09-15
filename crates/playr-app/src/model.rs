@@ -28,7 +28,7 @@ use crate::command::{self, CommandLine, History};
 use crate::config::Config;
 use crate::dispatch::{self, Confirm, Frontend, Presentation, Prompt};
 use crate::message::{self, Message};
-use crate::sampler::{Sampler, Wave};
+use crate::sampler::{DetailRead, Sampler, Wave, DETAIL_MARGIN};
 use crate::View;
 
 /// How long a message stays showing.
@@ -340,6 +340,11 @@ impl Model {
         self.sampler.zoom = zoom;
     }
 
+    /// Records the columns the sampler view drew, which nudges count in.
+    pub fn set_scale(&mut self, scale: crate::sampler::Scale) {
+        self.sampler.scale = Some(scale);
+    }
+
     /// The message showing, if any.
     pub fn message(&self) -> Option<&Message> {
         self.message.as_ref().map(|(m, _, _)| m)
@@ -417,6 +422,31 @@ impl Model {
                     self.sampler.wave = match result {
                         Ok(peaks) => Wave::Ready { path: track, peaks },
                         Err(error) => Wave::Failed { path: track, error },
+                    };
+                }
+                Event::Detail { job, track, result } => {
+                    let DetailRead::Reading {
+                        job: reading,
+                        start,
+                        end,
+                        ..
+                    } = self.sampler.detail
+                    else {
+                        continue;
+                    };
+                    if reading != job {
+                        continue;
+                    }
+                    self.sampler.detail = match result {
+                        Ok(detail) => DetailRead::Ready {
+                            path: track,
+                            detail,
+                        },
+                        Err(_) => DetailRead::Failed {
+                            path: track,
+                            start,
+                            end,
+                        },
                     };
                 }
                 Event::Planned { job, track, result } => {
@@ -530,6 +560,25 @@ impl Model {
         {
             self.sampler.pending = None;
         }
+        if self
+            .sampler
+            .range
+            .as_ref()
+            .is_some_and(|r| Some(&r.path) != current)
+        {
+            self.sampler.range = None;
+        }
+        if self
+            .sampler
+            .detail
+            .path()
+            .is_some_and(|p| Some(p) != current)
+        {
+            self.sampler.detail = DetailRead::None;
+        }
+        if self.view == View::Sampler && self.sampler.wave.path() == current {
+            self.follow_detail(current);
+        }
         if self.view != View::Sampler || self.sampler.wave.path() == current {
             return;
         }
@@ -542,6 +591,38 @@ impl Model {
                 self.session.cancel_peaks();
                 Wave::None
             }
+        };
+    }
+}
+
+impl Model {
+    /// Reads the frames the drawn view shows, and [`DETAIL_MARGIN`] either
+    /// side, when its columns are finer than the peaks and nothing read or
+    /// reading covers them.
+    fn follow_detail(&mut self, current: Option<&PathBuf>) {
+        let (Some(path), Some(scale)) = (current, self.sampler.scale) else {
+            return;
+        };
+        let Wave::Ready { peaks, .. } = &self.sampler.wave else {
+            return;
+        };
+        if !scale.needs_detail() {
+            return;
+        }
+        let (rate, frames) = (peaks.rate, peaks.frames);
+        let (a, b) = scale.shown();
+        let b = b.min(frames);
+        if a >= b || self.sampler.detail.answers(path, a, b) {
+            return;
+        }
+        let margin = crate::sampler::frame_of(DETAIL_MARGIN, rate);
+        let (start, end) = (a.saturating_sub(margin), (b + margin).min(frames));
+        let job = self.session.read_detail(path.clone(), rate, start, end);
+        self.sampler.detail = DetailRead::Reading {
+            path: path.clone(),
+            job,
+            start,
+            end,
         };
     }
 }
@@ -639,6 +720,14 @@ impl Frontend for Model {
                 Model::notify(self, Message::Theme(theme));
             }
         }
+    }
+
+    fn sampler(&self) -> &Sampler {
+        &self.sampler
+    }
+
+    fn sampler_mut(&mut self) -> &mut Sampler {
+        &mut self.sampler
     }
 
     fn planning(&mut self, job: JobId) {

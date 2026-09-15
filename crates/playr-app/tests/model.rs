@@ -101,6 +101,272 @@ fn the_theme_starts_from_the_settings_and_changes_by_command() {
 }
 
 #[test]
+fn the_sampler_snaps_ranges_marks_and_nudges_and_slices_the_range() {
+    use playr_app::action::{Nudge, Slicing};
+    use playr_app::sampler::{frame_of, Scale, Wave};
+
+    // Four seconds at 8 kHz changing sign every half second: crossings at
+    // frames 4,000, 8,000 ... 28,000. A snap reaches 80 frames either side.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("steps.wav");
+    let parts: Vec<(f32, f32)> = (0..8)
+        .map(|i| (0.5, if i % 2 == 0 { 0.25 } else { -0.25 }))
+        .collect();
+    common::levels(&file, 8000, &parts);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ms = Duration::from_millis;
+    let current = Some(file.clone());
+
+    model.perform(Action::Nudge(Nudge::Columns(1)));
+    assert_eq!(
+        model.message(),
+        Some(&Message::NoWaveform),
+        "no columns drawn yet"
+    );
+
+    model.perform(Action::Snap(None));
+    assert_eq!(model.message(), Some(&Message::Snap(true)));
+    model.perform(Action::SetRange(Some((ms(1_005), ms(2_995)))));
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((8_000, 24_000))
+    );
+
+    // 1.508 s snaps to 1.5 s; 1.6 s has no crossing near. They are 100 ms
+    // apart, which only the sampler view allows.
+    model.perform(Action::MarkAt(ms(1_508)));
+    model.perform(Action::MarkAt(ms(1_600)));
+    let marks: Vec<u64> = model
+        .session_mut()
+        .marks_for(current.as_ref())
+        .iter()
+        .map(|m| m.frame)
+        .collect();
+    assert_eq!(marks, [12_000, 12_800]);
+
+    model.perform(Action::Slice(Slicing::Region));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.sampler().pending.is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "nothing planned: {:?}",
+            model.message()
+        );
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let plan = model.sampler().pending.as_ref().unwrap();
+    assert_eq!(plan.job.range, Some((8_000, 24_000)));
+    assert_eq!(plan.spans, [(8_000, Some(24_000))]);
+
+    // Paused, so the position is where each seek put it.
+    model.perform(Action::TogglePause);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+    let at = |model: &Model, frame: u64| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while frame_of(model.session().player().position(), 8000) != frame {
+            assert!(
+                Instant::now() < deadline,
+                "at {:?}, not frame {frame}",
+                model.session().player().position()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    model.perform(Action::SeekTo(ms(990)));
+    at(&model, 8_000);
+    model.perform(Action::Nudge(Nudge::Columns(1)));
+    at(&model, 8_064);
+    model.perform(Action::Nudge(Nudge::Columns(-1)));
+    at(&model, 8_000);
+    model.perform(Action::Nudge(Nudge::Percent(-10)));
+    at(&model, 7_360);
+}
+
+#[test]
+fn the_range_loops_follows_its_changes_and_escape_clears_it() {
+    use playr_app::sampler::Wave;
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = |model: &Model| model.session().player().status();
+    let settle = |model: &Model, done: &dyn Fn(&playr_core::audio::Status) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done(&status(model)) {
+            assert!(Instant::now() < deadline, "{:?}", status(model).looping);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let ms = Duration::from_millis;
+
+    model.perform(Action::Loop(None));
+    assert_eq!(model.message(), Some(&Message::NoRangeToLoop));
+
+    // A paused track plays once it loops.
+    model.perform(Action::TogglePause);
+    settle(&model, &|s| s.state == State::Paused);
+    model.perform(Action::SetRange(Some((ms(2_000), ms(3_000)))));
+    model.perform(Action::Loop(None));
+    assert_eq!(model.message(), Some(&Message::Loop(true)));
+    settle(&model, &|s| {
+        s.looping == Some((16_000, 24_000)) && s.state == State::Playing
+    });
+
+    // A new end moves the loop with it.
+    model.perform(Action::SetRange(Some((ms(2_000), ms(2_500)))));
+    settle(&model, &|s| s.looping == Some((16_000, 20_000)));
+
+    // So does moving an end, which stops a frame short of the other.
+    use playr_app::action::Nudge;
+    use playr_app::sampler::{Edge, Scale};
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+    model.perform(Action::PickEdge(Edge::End));
+    model.perform(Action::MoveEdge(Nudge::Columns(-2)));
+    let current = model.snapshot().status.current().cloned();
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((16_000, 19_872))
+    );
+    settle(&model, &|s| s.looping == Some((16_000, 19_872)));
+    model.perform(Action::PickEdge(Edge::Start));
+    model.perform(Action::MoveEdge(Nudge::Percent(100)));
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((19_871, 19_872))
+    );
+    settle(&model, &|s| s.looping == Some((19_871, 19_872)));
+    model.perform(Action::SetRange(Some((ms(2_000), ms(2_500)))));
+
+    // Escape, with no slices planned, clears the range, which ends the loop.
+    model.perform(Action::DiscardSlices);
+    assert_eq!(model.sampler().range, None);
+    settle(&model, &|s| s.looping.is_none());
+    model.perform(Action::DiscardSlices);
+    assert_eq!(model.message(), Some(&Message::NoSlicesPlanned));
+}
+
+#[test]
+fn a_close_view_reads_its_frames_and_again_once_it_leaves_them() {
+    use playr_app::sampler::{DetailRead, Scale, Wave};
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("steps.wav");
+    let parts: Vec<(f32, f32)> = (0..8)
+        .map(|i| (0.5, if i % 2 == 0 { 0.25 } else { -0.25 }))
+        .collect();
+    common::levels(&file, 8000, &parts);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let until = |model: &mut Model, done: &dyn Fn(&Model) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done(model) {
+            assert!(Instant::now() < deadline, "{:?}", model.sampler().detail);
+            model.refresh();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    until(&mut model, &|m| {
+        matches!(m.sampler().wave, Wave::Ready { .. })
+    });
+    let current = Some(file.clone());
+
+    // Columns of 64 frames draw from the peaks: nothing is read.
+    let coarse = Scale {
+        start: 8_000,
+        per_column: 64,
+        per_frame: 1,
+        columns: 1_000,
+    };
+    model.set_scale(coarse);
+    model.refresh();
+    assert!(matches!(model.sampler().detail, DetailRead::None));
+
+    // 16 columns a frame: 63 frames in view, and 2 s, 16,000 frames, either side.
+    let close = Scale {
+        per_column: 1,
+        per_frame: 16,
+        ..coarse
+    };
+    model.set_scale(close);
+    model.refresh();
+    assert!(matches!(
+        model.sampler().detail,
+        DetailRead::Reading {
+            start: 0,
+            end: 24_063,
+            ..
+        }
+    ));
+    until(&mut model, &|m| m.sampler().detail(Some(&file)).is_some());
+    let detail = model.sampler().detail(current.as_ref()).unwrap();
+    assert!(detail.covers(8_000, 8_063));
+    assert!(detail.mean(8_000).unwrap() > 0.0 && detail.mean(7_999).unwrap() < 0.0);
+
+    // Inside what was read, no new read; past it, another.
+    model.set_scale(Scale {
+        start: 20_000,
+        ..close
+    });
+    model.refresh();
+    assert!(matches!(model.sampler().detail, DetailRead::Ready { .. }));
+    model.set_scale(Scale {
+        start: 30_000,
+        ..close
+    });
+    model.refresh();
+    assert!(matches!(
+        model.sampler().detail,
+        DetailRead::Reading {
+            start: 14_000,
+            end: 32_000,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn command_lines_run_and_are_remembered_even_when_they_fail() {
     let (mut model, _dir) = model();
     model.set_input(Input::Command(CommandLine::default()));

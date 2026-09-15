@@ -331,6 +331,7 @@ fn now_playing_shows_title_position_and_source_format() {
             error_seq: 0,
             semitones: 0,
             mode: Default::default(),
+            looping: None,
         },
         position: Duration::from_secs(151),
         volume: 0.75,
@@ -1422,6 +1423,7 @@ fn planned_slices_are_drawn_before_they_are_written() {
             marks: vec![1600, 4000],
             at: 2400,
             cut: playr_core::samples::Cut::Equal(2),
+            range: None,
             samples: "/tmp".into(),
         },
         spans: vec![(1600, Some(2880)), (2880, Some(4000))],
@@ -1578,6 +1580,137 @@ fn the_envelope_shades_rms_inside_the_peak() {
 }
 
 #[test]
+fn the_sampler_draws_the_range_and_snap_and_returns_its_columns() {
+    use playr_app::sampler::{Display, Range, Scale};
+    let ms = Duration::from_millis;
+    let snapshot = sampling("/m/t.wav", ms(1500), &[ms(1000), ms(2500)]);
+    let ranged = |start, end| Sampler {
+        snap: true,
+        range: Some(Range {
+            path: "/m/t.wav".into(),
+            start,
+            end,
+        }),
+        ..sampler_with("/m/t.wav", Display::Envelope)
+    };
+    let axis_of = |lines: &[String]| -> Vec<(usize, char)> {
+        columns(&lines[13])
+            .into_iter()
+            .enumerate()
+            .filter(|(_, c)| *c != ' ')
+            .collect()
+    };
+    // 40 columns of 160 frames, 100 ms each: the range runs 0.5 s to 3.5 s.
+    let case = |sampler| {
+        Case::new(View::Sampler, &snapshot)
+            .sampler(sampler)
+            .size(42, 20)
+    };
+    let lines = case(ranged(Some(800), Some(5_600))).render();
+    assert_eq!(
+        axis_of(&lines),
+        [(5, '['), (10, '|'), (15, '^'), (25, '|'), (35, ']')]
+    );
+    assert!(
+        lines[14]
+            .trim_start_matches('\u{2502}')
+            .starts_with("range 0:00.500-0:03.500 (3.000 s)"),
+        "{:?}",
+        lines[14]
+    );
+    let drawn = case(ranged(Some(800), Some(5_600))).drawn();
+    assert_eq!(
+        drawn.scale,
+        Some(Scale {
+            start: 0,
+            per_column: 160,
+            per_frame: 1,
+            columns: 40
+        })
+    );
+    let wide = Case::new(View::Sampler, &snapshot)
+        .sampler(ranged(None, None))
+        .size(100, 20)
+        .render();
+    assert!(
+        wide[1].contains("1 col = 60 ms  snap  t.wav"),
+        "{:?}",
+        wide[1]
+    );
+    let mut looping = snapshot.clone();
+    looping.status.looping = Some((800, 5_600));
+    let wide = Case::new(View::Sampler, &looping)
+        .sampler(ranged(None, None))
+        .size(100, 20)
+        .render();
+    assert!(wide[1].contains("snap  loop  t.wav"), "{:?}", wide[1]);
+
+    // The end edge keys move is reversed; the start is chosen at first.
+    use ratatui::style::Modifier;
+    let reversed = |sampler: Sampler, column: u16| {
+        let buf = case(sampler).buffer();
+        buf[(1 + column, 13)].modifier.contains(Modifier::REVERSED)
+    };
+    assert!(reversed(ranged(Some(800), Some(5_600)), 5));
+    assert!(!reversed(ranged(Some(800), Some(5_600)), 35));
+    let end = Sampler {
+        edge: playr_app::sampler::Edge::End,
+        ..ranged(Some(800), Some(5_600))
+    };
+    assert!(reversed(end.clone(), 35) && !reversed(end, 5));
+
+    // One end alone is drawn, and the region stays between the marks.
+    let lines = case(ranged(Some(800), None)).render();
+    assert_eq!(axis_of(&lines)[0], (5, '['));
+    assert!(
+        lines[14].contains("region 0:01.000-0:02.500"),
+        "{:?}",
+        lines[14]
+    );
+}
+
+#[test]
+fn at_a_frame_a_cell_braille_fills_both_dot_columns() {
+    use playr_app::sampler::Display;
+    let snapshot = sampling("/m/t.wav", Duration::from_millis(2_500), &[]);
+    let sampler = Sampler {
+        zoom: 50,
+        ..sampler_with("/m/t.wav", Display::Braille)
+    };
+    let case = || {
+        Case::new(View::Sampler, &snapshot)
+            .sampler(sampler.clone())
+            .size(42, 20)
+    };
+    assert_eq!(case().drawn().scale.map(|s| s.per_column), Some(1));
+    let wide = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler.clone())
+        .size(100, 20)
+        .render();
+    assert!(wide[1].contains("1 col = 1 frame"), "{:?}", wide[1]);
+    let lines = case().render();
+    // Left dot column bits, then right: each cell holds one frame in both.
+    let (left, right) = (0x01 | 0x02 | 0x04 | 0x40, 0x08 | 0x10 | 0x20 | 0x80);
+    let cells: Vec<u32> = lines[2..13]
+        .iter()
+        .flat_map(|l| columns(l))
+        .filter_map(|c| {
+            (c as u32)
+                .checked_sub(0x2800)
+                .filter(|&b| b > 0 && b < 0x100)
+        })
+        .collect();
+    assert!(!cells.is_empty(), "no waveform drawn");
+    for bits in cells {
+        assert_eq!(
+            (bits & left).count_ones(),
+            (bits & right).count_ones(),
+            "{bits:#x}"
+        );
+    }
+}
+
+#[test]
 fn drawing_returns_the_zoom_clamped_to_the_track() {
     use playr_app::sampler::Display;
     let zoomed = |zoom| Sampler {
@@ -1592,9 +1725,10 @@ fn drawing_returns_the_zoom_clamped_to_the_track() {
             .drawn()
             .zoom
     };
-    // 6,400 frames over 40 columns is 160 a column; two halvings reach 64.
+    // 6,400 frames over 40 columns is 160 a column; seven halvings reach one
+    // frame a cell, the deepest a terminal goes.
     assert_eq!(draw(zoomed(1)), 1);
-    assert_eq!(draw(zoomed(50)), 2);
+    assert_eq!(draw(zoomed(50)), 7);
     // With no waveform to show, the zoom is kept for when there is one.
     let reading = Sampler {
         zoom: 50,

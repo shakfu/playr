@@ -45,6 +45,12 @@ pub enum Event {
         track: PathBuf,
         result: Result<Arc<Peaks>, String>,
     },
+    /// Frames of `track` decoded for a close view.
+    Detail {
+        job: JobId,
+        track: PathBuf,
+        result: Result<Arc<crate::wave::Detail>, String>,
+    },
     /// Slices of `track` were planned.
     Planned {
         job: JobId,

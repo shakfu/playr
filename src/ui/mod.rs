@@ -70,6 +70,8 @@ pub struct Drawn {
     pub lists: Lists,
     pub help_scroll: usize,
     pub zoom: u32,
+    /// The sampler's columns, when it drew a waveform.
+    pub scale: Option<playr_app::sampler::Scale>,
 }
 
 /// No typed input, for a [`Screen`] that collects none.
@@ -223,6 +225,9 @@ impl App {
         self.model.set_cursor(View::Selection, selection.row);
         self.model.set_cursor(View::Playlists, playlists.row);
         self.model.set_zoom(drawn.zoom);
+        if let Some(scale) = drawn.scale {
+            self.model.set_scale(scale);
+        }
         self.help_scroll = drawn.help_scroll;
     }
 

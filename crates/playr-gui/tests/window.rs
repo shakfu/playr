@@ -477,6 +477,145 @@ fn the_waveform_seeks_marks_and_zooms_under_the_mouse() {
 }
 
 #[test]
+fn the_wheel_zooms_past_the_peaks_and_the_frames_are_read() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    harness.get_by_label("Pause").click();
+    harness.run_steps(2);
+    let rect = harness.get_by_label("Track waveform").rect();
+    for _ in 0..40 {
+        harness.hover_at(rect.center());
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 100.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run_steps(1);
+    }
+    harness.run_steps(2);
+    // The deepest zoom: a frame across 16 points.
+    let scale = model(&harness).sampler().scale.unwrap();
+    assert_eq!((scale.per_column, scale.per_frame), (1, 16));
+    wait(&mut harness, |m| {
+        let current = m.snapshot().status.current().cloned();
+        let (a, b) = m.sampler().scale.unwrap().shown();
+        m.sampler()
+            .detail(current.as_ref())
+            .is_some_and(|d| d.covers(a, b))
+    });
+    harness.run_steps(2);
+    assert!(harness.query_by_label("reading frames").is_none());
+    assert!(harness.query_by_label_contains("1/16 frame").is_some());
+}
+
+#[test]
+fn a_drag_sets_the_range_and_the_bar_slices_it() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    harness.get_by_label("Snap to zero").click();
+    harness.run_steps(2);
+    assert!(model(&harness).sampler().snap);
+
+    // A quarter to half along the 12 s track, near 3 s and 6 s at 8 kHz.
+    let rect = harness.get_by_label("Track waveform").rect();
+    let along = |x: f32| egui::pos2(rect.left() + rect.width() * x, rect.center().y);
+    harness.hover_at(along(0.25));
+    harness.run_steps(1);
+    harness.drag_at(along(0.25));
+    harness.run_steps(1);
+    for x in [0.3, 0.4, 0.5] {
+        harness.hover_at(along(x));
+        harness.run_steps(1);
+    }
+    harness.drop_at(along(0.5));
+    harness.run_steps(2);
+    let current = model(&harness).snapshot().status.current().cloned();
+    let (a, b) = model(&harness)
+        .sampler()
+        .range(current.as_ref())
+        .expect("no range");
+    // The whole track shows, so a point's frame is its columns times a
+    // column's frames. The track has no zero crossing to snap to.
+    let per_column = model(&harness).sampler().scale.unwrap().per_column as f32;
+    let frame = |x: f32| (rect.width() * x * per_column) as u64;
+    assert!(
+        a.abs_diff(frame(0.25)) <= 96 && b.abs_diff(frame(0.5)) <= 96,
+        "{a}..{b}, not {}..{}",
+        frame(0.25),
+        frame(0.5)
+    );
+
+    harness.get_by_label("Equal slices").click();
+    harness.run_steps(2);
+    wait(&mut harness, |m| m.sampler().pending.is_some());
+    let spans = model(&harness)
+        .sampler()
+        .pending
+        .as_ref()
+        .unwrap()
+        .spans
+        .clone();
+    assert_eq!(spans.len(), 8, "the count starts at 8");
+    assert_eq!((spans[0].0, spans[7].1), (a, Some(b)));
+
+    harness.get_by_label("Discard slices").click();
+    harness.run_steps(2);
+
+    // Loop it, then drag its end back to three eighths along: the loop follows.
+    harness.get_by_label("Loop range").click();
+    harness.run_steps(2);
+    wait(&mut harness, |m| {
+        m.snapshot().status.looping == Some((a, b))
+    });
+    let end_x = rect.left() + (b as f32 / per_column).round();
+    harness.hover_at(egui::pos2(end_x, rect.center().y));
+    harness.run_steps(1);
+    harness.drag_at(egui::pos2(end_x, rect.center().y));
+    harness.run_steps(1);
+    for x in [0.45, 0.4, 0.375] {
+        harness.hover_at(along(x));
+        harness.run_steps(1);
+    }
+    harness.drop_at(along(0.375));
+    harness.run_steps(2);
+    let (start, end) = model(&harness)
+        .sampler()
+        .range(current.as_ref())
+        .expect("no range");
+    assert_eq!(start, a, "the start held");
+    assert!(
+        end.abs_diff(frame(0.375)) <= 96,
+        "{end}, not {}",
+        frame(0.375)
+    );
+    wait(&mut harness, |m| {
+        m.snapshot().status.looping == Some((a, end))
+    });
+
+    // Move end, then Earlier: the end moves back a column.
+    harness.get_by_label("Move end").click();
+    harness.run_steps(2);
+    harness.get_by_label("Earlier").click();
+    harness.run_steps(2);
+    let moved = model(&harness).sampler().range(current.as_ref());
+    assert_eq!(moved, Some((a, end - per_column as u64)));
+
+    // Escape clears the range and ends the loop.
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(2);
+    assert_eq!(model(&harness).sampler().range(current.as_ref()), None);
+    wait(&mut harness, |m| m.snapshot().status.looping.is_none());
+
+    // The sensitivity starts from the settings, 0.5 by default.
+    harness.get_by_label("Slice at onsets").click();
+    harness.run_steps(2);
+    wait(&mut harness, |m| m.sampler().pending.is_some());
+    let cut = model(&harness).sampler().pending.as_ref().unwrap().job.cut;
+    assert_eq!(cut, playr_core::samples::Cut::Onsets(0.5));
+}
+
+#[test]
 fn slices_planned_in_the_sampler_are_written_with_a_button() {
     let samples = tempfile::tempdir().unwrap();
     let (mut harness, _dir) = sampling(samples.path());

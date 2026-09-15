@@ -20,12 +20,13 @@ use std::time::Duration;
 
 use crate::audio::decode::AudioStream;
 
-/// How a track is cut.
+/// How a track is cut. The region is the job's range when it has one, and
+/// otherwise the stretch between the marks either side of the playhead.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Cut {
-    /// The region between the marks either side of the playhead, as one slice.
+    /// The region, as one slice.
     Region,
-    /// The whole track, at every mark.
+    /// The whole track, or the range, at every mark in it.
     Marks,
     /// The region, in this many equal parts.
     Equal(usize),
@@ -44,6 +45,8 @@ pub struct Job {
     /// The playhead, in frames.
     pub at: u64,
     pub cut: Cut,
+    /// Frames to cut instead of the region around `at`, end exclusive.
+    pub range: Option<(u64, u64)>,
     /// The directory exports are written under.
     pub samples: PathBuf,
 }
@@ -178,6 +181,17 @@ pub struct Plan {
     pub spans: Vec<Span>,
 }
 
+/// Frames `start..end` of the track at `path`, which counts frames at `rate`,
+/// interleaved, with the channel count. Fewer where the track ends first.
+pub(crate) fn read_frames(
+    path: &Path,
+    rate: u32,
+    start: u64,
+    end: u64,
+) -> Result<(Vec<f32>, usize), String> {
+    Reader::open(path, rate, start)?.frames_to(end)
+}
+
 /// Runs `job`, returning the directory written and the slices in it.
 pub fn export(job: &Job) -> Result<Exported, String> {
     write(job, &plan(job)?)
@@ -186,9 +200,28 @@ pub fn export(job: &Job) -> Result<Exported, String> {
 /// The slices `job` would write, without writing them. Finding onsets or the
 /// length of an open region decodes the track, so this can take seconds.
 pub fn plan(job: &Job) -> Result<Vec<Span>, String> {
-    let (start, end) = region(&job.marks, job.at);
+    let (start, end) = match job.range {
+        Some((a, b)) => (a, Some(b)),
+        None => region(&job.marks, job.at),
+    };
     let spans: Vec<Span> = match job.cut {
         Cut::Region => vec![(start, end)],
+        Cut::Marks if job.range.is_some() => {
+            let mut points: Vec<u64> = job
+                .marks
+                .iter()
+                .copied()
+                .filter(|&m| m > start && end.is_none_or(|e| m < e))
+                .collect();
+            if points.is_empty() {
+                return Err("no marks in the range".into());
+            }
+            points.sort_unstable();
+            points.dedup();
+            points.insert(0, start);
+            let ends = points.iter().skip(1).map(|&e| Some(e)).chain([end]);
+            points.iter().copied().zip(ends).collect()
+        }
         Cut::Marks => {
             let mut points: Vec<u64> = job.marks.iter().copied().filter(|&m| m > 0).collect();
             if points.is_empty() {
@@ -203,7 +236,7 @@ pub fn plan(job: &Job) -> Result<Vec<Span>, String> {
         Cut::Equal(n) => {
             let len = match end {
                 Some(end) => end - start,
-                None => Reader::open(job, start)?.count_to(None)?,
+                None => Reader::open(&job.path, job.rate, start)?.count_to(None)?,
             };
             let spans = equal_spans(len, n);
             if spans.is_empty() {
@@ -215,7 +248,7 @@ pub fn plan(job: &Job) -> Result<Vec<Span>, String> {
                 .collect()
         }
         Cut::Onsets(sensitivity) => {
-            let mono = Reader::open(job, start)?.mono_to(end)?;
+            let mono = Reader::open(&job.path, job.rate, start)?.mono_to(end)?;
             let points: Vec<u64> = onsets(&mono, job.rate, sensitivity)
                 .into_iter()
                 .map(|p| p as u64)
@@ -244,7 +277,7 @@ pub fn write(job: &Job, spans: &[Span]) -> Result<Exported, String> {
     };
     // Opened before the directory is made, so a track that will not open
     // leaves nothing behind.
-    let reader = Reader::open(job, first)?;
+    let reader = Reader::open(&job.path, job.rate, first)?;
     let stem = name_for(&job.path);
     fs::create_dir_all(&job.samples)
         .map_err(|e| format!("cannot create {}: {e}", job.samples.display()))?;
@@ -281,12 +314,13 @@ struct Reader {
 }
 
 impl Reader {
-    fn open(job: &Job, start: u64) -> Result<Reader, String> {
-        let fail = |e: crate::audio::decode::DecodeError| format!("{}: {e}", job.path.display());
-        let mut stream = AudioStream::open(&job.path).map_err(fail)?;
+    /// The track at `path`, which counts frames at `rate`, from frame `start`.
+    fn open(path: &Path, rate: u32, start: u64) -> Result<Reader, String> {
+        let fail = |e: crate::audio::decode::DecodeError| format!("{}: {e}", path.display());
+        let mut stream = AudioStream::open(path).map_err(fail)?;
         if start > 0 {
             // Exact: a nanosecond of rounding is far below half a frame.
-            let at = Duration::from_nanos(start * 1_000_000_000 / job.rate as u64);
+            let at = Duration::from_nanos(start * 1_000_000_000 / rate as u64);
             if stream.duration().is_some_and(|d| at >= d) {
                 return Err(EMPTY.into());
             }
@@ -294,7 +328,7 @@ impl Reader {
         }
         Ok(Reader {
             stream,
-            rate: job.rate,
+            rate,
             frame: start,
             buf: Vec::new(),
         })
@@ -333,6 +367,18 @@ impl Reader {
             }
         }
         Ok(())
+    }
+
+    /// The frames from here to `end`, or the end of the track, interleaved,
+    /// with the channel count.
+    fn frames_to(mut self, end: u64) -> Result<(Vec<f32>, usize), String> {
+        let (mut samples, mut count) = (Vec::new(), 1);
+        self.chunks(Some(end), |_, chunk, channels| {
+            samples.extend_from_slice(chunk);
+            count = channels;
+            Ok(true)
+        })?;
+        Ok((samples, count))
     }
 
     /// Frames from here to `end`, or the end of the track.
