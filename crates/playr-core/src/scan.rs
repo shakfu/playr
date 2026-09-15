@@ -41,8 +41,9 @@ pub struct ScanStats {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ScanReport {
     pub stats: ScanStats,
-    /// Rows under the directory whose files are gone, removed.
-    pub removed: usize,
+    /// Tracks under the directory whose files are gone. A scan keeps them;
+    /// [`db::prune_missing`] removes them.
+    pub missing: usize,
     /// Tracks in the library once the scan is done.
     pub total: usize,
 }
@@ -160,9 +161,10 @@ where
 
     // Transactions of `SCAN_BATCH` files: a commit per insert is orders of
     // magnitude slower, and one commit for the whole scan loses every row
-    // when the scan is interrupted.
+    // when the scan is interrupted. Files are read before the transaction
+    // opens, so the write lock is held for the inserts alone.
     for batch in files.chunks(SCAN_BATCH) {
-        let tx = conn.transaction()?;
+        let mut read = Vec::new();
         for entry in batch {
             let path = entry.path();
             stats.seen += 1;
@@ -176,7 +178,7 @@ where
 
             let disk = std::fs::metadata(path).ok().map(|m| stat(&m));
 
-            if let (Some(d), Ok(Some(known))) = (disk, db::stat_of(&tx, path_str)) {
+            if let (Some(d), Ok(Some(known))) = (disk, db::stat_of(conn, path_str)) {
                 if d == known {
                     stats.skipped += 1;
                     progress(&stats, path);
@@ -186,12 +188,16 @@ where
 
             match read_track(path) {
                 Some(t) => {
-                    db::upsert(&tx, &t)?;
+                    read.push(t);
                     stats.added += 1;
                 }
                 None => stats.failed += 1,
             }
             progress(&stats, path);
+        }
+        let tx = conn.transaction()?;
+        for t in &read {
+            db::upsert(&tx, t)?;
         }
         tx.commit()?;
     }
@@ -199,8 +205,8 @@ where
 }
 
 /// Scans `dir` into the library file at `library`, creating it if there is
-/// none, and removes rows under `dir` whose files are gone. `progress` is
-/// called per file seen.
+/// none, and counts the tracks under `dir` whose files are gone. `progress`
+/// is called per file seen.
 pub fn scan_into(
     library: &Path,
     dir: &Path,
@@ -209,11 +215,11 @@ pub fn scan_into(
     let fail = |e: rusqlite::Error| format!("{}: {e}", library.display());
     let mut conn = db::open(library).map_err(fail)?;
     let stats = scan_dir(&mut conn, dir, |s, _| progress(s)).map_err(fail)?;
-    let removed = db::prune_missing(&conn, dir).map_err(fail)?;
+    let missing = db::missing_under(&conn, dir).map_err(fail)?.len();
     let total = db::query::count(&conn).map_err(fail)? as usize;
     Ok(ScanReport {
         stats,
-        removed,
+        missing,
         total,
     })
 }

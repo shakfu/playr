@@ -77,6 +77,7 @@ pub fn text(message: &Message) -> String {
                 Task::Slice => "slicing failed",
                 Task::Export => "export failed",
                 Task::Scan => "scan failed",
+                Task::Prune => "prune failed",
                 Task::Open => "could not open",
             };
             format!("{what}: {error}")
@@ -148,13 +149,25 @@ fn outcome_text(outcome: &Outcome) -> String {
         }
         Outcome::ScanStarted { dir } => format!("scanning {}", home_as_tilde(dir)),
         Outcome::Scanning { seen, added } => format!("scanning: {seen} files, {added} added"),
-        Outcome::Scanned { dir, report } => format!(
-            "scanned {}: {} added, {} removed, {} unreadable; {} tracks",
+        Outcome::Scanned { dir, report } => {
+            let missing = match report.missing {
+                0 => String::new(),
+                n => format!(", {n} missing (:prune removes)"),
+            };
+            format!(
+                "scanned {}: {} added, {} unreadable{missing}; {} tracks",
+                home_as_tilde(dir),
+                report.stats.added,
+                report.stats.failed,
+                report.total
+            )
+        }
+        Outcome::PruneStarted { dir } => format!("pruning {}", home_as_tilde(dir)),
+        Outcome::Pruned { dir, removed } => format!(
+            "pruned {}: {} and {} of missing files",
             home_as_tilde(dir),
-            report.stats.added,
-            report.removed,
-            report.stats.failed,
-            report.total
+            count(removed.tracks, "track"),
+            count(removed.marks, "mark")
         ),
         Outcome::Opening => "opening".into(),
         Outcome::Opened { tracks, skipped } => {
@@ -187,7 +200,7 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::NoEarlierMark => "no earlier mark".into(),
         Refusal::NoLibraryPath => "no library file to scan into".into(),
         Refusal::NotADirectory(path) => format!("not a directory: {}", home_as_tilde(path)),
-        Refusal::ScanRunning => "a scan is already running".into(),
+        Refusal::ScanRunning => "a scan or prune is already running".into(),
     }
 }
 
@@ -208,5 +221,13 @@ pub fn home_as_tilde(path: &Path) -> String {
     match home.and_then(|h| path.strip_prefix(h).ok().map(|rest| rest.to_path_buf())) {
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),
+    }
+}
+
+/// `n` of `thing`, as `1 mark` or `3 marks`.
+fn count(n: usize, thing: &str) -> String {
+    match n {
+        1 => format!("1 {thing}"),
+        n => format!("{n} {thing}s"),
     }
 }

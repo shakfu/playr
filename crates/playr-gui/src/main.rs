@@ -9,6 +9,7 @@ use clap::Parser;
 use eframe::egui;
 use playr_app::config::{self, Config};
 use playr_app::dispatch::Frontend;
+use playr_app::instance::{self, Instance};
 use playr_app::model::Model;
 use playr_core::audio::Player;
 use playr_core::db::{self, Track};
@@ -33,6 +34,8 @@ struct Cli {
 
 /// What the window starts with.
 struct Start {
+    /// Held while the window is open; see `playr_app::instance`.
+    instance: Option<Instance>,
     conn: rusqlite::Connection,
     player: Player,
     tracks: Vec<Track>,
@@ -55,24 +58,27 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     match start(cli) {
-        Ok(start) => eframe::run_native(
-            "playr",
-            options,
-            Box::new(move |cc| {
-                cc.egui_ctx.set_theme(egui::Theme::Dark);
-                let ctx = cc.egui_ctx.clone();
-                let mut model = Model::waking(
-                    start.conn,
-                    start.player,
-                    start.tracks,
-                    start.config,
-                    move || ctx.request_repaint(),
-                );
-                // `:scan` creates the library here when there is none yet.
-                model.session_mut().set_library_path(start.library);
-                Ok(Box::new(Gui::new(model)))
-            }),
-        ),
+        Ok(mut start) => {
+            let _instance = start.instance.take();
+            eframe::run_native(
+                "playr",
+                options,
+                Box::new(move |cc| {
+                    cc.egui_ctx.set_theme(egui::Theme::Dark);
+                    let ctx = cc.egui_ctx.clone();
+                    let mut model = Model::waking(
+                        start.conn,
+                        start.player,
+                        start.tracks,
+                        start.config,
+                        move || ctx.request_repaint(),
+                    );
+                    // `:scan` creates the library here when there is none yet.
+                    model.session_mut().set_library_path(start.library);
+                    Ok(Box::new(Gui::new(model)))
+                }),
+            )
+        }
         Err(errors) => eframe::run_native(
             "playr",
             options,
@@ -87,6 +93,7 @@ fn main() -> eframe::Result {
 /// Opens the library, settings, files and audio device, as the terminal does.
 /// A window has no visible stderr, so every problem is returned to be shown.
 fn start(cli: Cli) -> Result<Start, Vec<String>> {
+    let instance = instance::claim().map_err(|e| vec![e])?;
     let library = cli.db.unwrap_or_else(db::default_path);
     let fail = |e: &dyn std::fmt::Display| vec![e.to_string()];
     // Only a scan creates the library; without one playr runs on an empty one.
@@ -115,6 +122,7 @@ fn start(cli: Cli) -> Result<Start, Vec<String>> {
     }
     let player = Player::new().map_err(|e| fail(&e))?;
     Ok(Start {
+        instance: Some(instance),
         conn,
         player,
         tracks,

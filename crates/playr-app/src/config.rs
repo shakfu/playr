@@ -71,38 +71,28 @@ impl Config {
     fn apply(&mut self, text: &str) -> Result<(), Vec<String>> {
         let (tables, mut errors) = self.settings.apply(text, &["keys"]);
         for (name, value) in tables {
-            match value.get_ref() {
-                DeValue::Table(keys) => {
-                    for (key, target) in keys {
-                        match target.get_ref() {
-                            DeValue::Table(bindings) => match command::view_named(key.get_ref()) {
-                                Some(view) => {
-                                    for (key, target) in bindings {
-                                        if let Err(e) = self.bind(Some(view), key, target) {
-    errors.add(target.span().start, e);
-}
-                                    }
-                                }
-                                None => errors.add(
-                                    key.span().start,
-                                    format!(
-                                        "[keys.{}] is not a view; views: library, selection, playlists, sampler",
-                                        key.get_ref()
-                                    ),
-                                ),
-                            },
-                            _ => {
-    if let Err(e) = self.bind(None, key, target) {
-        errors.add(target.span().start, e);
-    }
-}
+            let DeValue::Table(keys) = value.get_ref() else {
+                let message = format!("{} cannot be {}", name.get_ref(), kind(value.get_ref()));
+                errors.add(value.span().start, message);
+                continue;
+            };
+            for (key, target) in keys {
+                // A table under `[keys]` holds one view's bindings.
+                let (view, bindings) = match target.get_ref() {
+                    DeValue::Table(bindings) => match command::view_named(key.get_ref()) {
+                        Some(view) => (Some(view), bindings.iter().collect()),
+                        None => {
+                            errors.add(key.span().start, not_a_view(key.get_ref()));
+                            continue;
                         }
+                    },
+                    _ => (None, vec![(key, target)]),
+                };
+                for (key, target) in bindings {
+                    if let Err(e) = self.bind(view, key, target) {
+                        errors.add(target.span().start, e);
                     }
                 }
-                v => errors.add(
-                    value.span().start,
-                    format!("{} cannot be {}", name.get_ref(), kind(v)),
-                ),
             }
         }
         errors.finish()
@@ -132,4 +122,9 @@ impl Config {
         self.keys.bind(view, key, action);
         Ok(())
     }
+}
+
+/// The error for a table under `[keys]` that names no view.
+fn not_a_view(name: &str) -> String {
+    format!("[keys.{name}] is not a view; views: library, selection, playlists, sampler")
 }

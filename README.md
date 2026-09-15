@@ -51,7 +51,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 - Rescan skips files whose size and modification time are unchanged
 
-- Rows for deleted files under the scanned directory are pruned
+- Tracks whose files are gone are kept until `playr prune` removes them, so an unplugged drive does not empty playlists
 
 - Scans commit every 500 files, so an interrupted scan keeps its progress
 
@@ -87,7 +87,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 ## Install
 
-playr is two programs: `playr`, the terminal interface, and `playr-gui`, a desktop window with the same features, keys and `:` commands. Both read the same library and settings.
+playr is two programs: `playr`, the terminal interface, and `playr-gui`, a desktop window with the same features, keys and `:` commands. Both read the same library and settings, and only one runs at a time: while either is open, the other, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json` and `playr formats` only read, and run alongside either.
 
 ### Release archives
 
@@ -147,6 +147,7 @@ Without it, Opus files are reported as undecodable and skipped, the same as WMA 
 
 ```sh
 playr scan ~/music          # index a directory
+playr prune ~/music         # remove tracks and marks of files gone from it
 playr                       # browse the library
 playr ~/music/some/album    # play a directory, recursively, without indexing
 playr search bill evans     # play everything that matches
@@ -161,7 +162,7 @@ playr formats               # show what this build can decode
 
 The library lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan`, or `:scan` inside playr, creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
 
-Rescanning only re-reads files whose size or modification time changed, and drops rows under the scanned directory whose files are gone. Rows elsewhere are kept, so a scan made while a drive is unmounted does not empty its playlists.
+Rescanning only re-reads files whose size or modification time changed. A scan never removes anything: it counts the tracks under the scanned directory whose files are gone. `playr prune DIR` removes those tracks, and with them their places in playlists, and the marks of every file under `DIR` that is gone, whether it was in the library or not. Nothing outside `DIR` is touched, so pruning `~/music` leaves an unplugged drive mounted elsewhere alone. Prune after a file is moved or deleted for good, not while a drive under `DIR` is unplugged.
 
 ### Desktop window
 
@@ -289,7 +290,7 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 
 `:` opens a command line: `:seek 1:23`, `:volume 60`, `:playlist late night`. Every key's action has a command, and commands also take arguments no key can, such as a time or a name. Some commands work only in one view, as `:remove` in the selection. Tab completes, up recalls earlier lines, and `:help` lists every command. [docs/cheatsheet.md](docs/cheatsheet.md) has the full list.
 
-`:scan ~/music` adds a directory to the library without leaving playr. It runs in the background and counts files on the bottom line; once it finishes, the library view shows the new tracks. Saving a playlist or a mark while a scan runs waits for the scan to finish writing its current batch of 500 files, and fails with "database is locked" if that takes more than 5 seconds. `:open ~/music/some/album` plays a file or directory, as `playr <path>` does, and adds its tracks to the end of the selection.
+`:scan ~/music` adds a directory to the library without leaving playr. It runs in the background and counts files on the bottom line; once it finishes, the library view shows the new tracks. Saving a playlist or a mark while a scan runs waits for the scan to finish writing its current batch of 500 files, and fails with "database is locked" if that takes more than 5 seconds. `:prune ~/music` does what `playr prune` does, after asking. `:open ~/music/some/album` plays a file or directory, as `playr <path>` does, and adds its tracks to the end of the selection.
 
 ## Configuration
 

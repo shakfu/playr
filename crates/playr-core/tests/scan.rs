@@ -162,7 +162,7 @@ fn prune_removes_rows_for_deleted_files() {
     assert_eq!(query::count(&conn).unwrap(), 2);
 
     std::fs::remove_file(root.join("a.flac")).unwrap();
-    assert_eq!(db::prune_missing(&conn, root).unwrap(), 1);
+    assert_eq!(db::prune_missing(&conn, root).unwrap().tracks, 1);
     assert_eq!(query::count(&conn).unwrap(), 1);
     assert!(
         query::search(&conn, "A").unwrap().is_empty(),
@@ -218,7 +218,7 @@ fn prune_leaves_rows_outside_the_scanned_root() {
     db::upsert(&conn, &untagged(&base.join("music2/a.flac"))).unwrap();
     db::upsert(&conn, &untagged(&base.join("drive/b.flac"))).unwrap();
 
-    assert_eq!(db::prune_missing(&conn, &music).unwrap(), 1);
+    assert_eq!(db::prune_missing(&conn, &music).unwrap().tracks, 1);
     let left: Vec<String> = query::all(&conn)
         .unwrap()
         .into_iter()
@@ -241,7 +241,7 @@ fn prune_leaves_rows_under_a_root_that_differs_only_in_case() {
     let id = db::upsert(&conn, &untagged(&base.join("Music/b.flac"))).unwrap();
     query::save_playlist(&mut conn, "keep", &[id]).unwrap();
 
-    assert_eq!(db::prune_missing(&conn, &music).unwrap(), 1);
+    assert_eq!(db::prune_missing(&conn, &music).unwrap().tracks, 1);
     assert_eq!(query::count(&conn).unwrap(), 1);
     assert_eq!(query::playlists(&conn).unwrap()[0].len, 1);
 }
@@ -256,7 +256,10 @@ fn prune_of_a_missing_root_removes_nothing() {
     let id = db::upsert(&conn, &untagged(&drive.join("a.flac"))).unwrap();
     query::save_playlist(&mut conn, "keep", &[id]).unwrap();
 
-    assert_eq!(db::prune_missing(&conn, &drive).unwrap(), 0);
+    assert_eq!(
+        db::prune_missing(&conn, &drive).unwrap(),
+        db::Pruned::default()
+    );
     assert_eq!(query::count(&conn).unwrap(), 1);
     assert_eq!(query::playlists(&conn).unwrap()[0].len, 1);
 }
@@ -402,4 +405,116 @@ fn a_directory_that_cannot_be_listed_is_counted_unreadable() {
     let stats = scan::scan_dir(&mut conn, dir.path(), |_, _| {}).unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(stats.failed, 1, "{stats:?}");
+}
+
+#[test]
+fn a_scan_does_not_hold_the_write_lock_while_it_reads_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("lib");
+    std::fs::create_dir(&root).unwrap();
+    for i in 0..3 {
+        common::silence(&root.join(format!("{i}.wav")), 8000, 0.1);
+    }
+    let library = dir.path().join("library.db");
+    let mut conn = db::open(&library).unwrap();
+    // The session's connection, as a frontend writes a mark during a scan.
+    // Without a busy timeout, a write that meets the scan's lock fails at once.
+    let other = db::open(&library).unwrap();
+    other.busy_timeout(std::time::Duration::ZERO).unwrap();
+
+    let mut refused = Vec::new();
+    let stats = scan::scan_dir(&mut conn, &root, |s, _| {
+        let mark = query::Mark {
+            frame: s.seen as u64,
+            rate: 8000,
+        };
+        if let Err(e) = query::add_mark(&other, "/m/x.flac", mark) {
+            refused.push((s.seen, e.to_string()));
+        }
+    })
+    .unwrap();
+    assert_eq!(stats.added, 3);
+    assert!(refused.is_empty(), "writes refused mid-scan: {refused:?}");
+    assert_eq!(query::marks(&other, "/m/x.flac").unwrap().len(), 3);
+}
+
+#[test]
+fn a_scan_counts_missing_files_and_removes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let library = root.join("library.db");
+    common::silence(&root.join("here.wav"), 8000, 0.1);
+    let conn = db::open(&library).unwrap();
+    let gone = db::upsert(&conn, &untagged(&root.join("gone.flac"))).unwrap();
+    query::save_playlist(&mut db::open(&library).unwrap(), "keep", &[gone]).unwrap();
+    query::add_mark(
+        &conn,
+        &root.join("gone.flac").to_string_lossy(),
+        query::Mark {
+            frame: 1,
+            rate: 8000,
+        },
+    )
+    .unwrap();
+
+    let report = scan::scan_into(&library, &root, |_| {}).unwrap();
+    assert_eq!(
+        (report.stats.added, report.missing, report.total),
+        (1, 1, 2)
+    );
+    assert_eq!(
+        query::playlists(&conn).unwrap()[0].len,
+        1,
+        "a scan emptied a playlist"
+    );
+    assert_eq!(
+        query::marks(&conn, &root.join("gone.flac").to_string_lossy())
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn prune_removes_the_marks_of_missing_files_under_the_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    let music = base.join("music");
+    std::fs::create_dir(&music).unwrap();
+    let here = music.join("here.wav");
+    common::silence(&here, 8000, 0.1);
+    let mark = |conn: &rusqlite::Connection, path: &Path, frame| {
+        let path = path.to_string_lossy();
+        query::add_mark(conn, &path, query::Mark { frame, rate: 8000 }).unwrap();
+    };
+    let marks = |conn: &rusqlite::Connection, path: &Path| {
+        query::marks(conn, &path.to_string_lossy()).unwrap().len()
+    };
+
+    let conn = db::open_memory().unwrap();
+    let gone = music.join("gone.flac");
+    db::upsert(&conn, &untagged(&gone)).unwrap();
+    db::upsert(&conn, &untagged(&here)).unwrap();
+    mark(&conn, &gone, 1);
+    mark(&conn, &gone, 2);
+    mark(&conn, &here, 1);
+    // A file played without being scanned, since deleted.
+    let played = music.join("played.flac");
+    mark(&conn, &played, 1);
+    // Missing, but outside the root.
+    let elsewhere = base.join("drive/a.flac");
+    mark(&conn, &elsewhere, 1);
+
+    let pruned = db::prune_missing(&conn, &music).unwrap();
+    assert_eq!(
+        pruned,
+        db::Pruned {
+            tracks: 1,
+            marks: 3
+        }
+    );
+    assert_eq!(query::count(&conn).unwrap(), 1);
+    assert_eq!((marks(&conn, &gone), marks(&conn, &played)), (0, 0));
+    assert_eq!(marks(&conn, &here), 1, "a present file lost its mark");
+    assert_eq!(marks(&conn, &elsewhere), 1, "pruned outside the root");
 }

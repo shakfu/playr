@@ -2,6 +2,34 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1]
+
+### Changed
+
+- A scan no longer removes tracks whose files are gone. It counts them, and `playr prune DIR`, or `:prune DIR` after a confirmation, removes them with their places in playlists and the marks of every missing file under `DIR`. A scan pruned on its own, so a subfolder on an unplugged drive lost its tracks from every playlist at the next scan of its parent. The window has File, Remove missing files. Library API: `ScanReport::missing` replaces `removed`; `db::missing_under`; `db::prune_missing` returns `Pruned` and removes marks; `Session::check_prune`, `prune` and `pruned`; `Event::Pruned`; `Outcome::PruneStarted` and `Pruned`; `Task::Prune`; `Confirm::Prune`; `Action::Prune`.
+
+- Only one of `playr` and `playr-gui` runs at a time. While either is open, the other refuses to start with "playr is already running", and so does `playr scan`; `playr playlists`, `playr search --json` and `playr formats` still run. Each keeps playlists and marks in memory and checks changes against that copy, so two at once could replace each other's playlists without asking, and undo each other's marks. The claim is a per-user lock file, `instance.lock` beside the default library, whichever `--db` is open; the system releases it when playr exits, however it exits. Library API: `playr_app::instance`.
+
+### Fixed
+
+- Answering yes to "clear all marks" cleared the marks of the track playing at the answer, not the track asked about. A gapless track change while the question was open deleted the next track's marks. The question now names the track and carries its path. Library API: `Confirm::ClearMarks { path, count }`; `Session::marks_to_clear` returns the path with the count, and `Session::clear_marks` takes the path.
+
+- Saving a mark or a playlist during a scan could fail with "database is locked". The scan held the write lock while it read tags for up to 500 files, which can take longer than the 5 s busy timeout. Tags are now read before each batch's transaction opens.
+
+- In the sampler view, a slicing started before another finished could replace the newer one's planned slices, and `enter` then wrote the older cut. Its result also cleared "planning slices" while the newer one still ran. A plan is now shown only if it belongs to the latest slicing. Library API: `Sampler::planning` is the planning job's id, and `Frontend::planning` takes it.
+
+- A panic while scanning, such as one in a tag reader, ended the scan with no report, and every later `:scan` was refused as already running. The scan now ends with its error, and another can start.
+
+- Reindexing an older library on open was not atomic. Interrupted between dropping the old search index and refilling the new one, it left an index that later opens took as current, so searches missed every existing track. The migration now runs in one transaction and is redone on the next open.
+
+- A seek to or past the end of a track did nothing, with no message, since the decoder refuses it. It now moves on as the track's end would: to the next track in play order, still paused if playback was, or stops after the last.
+
+- A seek reported the position from before it until the device discarded its buffer, so two quick `:next-mark` presses could both choose the same mark. The position is now the seek's target until then. Changing track in that window also left the discard pending, and it then dropped up to 2 s from the start of the next track.
+
+- `playr-gui` declared Rust 1.89, the workspace's version, but egui 0.36 needs 1.95. It now declares 1.95. CI checks the other crates on 1.89.
+
+- `playr` started the interface with stdout redirected, and drew it into the file or pipe. crossterm opens `/dev/tty` when stdin is not a terminal, so the terminal check passed. playr now exits with an error when stdout is not a terminal. This also stopped `tests/cli.rs` from hanging when run from a terminal.
+
 ## [0.6.0]
 
 ### Added

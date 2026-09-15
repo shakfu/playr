@@ -104,10 +104,15 @@ fn init(conn: &Connection) -> Result<()> {
             )),
         ));
     }
+    // Neither pragma takes effect inside a transaction.
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+    // One transaction, so a migration interrupted partway is redone on the
+    // next open instead of leaving an index without the library's rows.
+    let tx = conn.unchecked_transaction()?;
     // An index from before file names were searchable reads its text from
     // `tracks`, and its triggers write only four columns. Both are replaced,
     // and the index refilled once the schema has made the new ones.
-    let old_index: bool = conn.query_row(
+    let old_index: bool = tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'tracks_fts')
            AND NOT EXISTS (SELECT 1 FROM pragma_table_info('tracks_fts') WHERE name = 'file')",
         [],
@@ -116,34 +121,34 @@ fn init(conn: &Connection) -> Result<()> {
     // Triggers from playr 0.5.0 and 0.5.1 read only `/` as a separator, so on
     // Windows they indexed a track's whole path as its file name, and a search
     // matched the folders above it. They are replaced and the index refilled.
-    let old_triggers: bool = conn.query_row(
+    let old_triggers: bool = tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM sqlite_master
                         WHERE name = 'tracks_ai' AND instr(sql, ':\\') = 0)",
         [],
         |r| r.get(0),
     )?;
     if old_index {
-        conn.execute_batch(
+        tx.execute_batch(
             "DROP TRIGGER IF EXISTS tracks_ai;
              DROP TRIGGER IF EXISTS tracks_ad;
              DROP TRIGGER IF EXISTS tracks_au;
              DROP TABLE tracks_fts;",
         )?;
     } else if old_triggers {
-        conn.execute_batch(
+        tx.execute_batch(
             "DROP TRIGGER IF EXISTS tracks_ai;
              DROP TRIGGER IF EXISTS tracks_au;",
         )?;
     }
-    conn.execute_batch(include_str!("schema.sql"))?;
+    tx.execute_batch(include_str!("schema.sql"))?;
     if old_index || old_triggers {
         // Updating every row in place fires the new trigger, which indexes it.
-        conn.execute_batch("BEGIN; UPDATE tracks SET path = path; COMMIT;")?;
+        tx.execute_batch("UPDATE tracks SET path = path;")?;
     }
     if version < SCHEMA_VERSION {
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
-    Ok(())
+    tx.commit()
 }
 
 /// Returns the `(mtime, size)` recorded for `path`, if the file is known.
@@ -193,25 +198,67 @@ pub fn upsert(conn: &Connection, t: &Track) -> Result<i64> {
     })
 }
 
-/// Removes rows under `root` whose file is gone. Returns the count removed.
+/// What [`prune_missing`] removed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Pruned {
+    /// Tracks, and with them their places in playlists.
+    pub tracks: usize,
+    pub marks: usize,
+}
+
+/// `root` as a path prefix, or `None` if it does not resolve.
+///
+/// The trailing separator keeps `/music` from matching `/music2`.
+fn prefix_of(root: &Path) -> Option<String> {
+    let root = root.canonicalize().ok()?;
+    Some(root.join("").to_string_lossy().into_owned())
+}
+
+/// Whether the file at `path` is known to be gone. One whose existence
+/// cannot be checked is not.
+fn gone(path: &str) -> bool {
+    matches!(Path::new(path).try_exists(), Ok(false))
+}
+
+/// Tracks under `root` whose file is gone, in library order.
 ///
 /// Only `root` is checked: an unmounted drive elsewhere looks exactly like
-/// deleted files, and deleting its rows also empties its playlists. For the
-/// same reason a `root` that does not resolve prunes nothing, and a file whose
-/// existence cannot be checked is kept.
-pub fn prune_missing(conn: &Connection, root: &Path) -> Result<usize> {
-    let Ok(root) = root.canonicalize() else {
-        return Ok(0);
+/// deleted files. For the same reason a `root` that does not resolve has none.
+pub fn missing_under(conn: &Connection, root: &Path) -> Result<Vec<Track>> {
+    let Some(prefix) = prefix_of(root) else {
+        return Ok(Vec::new());
     };
-    // The trailing separator keeps `/music` from matching `/music2`.
-    let prefix = root.join("");
-    let gone: Vec<i64> = query::under_path(conn, &prefix.to_string_lossy())?
-        .into_iter()
-        .filter(|t| matches!(Path::new(&t.path).try_exists(), Ok(false)))
-        .map(|t| t.id)
-        .collect();
-    for id in &gone {
-        conn.execute("DELETE FROM tracks WHERE id = ?1", [id])?;
+    let mut tracks = query::under_path(conn, &prefix)?;
+    tracks.retain(|t| gone(&t.path));
+    Ok(tracks)
+}
+
+/// Removes the tracks [`missing_under`] finds, which also removes them from
+/// playlists, and the marks of every file under `root` that is gone, in the
+/// library or not.
+///
+/// Files are checked before the transaction opens, so the write lock is held
+/// for the deletes alone.
+pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
+    let Some(prefix) = prefix_of(root) else {
+        return Ok(Pruned::default());
+    };
+    let tracks = missing_under(conn, root)?;
+    let marked: Vec<String> = conn
+        .prepare("SELECT DISTINCT path FROM marks WHERE substr(path, 1, length(?1)) = ?1")?
+        .query_map([&prefix], |r| r.get(0))?
+        .collect::<Result<_>>()?;
+    let tx = conn.unchecked_transaction()?;
+    for t in &tracks {
+        tx.execute("DELETE FROM tracks WHERE id = ?1", [t.id])?;
     }
-    Ok(gone.len())
+    let mut marks = 0;
+    for path in marked.iter().filter(|p| gone(p)) {
+        marks += query::clear_marks(&tx, path)?;
+    }
+    tx.commit()?;
+    Ok(Pruned {
+        tracks: tracks.len(),
+        marks,
+    })
 }

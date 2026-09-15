@@ -486,3 +486,116 @@ fn jumping_plays_a_queued_track_and_keeps_the_queue() {
         "the queue was replaced"
     );
 }
+
+/// The status once `done` holds, or the last status after `within`.
+fn wait_within(player: &Player, within: Duration, done: impl Fn(&Status) -> bool) -> Status {
+    let deadline = Instant::now() + within;
+    loop {
+        let s = player.status();
+        if done(&s) || Instant::now() > deadline {
+            return s;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn a_seek_past_the_end_of_a_track_moves_on_as_its_end_would() {
+    let player = player();
+    let dir = tempfile::tempdir().unwrap();
+    let (first, second) = (dir.path().join("1.wav"), dir.path().join("2.wav"));
+    // Long enough that neither track plays out while the test waits.
+    silence(&first, 8000, 20.0);
+    silence(&second, 8000, 20.0);
+    player.send(Cmd::Play(vec![first, second], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+    let soon = Duration::from_secs(2);
+
+    player.send(Cmd::Seek(Duration::from_secs(30)));
+    let s = wait_within(&player, soon, |s| s.index == 1);
+    assert_eq!(
+        (s.index, s.state),
+        (1, State::Playing),
+        "the seek was ignored"
+    );
+    assert!(
+        player.position() < Duration::from_secs(2),
+        "{:?}",
+        player.position()
+    );
+
+    // Relative, in the last track: playback ends.
+    player.send(Cmd::SeekBy(30));
+    let s = wait_within(&player, soon, |s| s.state == State::Stopped);
+    assert_eq!(s.state, State::Stopped, "the seek was ignored");
+
+    // Paused, the next track waits paused too.
+    player.send(Cmd::Play(
+        vec![dir.path().join("1.wav"), dir.path().join("2.wav")],
+        0,
+    ));
+    wait_for(&player, |s| s.state == State::Playing);
+    player.send(Cmd::TogglePause);
+    wait_for(&player, |s| s.state == State::Paused);
+    player.send(Cmd::Seek(Duration::from_secs(30)));
+    let s = wait_within(&player, soon, |s| s.index == 1);
+    assert_eq!((s.index, s.state), (1, State::Paused));
+}
+
+#[test]
+fn the_position_is_the_seek_target_until_the_device_discards() {
+    let (player, control) = fake_player();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    silence(&file, 8000, 20.0);
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+
+    // A stalled device has not discarded the audio from before the seek.
+    control.stall();
+    player.send(Cmd::Seek(Duration::from_secs(10)));
+    std::thread::sleep(Duration::from_millis(100));
+    let pos = player.position();
+    assert!(
+        (Duration::from_secs(10)..Duration::from_millis(10_500)).contains(&pos),
+        "position {pos:?}"
+    );
+
+    control
+        .stall
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while player.position() < Duration::from_millis(10_200) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(player.position() >= Duration::from_millis(10_200));
+}
+
+#[test]
+fn a_track_change_before_a_seek_is_discarded_keeps_the_next_track_whole() {
+    let (player, control) = fake_player();
+    let dir = tempfile::tempdir().unwrap();
+    let (first, second) = (dir.path().join("0.wav"), dir.path().join("1.wav"));
+    levels(&first, 8000, &[(20.0, 0.25)]);
+    levels(&second, 8000, &[(3.0, -0.25)]);
+    player.send(Cmd::Play(vec![first, second], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+
+    control.stall();
+    player.send(Cmd::Seek(Duration::from_secs(5)));
+    player.send(Cmd::Next);
+    wait_for(&player, |s| s.index == 1);
+    std::thread::sleep(Duration::from_millis(100));
+    control
+        .stall
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
+    let s = wait_for(&player, |s| s.state == State::Stopped);
+    assert_eq!(s.state, State::Stopped);
+    let played = control.played.lock().unwrap();
+    let second_secs = played.iter().filter(|v| **v < -0.2).count() as f64 / 2.0 / 8000.0;
+    assert!(
+        (second_secs - 3.0).abs() < 0.1,
+        "the second track played for {second_secs:.2} s"
+    );
+}

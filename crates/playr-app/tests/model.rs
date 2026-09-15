@@ -245,3 +245,80 @@ fn a_peak_is_held_then_released() {
     assert_eq!(hold_peak(held, 0.2, later), Some((0.2, later)));
     assert_eq!(hold_peak(held, 0.0, later), None);
 }
+
+/// Waits until `count` passes `seen`, or five seconds pass.
+fn wait_past(count: &std::sync::atomic::AtomicUsize, seen: usize) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let now = count.load(std::sync::atomic::Ordering::SeqCst);
+        if now > seen {
+            return now;
+        }
+        assert!(Instant::now() < deadline, "no event arrived");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn only_the_latest_slicing_is_shown() {
+    use playr_app::action::Slicing;
+    use playr_app::sampler::{plan_text, Wave};
+    use playr_core::samples::Cut;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 60.0);
+    let events = Arc::new(AtomicUsize::new(0));
+    let counted = events.clone();
+    let mut model = Model::waking(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+        move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // The engine keeps its open file. Planning opens the path again, and
+    // finds a pipe that blocks until the test writes the track into it.
+    let moved = dir.path().join("moved.wav");
+    std::fs::rename(&file, &moved).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(&file)
+        .status()
+        .unwrap();
+    assert!(made.success());
+
+    let seen = events.load(Ordering::SeqCst);
+    model.perform(Action::Slice(Slicing::Region));
+    let seen = wait_past(&events, seen);
+    // The region's plan waits in the channel while a newer slicing starts.
+    model.perform(Action::Slice(Slicing::Onsets(None)));
+    model.refresh();
+    assert!(model.sampler().pending.is_none(), "an older plan was shown");
+    assert_eq!(plan_text(model.sampler()), "planning slices");
+
+    let mut pipe = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+    std::io::copy(&mut std::fs::File::open(&moved).unwrap(), &mut pipe).unwrap();
+    drop(pipe);
+    wait_past(&events, seen);
+    model.refresh();
+    let pending = model.sampler().pending.as_ref().map(|p| p.job.cut);
+    assert!(
+        matches!(pending, Some(Cut::Onsets(_))),
+        "{pending:?}, {:?}",
+        model.message()
+    );
+    assert!(!plan_text(model.sampler()).contains("planning"));
+}

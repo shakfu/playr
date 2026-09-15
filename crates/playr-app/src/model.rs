@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use playr_core::audio::{Cmd, Player, Status};
 use playr_core::db::query::{Mark, Playlist};
 use playr_core::db::Track;
-use playr_core::event::{Event, EventSink};
+use playr_core::event::{Event, EventSink, JobId};
 use playr_core::notice::{Notice, Outcome, Task};
 use playr_core::samples::Plan;
 use playr_core::session::Session;
@@ -412,8 +412,11 @@ impl Model {
                         Err(error) => Wave::Failed { path: track, error },
                     };
                 }
-                Event::Planned { track, result, .. } => {
-                    self.sampler.planning = false;
+                Event::Planned { job, track, result } => {
+                    if self.sampler.planning != Some(job) {
+                        continue;
+                    }
+                    self.sampler.planning = None;
                     if Some(&track) != current {
                         continue;
                     }
@@ -439,6 +442,16 @@ impl Model {
                         Ok(report) => self.notify(Outcome::Scanned { dir, report }),
                         Err(error) => self.notify(Notice::Failed {
                             task: Task::Scan,
+                            error,
+                        }),
+                    }
+                }
+                Event::Pruned { dir, result, .. } => {
+                    self.session.pruned();
+                    match result {
+                        Ok(removed) => self.notify(Outcome::Pruned { dir, removed }),
+                        Err(error) => self.notify(Notice::Failed {
+                            task: Task::Prune,
                             error,
                         }),
                     }
@@ -617,8 +630,8 @@ impl Frontend for Model {
         }
     }
 
-    fn planning(&mut self) {
-        self.sampler.planning = true;
+    fn planning(&mut self, job: JobId) {
+        self.sampler.planning = Some(job);
     }
 
     fn take_plan(&mut self) -> Option<Plan> {

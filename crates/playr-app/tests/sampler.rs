@@ -143,6 +143,6 @@ fn the_waveform_waits_for_its_track_with_a_reason() {
         "another track's peaks"
     );
     assert_eq!(plan_text(&sampler), "");
-    sampler.planning = true;
+    sampler.planning = Some(1);
     assert_eq!(plan_text(&sampler), "planning slices");
 }

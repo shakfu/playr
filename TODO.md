@@ -7,18 +7,6 @@ What is missing, grouped by priority:
 - **Medium:** improves an area that already works.
 - **Low:** niche, large for its benefit, or blocked **upstream**, which marks items not fixable here without replacing a dependency.
 
-## Critical
-
-### Release
-
-- [ ] **Confirm the builds no run has made yet.** The release workflow now builds `playr-gui`, but no run has built the Windows icon resource (`build.rs`, which needs Windows' resource compiler), either Linux build of the window, or the x86_64 macOS window, which is cross-compiled on an arm64 runner. A failure in any stops the release, so confirm them before tagging 0.6.0: run the release workflow by hand from the Actions tab with no tag, which builds and packages every platform and publishes nothing.
-
-### Library
-
-- [ ] **Keep rows for missing files.** Pruning deletes a row, and the cascade removes it from every playlist. A moved file comes back as a new row in no playlist. Marking rows missing instead needs a schema change.
-
-- [ ] **Writes that fail while another writer holds the library.** The terminal and the window on one library, or a scan in either, can hold SQLite's write lock. A mark or playlist saved meanwhile waits up to rusqlite's 5 s busy timeout and then fails with "database is locked", and the save is lost. Smaller scan batches or WAL mode would shorten the wait; WAL changes the file's journal mode, which older playr must still open. Untested, and needs a test with two connections.
-
 ## High
 
 ### Desktop window
@@ -43,7 +31,7 @@ What is missing, grouped by priority:
 
 ### Library
 
-- [ ] **Multiple roots.** `scan` takes directories but nothing records them, so a rescan means retyping the paths. Pruning only checks the directories scanned, so rows for files deleted under a root that is never rescanned stay. Recorded roots would allow a bare `playr scan` that covers them all.
+- [ ] **Multiple roots.** `scan` takes directories but nothing records them, so a rescan means retyping the paths. Pruning only checks the directories named, so rows for files deleted under a root never pruned stay. Recorded roots would allow a bare `playr scan` and `playr prune` that cover them all.
 
 ### Output
 

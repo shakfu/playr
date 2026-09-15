@@ -8,7 +8,7 @@
 //! the session's [`EventSink`], as the engine does.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,7 +52,7 @@ pub struct Session {
     reading: Option<Arc<AtomicBool>>,
     /// The library file a scan writes to.
     library: Option<PathBuf>,
-    /// Set while a scan runs.
+    /// Set while a scan or a prune runs.
     scanning: Arc<AtomicBool>,
 }
 
@@ -422,32 +422,34 @@ impl Session {
         }
     }
 
-    /// How many marks clearing the playing track would remove, for a
+    /// The playing track and how many marks clearing it would remove, for a
     /// frontend to confirm before [`Session::clear_marks`].
-    pub fn marks_to_clear(&mut self) -> Result<usize, Refusal> {
+    pub fn marks_to_clear(&mut self) -> Result<(PathBuf, usize), Refusal> {
         let (path, _) = self.playing_track()?;
         match self.marks_for(Some(&path)).len() {
             0 => Err(Refusal::NoMarks),
-            n => Ok(n),
+            n => Ok((path, n)),
         }
     }
 
-    /// Clears the marks of the track they were last read for, or does nothing
-    /// if none were read.
-    pub fn clear_marks(&mut self) -> Option<Notice> {
-        let path = self.marks_for.clone()?;
-        Some(
-            match query::clear_marks(&self.conn, &path.to_string_lossy()) {
-                Ok(_) => {
+    /// Clears the marks of the track at `path`, or does nothing if it has none.
+    ///
+    /// The path is the one the frontend asked about, since the playing track
+    /// can change before the answer.
+    pub fn clear_marks(&mut self, path: &Path) -> Option<Notice> {
+        match query::clear_marks(&self.conn, &path.to_string_lossy()) {
+            Ok(0) => None,
+            Ok(_) => {
+                if self.marks_for.as_deref() == Some(path) {
                     self.marks.clear();
-                    Outcome::MarksCleared.into()
                 }
-                Err(e) => Notice::Failed {
-                    task: Task::ClearMarks,
-                    error: e.to_string(),
-                },
-            },
-        )
+                Some(Outcome::MarksCleared.into())
+            }
+            Err(e) => Some(Notice::Failed {
+                task: Task::ClearMarks,
+                error: e.to_string(),
+            }),
+        }
     }
 
     /// Seeks to the next mark, or back to the previous one.
@@ -569,14 +571,16 @@ impl Session {
         }
         let (scanning, events) = (self.scanning.clone(), self.events.clone());
         Ok(self.spawn(move |job| {
-            let result = scan::scan_into(&library, &dir, |stats| {
-                if stats.seen % crate::event::SCAN_PROGRESS_EVERY == 0 {
-                    events(Event::ScanProgress {
-                        job,
-                        seen: stats.seen,
-                        added: stats.added,
-                    });
-                }
+            let result = caught("scan", || {
+                scan::scan_into(&library, &dir, |stats| {
+                    if stats.seen % crate::event::SCAN_PROGRESS_EVERY == 0 {
+                        events(Event::ScanProgress {
+                            job,
+                            seen: stats.seen,
+                            added: stats.added,
+                        });
+                    }
+                })
             });
             scanning.store(false, Ordering::Relaxed);
             Some(Event::Scanned { job, dir, result })
@@ -594,6 +598,50 @@ impl Session {
                 self.marks.clear();
             }
         }
+        self.reload();
+    }
+
+    /// Whether `dir` can be pruned, for a frontend to refuse before it asks.
+    pub fn check_prune(&self, dir: &Path) -> Result<(), Refusal> {
+        if !self.has_library_file() {
+            Err(Refusal::NoLibraryFile)
+        } else if !dir.is_dir() {
+            Err(Refusal::NotADirectory(dir.to_path_buf()))
+        } else if self.scanning.load(Ordering::Relaxed) {
+            Err(Refusal::ScanRunning)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Removes the tracks under `dir` whose files are gone, and the marks of
+    /// every file under it that is gone. Finishes with [`Event::Pruned`],
+    /// after which the frontend calls [`Session::pruned`]. Shares a scan's
+    /// turn: one of either runs at a time.
+    pub fn prune(&mut self, dir: PathBuf) -> Result<JobId, Refusal> {
+        self.check_prune(&dir)?;
+        let Some(library) = self.library.clone() else {
+            return Err(Refusal::NoLibraryFile);
+        };
+        if self.scanning.swap(true, Ordering::Relaxed) {
+            return Err(Refusal::ScanRunning);
+        }
+        let scanning = self.scanning.clone();
+        Ok(self.spawn(move |job| {
+            let result = caught("prune", || {
+                let fail = |e: rusqlite::Error| format!("{}: {e}", library.display());
+                let conn = db::open(&library).map_err(fail)?;
+                db::prune_missing(&conn, &dir).map_err(fail)
+            });
+            scanning.store(false, Ordering::Relaxed);
+            Some(Event::Pruned { job, dir, result })
+        }))
+    }
+
+    /// Takes in a finished prune: reads the library and its marks again.
+    pub fn pruned(&mut self) {
+        self.marks_for = None;
+        self.marks.clear();
         self.reload();
     }
 
@@ -634,4 +682,17 @@ impl Session {
             samples: self.samples.clone(),
         })
     }
+}
+
+/// `work`'s result, or its panic as an error. A panic in a tag reader or a
+/// decoder would otherwise end a job's thread with no event sent.
+fn caught<T>(what: &str, work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|panic| {
+        let text = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("no message");
+        Err(format!("the {what} stopped: {text}"))
+    })
 }

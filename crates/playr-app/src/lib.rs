@@ -14,6 +14,7 @@ pub mod action;
 pub mod command;
 pub mod config;
 pub mod dispatch;
+pub mod instance;
 pub mod message;
 pub mod meter;
 pub mod model;

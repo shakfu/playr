@@ -123,7 +123,7 @@ fn scans_and_opened_files_are_worded() {
             skipped: 899,
             failed: 1,
         },
-        removed: 2,
+        missing: 2,
         total: 5000,
     };
     for (outcome, words) in [
@@ -145,7 +145,33 @@ fn scans_and_opened_files_are_worded() {
                 dir: home.join("music"),
                 report,
             },
-            "scanned ~/music: 300 added, 2 removed, 1 unreadable; 5000 tracks",
+            "scanned ~/music: 300 added, 1 unreadable, 2 missing (:prune removes); 5000 tracks",
+        ),
+        (
+            Outcome::Scanned {
+                dir: home.join("music"),
+                report: ScanReport {
+                    missing: 0,
+                    ..report
+                },
+            },
+            "scanned ~/music: 300 added, 1 unreadable; 5000 tracks",
+        ),
+        (
+            Outcome::PruneStarted {
+                dir: home.join("music"),
+            },
+            "pruning ~/music",
+        ),
+        (
+            Outcome::Pruned {
+                dir: home.join("music"),
+                removed: playr_core::db::Pruned {
+                    tracks: 1,
+                    marks: 3,
+                },
+            },
+            "pruned ~/music: 1 track and 3 marks of missing files",
         ),
         (Outcome::Opening, "opening"),
         (
@@ -199,7 +225,7 @@ fn refusals_are_worded() {
             Refusal::NotADirectory("/opt/nothing".into()),
             "not a directory: /opt/nothing",
         ),
-        (Refusal::ScanRunning, "a scan is already running"),
+        (Refusal::ScanRunning, "a scan or prune is already running"),
     ] {
         assert_eq!(text(&refusal.into()), words);
     }
@@ -221,6 +247,7 @@ fn failures_and_playback_errors_are_worded() {
     assert_eq!(failed(Task::Slice), "slicing failed: disk full");
     assert_eq!(failed(Task::Export), "export failed: disk full");
     assert_eq!(failed(Task::Scan), "scan failed: disk full");
+    assert_eq!(failed(Task::Prune), "prune failed: disk full");
     assert_eq!(failed(Task::Open), "could not open: disk full");
 
     let playback = |missed| {

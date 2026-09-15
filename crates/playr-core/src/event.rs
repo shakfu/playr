@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::audio::State;
+use crate::db::Pruned;
 use crate::samples::{Exported, Plan};
 use crate::scan::{Playable, ScanReport};
 use crate::wave::Peaks;
@@ -68,6 +69,13 @@ pub enum Event {
         job: JobId,
         dir: PathBuf,
         result: Result<ScanReport, String>,
+    },
+    /// Tracks and marks under `dir` whose files are gone were removed. The
+    /// session reads the library again once told with `Session::pruned`.
+    Pruned {
+        job: JobId,
+        dir: PathBuf,
+        result: Result<Pruned, String>,
     },
     /// Paths given to `Session::open` are gathered into tracks to play.
     Opened { job: JobId, playable: Playable },

@@ -288,7 +288,11 @@ fn marks_need_something_playing() {
         session.slice_job(Cut::Region).map(|_| ()),
         Err(Refusal::NothingPlaying)
     );
-    assert_eq!(session.clear_marks(), None, "no marks were read");
+    assert_eq!(
+        session.clear_marks(Path::new("/m/a.flac")),
+        None,
+        "no marks to clear"
+    );
 }
 
 #[test]
@@ -310,7 +314,7 @@ fn marks_are_added_undone_cleared_and_sought_on_the_playing_track() {
     );
     session.add_mark(Some(secs(15)));
     session.add_mark(Some(secs(10)));
-    assert_eq!(session.marks_to_clear(), Ok(3));
+    assert_eq!(session.marks_to_clear(), Ok((file.clone(), 3)));
     let at: Vec<Duration> = session
         .marks_for(Some(&file))
         .iter()
@@ -337,7 +341,10 @@ fn marks_are_added_undone_cleared_and_sought_on_the_playing_track() {
     assert_eq!(job.marks, [40_000, 120_000]);
     assert_eq!(job_after.samples, PathBuf::from("/tmp/cuts"));
 
-    assert_eq!(session.clear_marks(), Some(Outcome::MarksCleared.into()));
+    assert_eq!(
+        session.clear_marks(&file),
+        Some(Outcome::MarksCleared.into())
+    );
     assert_eq!(session.marks_to_clear(), Err(Refusal::NoMarks));
     assert_eq!(session.undo_mark(), Refusal::NoMarks.into());
     assert_eq!(session.seek_to_mark(false), Refusal::NoEarlierMark.into());

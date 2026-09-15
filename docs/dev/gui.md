@@ -232,7 +232,7 @@ Step 2 carried the risk, as step 3 of the core split did: it moved most of `src/
 - **`:open` takes one path.** A path runs to the end of the line, so it can hold spaces without quotes, as a playlist name does. `Action::Open` holds a list, so a GUI's file dialog and dropped files open several at once.
 - **Opened tracks join the selection.** They are added to its end and played, and the selection view shows them with the cursor on the first, as `playr <path>` does on an empty selection. Replacing the selection would lose tracks collected for a playlist.
 - **A scan can start from an in-memory library.** The terminal tells the session where the library file goes; the scan creates it, and the session moves onto it once the scan finishes. Marks added before that, which were never saved, are lost.
-- **Writes during a scan can wait.** A mark or a playlist saved while a scan commits a batch waits for it, for up to rusqlite's 5 s busy timeout and then fails, and the interface pauses meanwhile. This follows from SQLite's locking; it has not been measured. Smaller batches, or WAL mode, would shorten the wait; neither is done.
+- **Writes during a scan can wait.** A mark or a playlist saved while a scan inserts a batch waits for the inserts, under rusqlite's 5 s busy timeout. Tags are read before the batch's transaction opens, so the wait no longer includes reading files. The library is already in WAL mode.
 
 ### Where step 2 differs from the sketch
 
@@ -246,7 +246,6 @@ Step 2 carried the risk, as step 3 of the core split did: it moved most of `src/
 ## Open questions
 
 - **Fonts.** egui's default fonts cover Latin, Greek and Cyrillic, not CJK. A terminal shows CJK tags with the terminal's font; the GUI shows boxes unless it loads a font with those glyphs. Bundling Noto Sans CJK adds about 16 MB per binary (estimate); loading a system font needs a font-lookup crate and differs per platform.
-- **Two processes, one library.** Can the terminal and the GUI run at once? Reads are safe under SQLite's locking; two writers can hit `SQLITE_BUSY`. A busy timeout on the connection may be enough, but it is untested.
 - **Native paths.** Both frontends use `~/.local/share/playr` and `~/.config/playr` on every platform, which is unusual on Windows and macOS. Moving to each platform's directories would move existing libraries.
 - **Media keys.** GUI users expect the keyboard's play and pause keys, and the macOS and Windows now-playing panels, to work. The terminal has none of this, so under the parity rule it waits, or both frontends gain it.
 - **After parity.** Multi-row selection, sorting by column, and dragging a mark each change `Frontend` or `Session`, and are listed as open issues in `docs/architecture.md`.

@@ -200,6 +200,16 @@ fn a_new_library_records_its_schema_version() {
 }
 
 #[test]
+fn a_library_file_is_in_wal_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = db::open(&dir.path().join("lib.db")).unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+}
+
+#[test]
 fn a_playlist_is_found_by_exact_name_before_case_folding() {
     let pl = |id, name: &str| query::Playlist {
         id,
@@ -530,6 +540,28 @@ fn a_library_whose_triggers_split_only_on_slashes_is_reindexed_on_open() {
     assert_eq!(paths(&conn, "file:take"), [windows]);
 }
 
+/// The search index and triggers playr 0.3 created, replacing the current ones.
+const OLD_INDEX: &str = "DROP TRIGGER tracks_ai; DROP TRIGGER tracks_ad; DROP TRIGGER tracks_au;
+     DROP TABLE tracks_fts;
+     CREATE VIRTUAL TABLE tracks_fts USING fts5(
+       title, artist, album, album_artist,
+       content='tracks', content_rowid='id', tokenize='unicode61');
+     CREATE TRIGGER tracks_ai AFTER INSERT ON tracks BEGIN
+       INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
+       VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+     END;
+     CREATE TRIGGER tracks_ad AFTER DELETE ON tracks BEGIN
+       INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
+       VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+     END;
+     CREATE TRIGGER tracks_au AFTER UPDATE ON tracks BEGIN
+       INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
+       VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+       INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
+       VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+     END;
+     INSERT INTO tracks_fts(tracks_fts) VALUES ('rebuild');";
+
 #[test]
 fn a_library_with_the_old_index_is_reindexed_with_file_names_on_open() {
     let dir = tempfile::tempdir().unwrap();
@@ -542,29 +574,7 @@ fn a_library_with_the_old_index_is_reindexed_with_file_names_on_open() {
     )
     .unwrap();
     // Put back the index and triggers playr 0.3 created, as such a library has.
-    conn.execute_batch(
-        "DROP TRIGGER tracks_ai; DROP TRIGGER tracks_ad; DROP TRIGGER tracks_au;
-         DROP TABLE tracks_fts;
-         CREATE VIRTUAL TABLE tracks_fts USING fts5(
-           title, artist, album, album_artist,
-           content='tracks', content_rowid='id', tokenize='unicode61');
-         CREATE TRIGGER tracks_ai AFTER INSERT ON tracks BEGIN
-           INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
-           VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
-         END;
-         CREATE TRIGGER tracks_ad AFTER DELETE ON tracks BEGIN
-           INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
-           VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
-         END;
-         CREATE TRIGGER tracks_au AFTER UPDATE ON tracks BEGIN
-           INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
-           VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
-           INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
-           VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
-         END;
-         INSERT INTO tracks_fts(tracks_fts) VALUES ('rebuild');",
-    )
-    .unwrap();
+    conn.execute_batch(OLD_INDEX).unwrap();
     assert!(
         paths(&conn, "mos").is_empty(),
         "the old index already had names"
@@ -597,4 +607,30 @@ fn a_library_with_the_old_index_is_reindexed_with_file_names_on_open() {
         .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
         .unwrap();
     assert_eq!(rows, 2);
+}
+
+#[test]
+fn a_reindex_that_fails_partway_is_redone_on_the_next_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let conn = db::open(&path).unwrap();
+    db::upsert(&conn, &untagged("/m/Mos Def - Mathematics.m4a")).unwrap();
+    conn.execute_batch(OLD_INDEX).unwrap();
+    // Stands in for a crash during the refill, which updates every row.
+    conn.execute_batch(
+        "CREATE TRIGGER stop BEFORE UPDATE ON tracks BEGIN SELECT RAISE(ABORT, 'crashed'); END;",
+    )
+    .unwrap();
+    drop(conn);
+    assert!(db::open(&path).is_err(), "the refill did not fail");
+
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TRIGGER stop").unwrap();
+    drop(conn);
+    let conn = db::open(&path).unwrap();
+    assert_eq!(
+        paths(&conn, "mos"),
+        ["/m/Mos Def - Mathematics.m4a"],
+        "the index was left without the library's rows"
+    );
 }

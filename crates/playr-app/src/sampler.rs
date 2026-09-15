@@ -68,8 +68,9 @@ pub struct Sampler {
     /// How many times the view is zoomed in from the whole track, each step
     /// halving the frames a column shows. Drawing clamps it.
     pub zoom: u32,
-    /// Whether slices are being planned on another thread.
-    pub planning: bool,
+    /// The job planning slices on another thread. Only its plan is shown, so a
+    /// slicing replaced before it finishes shows nothing.
+    pub planning: Option<JobId>,
     /// Slices planned for the track, shown until written or discarded.
     pub pending: Option<Plan>,
 }
@@ -123,7 +124,7 @@ pub fn peaks_of(sampler: &Sampler, playing: Option<&PathBuf>) -> Result<Arc<Peak
 /// when nothing is planned.
 pub fn plan_text(sampler: &Sampler) -> String {
     match (&sampler.pending, sampler.planning) {
-        (_, true) => "planning slices".into(),
+        (_, Some(_)) => "planning slices".into(),
         (Some(p), _) => format!(
             "{} slices planned: enter writes, esc discards",
             p.spans.len()

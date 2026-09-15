@@ -243,7 +243,7 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     };
     assert_eq!(
         completions("p", Library, &playlists),
-        ["play", "playlist", "pause", "prev", "prev-mark"]
+        ["play", "playlist", "prune", "pause", "prev", "prev-mark"]
     );
     assert_eq!(completions("", Library, &playlists).len(), usable(Library));
     assert_eq!(completions("re", Selection, &playlists), ["remove"]);
@@ -284,7 +284,7 @@ fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     assert_eq!(line.text, "play");
     line.complete(true, Library, &[]);
     assert_eq!(line.text, "playlist");
-    for _ in 0..4 {
+    for _ in 0..5 {
         line.complete(true, Library, &[]);
     }
     assert_eq!(line.text, "play", "the cycle does not wrap");

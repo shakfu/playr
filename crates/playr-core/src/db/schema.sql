@@ -1,6 +1,3 @@
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS tracks (
   id           INTEGER PRIMARY KEY,
   path         TEXT NOT NULL UNIQUE,

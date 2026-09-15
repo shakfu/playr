@@ -55,6 +55,7 @@ pub const COMMANDS: &[Command] = &[
     any("playlist", "NAME", "play a saved playlist"),
     any("save", "[NAME]", "save the selection as a playlist"),
     any("scan", "DIR", "add a directory to the library"),
+    any("prune", "DIR", "remove tracks and marks of missing files"),
     any("open", "PATH", "play a file or directory, and select it"),
     any("pause", "", "play or pause"),
     any("next", "", "next track"),
@@ -239,6 +240,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         RenameTo(name) => format!("rename {name}"),
         PlayPlaylist(name) => format!("playlist {name}"),
         Scan(dir) => format!("scan {}", dir.display()),
+        Prune(dir) => format!("prune {}", dir.display()),
         Open(paths) => {
             let paths: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
             format!("open {}", paths.join(" "))
@@ -476,8 +478,9 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "search" => Ok(Action::Search(rest.to_string())),
         "playlist" if rest.is_empty() => Err(usage()),
         "playlist" => Ok(Action::PlayPlaylist(unquote(rest).to_string())),
-        "scan" | "open" if rest.is_empty() => Err(usage()),
+        "scan" | "open" | "prune" if rest.is_empty() => Err(usage()),
         "scan" => Ok(Action::Scan(path(rest))),
+        "prune" => Ok(Action::Prune(path(rest))),
         "open" => Ok(Action::Open(vec![path(rest)])),
         "save" if rest.is_empty() => Ok(Action::StartSave),
         "save" => Ok(Action::SaveAs(unquote(rest).to_string())),

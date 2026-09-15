@@ -198,6 +198,10 @@ impl Gui {
                     ui.close();
                     chosen = rfd::FileDialog::new().pick_folder().map(Action::Scan);
                 }
+                if ui.button("Remove missing files...").clicked() {
+                    ui.close();
+                    chosen = rfd::FileDialog::new().pick_folder().map(Action::Prune);
+                }
                 ui.separator();
                 items(ui, controls::FILE_MENU, &mut chosen);
             });

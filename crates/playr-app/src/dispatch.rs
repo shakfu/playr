@@ -6,9 +6,12 @@
 //! every frontend, calling the session for what changes the library or
 //! playback and the frontend for what changes only the interface.
 
+use std::path::PathBuf;
+
 use playr_core::audio::Cmd;
 use playr_core::db::query::Playlist;
 use playr_core::db::Track;
+use playr_core::event::JobId;
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_core::samples::{Cut, Plan};
 use playr_core::session::Session;
@@ -25,8 +28,13 @@ pub enum Confirm {
     ReplacePlaylist(String),
     /// Empty the selection, which holds this many tracks.
     ClearSelection(usize),
-    /// Remove this many marks from the playing track.
-    ClearMarks(usize),
+    /// Remove the tracks and marks under this directory whose files are gone.
+    Prune(PathBuf),
+    /// Remove `count` marks from the track at `path`, which was playing when asked.
+    ClearMarks {
+        path: PathBuf,
+        count: usize,
+    },
 }
 
 impl Confirm {
@@ -38,7 +46,17 @@ impl Confirm {
                 format!("replace playlist \"{name}\" with the selection?")
             }
             Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection?"),
-            Confirm::ClearMarks(n) => format!("clear all {n} marks from this track?"),
+            Confirm::Prune(dir) => format!(
+                "remove tracks and marks under {} whose files are gone?",
+                crate::message::home_as_tilde(dir)
+            ),
+            Confirm::ClearMarks { path, count } => {
+                let name = path
+                    .file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy();
+                format!("clear all {count} marks from {name}?")
+            }
         }
     }
 }
@@ -99,8 +117,8 @@ pub trait Frontend {
     fn prompt(&mut self, prompt: Prompt);
     fn present(&mut self, presentation: Presentation);
 
-    /// Slices of the playing track are being planned.
-    fn planning(&mut self);
+    /// Slices of the playing track are being planned, as background job `job`.
+    fn planning(&mut self, job: JobId);
     /// Takes the planned slices the frontend is showing, if any.
     fn take_plan(&mut self) -> Option<Plan>;
 }
@@ -185,6 +203,10 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             Ok(_) => f.notify(Outcome::ScanStarted { dir }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
+        Action::Prune(dir) => match f.session().check_prune(&dir) {
+            Ok(()) => f.confirm(Confirm::Prune(dir)),
+            Err(refusal) => f.notify(refusal.into()),
+        },
         Action::Open(paths) => {
             f.session_mut().open(paths);
             f.notify(Outcome::Opening.into());
@@ -226,7 +248,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             f.notify(notice.into());
         }
         Action::ClearMarks => match f.session_mut().marks_to_clear() {
-            Ok(n) => f.confirm(Confirm::ClearMarks(n)),
+            Ok((path, count)) => f.confirm(Confirm::ClearMarks { path, count }),
             Err(refusal) => f.notify(refusal.into()),
         },
         Action::NextMark => {
@@ -279,11 +301,15 @@ pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
             let notice = f.session_mut().save_selection(&name, true);
             f.notify(notice.into());
         }
-        Confirm::ClearMarks(_) => {
-            if let Some(notice) = f.session_mut().clear_marks() {
+        Confirm::ClearMarks { path, .. } => {
+            if let Some(notice) = f.session_mut().clear_marks(&path) {
                 f.notify(notice.into());
             }
         }
+        Confirm::Prune(dir) => match f.session_mut().prune(dir.clone()) {
+            Ok(_) => f.notify(Outcome::PruneStarted { dir }.into()),
+            Err(refusal) => f.notify(refusal.into()),
+        },
         Confirm::ClearSelection(_) => {
             let outcome = f.session_mut().clear_selection();
             f.set_cursor(View::Selection, None);
@@ -455,8 +481,8 @@ fn slice(f: &mut impl Frontend, slicing: Slicing) {
     };
     if f.view() == View::Sampler {
         match f.session_mut().plan_slices(cut) {
-            Ok(_) => {
-                f.planning();
+            Ok(job) => {
+                f.planning(job);
                 f.notify(Outcome::PlanStarted.into());
             }
             Err(refusal) => f.notify(refusal.into()),

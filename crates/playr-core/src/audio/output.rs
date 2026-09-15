@@ -280,6 +280,9 @@ pub struct Shared {
     pub flush_requested: AtomicU64,
     /// The last `flush_requested` value the callback has acted on.
     pub flush_done: AtomicU64,
+    /// Where the latest seek resumes, in nanoseconds, which is the position
+    /// until the callback has acted on its flush.
+    pub seek_target: AtomicU64,
     /// Momentary loudness of what was last played, in LUFS, as f32 bits.
     momentary_bits: AtomicU32,
     /// Largest sample magnitude played since it was last taken, as f32 bits.
@@ -298,6 +301,7 @@ impl Shared {
             speed_bits: AtomicU32::new(1.0f32.to_bits()),
             flush_requested: AtomicU64::new(0),
             flush_done: AtomicU64::new(0),
+            seek_target: AtomicU64::new(0),
             momentary_bits: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             peak_bits: AtomicU32::new(0),
         }

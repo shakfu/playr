@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::audio::Mode;
+use crate::db::Pruned;
 use crate::scan::ScanReport;
 
 /// A report of one operation.
@@ -90,6 +91,13 @@ pub enum Outcome {
         dir: PathBuf,
         report: ScanReport,
     },
+    PruneStarted {
+        dir: PathBuf,
+    },
+    Pruned {
+        dir: PathBuf,
+        removed: Pruned,
+    },
     /// Paths are being gathered to play.
     Opening,
     /// `tracks` gathered and playing; `skipped` paths could not be.
@@ -124,7 +132,7 @@ pub enum Refusal {
     /// The session has no library file set, so a scan has nowhere to write.
     NoLibraryPath,
     NotADirectory(PathBuf),
-    /// One scan at a time: a second would write the same file.
+    /// One scan or prune at a time: a second would write the same file.
     ScanRunning,
 }
 
@@ -139,6 +147,7 @@ pub enum Task {
     Slice,
     Export,
     Scan,
+    Prune,
     Open,
 }
 

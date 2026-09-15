@@ -1,5 +1,6 @@
 //! playr: a minimal TUI music player.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -43,6 +44,12 @@ enum Command {
         #[arg(required = true, value_name = "DIR")]
         dirs: Vec<PathBuf>,
     },
+    /// Remove tracks under directories whose files are gone, with their marks
+    Prune {
+        /// Directories to check, recursively
+        #[arg(required = true, value_name = "DIR")]
+        dirs: Vec<PathBuf>,
+    },
     /// Play everything matching a search; put a query that starts with - after --
     Search {
         /// Print the matches as a JSON array instead of playing them
@@ -81,10 +88,25 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    // One playr at a time, terminal or window; reading the library needs no
+    // claim. Held until `run` returns.
+    let reads_only = matches!(
+        cli.command,
+        Some(Command::Playlists | Command::Search { json: true, .. })
+    );
+    let _instance = if reads_only {
+        None
+    } else {
+        Some(playr_app::instance::claim()?)
+    };
+
     // Only `scan` creates the library. Without one, everything else runs on an
     // empty in-memory library, so playing a file leaves nothing behind.
     let db_path = cli.db.unwrap_or_else(db::default_path);
     let scanning = matches!(cli.command, Some(Command::Scan { .. }));
+    if matches!(cli.command, Some(Command::Prune { .. })) && !db_path.try_exists()? {
+        return Err(format!("no library at {}", db_path.display()).into());
+    }
     let mut conn = if scanning || db_path.try_exists()? {
         db::open(&db_path)?
     } else {
@@ -95,6 +117,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let start: Vec<Track> = match cli.command {
         Some(Command::Formats) => unreachable!("handled above"),
         Some(Command::Scan { dirs }) => return cmd_scan(&mut conn, &dirs),
+        Some(Command::Prune { dirs }) => return cmd_prune(&conn, &dirs),
         Some(Command::Playlists) => {
             for p in db::query::playlists(&conn)? {
                 println!("{:<40} {:>4} tracks", p.name, p.len);
@@ -149,6 +172,11 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
     };
 
+    // crossterm opens /dev/tty when stdin is not a terminal, so only stdout
+    // shows whether the interface can be seen. Checked before the device opens.
+    if !std::io::stdout().is_terminal() {
+        return Err("playr needs a terminal: stdout is not one".into());
+    }
     let player = Player::new()?;
 
     // `ratatui::init` panics without a terminal; report it instead, since
@@ -198,7 +226,6 @@ fn cmd_scan(
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut total = scan::ScanStats::default();
     let multi = dirs.len() > 1;
-    let mut removed = 0;
     for path in dirs {
         if !path.is_dir() {
             eprintln!("playr: not a directory: {}", path.display());
@@ -225,7 +252,11 @@ fn cmd_scan(
         total.added += stats.added;
         total.skipped += stats.skipped;
         total.failed += stats.failed;
-        removed += db::prune_missing(conn, path)?;
+        let missing = db::missing_under(conn, path)?.len();
+        if missing > 0 {
+            let path = path.display();
+            println!("  {missing} tracks missing; `playr prune {path}` removes them");
+        }
     }
     if multi {
         println!(
@@ -233,8 +264,26 @@ fn cmd_scan(
             total.seen, total.added, total.skipped, total.failed
         );
     }
-    if removed > 0 {
-        println!("removed {removed} tracks whose files are gone");
+    println!("library now holds {} tracks", db::query::count(conn)?);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_prune(
+    conn: &rusqlite::Connection,
+    dirs: &[PathBuf],
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    for path in dirs {
+        if !path.is_dir() {
+            eprintln!("playr: not a directory: {}", path.display());
+            continue;
+        }
+        let pruned = db::prune_missing(conn, path)?;
+        println!(
+            "pruning {}: removed {} tracks and {} marks of missing files",
+            path.display(),
+            pruned.tracks,
+            pruned.marks
+        );
     }
     println!("library now holds {} tracks", db::query::count(conn)?);
     Ok(ExitCode::SUCCESS)

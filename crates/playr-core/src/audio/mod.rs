@@ -247,6 +247,11 @@ impl Player {
 
     /// Audible position in the current track.
     pub fn position(&self) -> Duration {
+        // Until the device discards, the counters describe the audio before a seek.
+        let requested = self.shared.flush_requested.load(Ordering::Relaxed);
+        if requested != self.shared.flush_done.load(Ordering::Relaxed) {
+            return Duration::from_nanos(self.shared.seek_target.load(Ordering::Relaxed));
+        }
         track_position(
             self.shared.frames_out.load(Ordering::Relaxed),
             self.shared.track_start.load(Ordering::Relaxed),
@@ -500,11 +505,11 @@ impl Engine {
                 self.teardown();
                 self.state = State::Stopped;
             }
-            Cmd::Seek(pos) => self.seek(pos),
+            Cmd::Seek(pos) => self.seek_to(pos),
             Cmd::SeekBy(delta) => {
                 let cur = self.elapsed().as_secs_f64();
                 let target = (cur + delta as f64).max(0.0);
-                self.seek(Duration::from_secs_f64(target));
+                self.seek_to(Duration::from_secs_f64(target));
             }
             // Applied by `Player::send`, which never forwards it.
             Cmd::SetVolume(_) => {}
@@ -585,6 +590,8 @@ impl Engine {
         self.written = 0;
         // Dropping the output drops the ring, discarding anything buffered.
         self.out = None;
+        // A flush still pending would discard the next stream's first audio.
+        self.settle_flush();
         self.shared.frames_out.store(0, Ordering::Relaxed);
         self.shared.track_start.store(0, Ordering::Relaxed);
         // A new track starts from its own beginning, not a previous seek.
@@ -793,6 +800,33 @@ impl Engine {
         }
     }
 
+    /// Seeks where the listener asked. The decoder refuses a target at or past
+    /// the end, so that moves on as reaching the end would.
+    fn seek_to(&mut self, pos: Duration) {
+        match self.marks.front() {
+            Some(&(_, audible, Some(duration))) if pos >= duration => self.played_out(audible),
+            _ => self.seek(pos),
+        }
+    }
+
+    /// Moves on from track `current` as its end does: to the next track in
+    /// play order, still paused if it was, or stops when there is none.
+    fn played_out(&mut self, current: usize) {
+        let paused = self.state == State::Paused;
+        self.teardown();
+        match self.order.successor(current, false) {
+            Some(next) => {
+                if self.start(next, false) && paused && self.state == State::Playing {
+                    if let Some(o) = &self.out {
+                        o.pause();
+                    }
+                    self.state = State::Paused;
+                }
+            }
+            None => self.state = State::Stopped,
+        }
+    }
+
     /// Seeks within the audible track, which is `marks[0]`.
     ///
     /// The decoder reads 1-2 s ahead, so near a track's end it has already
@@ -844,6 +878,11 @@ impl Engine {
         // pushed until it has. Reopening the device instead cost a gap and
         // could click. Positions are reset once the discard is done.
         let rate = self.shared.position_rate.load(Ordering::Relaxed) as f64;
+        // Before the request, so a reader that sees the request sees this target.
+        self.shared.seek_target.store(
+            pos.as_nanos().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
         let generation = self.shared.flush_requested.fetch_add(1, Ordering::Relaxed) + 1;
         self.flush = Some(Flush {
             generation,
@@ -867,6 +906,8 @@ impl Engine {
                 return;
             };
             self.out = None;
+            // The stalled device never will; the new ring starts empty.
+            self.settle_flush();
             match self.open_output(plan) {
                 Ok(o) => {
                     if self.state == State::Playing {
@@ -892,6 +933,12 @@ impl Engine {
         self.shared
             .position_offset
             .store(flush.offset, Ordering::Relaxed);
+    }
+
+    /// Marks every flush done, once no callback can act on the ring it named.
+    fn settle_flush(&self) {
+        let requested = self.shared.flush_requested.load(Ordering::Relaxed);
+        self.shared.flush_done.store(requested, Ordering::Relaxed);
     }
 
     /// Converts decoded source samples to the output layout and appends to `carry`.
@@ -1073,11 +1120,15 @@ impl Engine {
         if self.carry.is_empty() {
             return;
         }
-        let (written, _) = out.producer.push_partial_slice(&self.carry);
+        // Whole frames only: `slots` read during a callback can be odd, and a
+        // split frame would undercount `written` and could swap channels.
+        let channels = out.plan.channels as usize;
+        let whole = out.producer.slots().min(self.carry.len()) / channels * channels;
+        let (written, _) = out.producer.push_partial_slice(&self.carry[..whole]);
         let n = written.len();
         if n > 0 {
             self.carry.drain(..n);
-            self.written += n as u64 / out.plan.channels as u64;
+            self.written += (n / channels) as u64;
         }
     }
 

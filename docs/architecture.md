@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, current as of playr 0.6.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal and the desktop window, `playr-gui`.
+Design note, current as of playr 0.6.1. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal and the desktop window, `playr-gui`.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -94,8 +94,8 @@ impl Session {
     pub fn marks_for(&mut self, path: Option<&PathBuf>) -> &[Mark];
     pub fn add_mark(&mut self, at: Option<Duration>) -> Notice;
     pub fn undo_mark(&mut self) -> Notice;
-    pub fn marks_to_clear(&mut self) -> Result<usize, Refusal>;
-    pub fn clear_marks(&mut self) -> Option<Notice>;
+    pub fn marks_to_clear(&mut self) -> Result<(PathBuf, usize), Refusal>;
+    pub fn clear_marks(&mut self, path: &Path) -> Option<Notice>;
     pub fn seek_to_mark(&mut self, forward: bool) -> Notice;
 
     // Work that takes seconds: started here, finished by an event
@@ -107,6 +107,9 @@ impl Session {
     pub fn slice_job(&mut self, cut: Cut) -> Result<Job, Refusal>;
     pub fn scan(&mut self, dir: PathBuf) -> Result<JobId, Refusal>;      // Event::ScanProgress, Event::Scanned
     pub fn scanned(&mut self);                                           // after Event::Scanned
+    pub fn check_prune(&self, dir: &Path) -> Result<(), Refusal>;
+    pub fn prune(&mut self, dir: PathBuf) -> Result<JobId, Refusal>;     // Event::Pruned
+    pub fn pruned(&mut self);                                            // after Event::Pruned
     pub fn open(&mut self, paths: Vec<PathBuf>) -> JobId;                // Event::Opened
 }
 ```
@@ -117,7 +120,7 @@ Conventions:
 - **Confirmation by refusal.** The core never asks a question. `save_selection(name, false)` over an existing playlist returns `Refusal::WouldReplace(name)`; the frontend asks in its own way and calls again with `replace: true`. `check_save` and `marks_to_clear` let a frontend refuse or word a question before it prompts.
 - **Silent no-ops stay silent.** `delete_playlist` and `clear_marks` return `Option<Notice>`, `None` when there was nothing to act on.
 - **Plans are values.** `Event::Planned` carries a `Plan`. The frontend shows it and passes it back to `write_slices`, or drops it; discarding needs no call. `export` plans and writes in one job, for a frontend that shows no plan.
-- **A scan writes through its own connection.** It opens the library file on its thread, creating it when the session runs on an in-memory library, and a frontend calls `scanned` on `Event::Scanned` to read the result, which moves such a session onto the file. One scan runs at a time. A write on the session's connection during a scan waits, under rusqlite's 5 s busy timeout, for the scan to commit its current batch of 500 files, and fails once that passes.
+- **A scan writes through its own connection.** It opens the library file on its thread, creating it when the session runs on an in-memory library, and a frontend calls `scanned` on `Event::Scanned` to read the result, which moves such a session onto the file. A scan never removes tracks; `prune` does, on its own connection too. One scan or prune runs at a time. A scan reads each batch of 500 files before its transaction opens, so a write on the session's connection waits only while a batch's rows are inserted.
 - **Opening reads tags off the frontend's thread.** `open` walks directories and reads tags on a job, since a large directory takes seconds, and reports what it gathered and what it could not; the terminal's `playr <path>` uses the same `scan::playable`.
 - **A superseded job sends nothing.** A peaks read replaced by another stops, rather than sending an event a frontend must recognise as stale.
 
@@ -157,6 +160,7 @@ pub enum Event {
     Exported { job: JobId, result: Result<Exported, String> },
     ScanProgress { job: JobId, seen: usize, added: usize },
     Scanned { job: JobId, dir: PathBuf, result: Result<ScanReport, String> },
+    Pruned { job: JobId, dir: PathBuf, result: Result<Pruned, String> },
     Opened { job: JobId, playable: Playable },
 }
 ```
@@ -221,7 +225,7 @@ pub trait Frontend {
     fn prompt(&mut self, prompt: Prompt);
     fn present(&mut self, presentation: Presentation);                   // quit, help lists, zoom, display
 
-    fn planning(&mut self);
+    fn planning(&mut self, job: JobId);
     fn take_plan(&mut self) -> Option<Plan>;
 }
 
@@ -295,6 +299,7 @@ Each step left `make test` passing. Only step 7 changed behaviour: the `mode` pr
 
 ## Decisions left open
 
+- **One process.** The terminal and the window never run at once; `playr_app::instance` holds a per-user lock. Each `Session` checks names and marks against its own copy of the library, so a second writer would act on stale data.
 - **Daemon.** A daemon holding the `Session`, with frontends as clients over a socket, would let a terminal and a GUI control one playback at once, and fits the OSC option in [Sampling](sampler.md#not-built-yet). It costs a protocol and a process to manage. The in-process `Session` does not rule it out: a daemon wraps it, and the `serde` feature is its wire format.
 - **Library loading.** `Session::tracks` returns the whole library in memory. At 100,000 tracks a GUI table wants pages or a query per scroll; the API would add `tracks_page(offset, count)` then.
 - **cpal versions.** rtrack uses cpal 0.15 and playr 0.18. A waveform crate shared with rtrack must not depend on cpal.

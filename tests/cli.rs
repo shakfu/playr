@@ -8,8 +8,9 @@ use std::process::{Command, Stdio};
 
 fn playr(db: &Path, args: &[&str]) {
     Command::new(env!("CARGO_BIN_EXE_playr"))
-        // Not the config of whoever runs the tests.
+        // Not the config or the instance lock of whoever runs the tests.
         .env("XDG_CONFIG_HOME", db.parent().unwrap())
+        .env("XDG_DATA_HOME", db.parent().unwrap())
         .arg("--db")
         .arg(db)
         .args(args)
@@ -51,6 +52,7 @@ fn only_scan_creates_the_library() {
 fn output(db: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_playr"))
         .env("XDG_CONFIG_HOME", db.parent().unwrap())
+        .env("XDG_DATA_HOME", db.parent().unwrap())
         .arg("--db")
         .arg(db)
         .args(args)
@@ -163,6 +165,7 @@ fn search_json_prints_every_match_with_its_columns() {
 fn with_config(dir: &Path, args: &[&str]) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_playr"))
         .env("XDG_CONFIG_HOME", dir)
+        .env("XDG_DATA_HOME", dir)
         .arg("--db")
         .arg(dir.join("library.db"))
         .args(args)
@@ -223,6 +226,7 @@ fn a_missing_home_variable_does_not_stop_playr() {
     let out = Command::new(env!("CARGO_BIN_EXE_playr"))
         .env_remove("HOME")
         .env_remove("XDG_CONFIG_HOME")
+        .env("XDG_DATA_HOME", dir.path())
         .arg("--db")
         .arg(dir.path().join("library.db"))
         .arg("--settings")
@@ -233,4 +237,92 @@ fn a_missing_home_variable_does_not_stop_playr() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("panicked"), "{stderr}");
     assert!(stderr.contains("line 1: unknown setting: frob"), "{stderr}");
+}
+
+#[test]
+fn a_second_playr_is_refused_but_reading_the_library_is_not() {
+    use playr_app::instance::{claim_at, ALREADY_RUNNING};
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let db = dir.path().join("library.db");
+    let songs = dir.path().join("music");
+    std::fs::create_dir(&songs).unwrap();
+    // Another playr, the terminal or the window, is running.
+    let _running = claim_at(&data.join("playr/instance.lock")).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_playr"))
+            .env("XDG_DATA_HOME", &data)
+            .env("XDG_CONFIG_HOME", dir.path())
+            .arg("--db")
+            .arg(&db)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+
+    for args in [vec!["scan", songs.to_str().unwrap()], vec![]] {
+        let out = run(&args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "playr {args:?} ran");
+        assert!(stderr.contains(ALREADY_RUNNING), "playr {args:?}: {stderr}");
+    }
+    assert!(!db.exists(), "a refused scan created the library");
+
+    // Reading needs no lock.
+    for args in [&["playlists"][..], &["formats"], &["search", "--json", "x"]] {
+        let out = run(args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains(ALREADY_RUNNING),
+            "playr {args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn scan_keeps_missing_tracks_and_prune_removes_them_with_their_marks() {
+    use playr_core::db::{self, query, Track};
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().canonicalize().unwrap().join("music");
+    std::fs::create_dir(&music).unwrap();
+    let db_path = dir.path().join("library.db");
+    let gone = music.join("gone.flac").to_string_lossy().into_owned();
+    let conn = db::open(&db_path).unwrap();
+    let track = Track {
+        path: gone.clone(),
+        mtime: 1,
+        size: 1,
+        ..Default::default()
+    };
+    db::upsert(&conn, &track).unwrap();
+    query::add_mark(
+        &conn,
+        &gone,
+        query::Mark {
+            frame: 1,
+            rate: 8000,
+        },
+    )
+    .unwrap();
+    drop(conn);
+
+    let (code, stdout, stderr) = output(&db_path, &["scan", music.to_str().unwrap()]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("1 tracks missing"), "{stdout}");
+    let conn = db::open(&db_path).unwrap();
+    assert_eq!(query::count(&conn).unwrap(), 1, "a scan removed a track");
+
+    let (code, stdout, stderr) = output(&db_path, &["prune", music.to_str().unwrap()]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("removed 1 tracks and 1 marks"), "{stdout}");
+    assert_eq!(query::count(&conn).unwrap(), 0);
+    assert!(query::marks(&conn, &gone).unwrap().is_empty());
+
+    // Pruning needs a library; it does not make one.
+    let other = dir.path().join("other.db");
+    let (code, _, stderr) = output(&other, &["prune", music.to_str().unwrap()]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("no library"), "{stderr}");
+    assert!(!other.exists());
 }

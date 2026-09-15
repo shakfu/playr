@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use playr_core::audio::{Cmd, State};
 use playr_core::db::{self, Track};
+use playr_core::event;
 use playr_core::event::{Event, EventSink, SCAN_PROGRESS_EVERY};
 use playr_core::notice::Refusal;
 use playr_core::samples::Cut;
@@ -323,4 +324,114 @@ fn opening_gathers_tracks_with_tags_from_the_library() {
         }
         _ => unreachable!(),
     }
+}
+
+#[test]
+fn a_scan_that_panics_reports_the_failure_and_lets_another_start() {
+    use std::sync::atomic::Ordering;
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    std::fs::create_dir(&songs).unwrap();
+    for i in 0..SCAN_PROGRESS_EVERY {
+        std::fs::write(songs.join(format!("{i:03}.flac")), b"x").unwrap();
+    }
+    let (send, events) = mpsc::channel();
+    let once = Arc::new(AtomicBool::new(false));
+    // A panic on the scan's thread, standing in for one in a tag reader.
+    let sink: EventSink = Arc::new(move |event| {
+        if matches!(event, Event::ScanProgress { .. }) && !once.swap(true, Ordering::SeqCst) {
+            panic!("a reader panicked");
+        }
+        let _ = send.send(event);
+    });
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+
+    let job = session.scan(songs.clone()).unwrap();
+    let seen = until(&events, |e| matches!(e, Event::Scanned { .. }));
+    match seen.last().unwrap() {
+        Event::Scanned { job: j, result, .. } => {
+            assert_eq!(*j, job);
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|e| e.contains("a reader panicked")),
+                "{result:?}"
+            );
+        }
+        _ => unreachable!(),
+    }
+    assert!(
+        session.scan(songs).is_ok(),
+        "the scan that panicked still counts as running"
+    );
+}
+
+#[test]
+fn a_prune_removes_missing_tracks_and_marks_then_the_session_reads_them_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().canonicalize().unwrap().join("music");
+    std::fs::create_dir(&music).unwrap();
+    let gone = music.join("gone.flac");
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    db::upsert(
+        &conn,
+        &Track {
+            mtime: 1,
+            size: 1,
+            ..track(&gone)
+        },
+    )
+    .unwrap();
+    let mark = playr_core::db::query::Mark {
+        frame: 8000,
+        rate: 8000,
+    };
+    playr_core::db::query::add_mark(&conn, &gone.to_string_lossy(), mark).unwrap();
+
+    let (sink, events) = channel();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+    assert_eq!(session.marks_for(Some(&gone)).len(), 1);
+    let file = music.join("x");
+    std::fs::write(&file, b"x").unwrap();
+    assert_eq!(
+        session.prune(file.clone()),
+        Err(Refusal::NotADirectory(file))
+    );
+
+    let job = session.prune(music.clone()).unwrap();
+    assert_eq!(session.scan(music.clone()), Err(Refusal::ScanRunning));
+    let seen = until(&events, |e| matches!(e, Event::Pruned { .. }));
+    match seen.last().unwrap() {
+        Event::Pruned {
+            job: j,
+            dir,
+            result,
+        } => {
+            assert_eq!((*j, dir), (job, &music));
+            assert_eq!(
+                result,
+                &Ok(db::Pruned {
+                    tracks: 1,
+                    marks: 1
+                })
+            );
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(session.tracks().len(), 1, "read before being told");
+    session.pruned();
+    assert!(session.tracks().is_empty());
+    assert!(
+        session.marks_for(Some(&gone)).is_empty(),
+        "stale marks kept"
+    );
+
+    let mut memory = Session::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        event::ignore(),
+    );
+    assert_eq!(memory.prune(music), Err(Refusal::NoLibraryFile));
 }

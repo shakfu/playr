@@ -56,6 +56,8 @@ pub enum Action {
     PlayPlaylist(String),
     /// Scan a directory into the library, in the background.
     Scan(PathBuf),
+    /// Remove tracks and marks under a directory whose files are gone, once confirmed.
+    Prune(PathBuf),
     /// Play files or directories, adding them to the selection.
     Open(Vec<PathBuf>),
 

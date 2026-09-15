@@ -14,7 +14,7 @@ use playr_app::message::Message;
 use playr_app::View::{self, Library, Playlists, Sampler, Selection};
 use playr_core::db::query::{self, Playlist};
 use playr_core::db::{self, Track};
-use playr_core::event;
+use playr_core::event::{self, JobId};
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_core::samples::Plan;
 use playr_core::session::Session;
@@ -89,7 +89,7 @@ impl Frontend for Headless {
     fn present(&mut self, presentation: Presentation) {
         self.shown.push(presentation);
     }
-    fn planning(&mut self) {
+    fn planning(&mut self, _job: JobId) {
         self.planning = true;
     }
     fn take_plan(&mut self) -> Option<Plan> {
@@ -293,4 +293,75 @@ fn commands_parse_and_dispatch_in_the_frontend_s_view() {
     // `command` names the prompt only as a key binding's target.
     dispatch(Action::StartCommand, &mut f);
     assert_eq!(f.prompts, [Prompt::Search, Prompt::Command]);
+}
+
+/// Plays `track` alone, waits until it plays, and marks it at `secs`.
+fn play_and_mark(f: &mut Headless, track: &Track, secs: &[u64]) {
+    f.session.play(std::slice::from_ref(track), 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.playing_track().map(|(p, _)| p) != Ok(PathBuf::from(&track.path)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never started playing"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    for s in secs {
+        f.session.add_mark(Some(std::time::Duration::from_secs(*s)));
+    }
+}
+
+#[test]
+fn clearing_marks_clears_the_track_asked_about_after_the_track_changes() {
+    let (mut f, dir) = headless();
+    let wav = |name: &str| {
+        let path = dir.path().join(name);
+        common::silence(&path, 8000, 20.0);
+        Track {
+            path: path.to_string_lossy().into_owned(),
+            mtime: 1,
+            size: 1,
+            ..Default::default()
+        }
+    };
+    let (a, b) = (wav("a.wav"), wav("b.wav"));
+    let marks =
+        |f: &mut Headless, t: &Track| f.session.marks_for(Some(&PathBuf::from(&t.path))).len();
+
+    play_and_mark(&mut f, &a, &[5, 10]);
+    dispatch(Action::ClearMarks, &mut f);
+    let question = f.asked.take().unwrap();
+    assert!(matches!(&question, Confirm::ClearMarks { count: 2, .. }));
+    // The track changes while the question is open, and the frontend reads
+    // the new track's marks, as `Model::refresh` does each frame.
+    play_and_mark(&mut f, &b, &[5, 10, 15]);
+    confirmed(question, &mut f);
+
+    assert_eq!(marks(&mut f, &a), 0, "the track asked about kept its marks");
+    assert_eq!(
+        marks(&mut f, &b),
+        3,
+        "a track not asked about lost its marks"
+    );
+}
+
+#[test]
+fn pruning_asks_first_and_starts_on_a_yes() {
+    let (mut f, dir) = headless();
+    let nowhere = dir.path().join("nowhere");
+    dispatch(Action::Prune(nowhere.clone()), &mut f);
+    assert_eq!(last(&f), Some(&Refusal::NotADirectory(nowhere).into()));
+    assert_eq!(f.asked, None, "asked about a directory that is not there");
+
+    let music = dir.path().to_path_buf();
+    dispatch(Action::Prune(music.clone()), &mut f);
+    let question = f.asked.take().unwrap();
+    assert_eq!(question, Confirm::Prune(music.clone()));
+    assert_ne!(
+        last(&f),
+        Some(&Outcome::PruneStarted { dir: music.clone() }.into()),
+        "pruned before a yes"
+    );
+    confirmed(question, &mut f);
+    assert_eq!(last(&f), Some(&Outcome::PruneStarted { dir: music }.into()));
 }

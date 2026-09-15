@@ -69,6 +69,23 @@ jobs:
       - name: Test with Opus
         run: cargo test --workspace --no-fail-fast --features opus
 
+  # The rust-version in Cargo.toml, for every crate but playr-gui, which
+  # declares egui's own. Keep the toolchain below equal to it.
+  msrv:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@1.89
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check on the declared rust-version, with Opus
+        run: cargo check -p playr -p playr-core -p playr-app --all-targets --features opus
+
   lint:
     runs-on: ubuntu-22.04
     steps:
