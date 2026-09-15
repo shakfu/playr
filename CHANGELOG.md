@@ -2,9 +2,11 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.3]
 
 ### Fixed
+
+- The time on the terminal's progress bar was hard to read. Over the filled part it was the default text colour on the bar, light on cyan in the dark theme; past it, it was the bar's colour, 3.8:1 on white in the light theme. It is now black over the filled part and the default colour past it, since black over the whole label vanishes past the fill on a dark background. It is not bold: some terminals draw bold black as grey. Library API: `Palette::progress_text`.
 
 - On Linux, `make install` installed the desktop entry, but its icon did not show when another app had left an `icon-theme.cache` under `~/.local/share/icons/hicolor`. GTK trusts that cache while `hicolor/` is no newer than it, and adding a file to `256x256/apps/` does not change `hicolor/`. `make install` now rebuilds an existing cache. It does not create one, since a cache that nothing refreshes causes the same failure for the next installer.
 

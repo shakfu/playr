@@ -67,9 +67,7 @@ What is missing, grouped by priority:
 
 - [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. A table in the library would keep it.
 
-- [ ] **Colours.** Not configurable. The themes' colours are fixed in `playr::ui::palette` and `playr_gui::palette`. A `[colors]` table in `settings.toml` could set them once settings tables serve more than one frontend (below).
-
-- [ ] **Settings tables for more than one frontend.** A table no frontend names is an error, so a `[gui]` table would stop the terminal starting, and `[keys]` would stop a frontend that does not read it. A list of tables every frontend knows, ignored unless named, would fix it; nothing needs it until the window has settings of its own.
+- [ ] **Settings tables for more than one frontend.** A table no frontend names is an error, so a `[gui]` table would stop the terminal starting, and `[keys]` would stop a frontend that does not read it. A list of tables every frontend knows, ignored unless named, would fix it; nothing needs it until the window has settings of its own. A key both frontends read, such as `theme`, avoids it: `playr_app::config` reads it.
 
 - [ ] **Platform directories.** Both interfaces keep the library in `~/.local/share/playr` and settings in `~/.config/playr` on every platform, which is unusual on macOS and Windows. Moving to each platform's directories must move existing libraries.
 
@@ -102,6 +100,14 @@ What is missing, grouped by priority:
 ### Sampler
 
 - [ ] **Live marks for sampling tools.** Slices can be exported as files. Handing a marked passage to a running tool, such as SuperCollider, is not done: `docs/sampler.md` weighs a JSON Lines file against OSC.
+
+### Interface
+
+- [ ] **Custom colours.** `dark`, `light` and `system` are fixed sets in `playr::ui::palette` and `playr_gui::palette`. A `[colors]` table would need two kinds of value: ANSI or 256-colour indices in the terminal, RGB in the window.
+
+- [ ] **Terminal background detection.** In the terminal, `system` is the ANSI set, as `dark` is. An OSC 11 query at startup would find a light background in most modern terminals, but can stall over ssh and tmux. `COLORFGBG` is cheaper, and only some terminals set it.
+
+- [ ] **Dim text on Solarized Dark.** `dim` and the selected row's background are ANSI bright black, which Solarized Dark sets to its background colour, so dim text disappears there. Not tested here.
 
 ### Output
 

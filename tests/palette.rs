@@ -40,11 +40,12 @@ const WHITE: [u8; 3] = [255; 3];
 /// Text in the terminal's default colour, assumed near black on a light theme.
 const BLACK: [u8; 3] = [0; 3];
 
-fn every_role(p: &Palette) -> [Color; 17] {
+fn every_role(p: &Palette) -> [Color; 18] {
     [
         p.accent,
         p.accent_peak,
         p.progress,
+        p.progress_text,
         p.dim,
         p.selected_bg,
         p.dim_selected,
@@ -119,7 +120,7 @@ fn light_bars_and_marks_reach_3_to_1() {
         let ratio = contrast(rgb(colour), WHITE);
         assert!(ratio >= 3.0, "{role} on white: {ratio:.2}");
     }
-    let over = contrast(BLACK, rgb(p.progress));
+    let over = contrast(rgb(p.progress_text), rgb(p.progress));
     assert!(over >= 4.5, "the time over the progress bar: {over:.2}");
 }
 

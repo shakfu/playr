@@ -641,8 +641,22 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
     let gauge = Gauge::default()
         .gauge_style(Style::default().fg(p.progress))
         .ratio(ratio)
-        .label(format!("{} / {}", fmt_time(pos), fmt_time(total)));
+        // In the default colour: `progress` as text on the unfilled part is
+        // too faint in the light theme.
+        .label(Span::styled(
+            format!("{} / {}", fmt_time(pos), fmt_time(total)),
+            Style::default().fg(Color::Reset),
+        ));
     f.render_widget(gauge, progress);
+    // Light default text on the filled part is faint in the dark theme. Only
+    // label cells there have the bar's colour behind them. Not bold: some
+    // terminals draw bold black as grey.
+    let buf = f.buffer_mut();
+    for at in progress.positions() {
+        if buf[at].bg == p.progress {
+            buf[at].set_fg(p.progress_text);
+        }
+    }
     draw_marks(app, f, ticks);
 
     // A prompt needs the whole line; anything else shares it with the indicators.

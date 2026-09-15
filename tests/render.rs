@@ -1127,6 +1127,51 @@ fn the_rename_prompt_names_the_playlist() {
     assert!(joined.contains("rename \"late\" to: night_"), "{joined}");
 }
 
+#[test]
+fn the_progress_label_is_dark_over_the_filled_part_and_default_past_it() {
+    use ratatui::style::Color;
+    let mut snapshot = stopped();
+    snapshot.status.state = State::Playing;
+    snapshot.status.duration = Some(Duration::from_secs(100));
+    snapshot.position = Duration::from_secs(50);
+    for theme in [Theme::Dark, Theme::Light] {
+        let buf = Case::new(View::Library, &snapshot)
+            .size(100, 12)
+            .theme(theme)
+            .buffer();
+        let row = (0..buf.area.height)
+            .find(|&y| {
+                let line: String = (0..100).map(|x| buf[(x, y)].symbol()).collect();
+                line.contains("0:50 / 1:40")
+            })
+            .expect("no progress bar");
+        // By cell: the filled part's blocks are several bytes each.
+        let cells: Vec<&str> = (0..100).map(|x| buf[(x, row)].symbol()).collect();
+        let start = cells.windows(4).position(|w| w.concat() == "0:50").unwrap() as u16;
+        let label: Vec<_> = (start..start + 11).map(|x| &buf[(x, row)]).collect();
+        // Half played: the label starts over the filled part and ends past it.
+        let p = playr::ui::palette::of(theme);
+        let (filled, past): (Vec<&ratatui::buffer::Cell>, Vec<_>) =
+            label.iter().partition(|c| c.bg == p.progress);
+        assert!(
+            !filled.is_empty() && !past.is_empty(),
+            "{theme:?}: {label:?}"
+        );
+        assert!(
+            past.iter().all(|c| c.bg == Color::Reset),
+            "{theme:?}: {past:?}"
+        );
+        assert!(
+            filled.iter().all(|c| c.fg == p.progress_text),
+            "{theme:?}: {filled:?}"
+        );
+        assert!(
+            past.iter().all(|c| c.fg == Color::Reset),
+            "{theme:?}: {past:?}"
+        );
+    }
+}
+
 // --- marks ---
 
 #[test]

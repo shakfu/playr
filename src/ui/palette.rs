@@ -13,8 +13,10 @@ pub struct Palette {
     pub accent: Color,
     /// Envelope peaks behind [`Palette::accent`].
     pub accent_peak: Color,
-    /// The progress bar, with its time written over it in the default colour.
+    /// The progress bar. Its time is in the default colour, except over the
+    /// filled part, where it is [`Palette::progress_text`].
     pub progress: Color,
+    pub progress_text: Color,
     pub dim: Color,
     /// Background of the selected row.
     pub selected_bg: Color,
@@ -47,6 +49,7 @@ pub const ANSI: Palette = Palette {
     // ones in some themes, so these two come from the 256-colour table.
     accent_peak: Color::Indexed(30),
     progress: Color::Cyan,
+    progress_text: Color::Black,
     dim: Color::DarkGray,
     selected_bg: Color::DarkGray,
     // `dim` is the same colour as `selected_bg`.
@@ -67,8 +70,9 @@ pub const ANSI: Palette = Palette {
 pub const LIGHT: Palette = Palette {
     accent: Color::Indexed(24),
     accent_peak: Color::Indexed(110),
-    // Light enough for dark text over it, dark enough to see on white.
+    // Light enough for black text over it, dark enough to see on white.
     progress: Color::Indexed(67),
+    progress_text: Color::Indexed(16),
     dim: Color::Indexed(243),
     selected_bg: Color::Indexed(254),
     dim_selected: Color::Indexed(240),
