@@ -52,6 +52,11 @@ ifeq ($(UNAME),Darwin)
 else ifeq ($(UNAME),Linux)
 	@install -Dm 644 packaging/linux/playr.desktop $(HOME)/.local/share/applications/playr.desktop
 	@install -Dm 644 crates/playr-gui/assets/playr.png $(HOME)/.local/share/icons/hicolor/256x256/apps/playr.png
+	@# A stale icon-theme.cache hides icons it does not list; rebuild it if present.
+	@if [ -f $(HOME)/.local/share/icons/hicolor/icon-theme.cache ]; then \
+		gtk-update-icon-cache -qft $(HOME)/.local/share/icons/hicolor || true; fi
+	@# GIO reads MimeType= only through mimeinfo.cache.
+	@update-desktop-database -q $(HOME)/.local/share/applications || true
 	@echo "installed playr.desktop and its icon under $(HOME)/.local/share"
 endif
 

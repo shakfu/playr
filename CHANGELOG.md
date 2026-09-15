@@ -2,6 +2,14 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- On Linux, `make install` installed the desktop entry, but its icon did not show when another app had left an `icon-theme.cache` under `~/.local/share/icons/hicolor`. GTK trusts that cache while `hicolor/` is no newer than it, and adding a file to `256x256/apps/` does not change `hicolor/`. `make install` now rebuilds an existing cache. It does not create one, since a cache that nothing refreshes causes the same failure for the next installer.
+
+- On Linux, playr was not offered to open audio files after `make install`. GIO reads a desktop entry's `MimeType=` only through `~/.local/share/applications/mimeinfo.cache`. `make install` now rebuilds that cache, creating it if needed.
+
 ## [0.6.2]
 
 ### Added
