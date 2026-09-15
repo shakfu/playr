@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, current as of playr 0.6.1. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal and the desktop window, `playr-gui`.
+Design note, current as of playr 0.6.2. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal and the desktop window, `playr-gui`.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -223,7 +223,7 @@ pub trait Frontend {
     fn notify(&mut self, message: Message);
     fn confirm(&mut self, question: Confirm);
     fn prompt(&mut self, prompt: Prompt);
-    fn present(&mut self, presentation: Presentation);                   // quit, help lists, zoom, display
+    fn present(&mut self, presentation: Presentation);                   // quit, help lists, zoom, display, theme
 
     fn planning(&mut self, job: JobId);
     fn take_plan(&mut self) -> Option<Plan>;
@@ -240,7 +240,7 @@ pub fn rename(f: &mut impl Frontend, from: &Playlist, name: &str);       // afte
 - **Search results are the frontend's.** The library view shows `listed`, so `dispatch` can search and clear a search without owning presentation state.
 - **Effects split by kind.** `prompt` for text to collect, `confirm` for a yes or no, `present` for the rest, and `planning`/`take_plan` for slices shown before writing.
 - **No state in `dispatch`.** The frontend owns the session and the key map and lends them through `session`, `session_mut` and `keys`.
-- **`Message`** wraps a core `Notice` and adds what is about the interface: cancelled prompts, key bindings, display changes, command errors. `View`, `Display` and `Confirm` live here with the actions that produce them.
+- **`Message`** wraps a core `Notice` and adds what is about the interface: cancelled prompts, key bindings, display and theme changes, command errors. `View`, `Display`, `Theme` and `Confirm` live here with the actions that produce them.
 - **`Key`** is playr-app's own type: a code and modifiers, with names and parsing. A frontend converts its key events to it; an egui app would convert `egui::Key`.
 - **`model::Model`** is the interface's state, and implements `Frontend`: the session, the view and each view's cursor, search results, the list playing, the open prompt or question with any text typed into it, the message and when it expires, the sampler's state and a per-frame `Snapshot` with the held peak. `refresh` samples the player and drains events; `perform` does an action; `answer`, `run_command`, `search_as_typed`, `end_search`, `save_as` and `rename_to` finish what a prompt collected. Both Rust frontends wrap it, so what a key does and what a control does cannot differ. A frontend keeps only drawing state: scroll offsets, focus, glyphs.
 - **`config::Config`** holds `settings: Settings` and `keys: Keymap`. It reads `[keys]` from what `Settings::apply` hands back; each binding is a `:` command string checked by the command parser.

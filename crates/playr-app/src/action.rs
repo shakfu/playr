@@ -96,6 +96,8 @@ pub enum Action {
     /// Write the slices planned in the sampler view.
     WriteSlices,
     DiscardSlices,
+    /// Draw in these colours.
+    Theme(crate::Theme),
 
     /// Bind `key` in one view, or in every view, to an action or to nothing.
     Map {

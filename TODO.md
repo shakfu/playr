@@ -67,7 +67,7 @@ What is missing, grouped by priority:
 
 - [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. A table in the library would keep it.
 
-- [ ] **Colours.** Not configurable. `render.rs` uses 16 colours directly; they need named roles, such as accent and dim, before a `[colors]` table in `settings.toml` could set them.
+- [ ] **Colours.** Not configurable. The themes' colours are fixed in `playr::ui::palette` and `playr_gui::palette`. A `[colors]` table in `settings.toml` could set them once settings tables serve more than one frontend (below).
 
 - [ ] **Settings tables for more than one frontend.** A table no frontend names is an error, so a `[gui]` table would stop the terminal starting, and `[keys]` would stop a frontend that does not read it. A list of tables every frontend knows, ignored unless named, would fix it; nothing needs it until the window has settings of its own.
 

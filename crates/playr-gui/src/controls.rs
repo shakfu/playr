@@ -5,7 +5,7 @@
 //! another.
 
 use playr_app::action::{Action, Slicing, Zoom};
-use playr_app::{Display, View};
+use playr_app::{Display, Theme, View};
 
 /// A button or menu item.
 pub struct Control {
@@ -42,6 +42,13 @@ pub const VIEW_MENU: &[Control] = &[
     control("Next view", Action::NextView),
     control("Search", Action::StartSearch),
     control("Clear search", Action::ClearSearch),
+];
+
+/// View, Theme.
+pub const THEME_MENU: &[Control] = &[
+    control("System", Action::Theme(Theme::System)),
+    control("Light", Action::Theme(Theme::Light)),
+    control("Dark", Action::Theme(Theme::Dark)),
 ];
 
 pub const PLAYBACK_MENU: &[Control] = &[
@@ -111,6 +118,7 @@ pub const TABLES: &[&[Control]] = &[
     MARKS,
     FILE_MENU,
     VIEW_MENU,
+    THEME_MENU,
     PLAYBACK_MENU,
     SLICE_MENU,
     HELP_MENU,

@@ -172,7 +172,7 @@ playr-gui ~/music/some/album     # play a directory, as playr does
 playr-gui --db other.db          # use a different library file
 ```
 
-It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
+It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
 
 File, Add folder to library scans a directory, as `playr scan` does, and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
 
@@ -302,6 +302,7 @@ mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in f
 speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 samples = "~/Music/playr/samples"  # where :slice writes
+theme = "light"                    # system, light or dark
 
 [keys]                             # every view
 right = "seek +10"
@@ -321,6 +322,8 @@ x = "remove"
 - `ctrl-c` always quits, and the keys inside prompts and help lists cannot be changed.
 
 Any error stops playr before it starts, and every bad setting is listed with its line number. `?` lists the keys as bound in the view you are in. `:map` and `:unmap` change keys until playr exits.
+
+`theme` sets the colours, `dark` unless set, and `:theme` changes them until playr exits. In the window, `system` follows the system's light or dark appearance. A terminal cannot report its background reliably, so there `system` and `dark` use the terminal's own ANSI colours, which its theme shades, and `light` uses fixed colours for a light background. With `NO_COLOR` set to any value, the terminal draws without colour and reverses the cursor row.
 
 ## Formats
 

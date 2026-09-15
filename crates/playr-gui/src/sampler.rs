@@ -13,18 +13,10 @@ use playr_app::sampler::{self, Layout};
 use playr_app::Display;
 
 use crate::controls;
+use crate::palette::Palette;
 
 /// Mouse wheel movement, in points, that makes one zoom step.
 const WHEEL_STEP: f32 = 40.0;
-
-const REGION: egui::Color32 = egui::Color32::from_rgb(40, 60, 80);
-const RMS: egui::Color32 = egui::Color32::from_rgb(90, 170, 220);
-const PEAK: egui::Color32 = egui::Color32::from_rgb(40, 90, 130);
-const OUTSIDE_RMS: egui::Color32 = egui::Color32::from_gray(150);
-const OUTSIDE_PEAK: egui::Color32 = egui::Color32::from_gray(80);
-const MARK: egui::Color32 = egui::Color32::from_rgb(230, 200, 60);
-const EDGE: egui::Color32 = egui::Color32::from_rgb(210, 90, 210);
-const PLAYHEAD: egui::Color32 = egui::Color32::WHITE;
 
 /// Wheel movement not yet turned into a zoom step, kept between frames.
 #[derive(Debug, Default)]
@@ -69,7 +61,14 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, wheel: &mut Wheel) -> Vec<Acti
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Track waveform"));
-    paint(ui.painter_at(rect), rect, &layout, display, model);
+    paint(
+        ui.painter_at(rect),
+        ui.visuals(),
+        rect,
+        &layout,
+        display,
+        model,
+    );
 
     if response.hovered() {
         let delta = ui.input(|i| i.smooth_scroll_delta.y);
@@ -106,7 +105,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, wheel: &mut Wheel) -> Vec<Acti
     ui.horizontal(|ui| {
         let plan = sampler::plan_text(model.sampler());
         if !plan.is_empty() {
-            ui.colored_label(EDGE, plan);
+            ui.colored_label(Palette::of(ui.visuals()).edge, plan);
         }
         ui.weak(layout.region_text());
     });
@@ -131,12 +130,14 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, wheel: &mut Wheel) -> Vec<Acti
 /// Paints the waveform of `layout` into `rect`, one column a point wide.
 fn paint(
     painter: egui::Painter,
+    visuals: &egui::Visuals,
     rect: egui::Rect,
     layout: &Layout,
     display: Display,
     model: &Model,
 ) {
-    painter.rect_filled(rect, 2.0, egui::Color32::from_gray(18));
+    let colours = Palette::of(visuals);
+    painter.rect_filled(rect, 2.0, visuals.extreme_bg_color);
     let playhead = layout.playhead();
     let x = |c: usize| rect.left() + c as f32 + 0.5;
     let columns = (layout.columns as usize).min(rect.width() as usize);
@@ -145,15 +146,15 @@ fn paint(
     let region: Vec<usize> = (0..columns).filter(|&c| layout.in_region(c)).collect();
     if let (Some(&first), Some(&last)) = (region.first(), region.last()) {
         let span = egui::Rect::from_x_y_ranges(x(first) - 0.5..=x(last) + 0.5, rect.y_range());
-        painter.rect_filled(span, 0.0, REGION);
+        painter.rect_filled(span, 0.0, colours.region);
     }
 
     for c in 0..columns {
         let inside = layout.in_region(c);
         let (rms_colour, peak_colour) = if inside {
-            (RMS, PEAK)
+            (colours.rms, colours.peak)
         } else {
-            (OUTSIDE_RMS, OUTSIDE_PEAK)
+            (colours.outside_rms, colours.outside_peak)
         };
         let column = |top: f32, bottom: f32, colour| {
             painter.line_segment(
@@ -194,13 +195,13 @@ fn paint(
     };
     if let Some(plan) = &model.sampler().pending {
         for c in sampler::edges(plan).filter_map(|e| layout.column_of(e)) {
-            line(c, EDGE, 1.0);
+            line(c, colours.edge, 1.0);
         }
     }
     for c in layout.marks.iter().filter_map(|&m| layout.column_of(m)) {
-        line(c, MARK, 1.5);
+        line(c, colours.yellow, 1.5);
     }
     if let Some(c) = playhead {
-        line(c, PLAYHEAD, 2.0);
+        line(c, visuals.strong_text_color(), 2.0);
     }
 }

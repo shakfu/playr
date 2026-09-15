@@ -183,6 +183,10 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     // running playr from a pipe or a service is an easy mistake to make.
     let mut terminal = ratatui::try_init().map_err(|e| format!("playr needs a terminal: {e}"))?;
     let mut app = ui::App::configured(conn, player, start, config);
+    // crossterm drops colour under NO_COLOR (https://no-color.org) with an SGR
+    // reset, which also clears the cursor row's reverse video, so playr drops it.
+    app.set_colour(std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()));
+    ratatui::crossterm::style::force_color_output(true);
     // `:scan` creates the library here when there is none yet.
     app.set_library_path(db_path);
     let result = app.run(&mut terminal);

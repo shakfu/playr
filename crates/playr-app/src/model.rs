@@ -108,6 +108,7 @@ pub struct Model {
     /// Events from the session's engine and background work, drained each frame.
     events: Receiver<Event>,
     sampler: Sampler,
+    theme: crate::Theme,
     /// The message showing, its words, and when it was shown.
     message: Option<(Message, String, Instant)>,
     quit: bool,
@@ -155,6 +156,7 @@ impl Model {
             onset_sensitivity: config.settings.onset_sensitivity,
             events,
             sampler: Sampler::default(),
+            theme: config.theme,
             message: None,
             quit: false,
             peak_hold: None,
@@ -319,6 +321,11 @@ impl Model {
 
     pub fn sampler(&self) -> &Sampler {
         &self.sampler
+    }
+
+    /// The colours to draw in, from the settings or `:theme`.
+    pub fn theme(&self) -> crate::Theme {
+        self.theme
     }
 
     /// Sets how the sampler draws the waveform, as a frontend does to choose
@@ -626,6 +633,10 @@ impl Frontend for Model {
             Presentation::Display(display) => {
                 self.sampler.display = display.unwrap_or(self.sampler.display.next());
                 Model::notify(self, Message::Display(self.sampler.display));
+            }
+            Presentation::Theme(theme) => {
+                self.theme = theme;
+                Model::notify(self, Message::Theme(theme));
             }
         }
     }

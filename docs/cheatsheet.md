@@ -49,6 +49,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:slice region\|marks\|N\|onsets [S]` |                         | write samples from the region or the track  |
 | `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |
 | `:unmap [VIEW] KEY`                   |                         | remove a key binding                        |
+| `:theme THEME`                        |                         | system, light or dark colours               |
 
 ## Library
 
@@ -87,6 +88,6 @@ In this view `:slice` plans slices and draws their edges as `+` under the wavefo
 ## Typing commands
 
 - A command, mode or view can be shortened to a prefix that names only one of those usable in the current view: `:vol 60`, `:mode shuf`.
-- Tab completes command names usable in the current view, then the argument of `:mode`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
+- Tab completes command names usable in the current view, then the argument of `:mode`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
 - Up recalls earlier lines that start with the typed text; down returns towards it. The history holds 100 lines and lasts until playr exits.
 - Enter runs the line, `esc` cancels, and backspace on an empty line closes the prompt.

@@ -1,7 +1,7 @@
 //! Settings: `settings.toml`, read at startup on top of the defaults.
 //!
 //! `playr_core::settings` reads the file and applies the core's keys; this
-//! module reads the `[keys]` tables it hands back. The default bindings are a
+//! module reads the `[keys]` tables and the `theme` key it hands back. The default bindings are a
 //! settings file too, `keys.toml` beside this module, read by the same code.
 //! Key bindings are `:` command strings, checked by the command parser, so a
 //! key and its command cannot mean different things. Any error stops playr
@@ -15,7 +15,7 @@ use playr_core::settings::{kind, Settings};
 
 use crate::action::{Key, Keymap};
 use crate::command::{self, view_name};
-use crate::View;
+use crate::{Theme, View};
 
 pub use playr_core::settings::default_path;
 
@@ -27,6 +27,7 @@ pub const DEFAULT_KEYS: &str = include_str!("keys.toml");
 pub struct Config {
     pub settings: Settings,
     pub keys: Keymap,
+    pub theme: Theme,
 }
 
 impl Default for Config {
@@ -34,6 +35,7 @@ impl Default for Config {
         let mut config = Config {
             settings: Settings::default(),
             keys: Keymap::empty(),
+            theme: Theme::Dark,
         };
         if let Err(errors) = config.apply(DEFAULT_KEYS) {
             panic!("bad default key bindings: {errors:?}");
@@ -69,8 +71,14 @@ impl Config {
     }
 
     fn apply(&mut self, text: &str) -> Result<(), Vec<String>> {
-        let (tables, mut errors) = self.settings.apply(text, &["keys"]);
+        let (tables, mut errors) = self.settings.apply(text, &["keys", "theme"]);
         for (name, value) in tables {
+            if name.get_ref() == "theme" {
+                if let Err(e) = self.set_theme(value.get_ref()) {
+                    errors.add(value.span().start, e);
+                }
+                continue;
+            }
             let DeValue::Table(keys) = value.get_ref() else {
                 let message = format!("{} cannot be {}", name.get_ref(), kind(value.get_ref()));
                 errors.add(value.span().start, message);
@@ -96,6 +104,18 @@ impl Config {
             }
         }
         errors.finish()
+    }
+
+    fn set_theme(&mut self, value: &DeValue) -> Result<(), String> {
+        let names = || Theme::NAMES.map(|t| t.0).join(", ");
+        let DeValue::String(s) = value else {
+            return Err(format!("theme cannot be {}", kind(value)));
+        };
+        let theme = Theme::NAMES.iter().find(|t| t.0.eq_ignore_ascii_case(s));
+        self.theme = theme
+            .ok_or_else(|| format!("unknown theme {s}; themes: {}", names()))?
+            .1;
+        Ok(())
     }
 
     /// Binds the key named `key` in `view` to the command in `target`.

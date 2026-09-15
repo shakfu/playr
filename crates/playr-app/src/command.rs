@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::action::{Action, Key, Keymap, Slicing, Zoom};
-use crate::{Display, View};
+use crate::{Display, Theme, View};
 use playr_core::audio::Mode;
 use playr_core::samples::MAX_SLICES;
 
@@ -97,6 +97,7 @@ pub const COMMANDS: &[Command] = &[
         "bind a key, in one view or in all",
     ),
     any("unmap", "[VIEW] KEY", "remove a key binding"),
+    any("theme", "THEME", "system, light or dark colours"),
     only(Library, "toggle", "", "select or unselect the track"),
     only(Library, "clear-search", "", "show the whole library again"),
     only(
@@ -132,6 +133,8 @@ pub const COMMANDS: &[Command] = &[
 ];
 
 const MODES: &[(&str, Mode)] = &Mode::NAMES;
+
+const THEMES: &[(&str, Theme)] = &Theme::NAMES;
 
 const VIEWS: &[(&str, View)] = &[
     ("library", Library),
@@ -278,6 +281,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Display(Some(d)) => format!("display {}", d.name()),
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
+        Theme(t) => format!("theme {}", t.name()),
         Slice(Slicing::Region) => "slice region".into(),
         Slice(Slicing::Marks) => "slice marks".into(),
         Slice(Slicing::Equal(n)) => format!("slice {n}"),
@@ -553,6 +557,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             "braille" => Ok(Action::Display(Some(Display::Braille))),
             _ => Err(usage()),
         },
+        "theme" => choose(rest, THEMES, "theme").map(Action::Theme),
         "write" => nothing(Action::WriteSlices),
         "discard" => nothing(Action::DiscardSlices),
         "slice" => match first_word(rest) {
@@ -608,7 +613,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
 /// What Tab can complete `text` to in `view`, as whole command lines.
 ///
 /// The first word completes to the names of commands that work in `view`.
-/// After `mode` or `view` the argument completes to its choices, and after
+/// After `mode`, `theme` or `view` the argument completes to its choices, and after
 /// `playlist` or `rename` to the names in `playlists`.
 pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> {
     let Some((word, rest)) = text.split_once(' ') else {
@@ -623,6 +628,7 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
     let rest = rest.trim_start();
     let choices: Vec<String> = match command.name {
         "mode" => MODES.iter().map(|m| m.0.to_string()).collect(),
+        "theme" => THEMES.iter().map(|t| t.0.to_string()).collect(),
         "view" => VIEWS.iter().map(|v| v.0.to_string()).collect(),
         "playlist" | "rename" => playlists.to_vec(),
         _ => Vec::new(),

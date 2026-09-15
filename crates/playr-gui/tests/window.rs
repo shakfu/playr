@@ -177,6 +177,26 @@ fn a_command_typed_in_the_bar_runs() {
     assert_eq!(model(&harness).input(), &Input::None);
 }
 
+#[test]
+fn the_theme_menu_sets_egui_s_theme() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    let theme = |harness: &Harness<'_, Gui>| harness.ctx.options(|o| o.theme_preference);
+    assert_eq!(theme(&harness), egui::ThemePreference::Dark);
+    harness.get_by_label("View").click();
+    harness.run_steps(2);
+    // A submenu's button carries an arrow after its name.
+    harness
+        .get(egui_kittest::kittest::by().label_contains("Theme"))
+        .hover();
+    harness.run_steps(2);
+    harness.get_by_label("Light").click();
+    harness.run_steps(2);
+    assert_eq!(model(&harness).theme(), playr_app::Theme::Light);
+    assert_eq!(theme(&harness), egui::ThemePreference::Light);
+    assert!(!harness.ctx.global_style().visuals.dark_mode);
+}
+
 /// Puts tracks A, B and C in the selection and shows it.
 fn selecting_all(harness: &mut Harness<'_, Gui>) {
     typing(harness, "aaa2");

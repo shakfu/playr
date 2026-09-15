@@ -133,6 +133,25 @@ fn the_file_changes_keys_and_sets_how_playback_starts() {
 }
 
 #[test]
+fn the_theme_is_a_top_level_setting_both_frontends_read() {
+    use playr_app::Theme;
+    assert_eq!(Config::default().theme, Theme::Dark);
+    assert_eq!(
+        Config::parse("theme = \"Light\"").unwrap().theme,
+        Theme::Light
+    );
+    let errors = Config::parse("volume = 50\ntheme = \"sepia\"\n[keys]\n").unwrap_err();
+    assert_eq!(
+        errors,
+        ["line 2: unknown theme sepia; themes: system, light, dark"]
+    );
+    assert_eq!(
+        Config::parse("theme = 1").unwrap_err(),
+        ["line 1: theme cannot be an integer"]
+    );
+}
+
+#[test]
 fn every_bad_setting_is_reported_with_its_line() {
     let text = r#"volume = 140
 mode = "shufle"

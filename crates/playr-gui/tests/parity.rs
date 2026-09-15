@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use playr_app::action::{Action, Key, Keymap, Slicing, Zoom};
-use playr_app::View;
+use playr_app::{Theme, View};
 use playr_core::audio::Mode;
 use playr_gui::controls;
 
@@ -62,6 +62,7 @@ fn every_action() -> Vec<Action> {
         Action::Display(None),
         Action::WriteSlices,
         Action::DiscardSlices,
+        Action::Theme(Theme::System),
         Action::Map {
             view: None,
             key,
@@ -122,6 +123,7 @@ fn every_action() -> Vec<Action> {
             | Action::Display(_)
             | Action::WriteSlices
             | Action::DiscardSlices
+            | Action::Theme(_)
             | Action::Map { .. }
             | Action::Unmap { .. } => {}
         }

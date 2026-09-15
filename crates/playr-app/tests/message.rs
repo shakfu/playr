@@ -8,7 +8,7 @@ use std::time::Duration;
 use playr_app::action::Key;
 use playr_app::command::parse;
 use playr_app::message::{fmt_time, home_as_tilde, text, Message};
-use playr_app::{Display, View};
+use playr_app::{Display, Theme, View};
 use playr_core::audio::Mode;
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
 
@@ -271,6 +271,7 @@ fn terminal_messages_are_worded() {
             "no playlist under the cursor in the playlists view",
         ),
         (Message::Display(Display::Decibels), "display: db"),
+        (Message::Theme(Theme::Light), "theme: light"),
         (
             Message::Mapped(parse("map selection ctrl-x clear", View::Library).unwrap()),
             "map selection ctrl-x clear",

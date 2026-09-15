@@ -64,7 +64,6 @@ fn main() -> eframe::Result {
                 "playr",
                 options,
                 Box::new(move |cc| {
-                    cc.egui_ctx.set_theme(egui::Theme::Dark);
                     let ctx = cc.egui_ctx.clone();
                     let mut model = Model::waking(
                         start.conn,
@@ -79,14 +78,9 @@ fn main() -> eframe::Result {
                 }),
             )
         }
-        Err(errors) => eframe::run_native(
-            "playr",
-            options,
-            Box::new(|cc| {
-                cc.egui_ctx.set_theme(egui::Theme::Dark);
-                Ok(Box::new(Errors(errors)))
-            }),
-        ),
+        Err(errors) => {
+            eframe::run_native("playr", options, Box::new(|_| Ok(Box::new(Errors(errors)))))
+        }
     }
 }
 

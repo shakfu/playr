@@ -61,6 +61,34 @@ impl View {
     }
 }
 
+/// The colours an interface draws in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Theme {
+    /// The system's appearance in a window; the terminal's own colours in a
+    /// terminal, which cannot reliably report its background.
+    System,
+    Light,
+    #[default]
+    Dark,
+}
+
+impl Theme {
+    /// Each theme's name in commands and settings.
+    pub const NAMES: [(&'static str, Theme); 3] = [
+        ("system", Theme::System),
+        ("light", Theme::Light),
+        ("dark", Theme::Dark),
+    ];
+
+    pub fn name(self) -> &'static str {
+        Theme::NAMES
+            .iter()
+            .find(|t| t.1 == self)
+            .expect("every theme")
+            .0
+    }
+}
+
 /// How a waveform is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Display {

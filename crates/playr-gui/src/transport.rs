@@ -7,15 +7,11 @@ use eframe::egui;
 use playr_app::action::Action;
 
 use crate::controls;
+use crate::palette::Palette;
 use playr_app::message::fmt_time;
 use playr_app::meter::{self, Zone};
 use playr_app::model::{self, Model};
 use playr_core::audio::{speed_for, Mode, State};
-
-/// Colours of the meter's zones, and of marks.
-const GREEN: egui::Color32 = egui::Color32::from_rgb(80, 200, 120);
-const YELLOW: egui::Color32 = egui::Color32::from_rgb(230, 200, 60);
-const RED: egui::Color32 = egui::Color32::from_rgb(230, 80, 70);
 
 /// Draws the transport into `ui` and performs what its controls ask for.
 pub fn show(model: &mut Model, ui: &mut egui::Ui) {
@@ -151,7 +147,7 @@ fn progress(
         let x = rect.left() + rect.width() * fraction(*mark);
         painter.line_segment(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            egui::Stroke::new(2.0, YELLOW),
+            egui::Stroke::new(2.0, Palette::of(visuals).yellow),
         );
     }
 
@@ -174,10 +170,13 @@ fn progress(
 ///
 /// Drawn right to left, so the readouts come first.
 fn level_meter(ui: &mut egui::Ui, loudness: Option<f32>, peak: Option<f32>) {
+    let Palette {
+        green, yellow, red, ..
+    } = *Palette::of(ui.visuals());
     let number = |v: Option<f32>| v.map_or("--".to_string(), |v| format!("{v:.1}"));
     let peak_text = egui::RichText::new(format!("pk {}", number(peak))).monospace();
     ui.label(if peak.is_some_and(meter::clipping) {
-        peak_text.color(RED)
+        peak_text.color(red)
     } else {
         peak_text
     });
@@ -189,9 +188,9 @@ fn level_meter(ui: &mut egui::Ui, loudness: Option<f32>, peak: Option<f32>) {
     if let Some(level) = loudness {
         // One rectangle per zone the level reaches.
         let zones = [
-            (meter::FLOOR_DB, meter::YELLOW_FROM_DB, GREEN),
-            (meter::YELLOW_FROM_DB, meter::RED_FROM_DB, YELLOW),
-            (meter::RED_FROM_DB, 0.0, RED),
+            (meter::FLOOR_DB, meter::YELLOW_FROM_DB, green),
+            (meter::YELLOW_FROM_DB, meter::RED_FROM_DB, yellow),
+            (meter::RED_FROM_DB, 0.0, red),
         ];
         for (from, to, colour) in zones {
             if level > from {
@@ -202,9 +201,9 @@ fn level_meter(ui: &mut egui::Ui, loudness: Option<f32>, peak: Option<f32>) {
     }
     if let Some(level) = peak {
         let colour = match meter::zone(level) {
-            Zone::Green => GREEN,
-            Zone::Yellow => YELLOW,
-            Zone::Red => RED,
+            Zone::Green => green,
+            Zone::Yellow => yellow,
+            Zone::Red => red,
         };
         painter.line_segment(
             [

@@ -7,6 +7,7 @@
 
 pub mod controls;
 pub mod keys;
+pub mod palette;
 mod sampler;
 mod transport;
 mod views;
@@ -19,7 +20,7 @@ use playr_app::action::Action;
 use playr_app::command::{self, view_name};
 use playr_app::dispatch::Frontend;
 use playr_app::model::{Input, Model};
-use playr_app::View;
+use playr_app::{Theme, View};
 use playr_core::audio::State;
 
 /// Ids of the text fields, so keys go to a field that has focus and to the
@@ -45,6 +46,8 @@ pub struct Gui {
     /// The view and cursor row shown last frame, to scroll to a row a key moved to.
     cursor: (View, Option<usize>),
     wheel: sampler::Wheel,
+    /// The theme last handed to egui.
+    theme: Option<Theme>,
 }
 
 impl Gui {
@@ -57,6 +60,7 @@ impl Gui {
             shown: Input::None,
             cursor: (View::Library, None),
             wheel: sampler::Wheel::default(),
+            theme: None,
         }
     }
 
@@ -68,6 +72,7 @@ impl Gui {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.model.refresh();
         self.model.expire_message();
+        self.follow_theme(ui.ctx());
         self.follow_input(ui.ctx());
         self.keys(ui.ctx());
 
@@ -90,6 +95,19 @@ impl Gui {
 
     fn perform(&mut self, action: Action) {
         self.model.perform(action);
+    }
+
+    /// Hands egui the model's theme when it changes, from the settings or `:theme`.
+    fn follow_theme(&mut self, ctx: &egui::Context) {
+        let theme = self.model.theme();
+        if self.theme != Some(theme) {
+            ctx.set_theme(match theme {
+                Theme::System => egui::ThemePreference::System,
+                Theme::Light => egui::ThemePreference::Light,
+                Theme::Dark => egui::ThemePreference::Dark,
+            });
+            self.theme = Some(theme);
+        }
     }
 
     /// Readies the text field of a prompt that has just opened.
@@ -205,7 +223,19 @@ impl Gui {
                 ui.separator();
                 items(ui, controls::FILE_MENU, &mut chosen);
             });
-            ui.menu_button("View", |ui| items(ui, controls::VIEW_MENU, &mut chosen));
+            let theme = Action::Theme(self.model.theme());
+            ui.menu_button("View", |ui| {
+                items(ui, controls::VIEW_MENU, &mut chosen);
+                ui.separator();
+                ui.menu_button("Theme", |ui| {
+                    for control in controls::THEME_MENU {
+                        if ui.radio(control.action == theme, control.label).clicked() {
+                            chosen = Some(control.action.clone());
+                            ui.close();
+                        }
+                    }
+                });
+            });
             ui.menu_button("Playback", |ui| {
                 items(ui, controls::PLAYBACK_MENU, &mut chosen);
                 ui.separator();
@@ -278,7 +308,7 @@ impl Gui {
             self.command_bar(ui);
         } else {
             let text = self.model.message_text().unwrap_or_default().to_string();
-            ui.colored_label(egui::Color32::YELLOW, text);
+            ui.colored_label(palette::Palette::of(ui.visuals()).yellow, text);
         }
         ui.add_space(4.0);
     }

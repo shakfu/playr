@@ -9,7 +9,7 @@ A desktop window with the terminal interface's features, for people who prefer a
 Decisions taken:
 
 - **Toolkit:** egui, through `eframe` 0.36. The design in `docs/architecture.md` already assumes its frame loop.
-- **Look:** egui's own dark style. No theme settings.
+- **Look:** egui's own dark style, unless `theme` or `:theme` chooses light or the system's appearance.
 - **Platforms:** Linux, macOS and Windows, as the terminal.
 
 ## The parity rule
@@ -64,6 +64,7 @@ Every row is a feature the terminal has today.
 | command list | `:help` | a window listing every command by view | `CommandHelp` |
 | command line | `:` prompt, Tab completion, history | a command bar that `:` opens, with completions in a drop-down and the same history | `StartCommand`, `command::parse` |
 | key bindings | `:map`, `:unmap` | the same commands | `Map`, `Unmap` |
+| theme | `:theme`; `system` and `dark` use the terminal's ANSI colours, `light` a 256-colour set | View, Theme; `system` follows the system's appearance | `Theme` |
 | sampler waveform | eighth blocks, dB, Braille | painted: envelope, dB, and a min/max line waveform | `Display` |
 | zoom | `z` `Z` `0` | mouse wheel over the waveform; the same keys | `Zoom` |
 | sampler seek and mark | keys only | click to seek; a modifier-click adds a mark at that point | `SeekTo`, `MarkAt` |

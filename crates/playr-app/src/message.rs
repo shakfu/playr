@@ -12,7 +12,7 @@ use playr_core::notice::{Notice, Outcome, Refusal, Task};
 
 use crate::action::{Action, Key};
 use crate::command;
-use crate::{Display, View};
+use crate::{Display, Theme, View};
 
 /// A message for the person using the interface.
 #[derive(Debug, Clone, PartialEq)]
@@ -23,6 +23,7 @@ pub enum Message {
     NoMatches,
     NoPlaylistUnderCursor,
     Display(Display),
+    Theme(Theme),
     /// A `map` command took effect; holds the `Action::Map`.
     Mapped(Action),
     Unmapped(Key),
@@ -94,6 +95,7 @@ pub fn text(message: &Message) -> String {
             "no playlist under the cursor in the playlists view".into()
         }
         Message::Display(display) => format!("display: {}", display.name()),
+        Message::Theme(theme) => format!("theme: {}", theme.name()),
         Message::Mapped(map) => command::line(map, None),
         Message::Unmapped(key) => format!("unmapped {key}"),
         Message::NotBound { key, view } => {

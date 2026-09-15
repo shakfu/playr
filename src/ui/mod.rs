@@ -3,6 +3,7 @@
 //! One thread: it renders, reads keys, and talks to the player over a channel.
 //! Nothing here blocks on audio.
 
+pub mod palette;
 pub mod render;
 pub mod sampler;
 
@@ -10,7 +11,7 @@ use std::time::Duration;
 
 pub use playr_app::dispatch::Confirm;
 pub use playr_app::model::{Input, Snapshot};
-pub use playr_app::View;
+pub use playr_app::{Theme, View};
 use ratatui::crossterm::event::{
     self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
@@ -35,6 +36,8 @@ pub struct App {
     offsets: Offsets,
     /// Rows the key or command list is scrolled by.
     help_scroll: usize,
+    /// False when `NO_COLOR` asks for none; see [`Screen::colour`].
+    colour: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -93,6 +96,9 @@ pub struct Screen<'a> {
     pub help_scroll: usize,
     pub message: Option<&'a str>,
     pub lists: Lists,
+    /// Whether to draw in colour. Without it the cursor row is reversed.
+    pub colour: bool,
+    pub theme: Theme,
 }
 
 impl<'a> Screen<'a> {
@@ -118,7 +124,14 @@ impl<'a> Screen<'a> {
             help_scroll: 0,
             message: None,
             lists: Lists::default(),
+            colour: true,
+            theme: Theme::Dark,
         }
+    }
+
+    /// The colours [`Screen::theme`] draws in.
+    pub fn palette(&self) -> &'static palette::Palette {
+        palette::of(self.theme)
     }
 
     /// The track list the library pane is showing.
@@ -153,12 +166,18 @@ impl App {
             model,
             offsets: Offsets::default(),
             help_scroll: 0,
+            colour: true,
         }
     }
 
     /// Sets the library file `:scan` writes to when playr started without one.
     pub fn set_library_path(&mut self, path: std::path::PathBuf) {
         self.model.session_mut().set_library_path(path);
+    }
+
+    /// Whether to draw in colour; false when `NO_COLOR` is set.
+    pub fn set_colour(&mut self, colour: bool) {
+        self.colour = colour;
     }
 
     /// Borrows the state the renderer needs.
@@ -175,6 +194,8 @@ impl App {
             playlists: m.session().playlists(),
             input: m.input(),
             help_scroll: self.help_scroll,
+            colour: self.colour,
+            theme: m.theme(),
             message: m.message_text(),
             lists: Lists {
                 library: scroll(c.library, o.library),

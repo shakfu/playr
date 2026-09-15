@@ -272,6 +272,10 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
         ["rename Late Night", "rename dawn"]
     );
     assert!(completions("rename ", Library, &playlists).is_empty());
+    assert_eq!(
+        completions("theme ", Playlists, &playlists),
+        ["theme system", "theme light", "theme dark"]
+    );
     assert!(completions("seek ", Library, &playlists).is_empty());
     assert!(completions("zz ", Library, &playlists).is_empty());
 }
@@ -496,6 +500,7 @@ fn command_lines_round_trip_through_parse() {
         "volume +2.5",
         "speed -3",
         "mode repeat-one",
+        "theme light",
         "mark 1.25",
         "save late night",
         "playlist late night",

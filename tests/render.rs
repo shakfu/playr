@@ -1,7 +1,7 @@
 //! Rendering tests against a headless backend. No audio device involved.
 
 use playr::ui::render::{self, scroll_offset};
-use playr::ui::{Drawn, Input, Lists, Screen, Scroll, Snapshot, View};
+use playr::ui::{Drawn, Input, Lists, Screen, Scroll, Snapshot, Theme, View};
 use playr_app::action::Keymap;
 use playr_app::sampler::Sampler;
 use playr_core::audio::{Spec, State, Status};
@@ -42,6 +42,8 @@ struct Case<'a> {
     /// The key map; the defaults when unset.
     keys: Option<&'a Keymap>,
     sampler: Sampler,
+    colour: bool,
+    theme: Theme,
 }
 
 impl<'a> Case<'a> {
@@ -62,6 +64,8 @@ impl<'a> Case<'a> {
             help_scroll: 0,
             keys: None,
             sampler: Sampler::default(),
+            colour: true,
+            theme: Theme::Dark,
         }
     }
 
@@ -120,6 +124,16 @@ impl<'a> Case<'a> {
         self
     }
 
+    fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    fn no_colour(mut self) -> Self {
+        self.colour = false;
+        self
+    }
+
     fn size(mut self, width: u16, height: u16) -> Self {
         self.width = width;
         self.height = height;
@@ -168,6 +182,8 @@ impl<'a> Case<'a> {
             input: self.input,
             help_scroll: self.help_scroll,
             message: self.message,
+            colour: self.colour,
+            theme: self.theme,
             lists: Lists {
                 library: at(self.all.is_empty(), cursor),
                 selection: at(self.selection.is_empty(), cursor),
@@ -1152,6 +1168,99 @@ fn sampling(path: &str, position: Duration, marks: &[Duration]) -> Snapshot {
     snapshot.position = position;
     snapshot.marks = marks.to_vec();
     snapshot
+}
+
+#[test]
+fn without_colour_no_cell_is_coloured_and_the_cursor_row_is_reversed() {
+    use playr_app::sampler::Display;
+    use ratatui::style::{Color, Modifier};
+    let tracks = vec![track("Alpha", "A", "X", 60), track("Beta", "B", "Y", 90)];
+    let snapshot = playing(Some(-2.0), Some(-1.0));
+    let row_of = |buf: &ratatui::buffer::Buffer, text: &str| {
+        (0..buf.area.height)
+            .find(|&y| {
+                let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                line.contains(text)
+            })
+            .expect("no such row")
+    };
+    let reversed =
+        |buf: &ratatui::buffer::Buffer, y: u16| buf[(5, y)].modifier.contains(Modifier::REVERSED);
+
+    let case = || Case::new(View::Library, &snapshot).all(&tracks).selected(1);
+    let buf = case().buffer();
+    let beta = row_of(&buf, "Beta");
+    assert_eq!(
+        buf[(5, beta)].bg,
+        Color::DarkGray,
+        "in colour, a background"
+    );
+    assert!(!reversed(&buf, beta));
+
+    let buf = case().no_colour().buffer();
+    let uncoloured = |buf: &ratatui::buffer::Buffer| {
+        buf.content()
+            .iter()
+            .all(|c| (c.fg, c.bg) == (Color::Reset, Color::Reset))
+    };
+    assert!(uncoloured(&buf), "library with the meter");
+    assert!(reversed(&buf, row_of(&buf, "Beta")), "cursor row");
+    assert!(!reversed(&buf, row_of(&buf, "Alpha")), "other rows");
+
+    let paused = sampling(
+        "/m/t.wav",
+        Duration::from_secs(1),
+        &[Duration::from_secs(2)],
+    );
+    let buf = Case::new(View::Sampler, &paused)
+        .sampler(sampler_with("/m/t.wav", Display::Envelope))
+        .no_colour()
+        .buffer();
+    assert!(uncoloured(&buf), "sampler envelope");
+}
+
+#[test]
+fn the_light_theme_draws_only_from_the_256_colour_table() {
+    use playr_app::sampler::Display;
+    use ratatui::style::Color;
+    let fixed = |buf: &ratatui::buffer::Buffer| {
+        buf.content()
+            .iter()
+            .flat_map(|c| [c.fg, c.bg])
+            .all(|c| matches!(c, Color::Reset | Color::Indexed(16..)))
+    };
+    let tracks = vec![track("Alpha", "A", "X", 60), track("Beta", "B", "Y", 90)];
+    let snapshot = playing(Some(-2.0), Some(-1.0));
+    let buf = Case::new(View::Library, &snapshot)
+        .all(&tracks)
+        .selection(&tracks[..1])
+        .theme(Theme::Light)
+        .buffer();
+    assert!(fixed(&buf), "library with the meter");
+    assert_eq!(buf[(5, 2)].bg, playr::ui::palette::LIGHT.selected_bg);
+
+    let paused = sampling(
+        "/m/t.wav",
+        Duration::from_secs(1),
+        &[Duration::from_secs(2)],
+    );
+    for display in [Display::Envelope, Display::Braille] {
+        let buf = Case::new(View::Sampler, &paused)
+            .sampler(sampler_with("/m/t.wav", display))
+            .theme(Theme::Light)
+            .buffer();
+        assert!(fixed(&buf), "sampler, {display:?}");
+    }
+    // `dark` is the ANSI set, as `system` is.
+    let dark = Case::new(View::Library, &snapshot)
+        .all(&tracks)
+        .theme(Theme::Dark)
+        .buffer();
+    let system = Case::new(View::Library, &snapshot)
+        .all(&tracks)
+        .theme(Theme::System)
+        .buffer();
+    assert_eq!(dark, system);
 }
 
 /// Four seconds at 1,600 frames a second, so 100 ms columns fall on whole

@@ -18,7 +18,7 @@ use playr_core::session::Session;
 
 use crate::action::{Action, Keymap, Slicing, Zoom};
 use crate::message::Message;
-use crate::{Display, View};
+use crate::{Display, Theme, View};
 
 /// A destructive action held until the listener confirms it.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +85,7 @@ pub enum Presentation {
     Zoom(Zoom),
     /// Draw the waveform this way, or the next way when `None`.
     Display(Option<Display>),
+    Theme(Theme),
 }
 
 /// What [`dispatch`] needs from a frontend.
@@ -263,6 +264,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Slice(slicing) => slice(f, slicing),
         Action::Zoom(zoom) => f.present(Presentation::Zoom(zoom)),
         Action::Display(display) => f.present(Presentation::Display(display)),
+        Action::Theme(theme) => f.present(Presentation::Theme(theme)),
         Action::WriteSlices => match f.take_plan() {
             Some(plan) => {
                 f.session_mut().write_slices(plan);

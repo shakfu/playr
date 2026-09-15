@@ -258,12 +258,14 @@ fn commands_parse_and_dispatch_in_the_frontend_s_view() {
     run(&mut f, "view sampler");
     run(&mut f, "zoom +");
     run(&mut f, "display braille");
+    run(&mut f, "theme light");
     run(&mut f, "keys");
     assert_eq!(
         f.shown,
         [
             Presentation::Zoom(playr_app::action::Zoom::In),
             Presentation::Display(Some(playr_app::Display::Braille)),
+            Presentation::Theme(playr_app::Theme::Light),
             Presentation::KeyList
         ]
     );

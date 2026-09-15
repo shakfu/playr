@@ -2,6 +2,16 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2]
+
+### Added
+
+- Light and dark themes, set by `theme = "system"`, `"light"` or `"dark"` in `settings.toml`, by `:theme` until playr exits, and in the window by View, Theme. `dark` is the default in both, as before. `system` follows the system's appearance in the window. A terminal cannot reliably report its background, so in the terminal `system` and `dark` both use the terminal's own ANSI colours. The terminal's light set uses the 256-colour table over remapped ANSI colours: terminal themes rarely change that table, and ANSI yellow and cyan are unreadable on xterm-style light palettes. Tests hold both light sets and the window's dark set to WCAG contrast: 4.5:1 for text, 3:1 for lines and bars. Library API: `Theme`, `Action::Theme`, `Presentation::Theme`, `Message::Theme`, `Config::theme`, `Model::theme`, `Screen::theme`, `playr::ui::palette`, `playr_gui::palette`.
+
+### Fixed
+
+- With `NO_COLOR` set, the terminal did not highlight the cursor row. crossterm honours `NO_COLOR` by sending an SGR reset in place of each colour, which also clears bold and reverse video. playr now removes colour itself and reverses the cursor row. Library API: `Screen::colour`, `App::set_colour`.
+
 ## [0.6.1]
 
 ### Changed

@@ -2,7 +2,7 @@
 #
 # ~/.config/playr/settings.toml is read on top of these, so it only needs the
 # lines it changes. The format is described in README.md, under Configuration.
-# Key bindings are the terminal's, in crates/playr-app/src/keys.toml.
+# The theme and key bindings are in crates/playr-app/src/keys.toml.
 
 # Percent, 0 to 100.
 volume = 100

@@ -89,6 +89,18 @@ fn a_question_waits_for_its_answer() {
 }
 
 #[test]
+fn the_theme_starts_from_the_settings_and_changes_by_command() {
+    use playr_app::Theme;
+    let config = Config::parse("theme = \"light\"").unwrap();
+    let conn = db::open_memory().unwrap();
+    let mut model = Model::new(conn, common::fake_player().0, Vec::new(), config);
+    assert_eq!(model.theme(), Theme::Light);
+    model.run_command("theme dark");
+    assert_eq!(model.theme(), Theme::Dark);
+    assert_eq!(model.message(), Some(&Message::Theme(Theme::Dark)));
+}
+
+#[test]
 fn command_lines_run_and_are_remembered_even_when_they_fail() {
     let (mut model, _dir) = model();
     model.set_input(Input::Command(CommandLine::default()));

@@ -1,7 +1,11 @@
-# playr's default key bindings, the [keys] tables of settings.toml.
+# playr's default theme and key bindings, which both frontends read from
+# settings.toml.
 #
 # The rest of the defaults are in crates/playr-core/src/settings.toml. The
 # format is described in README.md, under Configuration.
+
+# system, light or dark.
+theme = "dark"
 
 # Keys for every view. Each value is a : command; "nop" makes a key do nothing.
 [keys]
