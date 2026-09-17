@@ -18,7 +18,9 @@ What is missing, grouped by priority:
 
 - [ ] **macOS signing and notarization.** `playr.app` is unsigned, so a downloaded copy is refused until allowed in System Settings. Needs an Apple Developer account and the workflow's secrets.
 
-### Both interfaces
+### All interfaces
+
+- [ ] **refresh/resync library**. Re-scans the given the music library for additions.
 
 - [ ] **Media keys and the now-playing panel.** The keyboard's play and pause keys, MPRIS on Linux, and the macOS and Windows now-playing panels. Under the parity rule in `docs/dev/gui.md`, the terminal and the window gain them together.
 
