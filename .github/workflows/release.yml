@@ -113,8 +113,11 @@ jobs:
 
       # The TouchOSC layout is the same for every platform, so one build makes
       # it, from that build's OSC addresses.
-      - uses: astral-sh/setup-uv@v6
+      # No lock file to key a cache on, and the layout is built once a release.
+      - uses: astral-sh/setup-uv@v10.1.0
         if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          enable-cache: false
 
       - name: TouchOSC layout
         if: matrix.target == 'x86_64-unknown-linux-gnu'
