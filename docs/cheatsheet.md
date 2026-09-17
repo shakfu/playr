@@ -8,7 +8,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 - `TIME` is seconds, `m:ss` or `h:mm:ss`, as in `90`, `1:23`, `1:02:03`.
 
-- A leading `+` or `-` makes a number relative: `:seek +10`, `:volume -5`, `:speed +1`. Without a sign it is absolute.
+- A leading `+` or `-` makes a number relative: `:seek +10`, `:volume -5`, `:speed +1`. Without a sign it is absolute. `=` makes a signed speed absolute: `:speed =-3`.
 
 - `NAME` and `QUERY` run to the end of the line, so spaces need no quotes.
 
@@ -44,7 +44,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:stop`                               | `x`                     | stop                                        |
 | `:seek TIME \| +TIME \| -TIME`        | left, right, with shift | seek to a time, or by one: 1:23, +10        |
 | `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the volume, or change it: 60, +10       |
-| `:speed N \| +N \| -N`                | `(` `)` `\`             | set varispeed in semitones, or change it    |
+| `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | set varispeed in semitones, or change it    |
 | `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |
 | `:mark [TIME]`                        | `b`                     | mark the playing position, or a time        |
 | `:unmark`                             | `B`                     | undo the last mark                          |

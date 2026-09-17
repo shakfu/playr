@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>playr</title>
+<style>
+/* Colour roles as the terminal names them; see src/ui/palette.rs. */
+:root {
+  --bg: #23272e; --panel: #2b3038; --fg: #d8dee9; --dim: #7b8494; --line: #3b424d;
+  --accent: #88c0d0; --progress: #8fbcbb; --progress-text: #1d2127;
+  --selected-bg: #434c5a; --dim-selected: #b6bdc9;
+  --name: #b5bd68; --notice: #ebcb8b; --mark: #ebcb8b;
+  --green: #a3be8c; --yellow: #ebcb8b; --red: #bf616a;
+  --row: 26px; --gap: 8px; --radius: 4px;
+  --font: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+:root[data-theme="light"] {
+  --bg: #ffffff; --panel: #f3f4f6; --fg: #1c1c1c; --dim: #767676; --line: #d0d0d0;
+  --accent: #005f87; --progress: #5f87af; --progress-text: #000000;
+  --selected-bg: #e4e4e4; --dim-selected: #585858;
+  --name: #005f00; --notice: #875f00; --mark: #875f00;
+  --green: #008700; --yellow: #af8700; --red: #d70000;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --bg: #ffffff; --panel: #f3f4f6; --fg: #1c1c1c; --dim: #767676; --line: #d0d0d0;
+    --accent: #005f87; --progress: #5f87af; --progress-text: #000000;
+    --selected-bg: #e4e4e4; --dim-selected: #585858;
+    --name: #005f00; --notice: #875f00; --mark: #875f00;
+    --green: #008700; --yellow: #af8700; --red: #d70000;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.4 var(--font);
+  display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); overflow: hidden;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+}
+button, input, select {
+  font: inherit; color: inherit; background: transparent;
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+button { padding: 4px 10px; cursor: pointer; min-height: 30px; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, .list:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+input[type=search], input[type=text] { padding: 4px 8px; min-height: 30px; min-width: 0; }
+select { padding: 4px 6px; min-height: 30px; background: var(--bg); }
+input[type=range] { accent-color: var(--accent); min-width: 0; }
+.dim { color: var(--dim); }
+[hidden] { display: none !important; }
+
+/* Tabs and search, as the terminal's top line. */
+header {
+  display: flex; gap: var(--gap); align-items: center; padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+nav { display: flex; gap: 4px; flex: 1; min-width: 0; }
+.tab { border: none; color: var(--dim); padding: 4px 10px; }
+.tab[aria-selected="true"] { color: var(--accent); font-weight: 700; }
+#search { width: 18rem; }
+
+/* The list, drawn as the terminal's table. */
+main { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); min-height: 0; }
+.toolbar { grid-row: 1; display: flex; gap: var(--gap); padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.list { grid-row: 2; position: relative; overflow-y: auto; overscroll-behavior: contain; outline: none; }
+.spacer { position: relative; }
+.row {
+  position: absolute; left: 0; right: 0; height: var(--row);
+  display: grid; align-items: center; column-gap: 16px; padding: 0 12px 0 4px;
+  grid-template-columns: 1.5em 2em minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr) 4.5em 2.5em;
+  grid-template-areas: "cur sel artist album title time menu";
+  cursor: default; user-select: none; -webkit-user-select: none;
+}
+.row.playlist { grid-template-columns: 1.5em minmax(0, 1fr) 8em 2.5em; grid-template-areas: "cur name tracks menu"; }
+.row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .cur { grid-area: cur; color: var(--accent); }
+.row .sel { grid-area: sel; }
+.row .artist { grid-area: artist; color: var(--name); }
+.row .name { grid-area: name; color: var(--name); }
+.row .album { grid-area: album; color: var(--dim); }
+.row .title { grid-area: title; }
+.row .time { grid-area: time; color: var(--dim); text-align: right; }
+.row .tracks { grid-area: tracks; color: var(--dim); text-align: right; }
+.row .menu { grid-area: menu; border: none; padding: 0; min-height: 0; color: var(--dim); visibility: hidden; }
+.row:hover .menu, .row.cursor .menu { visibility: visible; }
+.row .sel button { border: none; padding: 0; min-height: 0; width: 100%; color: var(--dim); }
+.row .sel button[aria-pressed="true"] { color: var(--mark); font-weight: 700; }
+.row.cursor { background: var(--selected-bg); font-weight: 700; }
+.row.cursor .album, .row.cursor .time, .row.cursor .tracks { color: var(--dim-selected); }
+.row.playing .title { color: var(--accent); }
+.row.loading { color: var(--dim); }
+.empty { padding: 16px 12px; color: var(--dim); margin: 0; }
+
+/* The transport, as the terminal's bottom lines. */
+footer {
+  border-top: 1px solid var(--line); padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px;
+}
+.now { display: flex; gap: 12px; align-items: baseline; min-width: 0; }
+.now strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now .dim { white-space: nowrap; }
+.progress-row { display: flex; gap: 10px; align-items: center; }
+.clock { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bar {
+  position: relative; flex: 1; height: 18px; background: var(--panel);
+  border-radius: 2px; touch-action: none; cursor: pointer;
+}
+.bar .fill { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--progress); border-radius: 2px; }
+.bar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--mark); }
+.bar .hover { position: absolute; bottom: 22px; transform: translateX(-50%); padding: 1px 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px; pointer-events: none; }
+.controls, .settings { display: flex; gap: var(--gap); align-items: center; flex-wrap: wrap; }
+.group { display: flex; gap: 4px; align-items: center; }
+.sep { width: 1px; align-self: stretch; background: var(--line); }
+.settings label { display: flex; gap: 6px; align-items: center; }
+#volume, #speed { width: 8rem; }
+.num { font-variant-numeric: tabular-nums; white-space: pre; }
+.status { display: flex; gap: var(--gap); align-items: center; justify-content: space-between; }
+#message { color: var(--notice); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.meter { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.levels { position: relative; width: 12rem; height: 12px; background: var(--panel); border-radius: 2px; overflow: hidden; }
+/* Zones at -18 and -6 dB on a -40 dB to full scale bar, as in playr_app::meter. */
+.levels .zones { position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+  background: linear-gradient(to right, var(--green) 0 55%, var(--yellow) 55% 85%, var(--red) 85%); }
+.levels .cover { position: absolute; top: 0; right: 0; bottom: 0; width: 100%; background: var(--panel); }
+.levels .peak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fg); }
+.clip { color: var(--red); }
+.more-toggle { display: none; }
+
+/* The command line opens over the status line. */
+#commandbar { display: flex; gap: 6px; align-items: center; }
+#commandbar input { flex: 1; }
+#completions { color: var(--dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 40%; }
+
+dialog {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
+  padding: 16px; max-width: min(36rem, calc(100vw - 32px));
+}
+dialog::backdrop { background: rgb(0 0 0 / 0.45); }
+dialog h2 { font-size: 1em; margin: 0 0 12px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog .actions { display: flex; gap: var(--gap); justify-content: flex-end; margin-top: 16px; }
+dialog input[type=text] { width: 100%; }
+#list-dialog { width: min(42rem, calc(100vw - 32px)); }
+#list-rows { display: grid; grid-template-columns: max-content 1fr; column-gap: 20px; row-gap: 2px; overflow-y: auto; max-height: 60vh; }
+#list-rows .heading { grid-column: 1 / -1; color: var(--accent); margin-top: 10px; }
+#list-rows .keys { color: var(--name); }
+.sheet { width: min(24rem, calc(100vw - 32px)); }
+.sheet #sheet-items button { display: block; width: 100%; text-align: left; margin-top: 6px; min-height: 40px; }
+
+/* A tablet: no album column. */
+@media (max-width: 1000px) {
+  .row { grid-template-columns: 1.5em 2em minmax(0, 1.4fr) minmax(0, 1fr) 4.5em 2.5em;
+    grid-template-areas: "cur sel title artist time menu"; }
+  .row .album { display: none; }
+  #search { width: 12rem; }
+}
+
+/* A phone: two-line rows, big targets, and the less used controls behind More. */
+@media (max-width: 640px) {
+  :root { --row: 56px; }
+  body { font-size: 15px; }
+  button { min-height: 44px; }
+  select, input[type=search], input[type=text] { min-height: 44px; }
+  header { flex-wrap: wrap; padding: 6px 8px; }
+  nav { flex-basis: 100%; }
+  .tab { flex: 1; padding: 4px; }
+  #search { flex: 1; width: auto; }
+  .row {
+    grid-template-columns: 1em 2.5em minmax(0, 1fr) minmax(0, 1fr) 4em 2.75em;
+    grid-template-rows: auto auto;
+    grid-template-areas: "cur sel title title time menu" "cur sel artist album album menu";
+    row-gap: 0; column-gap: 8px; padding: 4px 4px 4px 2px; align-content: center;
+  }
+  .row .album { display: block; text-align: right; }
+  .row .menu { visibility: visible; min-height: 44px; }
+  .row .sel button { min-height: 44px; }
+  .row.playlist { grid-template-columns: 1em minmax(0, 1fr) auto 2.75em; grid-template-rows: auto; grid-template-areas: "cur name tracks menu"; }
+  footer { padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); }
+  .controls .group { flex: 1 1 100%; }
+  .controls .group button { flex: 1; padding: 4px 2px; }
+  .controls .sep { display: none; }
+  .extra[data-open="false"] { display: none; }
+  .more-toggle { display: inline-block; }
+  .settings label.slider { flex: 1 1 100%; }
+  #volume, #speed { flex: 1; width: auto; }
+  .levels { width: 5rem; }
+  .keys-hint { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <nav role="tablist" aria-label="Views">
+    <button class="tab" role="tab" data-view="library" aria-selected="true">Library <span class="num" data-count="library">0</span></button>
+    <button class="tab" role="tab" data-view="selection" aria-selected="false">Selection <span class="num" data-count="selection">0</span></button>
+    <button class="tab" role="tab" data-view="playlists" aria-selected="false">Playlists <span class="num" data-count="playlists">0</span></button>
+  </nav>
+  <input id="search" type="search" placeholder="/ search" aria-label="Search the library" autocomplete="off" spellcheck="false">
+  <button id="menu-button" aria-haspopup="dialog">Menu</button>
+</header>
+
+<main>
+  <div class="toolbar" id="selection-bar" hidden>
+    <button data-command="save">Save as playlist</button>
+    <button data-command="clear">Clear selection</button>
+  </div>
+  <div class="list" id="list" role="listbox" tabindex="0" aria-label="Tracks">
+    <div class="spacer" id="spacer"></div>
+    <p class="empty" id="empty" hidden></p>
+  </div>
+</main>
+
+<footer>
+  <div class="now"><span class="dim" aria-hidden="true">&gt;</span><strong id="now">nothing playing</strong><span class="dim" id="format"></span></div>
+  <div class="progress-row">
+    <span class="clock" id="position">0:00</span>
+    <div class="bar" id="bar" role="slider" tabindex="0" aria-label="Position; shift-click marks" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+      <div class="fill" id="fill"></div>
+      <div id="ticks"></div>
+      <span class="hover clock" id="hover" hidden></span>
+    </div>
+    <span class="clock" id="duration">0:00</span>
+  </div>
+  <div class="controls">
+    <div class="group">
+      <button data-command="prev">Prev</button>
+      <button data-command="pause" id="pause">Play</button>
+      <button data-command="stop">Stop</button>
+      <button data-command="next">Next</button>
+    </div>
+    <span class="sep"></span>
+    <div class="group">
+      <button data-command="prev-mark" aria-label="Previous mark">&lt; Mark</button>
+      <button data-command="mark">Mark</button>
+      <button data-command="unmark" aria-label="Undo mark">Undo</button>
+      <button data-command="next-mark" aria-label="Next mark">Mark &gt;</button>
+      <button data-command="delmarks" aria-label="Clear marks">Clear</button>
+    </div>
+  </div>
+  <div class="extra" id="extra" data-open="false">
+    <div class="settings">
+      <label class="slider">vol <input id="volume" type="range" min="0" max="100" step="1" value="100"> <span class="num" id="volume-value">100%</span></label>
+      <label class="slider">speed <input id="speed" type="range" min="-12" max="12" step="1" value="0"> <span class="num" id="speed-value">1.00x (+0 st)</span></label>
+      <button data-command="speed 0">Normal speed</button>
+      <label>mode <select id="mode">
+        <option value="normal">normal</option><option value="shuffle">shuffle</option>
+        <option value="repeat">repeat</option><option value="repeat-one">repeat one</option>
+      </select></label>
+    </div>
+  </div>
+  <div class="status" id="status">
+    <div class="meter" aria-label="Level">
+      <div class="levels" aria-hidden="true"><div class="zones"></div><div class="cover" id="cover"></div><div class="peak" id="peak" hidden></div></div>
+      <span class="num" id="lufs">  -- LUFS</span><span class="num" id="pk">pk   --</span>
+    </div>
+    <span id="message" role="status" aria-live="polite"></span>
+    <button class="keys-hint" data-command="keys">? keys</button>
+    <button class="more-toggle" id="more" aria-expanded="false" aria-controls="extra">More</button>
+  </div>
+  <div id="commandbar" hidden>
+    <span class="dim">:</span>
+    <input id="command" type="text" aria-label="Command" autocomplete="off" spellcheck="false">
+    <span id="completions"></span>
+  </div>
+</footer>
+
+<dialog id="confirm-dialog">
+  <h2>Confirm</h2>
+  <p id="question"></p>
+  <div class="actions"><button id="no">No</button><button id="yes">Yes</button></div>
+</dialog>
+
+<dialog id="name-dialog">
+  <h2 id="name-heading">Save the selection as</h2>
+  <input id="name" type="text" autocomplete="off" spellcheck="false" aria-labelledby="name-heading">
+  <div class="actions"><button id="name-cancel">Cancel</button><button id="name-ok">OK</button></div>
+</dialog>
+
+<dialog id="list-dialog">
+  <h2 id="list-heading">Keys</h2>
+  <div id="list-rows"></div>
+  <div class="actions"><button id="list-close">Close</button></div>
+</dialog>
+
+<dialog id="sheet" class="sheet">
+  <h2 id="sheet-heading"></h2>
+  <div id="sheet-items"></div>
+  <div class="actions"><button id="sheet-close">Close</button></div>
+</dialog>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const PAGE = 200;
+
+let state = null;         // the latest screen from the server
+let keys = {};            // view -> key name -> command line, or null for nothing
+let rescan = false;
+let errorUntil = 0;
+let shownInput = "none";
+
+// ---- talking to the server ----
+
+function fail(text) {
+  $("message").textContent = text;
+  errorUntil = Date.now() + 4000;
+}
+
+// POST `body` to `path`, or GET without one. Returns the JSON answer, true for
+// an empty one, or null after showing why the request failed.
+async function call(path, body) {
+  try {
+    const init = body === undefined ? {} : { method: "POST", body };
+    const response = await fetch(path, init);
+    if (!response.ok) {
+      fail(await response.text());
+      return null;
+    }
+    return response.status === 204 ? true : await response.json();
+  } catch (e) {
+    fail("playr-server did not answer");
+    return null;
+  }
+}
+
+const run = line => call("/command", line);
+
+function time(secs) {
+  secs = Math.max(0, Math.floor(secs || 0));
+  const h = Math.floor(secs / 3600), m = Math.floor(secs / 60) % 60, s = secs % 60;
+  const ss = String(s).padStart(2, "0");
+  return h ? h + ":" + String(m).padStart(2, "0") + ":" + ss : m + ":" + ss;
+}
+
+function span(cls, text) {
+  const s = document.createElement("span");
+  s.className = cls;
+  s.textContent = text == null ? "" : text;
+  return s;
+}
+
+function button(label, onclick) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.addEventListener("click", onclick);
+  return b;
+}
+
+// ---- the list: only the rows in view are drawn, and fetched a page at a time ----
+
+const list = {
+  view: "library",
+  revision: null,
+  pages: new Map(),     // first row of a page -> its rows, or "loading"
+  cursor: null,         // the cursor followed last
+  clicked: false,       // the page moved the cursor, so it is not scrolled to
+};
+
+function rowHeight() {
+  return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row")) || 26;
+}
+
+function rowAt(i) {
+  const start = Math.floor(i / PAGE) * PAGE, page = list.pages.get(start);
+  return Array.isArray(page) ? page[i - start] : undefined;
+}
+
+async function loadPage(start) {
+  if (list.pages.has(start)) return;
+  list.pages.set(start, "loading");
+  const view = list.view, revision = list.revision;
+  const answer = await call(`/rows?view=${view}&start=${start}&count=${PAGE}`);
+  // A page for a list since replaced is dropped.
+  if (view !== list.view || revision !== list.revision) return;
+  if (!answer) { list.pages.delete(start); return; }
+  list.pages.set(start, answer.rows);
+  drawRows();
+}
+
+function drawRows() {
+  if (!state) return;
+  const box = $("list"), spacer = $("spacer"), h = rowHeight();
+  const total = state.counts[list.view];
+  spacer.style.height = total * h + "px";
+  const first = Math.max(0, Math.floor(box.scrollTop / h) - 5);
+  const last = Math.min(total, Math.ceil((box.scrollTop + box.clientHeight) / h) + 5);
+  for (let p = Math.floor(first / PAGE) * PAGE; p < last; p += PAGE) loadPage(p);
+
+  const cursor = state.cursors[list.view];
+  const rows = [];
+  for (let i = first; i < last; i++) rows.push(drawRow(i, rowAt(i), cursor, h));
+  spacer.replaceChildren(...rows);
+
+  const empty = $("empty");
+  empty.hidden = total > 0;
+  if (total === 0) {
+    empty.textContent = list.view === "library"
+      ? (state.searching ? "No matches. Esc in the search field clears it." : "The library is empty.")
+      : list.view === "selection" ? "The selection is empty. Tap - on a library row to add it."
+      : "No playlists. Build a selection, then save it.";
+  }
+}
+
+function drawRow(i, row, cursor, h) {
+  const el = document.createElement("div");
+  el.className = "row";
+  el.style.top = i * h + "px";
+  el.setAttribute("role", "option");
+  el.id = "row-" + i;
+  el.dataset.index = i;
+  const isCursor = i === cursor;
+  el.setAttribute("aria-selected", String(isCursor));
+  el.append(span("cur", isCursor ? ">" : ""));
+  if (!row) {
+    el.classList.add("loading");
+    el.append(span("title", "..."));
+    return el;
+  }
+  if (isCursor) el.classList.add("cursor");
+  if (list.view === "playlists") {
+    el.classList.add("playlist");
+    el.append(span("name", row.name), span("tracks", row.tracks + (row.tracks === 1 ? " track" : " tracks")));
+  } else {
+    const sel = span("sel", "");
+    if (list.view === "library") {
+      const b = document.createElement("button");
+      // As the terminal marks a track in the selection.
+      b.textContent = row.selected ? "+" : "-";
+      b.setAttribute("aria-pressed", String(row.selected));
+      b.setAttribute("aria-label", row.selected ? "Unselect" : "Select");
+      b.dataset.rowCommand = "toggle";
+      sel.append(b);
+    }
+    el.append(sel, span("artist", row.artist), span("album", row.album),
+      span("title", row.title), span("time", row.time || "-"));
+    if (row.key === state.path) el.classList.add("playing");
+  }
+  const menu = document.createElement("button");
+  menu.className = "menu";
+  menu.textContent = "...";
+  menu.setAttribute("aria-label", "Actions for this row");
+  menu.dataset.rowMenu = "1";
+  el.append(menu);
+  return el;
+}
+
+// A cursor moved by a key or a command is scrolled into view.
+function followCursor() {
+  const cursor = state.cursors[list.view];
+  if (cursor === list.cursor) return;
+  list.cursor = cursor;
+  if (cursor == null || list.clicked) { list.clicked = false; return; }
+  const box = $("list"), h = rowHeight(), top = cursor * h;
+  if (top < box.scrollTop) box.scrollTop = top;
+  else if (top + h > box.scrollTop + box.clientHeight) box.scrollTop = top + h - box.clientHeight;
+}
+
+const ROW_MENUS = {
+  library: [["Play from here", "play"], ["Select or unselect", "toggle"]],
+  selection: [["Play from here", "play"], ["Remove", "remove"], ["Move up", "move -1"], ["Move down", "move +1"]],
+  playlists: [["Play", "play"], ["Add to selection", "add"], ["Rename", "rename"], ["Delete", "delete"]],
+};
+
+// Puts the cursor on row `i`, then runs `command` there.
+async function onRow(i, command) {
+  const row = rowAt(i);
+  if (!row) return;
+  list.clicked = true;
+  const done = await call("/row", JSON.stringify({ view: list.view, row: i, key: row.key, command: command || null }));
+  // The list changed under the tap; fetch it again.
+  if (!done) { list.pages.clear(); drawRows(); }
+}
+
+$("list").addEventListener("scroll", () => requestAnimationFrame(drawRows));
+$("list").addEventListener("click", e => {
+  const el = e.target.closest(".row");
+  if (!el) return;
+  const i = Number(el.dataset.index);
+  const toggle = e.target.closest("[data-row-command]");
+  if (toggle) return onRow(i, toggle.dataset.rowCommand);
+  if (e.target.closest("[data-row-menu]")) return openRowMenu(i);
+  // A touch on the cursor's row plays it; a mouse double-clicks.
+  const touch = matchMedia("(pointer: coarse)").matches;
+  if (touch && state.cursors[list.view] === i) return onRow(i, "play");
+  onRow(i, null);
+});
+$("list").addEventListener("dblclick", e => {
+  const el = e.target.closest(".row");
+  if (el && !e.target.closest("button")) onRow(Number(el.dataset.index), "play");
+});
+$("list").addEventListener("contextmenu", e => {
+  const el = e.target.closest(".row");
+  if (!el) return;
+  e.preventDefault();
+  openRowMenu(Number(el.dataset.index));
+});
+
+function openRowMenu(i) {
+  const row = rowAt(i);
+  if (!row) return;
+  $("sheet-heading").textContent = row.title || row.name;
+  $("sheet-items").replaceChildren(...ROW_MENUS[list.view].map(([label, command]) =>
+    button(label, () => { $("sheet").close(); onRow(i, command); })));
+  $("sheet").showModal();
+}
+
+// ---- the menu ----
+
+$("menu-button").addEventListener("click", () => {
+  const items = [
+    ["Keys", "keys"], ["Commands", "help"], ["Command line", "command"],
+    ["Clear search", "clear-search"],
+    ["Save selection as playlist", "save"], ["Clear selection", "clear"],
+    ["Theme: system", "theme system"], ["Theme: light", "theme light"], ["Theme: dark", "theme dark"],
+  ];
+  const buttons = items.map(([label, command]) =>
+    button(label, () => { $("sheet").close(); run(command); }));
+  if (rescan) buttons.push(button("Rescan music folder", () => { $("sheet").close(); call("/rescan", ""); }));
+  $("sheet-heading").textContent = "playr";
+  $("sheet-items").replaceChildren(...buttons);
+  $("sheet").showModal();
+});
+$("sheet-close").addEventListener("click", () => $("sheet").close());
+
+// ---- controls ----
+
+document.addEventListener("click", e => {
+  const b = e.target.closest("button[data-command]");
+  if (b) run(b.dataset.command);
+});
+document.querySelectorAll(".tab").forEach(tab =>
+  tab.addEventListener("click", () => run("view " + tab.dataset.view)));
+$("more").addEventListener("click", () => {
+  const open = $("extra").dataset.open !== "true";
+  $("extra").dataset.open = String(open);
+  $("more").setAttribute("aria-expanded", String(open));
+  requestAnimationFrame(drawRows);
+});
+
+let adjusting = null;     // the slider held, which the stream does not move
+for (const [id, send] of [["volume", v => "volume " + v], ["speed", v => "speed =" + v]]) {
+  const input = $(id);
+  input.addEventListener("input", () => { adjusting = id; showSliders(); });
+  input.addEventListener("change", () => { adjusting = null; run(send(input.value)); });
+}
+$("mode").addEventListener("change", () => run("mode " + $("mode").value));
+
+// The progress bar: a click or a drag seeks once released; with shift, marks.
+let dragging = null;
+function barTime(e) {
+  const r = $("bar").getBoundingClientRect();
+  return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (state.duration || 0);
+}
+$("bar").addEventListener("pointerdown", e => {
+  if (!state || state.duration == null) return;
+  dragging = barTime(e);
+  $("bar").setPointerCapture(e.pointerId);
+  showProgress();
+});
+$("bar").addEventListener("pointermove", e => {
+  if (!state || state.duration == null) return;
+  const t = barTime(e), hover = $("hover");
+  if (dragging !== null) { dragging = t; showProgress(); }
+  if (e.pointerType === "mouse" || dragging !== null) {
+    hover.hidden = false;
+    hover.textContent = time(t);
+    hover.style.left = (t / state.duration * 100) + "%";
+  }
+});
+$("bar").addEventListener("pointerleave", () => { if (dragging === null) $("hover").hidden = true; });
+$("bar").addEventListener("pointerup", e => {
+  if (dragging === null) return;
+  const t = barTime(e);
+  dragging = null;
+  $("hover").hidden = true;
+  run((e.shiftKey ? "mark " : "seek ") + t.toFixed(2));
+});
+$("bar").addEventListener("pointercancel", () => { dragging = null; $("hover").hidden = true; });
+
+// ---- search ----
+
+const search = $("search");
+let searchTimer = null;
+function sendSearch(done) {
+  clearTimeout(searchTimer);
+  return call("/search", JSON.stringify({ query: search.value.trim(), done }));
+}
+search.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => sendSearch(false), 150);
+});
+search.addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); sendSearch(true); search.blur(); }
+  if (e.key === "Escape") { e.preventDefault(); search.value = ""; sendSearch(true); search.blur(); }
+});
+search.addEventListener("blur", () => {
+  if (state && state.input.kind === "search") sendSearch(true);
+});
+
+// ---- dialogs, opened and closed by the model's input ----
+
+$("yes").addEventListener("click", () => call("/answer", "yes"));
+$("no").addEventListener("click", () => call("/answer", "no"));
+$("name-ok").addEventListener("click", () => call("/name", $("name").value));
+$("name-cancel").addEventListener("click", () => call("/close", ""));
+$("name").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); call("/name", $("name").value); }
+});
+$("list-close").addEventListener("click", () => call("/close", ""));
+for (const id of ["confirm-dialog", "name-dialog", "list-dialog"]) {
+  // Escape asks the model to close what it has open, rather than hiding it.
+  $(id).addEventListener("cancel", e => {
+    e.preventDefault();
+    if (id === "confirm-dialog") call("/answer", "no"); else call("/close", "");
+  });
+}
+$("confirm-dialog").addEventListener("keydown", e => {
+  // As in the other frontends, only y confirms.
+  if (e.key === "y") { e.preventDefault(); call("/answer", "yes"); }
+});
+
+function show(dialog, open) {
+  if (open && !dialog.open) dialog.showModal();
+  if (!open && dialog.open) dialog.close();
+}
+
+async function followInput() {
+  const input = state.input, kind = input.kind, opened = kind !== shownInput;
+  shownInput = kind;
+  show($("confirm-dialog"), kind === "confirm");
+  show($("name-dialog"), kind === "save" || kind === "rename");
+  show($("list-dialog"), kind === "keys" || kind === "commands");
+  $("commandbar").hidden = kind !== "command";
+  $("status").hidden = kind === "command";
+  if (!opened) return;
+  if (kind === "confirm") $("question").textContent = input.question;
+  if (kind === "save" || kind === "rename") {
+    $("name-heading").textContent = kind === "save" ? "Save the selection as" : `Rename "${input.from}" to`;
+    $("name").value = input.text;
+    $("name").focus();
+  }
+  if (kind === "keys" || kind === "commands") {
+    $("list-heading").textContent = kind === "keys" ? `Keys in the ${state.view} view` : "Commands";
+    $("list-rows").replaceChildren();
+    const rows = await call("/help?list=" + kind) || [];
+    $("list-rows").replaceChildren(...rows.flatMap(([a, b]) =>
+      b ? [span("keys", a), span("", b)] : [span("heading", a)]));
+  }
+  if (kind === "search" && document.activeElement !== search) search.focus();
+  if (kind === "command") openCommand(input.text);
+}
+
+// ---- the command line ----
+
+const command = { history: [], recall: null, completions: [], tab: -1 };
+
+async function openCommand(text) {
+  const input = $("command");
+  input.value = text || "";
+  command.recall = null;
+  command.tab = -1;
+  $("completions").textContent = "";
+  input.focus();
+  const answer = await call("/complete", "");
+  if (answer) command.history = answer.history;
+}
+
+async function complete(forward) {
+  const input = $("command");
+  if (command.tab < 0) {
+    const answer = await call("/complete", input.value);
+    if (!answer || answer.completions.length === 0) return;
+    command.completions = answer.completions;
+    command.tab = forward ? 0 : command.completions.length - 1;
+  } else {
+    const n = command.completions.length;
+    command.tab = (command.tab + (forward ? 1 : n - 1)) % n;
+  }
+  input.value = command.completions[command.tab];
+  $("completions").textContent = command.completions.length > 1 ? command.completions.slice(0, 8).join("  ") : "";
+}
+
+$("command").addEventListener("input", () => {
+  command.tab = -1;
+  command.recall = null;
+  $("completions").textContent = "";
+});
+$("command").addEventListener("keydown", async e => {
+  const input = $("command"), history = command.history;
+  if (e.key === "Tab") { e.preventDefault(); complete(!e.shiftKey); return; }
+  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    e.preventDefault();
+    if (history.length === 0) return;
+    const at = command.recall === null ? history.length : command.recall;
+    command.recall = Math.min(history.length - 1, Math.max(0, at + (e.key === "ArrowUp" ? -1 : 1)));
+    input.value = history[command.recall];
+    return;
+  }
+  if (e.key === "Escape") { e.preventDefault(); call("/close", ""); return; }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const line = input.value.trim();
+    input.blur();
+    if (line) run(line); else call("/close", "");
+  }
+});
+$("command").addEventListener("blur", () => {
+  if (state && state.input.kind === "command") call("/close", "");
+});
+
+// ---- keys, bound as in the other frontends ----
+
+const NAMED = {
+  ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+  Enter: "enter", Escape: "esc", Tab: "tab", Backspace: "backspace", Delete: "delete",
+  Insert: "insert", Home: "home", End: "end", PageUp: "pageup", PageDown: "pagedown",
+};
+
+// The name a binding gives the key of `e`, as playr_app::action::Key writes it.
+function keyName(e) {
+  const prefix = (e.ctrlKey ? "ctrl-" : "") + (e.altKey ? "alt-" : "");
+  if (e.key.length === 1) {
+    // A character already says whether shift was held.
+    const c = e.key === " " ? "space" : (e.ctrlKey ? e.key.toLowerCase() : e.key);
+    return prefix + c;
+  }
+  if (e.key === "Tab" && e.shiftKey) return prefix + "backtab";
+  const name = NAMED[e.key] || (/^F([1-9]|1[0-2])$/.test(e.key) ? e.key.toLowerCase() : null);
+  return name && prefix + (e.shiftKey ? "shift-" : "") + name;
+}
+
+document.addEventListener("keydown", e => {
+  if (!state || e.metaKey || e.isComposing) return;
+  if (document.querySelector("dialog[open]")) return;
+  if (e.target.matches && e.target.matches("input, select, textarea")) return;
+  const name = keyName(e);
+  if (!name) return;
+  const bound = (keys[state.view] || {})[name];
+  if (bound === undefined) return;
+  e.preventDefault();
+  if (bound !== null) call("/key", name);
+});
+
+// ---- drawing the state ----
+
+function showSliders() {
+  const s = state;
+  if (adjusting !== "volume") $("volume").value = Math.round(s.volume);
+  $("volume-value").textContent = String($("volume").value).padStart(3) + "%";
+  if (adjusting !== "speed") $("speed").value = s.speed;
+  const st = Number($("speed").value);
+  const factor = adjusting === "speed" ? Math.pow(2, st / 12).toFixed(2) + "x" : s.speed_label;
+  $("speed-value").textContent = factor + " (" + (st >= 0 ? "+" : "") + st + " st)";
+}
+
+function showProgress() {
+  const s = state, duration = s.duration || 0;
+  const at = dragging !== null ? dragging : s.position;
+  $("position").textContent = time(at);
+  $("duration").textContent = time(duration);
+  $("fill").style.width = duration ? Math.min(100, at / duration * 100) + "%" : "0";
+  const bar = $("bar");
+  bar.setAttribute("aria-valuemax", String(Math.round(duration)));
+  bar.setAttribute("aria-valuenow", String(Math.round(at)));
+  bar.setAttribute("aria-valuetext", time(at) + " of " + time(duration));
+}
+
+function showMeter() {
+  const s = state, playing = s.state === "playing";
+  const fraction = db => Math.min(1, Math.max(0, (db + 40) / 40));
+  $("cover").style.width = (100 - (playing && s.loudness != null ? fraction(s.loudness) * 100 : 0)) + "%";
+  const peak = $("peak");
+  peak.hidden = !playing || s.peak == null;
+  if (!peak.hidden) peak.style.left = "calc(" + fraction(s.peak) * 100 + "% - 2px)";
+  const number = v => (v == null || !playing ? "--" : v.toFixed(1)).padStart(5);
+  $("lufs").textContent = number(s.loudness) + " LUFS";
+  $("pk").textContent = "pk " + number(s.peak);
+  $("pk").classList.toggle("clip", playing && s.clipping);
+}
+
+let ticksFor = "";
+function showTicks() {
+  const s = state, key = JSON.stringify([s.marks, s.duration]);
+  if (key === ticksFor) return;
+  ticksFor = key;
+  $("ticks").replaceChildren(...(s.duration ? s.marks : []).map(m => {
+    const t = document.createElement("div");
+    t.className = "tick";
+    t.style.left = (m / s.duration * 100) + "%";
+    return t;
+  }));
+}
+
+function draw(next) {
+  const previous = state;
+  state = next;
+  const s = next, root = document.documentElement;
+  if (root.dataset.theme !== s.theme) root.dataset.theme = s.theme;
+
+  for (const tab of document.querySelectorAll(".tab")) {
+    tab.setAttribute("aria-selected", String(tab.dataset.view === s.view));
+  }
+  for (const count of document.querySelectorAll("[data-count]")) {
+    count.textContent = s.counts[count.dataset.count];
+  }
+  $("selection-bar").hidden = s.view !== "selection";
+  $("list").setAttribute("aria-label", s.view === "playlists" ? "Playlists" : "Tracks");
+
+  const viewChanged = s.view !== list.view;
+  if (viewChanged || s.lists !== list.revision) {
+    list.view = s.view;
+    list.revision = s.lists;
+    list.pages.clear();
+    if (viewChanged) { $("list").scrollTop = 0; list.cursor = null; }
+  }
+  followCursor();
+  if (!previous || viewChanged || previous.lists !== s.lists || previous.path !== s.path
+      || previous.cursors[s.view] !== s.cursors[s.view] || previous.searching !== s.searching) {
+    drawRows();
+  }
+  const cursor = s.cursors[s.view];
+  $("list").setAttribute("aria-activedescendant", cursor == null ? "" : "row-" + cursor);
+
+  if (document.activeElement !== search && !s.searching && search.value) search.value = "";
+
+  $("now").textContent = s.title ? (s.artist ? s.title + " - " + s.artist : s.title) : "nothing playing";
+  $("format").textContent = s.format || "";
+  $("pause").textContent = s.state === "playing" ? "Pause" : "Play";
+  document.title = s.title ? s.title + " - playr" : "playr";
+  showProgress();
+  showTicks();
+  showSliders();
+  if (document.activeElement !== $("mode")) $("mode").value = s.mode;
+  showMeter();
+
+  if (s.message) $("message").textContent = s.message;
+  else if (Date.now() > errorUntil) $("message").textContent = "";
+
+  followInput();
+}
+
+window.addEventListener("resize", () => requestAnimationFrame(drawRows));
+
+(async () => {
+  const [bindings, config] = await Promise.all([call("/keys"), call("/config")]);
+  if (bindings) keys = bindings;
+  if (config) rescan = config.rescan;
+})();
+
+const events = new EventSource("/events");
+events.onmessage = e => draw(JSON.parse(e.data));
+events.onerror = () => fail("reconnecting to playr-server");
+</script>
+</body>
+</html>

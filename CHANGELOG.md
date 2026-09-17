@@ -2,6 +2,29 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0]
+
+### Added
+
+- `playr-server`, playr with no screen, for a machine such as a Raspberry Pi with a DAC. Its web page has the window's views, key bindings, `:` command line, dialogs, marks and themes, without the sampler, and adapts to a phone, a tablet or a desktop browser. With `--music DIR` the page can rescan that directory, and no other; it cannot open, scan or prune a path, or quit. With `--osc`, OSC controls playback and plays playlists by index, and `--osc-reply` sends the state back; `playr-server osc-schema` lists the addresses, and `make touchosc` builds a TouchOSC layout from them. See `docs/dev/server.md`. Every web request needs a token, printed at startup, or none with `--open`, for a trusted network or behind a proxy that authenticates. Either way the `Host` must name the machine, so another web site open in the browser cannot reach it. It listens on 127.0.0.1 unless `--listen` says otherwise, and shares the lock of `playr` and `playr-gui`. `playr` and `playr-gui` still have no network code. Release archives include `playr-server`, Linux ones with a systemd user unit, and each release a TouchOSC layout; [docs/server-guide.md](docs/server-guide.md) covers setting it up on a Raspberry Pi.
+
+  ```
+  playr-server --listen 0.0.0.0:8080 --open --host pi.lan --music /mnt/music \
+    --osc 0.0.0.0:9000 --osc-reply 192.168.1.30:9001
+  ```
+
+### Changed
+
+- The documentation covers three programs. The README introduces `playr-server` and links its guide, `docs/server-guide.md`, and the "no network code" claim now names `playr` and `playr-gui` only. `docs/architecture.md` and its crate diagram add the server, whose owner thread is half of the daemon the notes left open. `docs/sampler.md` records that OSC for marks would go in `playr-server`, the one program with network code. `TODO.md` lists the server's gaps, among them the Pi and TouchOSC checks, CI browser tests and a `[server]` settings table.
+
+### Fixed
+
+- `:speed` could not set a negative speed. A signed number is relative, so `:speed -3` lowered the speed by three semitones from where it was, yet the error for `:speed 13` gave the range as -12 to 12. `=` now makes a signed speed absolute. It was chosen over reading a bare signed number as absolute, which would change the `(` and `)` bindings and every `[keys]` table that copies them.
+
+  ```
+  :speed =-3
+  ```
+
 ## [0.7.0]
 
 ### Added

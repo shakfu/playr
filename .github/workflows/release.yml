@@ -1,6 +1,7 @@
-# Builds playr and playr-gui for each platform when a version tag is pushed,
-# packages them with packaging/package.sh, and publishes the archives to a
-# GitHub release whose notes are that version's CHANGELOG.md section. Tags are
+# Builds playr, playr-gui and playr-server for each platform when a version tag
+# is pushed, packages them with packaging/package.sh, and publishes the
+# archives and the TouchOSC layout to a GitHub release whose notes are that
+# version's CHANGELOG.md section. Tags are
 # bare versions, such as 0.6.0.
 #
 # Run by hand with no tag, it tests, builds and packages the branch chosen and
@@ -95,10 +96,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # The terminal and the desktop window. Opus needs cmake, which every
-      # runner image has.
+      # The terminal, the desktop window and the server. Opus needs cmake,
+      # which every runner image has.
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p playr -p playr-gui --features playr/opus,playr-gui/opus
+        run: cargo build --release --locked --target ${{ matrix.target }} -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
 
       - name: Package
         shell: bash
@@ -109,6 +110,23 @@ jobs:
         with:
           name: playr-${{ matrix.target }}
           path: playr-*-${{ matrix.target }}.*
+
+      # The TouchOSC layout is the same for every platform, so one build makes
+      # it, from that build's OSC addresses.
+      - uses: astral-sh/setup-uv@v6
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+
+      - name: TouchOSC layout
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          target/${{ matrix.target }}/release/playr-server osc-schema > osc-schema.json
+          uv run packaging/touchosc/layout.py osc-schema.json "playr-${TAG:-$(git rev-parse --short HEAD)}-touchosc.tosc"
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          name: playr-touchosc
+          path: playr-*-touchosc.tosc
 
   release:
     needs: build

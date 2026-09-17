@@ -2000,6 +2000,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
+name = "httparse"
+version = "1.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
 name = "icu_collections"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3462,7 +3468,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "playr"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "cpal",
@@ -3480,7 +3486,7 @@ dependencies = [
 
 [[package]]
 name = "playr-app"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "cpal",
  "hound",
@@ -3492,7 +3498,7 @@ dependencies = [
 
 [[package]]
 name = "playr-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "cpal",
  "hound",
@@ -3509,7 +3515,7 @@ dependencies = [
 
 [[package]]
 name = "playr-gui"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "cpal",
@@ -3523,6 +3529,24 @@ dependencies = [
  "rfd",
  "rtrb",
  "rusqlite",
+ "tempfile",
+]
+
+[[package]]
+name = "playr-server"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "cpal",
+ "getrandom 0.4.3",
+ "hound",
+ "httparse",
+ "playr-app",
+ "playr-core",
+ "rosc",
+ "rtrb",
+ "rusqlite",
+ "serde_json",
  "tempfile",
 ]
 
@@ -3938,6 +3962,17 @@ dependencies = [
  "wayland-protocols",
  "web-sys",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rosc"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd37602e1513794e952274082d074e8d31aa7f64d047e3acb746c91db40600a5"
+dependencies = [
+ "byteorder",
+ "nom",
+ "time",
 ]
 
 [[package]]
@@ -4827,6 +4862,7 @@ dependencies = [
  "powerfmt",
  "serde_core",
  "time-core",
+ "time-macros",
 ]
 
 [[package]]
@@ -4834,6 +4870,16 @@ name = "time-core"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
+
+[[package]]
+name = "time-macros"
+version = "0.2.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
+dependencies = [
+ "num-conv",
+ "time-core",
+]
 
 [[package]]
 name = "tiny-skia"

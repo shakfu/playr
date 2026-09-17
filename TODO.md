@@ -68,13 +68,29 @@ What is missing, grouped by priority:
 
 - [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. A table in the library would keep it.
 
-- [ ] **Settings tables for more than one frontend.** A table no frontend names is an error, so a `[gui]` table would stop the terminal starting, and `[keys]` would stop a frontend that does not read it. A list of tables every frontend knows, ignored unless named, would fix it; nothing needs it until the window has settings of its own. A key both frontends read, such as `theme`, avoids it: `playr_app::config` reads it.
+- [ ] **Settings tables for more than one frontend.** A table no frontend names is an error, so a `[gui]` table would stop the terminal starting, and `[keys]` would stop a frontend that does not read it. A list of tables every frontend knows, ignored unless named, would fix it. `playr-server` needs it first: its flags would move to a `[server]` table, out of the systemd unit. A key both frontends read, such as `theme`, avoids it: `playr_app::config` reads it.
 
 - [ ] **Platform directories.** Both interfaces keep the library in `~/.local/share/playr` and settings in `~/.config/playr` on every platform, which is unusual on macOS and Windows. Moving to each platform's directories must move existing libraries.
 
 ### Output
 
 - [ ] **Bit-perfect output.** Select a `hw:` ALSA device so PipeWire cannot resample behind us. Today the `default` device accepts every rate and may convert internally, so "no resampling" means playr does not resample, not that nothing does. Negotiation already accepts the 32-bit and 24-bit integer formats such devices offer; choosing the device is what remains.
+
+### Server
+
+- [ ] **Tried on a Raspberry Pi.** The arm64 archive's glibc requirement, the ALSA default device from `~/.asoundrc`, the systemd user service with lingering, and the CPU cost of resampling are unchecked on a Pi. `docs/server-guide.md` assumes them.
+
+- [ ] **Tried in TouchOSC.** The generated layout rests on inference for three bindings: a radio sending its segment's index, a received speed scaled back onto the fader, and a dragged fader not moved by the progress sent back. See `docs/dev/server.md`.
+
+- [ ] **Browser tests in CI.** `make page-test` needs an audio device, which runners lack. A null output device for tests would let the release and test workflows run it.
+
+- [ ] **Reordering the selection by dragging.** The web page moves a selected track with its row menu; the window also drags rows.
+
+- [ ] **A hostname for `--osc-reply`.** It takes an IP address, so the tablet needs a fixed one. Resolving a name at startup would allow `ipad.local`.
+
+- [ ] **The terminal alongside the server.** The lock stops `playr` while `playr-server` runs. A `--tui` mode would drain the server's request channel in the terminal's loop, so both control one playback.
+
+- [ ] **A `[server]` table in `settings.toml`.** The server's settings are flags in its systemd unit. Blocked on "Settings tables for more than one frontend" under Interface.
 
 ### Formats
 
@@ -88,7 +104,7 @@ What is missing, grouped by priority:
 
 - [ ] **Linux packages.** Release archives carry `playr.desktop` and an icon to copy by hand; no `.deb`, Flatpak or AppImage.
 
-- [ ] **Publishing to crates.io.** Manual, with `cargo publish --workspace`. `playr-gui` has `publish = false`; decide whether it goes to crates.io, and whether the release workflow publishes.
+- [ ] **Publishing to crates.io.** Manual, with `cargo publish --workspace`. `playr-gui` and `playr-server` have `publish = false`; decide whether they go to crates.io, and whether the release workflow publishes.
 
 ## Low
 
@@ -109,6 +125,12 @@ What is missing, grouped by priority:
 - [ ] **Terminal background detection.** In the terminal, `system` is the ANSI set, as `dark` is. An OSC 11 query at startup would find a light background in most modern terminals, but can stall over ssh and tmux. `COLORFGBG` is cheaper, and only some terminals set it.
 
 - [ ] **Dim text on Solarized Dark.** `dim` and the selected row's background are ANSI bright black, which Solarized Dark sets to its background colour, so dim text disappears there. Not tested here.
+
+### Server
+
+- [ ] **One view and cursor per server.** Every tab and device drives the same `Model`, so two people browsing move each other's cursor and view. Accepted for one user. A fix gives each page its own view and cursors, which `dispatch`'s one cursor per view does not allow; see "Multi-row selection" under Interface.
+
+- [ ] **Six open pages per browser.** A browser opens six connections to a host at most, and each page's event stream holds one, so with about six tabs of the same server open, a page's requests wait for a free connection and it stalls. Accepted for one user. Sharing one stream between tabs, with a `SharedWorker`, would lift it.
 
 ### Output
 

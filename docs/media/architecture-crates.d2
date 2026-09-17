@@ -12,6 +12,13 @@ playr: "playr (terminal frontend)" {
 
 gui: "playr-gui (egui frontend)"
 
+server: "playr-server (web page and OSC)" {
+  owner: "owner\nthread owning Model"
+  web: "web\nscreen, rows, allowed"
+  http: "http\npage, routes, events"
+  osc: "osc\naddresses, feedback"
+}
+
 tauri: "playr-tauri (Tauri backend)\nnot built" {
   style.stroke-dash: 3
 }
@@ -42,6 +49,8 @@ playr -> app: "actions, commands, keys"
 playr -> core: "Session, types"
 gui -> app: "actions, commands, keys"
 gui -> core: "Session, types"
+server -> app: "Model, commands, keys"
+server -> core: "Player, types"
 tauri -> core: "serde feature (step 8)" {
   style.stroke-dash: 3
 }

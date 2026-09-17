@@ -73,7 +73,7 @@ pub const COMMANDS: &[Command] = &[
     ),
     any(
         "speed",
-        "N | +N | -N",
+        "N | =-N | +N | -N",
         "set varispeed in semitones, or change it",
     ),
     any(
@@ -293,6 +293,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         ),
         SetVolume(v) => format!("volume {}", number(f64::from(*v) * 100.0)),
         SpeedBy(n) => format!("speed {n:+}"),
+        SetSpeed(n) if *n < 0 => format!("speed ={n}"),
         SetSpeed(n) => format!("speed {n}"),
         CycleMode(true) => "mode +".into(),
         CycleMode(false) => "mode -".into(),
@@ -586,10 +587,17 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             match signed(rest) {
                 _ if rest.is_empty() => Err(usage()),
                 Some((sign, n)) => Ok(Action::SpeedBy(sign as i32 * semitones(n)?)),
-                None => match semitones(rest)? {
-                    n if n <= 12 => Ok(Action::SetSpeed(n)),
-                    _ => Err("speed is -12 to 12 semitones".into()),
-                },
+                None => {
+                    // A sign alone means relative, so `=` sets a negative speed: `=-3`.
+                    let (sign, n) = match rest.strip_prefix('=') {
+                        Some(t) => signed(t).unwrap_or((1.0, t)),
+                        None => (1.0, rest),
+                    };
+                    match sign as i32 * semitones(n)? {
+                        n if n.abs() <= 12 => Ok(Action::SetSpeed(n)),
+                        _ => Err("speed is -12 to 12 semitones".into()),
+                    }
+                }
             }
         }
         "mode" => match rest {

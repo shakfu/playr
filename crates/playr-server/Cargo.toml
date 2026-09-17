@@ -1,0 +1,39 @@
+[package]
+name = "playr-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "playr without a screen, controlled from a web page and OSC"
+keywords = ["music", "audio", "player", "osc"]
+categories = ["multimedia::audio"]
+# Not published until it serves its clients; see docs/dev/server.md.
+publish = false
+
+[features]
+default = []
+# Opus decoding via libopus, as in the terminal build; see the playr crate.
+opus = ["playr-core/opus"]
+
+[dependencies]
+playr-core.workspace = true
+playr-app.workspace = true
+clap = { version = "4.6", features = ["derive"] }
+rusqlite.workspace = true
+# The token; already built for tempfile.
+getrandom = "0.4"
+# Request heads, parsed as hyper parses them; the server is std sockets.
+httparse = "1.10"
+# OSC messages; its nom and byteorder are already built for other crates.
+rosc = "0.11"
+# The state sent to the page; already built for the terminal's `search --json`.
+serde_json = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+# The fake audio device in playr-core's test helpers.
+cpal.workspace = true
+rtrb.workspace = true
+hound.workspace = true

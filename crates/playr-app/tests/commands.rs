@@ -232,8 +232,21 @@ fn speed_is_whole_semitones_and_a_sign_makes_it_relative() {
     assert_eq!(lib("speed 0"), Ok(Action::SetSpeed(0)));
     assert_eq!(lib("speed +1"), Ok(Action::SpeedBy(1)));
     assert_eq!(lib("speed -12"), Ok(Action::SpeedBy(-12)));
+    assert_eq!(lib("speed =-3"), Ok(Action::SetSpeed(-3)));
+    assert_eq!(lib("speed =3"), Ok(Action::SetSpeed(3)));
     assert_eq!(lib("speed 13"), Err("speed is -12 to 12 semitones".into()));
-    for bad in ["speed", "speed 1.5", "speed +x", "speed +25"] {
+    assert_eq!(
+        lib("speed =-13"),
+        Err("speed is -12 to 12 semitones".into())
+    );
+    for bad in [
+        "speed",
+        "speed 1.5",
+        "speed +x",
+        "speed +25",
+        "speed =",
+        "speed =--3",
+    ] {
         assert!(lib(bad).is_err(), "{bad:?} parsed");
     }
 }
@@ -581,6 +594,7 @@ fn command_lines_round_trip_through_parse() {
         "volume 60",
         "volume +2.5",
         "speed -3",
+        "speed =-3",
         "mode repeat-one",
         "theme light",
         "mark 1.25",

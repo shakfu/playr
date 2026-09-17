@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, current as of playr 0.7.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal and the desktop window, `playr-gui`.
+Design note, current as of playr 0.8.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal, the desktop window, `playr-gui`, and a server controlled from a web page, `playr-server`.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -35,18 +35,21 @@ So the core:
 ```
 playr         terminal frontend  ---+
 playr-gui     egui frontend      ---+--> playr-app --> playr-core
+playr-server  web and OSC        ---+
 playr-tauri   Tauri backend      -----------------> playr-core [serde]
 ```
 
 ![Crates and their modules](media/architecture-crates.svg)
 
-The Rust frontends also depend on `playr-core` directly, for `Session` and the types `dispatch` passes; the arrows show only where each frontend gets its interaction from. `playr-gui` is described in `docs/dev/gui.md`; `playr-tauri` does not exist. `[serde]` is step 8.
+The Rust frontends also depend on `playr-core` directly, for `Session` and the types `dispatch` passes; the arrows show only where each frontend gets its interaction from. `playr-gui` is described in `docs/dev/gui.md`, `playr-server` in `docs/dev/server.md`; `playr-tauri` does not exist. `[serde]` is step 8.
 
 - **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
 
 - **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state) and `sampler` (the sampler view's state and column geometry). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
 
 - **playr-gui** (`crates/playr-gui`): the desktop window, with egui. It wraps `Model` as the terminal does.
+
+- **playr-server** (`crates/playr-server`): playr with no screen. One thread owns `Model`; the web page and OSC reach it over a channel. The page is a frontend like the window, without the sampler. The only crate with network code.
 
 - **playr** (the root crate): the terminal. The command line in `src/main.rs`, and `src/ui`: `App` over the shared `Model`, key handling, drawing and the sampler's glyphs.
 
@@ -193,6 +196,7 @@ Each frontend adapts the sink:
 |-|-|
 | terminal | sends to a channel the draw loop drains each frame |
 | egui | sends to a channel, then calls `ctx.request_repaint()` so the next frame drains it |
+| server | sends to a channel the owner thread drains at each refresh, every 33 ms while playing and 250 ms otherwise |
 | Tauri | keeps the `Arc<Peaks>` of an `Event::Peaks` and emits only that they are ready; emits every other event with `app.emit("playr", event)`, which needs the `serde` feature |
 
 Position, loudness and peak level change continuously, so they are not events. A frontend reads them from `Session::player()`; `playr_app::model::Model` samples them once per frame into a `Snapshot`. A Tauri backend would read and emit them on a timer, 20 to 30 times a second. A waveform crosses IPC as numbers per column: the backend keeps the `Arc<Peaks>` and answers the page with `Peaks::range(start, end)` for each column shown.
@@ -347,10 +351,10 @@ Each step left `make test` passing. Only step 7 changed behaviour: the `mode` pr
 
 ## Decisions left open
 
-- **One process.** The terminal and the window never run at once; `playr_app::instance` holds a per-user lock. Each `Session` checks names and marks against its own copy of the library, so a second writer would act on stale data.
+- **One process.** The terminal, the window and the server never run at once; `playr_app::instance` holds a per-user lock. Each `Session` checks names and marks against its own copy of the library, so a second writer would act on stale data. To use the terminal where the server runs, stop the server first.
 
-- **Daemon.** A daemon holding the `Session`, with frontends as clients over a socket, would let a terminal and a GUI control one playback at once, and fits the OSC option in [Sampling](sampler.md#not-built-yet). It costs a protocol and a process to manage. The in-process `Session` does not rule it out: a daemon wraps it, and the `serde` feature is its wire format.
+- **Daemon.** `playr-server` is half of one: a process owning a `Model`, with a web page and OSC as clients over HTTP and UDP. The terminal and the window are not its clients, so they still cannot control the same playback. Making them clients costs a protocol for `Model` state; its JSON is built by hand in `playr_server::web`, not by the `serde` feature. A `--tui` mode, draining the server's request channel in the terminal's loop, would join the two in one process instead. See `docs/dev/server.md`.
 
-- **Library loading.** `Session::tracks` returns the whole library in memory. At 100,000 tracks a GUI table wants pages or a query per scroll; the API would add `tracks_page(offset, count)` then.
+- **Library loading.** `Session::tracks` returns the whole library in memory. The window lays out only the rows in view, and the server sends the web page 200 rows at a time from that copy. A library too large to hold would need `tracks_page(offset, count)` from the database.
 
 - **cpal versions.** rtrack uses cpal 0.15 and playr 0.18. A waveform crate shared with rtrack must not depend on cpal.

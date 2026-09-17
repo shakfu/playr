@@ -1,0 +1,22 @@
+# playr-server as a systemd user service; see docs/server-guide.md.
+#
+#   install -Dm 644 playr-server.service ~/.config/systemd/user/playr-server.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now playr-server
+#   loginctl enable-linger "$USER"    # start at boot, without logging in
+#
+# Change the flags with: systemctl --user edit --full playr-server
+
+[Unit]
+Description=playr, controlled from a web page and OSC
+Documentation=https://github.com/shakfu/playr/blob/main/docs/server-guide.md
+
+[Service]
+# Add --open to serve the page without a token, on a network you trust.
+ExecStart=%h/.local/bin/playr-server --listen 0.0.0.0:8080 --music %h/Music
+# Tries again after a failure, such as no audio device yet at boot.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

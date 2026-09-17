@@ -1,4 +1,4 @@
-//! One playr at a time: the terminal or the window, never both.
+//! One playr at a time: the terminal, the window or the server.
 //!
 //! Each keeps the library's playlists and marks in memory and checks changes
 //! against that copy, so a second process could replace the first one's
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// Why a second playr does not start.
 pub const ALREADY_RUNNING: &str =
-    "playr is already running, in a terminal or a window; quit it first";
+    "playr is already running, in a terminal, a window or a server; quit it first";
 
 /// The claim on being the one playr running. The system releases it when the
 /// process ends, however it ends.

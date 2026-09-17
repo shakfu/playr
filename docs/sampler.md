@@ -114,7 +114,7 @@ A slice is exact to the frame for the marks it was given. How close a mark is to
   | option | fits | cost |
   |-|-|-|
   | One JSON line per mark, appended to a file such as `$XDG_STATE_HOME/playr/marks.jsonl` | any tool that can follow a file; a short script can forward it | smallest: no socket and no protocol to version |
-  | Send-only [OSC](https://opensoundcontrol.stanford.edu/spec-1_0.html) to 127.0.0.1: `/playr/mark`, `/playr/track`, `/playr/position` | SuperCollider, Max, Pure Data, TouchOSC, Bitwig, REAPER; SuperCollider's [`Buffer.read`](https://doc.sccode.org/Classes/Buffer.html) takes a path and a frame range | a UDP socket, so playr would no longer be free of network code |
+  | Send-only [OSC](https://opensoundcontrol.stanford.edu/spec-1_0.html) to 127.0.0.1: `/playr/mark`, `/playr/track`, `/playr/position` | SuperCollider, Max, Pure Data, TouchOSC, Bitwig, REAPER; SuperCollider's [`Buffer.read`](https://doc.sccode.org/Classes/Buffer.html) takes a path and a frame range | a UDP socket: `playr` and `playr-gui` have none, so this would go in `playr-server`, which sends playback state as OSC already |
   | The region on the clipboard, as `amen.flac@52920+52920` | any tool, after a window switch | smallest of all, but a tool cannot react on its own |
 
   [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) is Linux-only and has no marks or regions. A JSON socket like [mpv's](https://mpv.io/manual/stable/#json-ipc) needs a bridge for music tools.
@@ -125,4 +125,4 @@ A slice is exact to the frame for the marks it was given. How close a mark is to
   {"path":"/music/breaks/amen.flac","frame":52920,"rate":44100,"channels":2,"semitones":0,"title":"Amen, Brother","artist":"The Winstons","at":"2026-09-13T21:04:11.382Z"}
   ```
 
-  Questions still open: which tools receive this, whether "no network code" is a hard rule or a default, whether a region needs separate in and out marks, and whether a region taken at +3 semitones should carry the pitch shift.
+  Questions still open: which tools receive this, whether a region needs separate in and out marks, and whether a region taken at +3 semitones should carry the pitch shift. Network code is settled: `playr` and `playr-gui` have none, and `playr-server` holds it; its OSC leaves `/playr/position` free for this ([server guide](server-guide.md#osc-and-touchosc)).

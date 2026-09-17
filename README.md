@@ -2,7 +2,7 @@
 
 A minimal music player, in a terminal or a desktop window. Plays a directory, a saved playlist, or the results of a search. Keeps a SQLite index of your library.
 
-It contacts no server, fetches no metadata, scrobbles nothing, and has no network code in it at all.
+It contacts no server, fetches no metadata and scrobbles nothing. `playr` and `playr-gui` have no network code at all; `playr-server`, which plays on a machine without a screen and is controlled from a web page, is the one program that listens on a network.
 
 ![Varispeed on a Boards of Canada record is a good use of an afternoon.](https://raw.githubusercontent.com/shakfu/playr/main/docs/media/playr.png)
 
@@ -91,7 +91,7 @@ It contacts no server, fetches no metadata, scrobbles nothing, and has no networ
 
 ## Install
 
-playr is two programs: `playr`, the terminal interface, and `playr-gui`, a desktop window with the same features, keys and `:` commands. Both read the same library and settings, and only one runs at a time: while either is open, the other, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json` and `playr formats` only read, and run alongside either.
+playr is three programs: `playr`, the terminal interface; `playr-gui`, a desktop window with the same features, keys and `:` commands; and `playr-server`, for a machine without a screen, controlled from a web page or OSC. All read the same library and settings, and only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json` and `playr formats` only read, and run alongside any of them.
 
 ### Release archives
 
@@ -103,7 +103,7 @@ Each [GitHub release](https://github.com/shakfu/playr/releases) has prebuilt arc
 
 - Windows: x86_64
 
-Each archive holds both programs, with `SHA256SUMS` in the release for checking them. Put `playr` on your `PATH`; the window needs one more step on macOS and Linux:
+Each archive holds the three programs, with `SHA256SUMS` in the release for checking them, and the release has a TouchOSC layout for `playr-server`. Put `playr` and `playr-server` on your `PATH`; the window needs one more step on macOS and Linux:
 
 - **macOS:** the window is `playr.app`; move it to `Applications`. It is not signed or notarized, so macOS refuses to open it once downloaded with a browser; allow it under System Settings, Privacy & Security, or run `xattr -dr com.apple.quarantine playr.app`.
 
@@ -114,21 +114,22 @@ Each archive holds both programs, with `SHA256SUMS` in the release for checking 
 ### From a clone
 
 ```sh
-make install    # both programs, and the window as an application
+make install    # the three programs, and the window as an application
 make gui        # run the window without installing
 make app        # macOS: build target/release/playr.app
 ```
 
-`make install` copies `playr` and `playr-gui` to `~/.local/bin`. On macOS it also puts `playr.app` in `~/Applications`; on Linux it adds `playr.desktop` and its icon under `~/.local/share`.
+`make install` copies `playr`, `playr-gui` and `playr-server` to `~/.local/bin`. On macOS it also puts `playr.app` in `~/Applications`; on Linux it adds `playr.desktop` and its icon under `~/.local/share`.
 
 ### With cargo
 
 ```sh
 cargo install playr                                             # the terminal, from crates.io
 cargo install --git https://github.com/shakfu/playr playr-gui    # the window, from GitHub
+cargo install --git https://github.com/shakfu/playr playr-server # the server, from GitHub
 ```
 
-`playr-gui` is not on crates.io yet. `cargo install` builds only the program, without the macOS bundle or the Linux desktop entry. Add `--features opus` to either for Opus.
+`playr-gui` and `playr-server` are not on crates.io yet. `cargo install` builds only the program, without the macOS bundle or the Linux desktop entry. Add `--features opus` to either for Opus.
 
 ### Building
 
@@ -183,6 +184,14 @@ playr-gui --db other.db          # use a different library file
 It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
 
 File, Add folder to library scans a directory, as `playr scan` does, and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
+
+### Server
+
+```sh
+playr-server --listen 0.0.0.0:8080 --music ~/music   # prints the address to open
+```
+
+`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page with the window's views, keys, `:` commands, dialogs and marks, without the sampler. The page adapts to a phone, a tablet or a desktop browser. It needs a token from the printed address, or none with `--open` on a network you trust. With `--osc`, OSC controls playback too. [docs/server-guide.md](docs/server-guide.md) covers access from other devices, TouchOSC, and running it as a service on a Raspberry Pi.
 
 ## Keys
 
@@ -389,11 +398,13 @@ Volume is a float gain applied before quantisation.
 make test
 ```
 
-`make test` runs the suite for all four crates in the workspace, `playr-core`, `playr-app`, `playr` and `playr-gui`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, and the window's tests drive it headless with `egui_kittest`, so neither needs a display or an audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
+`make test` runs the suite for all five crates in the workspace, `playr-core`, `playr-app`, `playr`, `playr-gui` and `playr-server`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, and the window's tests drive it headless with `egui_kittest`, so neither needs a display or an audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
 
 `.github/workflows/test.yml` runs both builds' tests on Linux, macOS and Windows on every branch push and pull request, with `PLAYR_REQUIRE_FFMPEG=1` and ffmpeg 9.0 on every runner, and checks formatting and clippy on Linux. Runners have no audio device, so only the real-device smoke test skips there.
 
-`.github/workflows/release.yml` builds and packages both programs for every platform when a version tag is pushed, and publishes the release. Run by hand from the Actions tab with no tag, it builds and packages the chosen branch and keeps the archives as the run's artifacts without publishing, to try every platform's build before tagging.
+`.github/workflows/release.yml` builds and packages the three programs for every platform when a version tag is pushed, builds the TouchOSC layout, and publishes the release. Run by hand from the Actions tab with no tag, it builds and packages the chosen branch and keeps the archives as the run's artifacts without publishing, to try every platform's build before tagging.
+
+`make page-test` drives `playr-server`'s page in Chromium with Playwright, and `make touchosc-test` checks the TouchOSC layout against the server's addresses. They need uv, and the page tests a browser and an audio device, so neither is part of `make test`.
 
 Opus output was checked against `ffmpeg` by decoding the same file both ways: identical frame counts and 138.7 dB SNR, with no alignment offset.
 
