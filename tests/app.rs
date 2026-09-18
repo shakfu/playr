@@ -580,6 +580,15 @@ fn renaming_refuses_a_taken_or_empty_name_and_follows_the_playlist() {
     assert_eq!(app.screen().lists.playlists.row, Some(0));
 }
 
+/// Seeks to `to` seconds and waits for the playhead to arrive, which is exact
+/// while the device is stalled.
+fn seek_to(app: &mut App, to: f64) {
+    command(app, &format!("seek {to}"));
+    refresh_until(app, |s| (s.position.as_secs_f64() - to).abs() < 0.01);
+    let at = app.screen().snapshot.position.as_secs_f64();
+    assert!((at - to).abs() < 0.01, "seek {to} landed at {at}");
+}
+
 /// Refreshes until `done` holds for the app's snapshot, or five seconds pass.
 fn refresh_until(app: &mut App, done: impl Fn(&playr::ui::Snapshot) -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -607,30 +616,22 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     };
     let (player, device) = common::fake_player();
     let mut app = App::with_selection(conn, player, vec![track]);
-    let seconds = |app: &mut App| {
-        std::thread::sleep(Duration::from_millis(300));
-        app.refresh();
-        app.screen().snapshot.position.as_secs_f64()
-    };
     refresh_until(&mut app, |s| s.position > Duration::from_millis(200));
 
-    // The second press is meant to land on the mark the first made, so the
-    // position must not move between them. The device is stalled rather than
-    // the second taken on trust: on a loaded machine the two presses can fall
-    // either side of a second, and the second then makes a mark of its own.
+    // Stalled for the rest of the test, so each position below is the seek
+    // target exactly. Both a repeated `b` and `,` turn on the playhead being
+    // within a second of a mark, and a running device drifts past that
+    // between two presses on a loaded machine.
     device.stall();
-    app.refresh();
-    let at = app.screen().snapshot.position.as_secs();
+
+    seek_to(&mut app, 0.5);
     press(&mut app, 'b');
-    assert_eq!(mark_seconds(&app), Some(("Marked", at)));
+    assert_eq!(mark_seconds(&app), Some(("Marked", 0)));
     press(&mut app, 'b');
-    assert_eq!(mark_seconds(&app), Some(("AlreadyMarked", at)));
-    device
-        .stall
-        .store(false, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(mark_seconds(&app), Some(("AlreadyMarked", 0)));
 
     key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
-    assert!(seconds(&mut app) > 30.0);
+    refresh_until(&mut app, |s| s.position.as_secs_f64() > 30.0);
     press(&mut app, 'b');
     assert_eq!(mark_seconds(&app), Some(("Marked", 30)));
 
@@ -639,21 +640,20 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     assert_eq!(query::marks(&other, &path).unwrap().len(), 2);
 
     // Half a second past the 0:30 mark, within a second of it, so `,` skips it.
-    std::thread::sleep(Duration::from_millis(500));
+    seek_to(&mut app, 31.0);
     press(&mut app, ',');
-    let back = seconds(&mut app);
+    refresh_until(&mut app, |s| s.position.as_secs_f64() < 2.0);
+    let back = app.screen().snapshot.position.as_secs_f64();
     assert!(back < 2.0, "comma went to {back}s, not the first mark");
     press(&mut app, '.');
-    let forward = seconds(&mut app);
+    refresh_until(&mut app, |s| s.position.as_secs_f64() > 2.0);
+    let forward = app.screen().snapshot.position.as_secs_f64();
     assert!((30.0..31.5).contains(&forward), "period went to {forward}s");
     press(&mut app, '.');
     assert_eq!(said(&app), msg(Refusal::NoLaterMark));
 
     // A mark added last but earlier in the track: `B` removes it, not 0:30.
-    // An absolute seek, marked as soon as it lands: relative seeks and sleeps
-    // add up to more than the second the check allows on a slow machine.
-    command(&mut app, "seek 5");
-    refresh_until(&mut app, |s| (5.0..5.5).contains(&s.position.as_secs_f64()));
+    seek_to(&mut app, 5.0);
     press(&mut app, 'b');
     assert_eq!(mark_seconds(&app), Some(("Marked", 5)));
     press(&mut app, 'B');

@@ -72,6 +72,59 @@ pub fn track_position(
     Duration::from_secs_f64((played + offset as f64) / rate as f64)
 }
 
+/// Marks the device has yet to reach, oldest first: the `frames_out` each
+/// applies at, and the position offset from that frame on.
+///
+/// The callback advances `frames_out`; the engine advances `track_start` and
+/// `position_offset` on its next pass, so between a loop's wrap and that pass
+/// the three describe different instants and the position runs past the loop's
+/// end. A reader applies the marks itself and gets the position being heard.
+#[derive(Default)]
+struct Pending(Mutex<Vec<(u64, u64)>>);
+
+impl Pending {
+    /// Replaces the marks with those still ahead of the device.
+    fn set(&self, marks: impl Iterator<Item = (u64, u64)>) {
+        if let Ok(mut held) = self.0.lock() {
+            held.clear();
+            held.extend(marks);
+        }
+    }
+
+    /// `(track_start, position_offset)` at `frames_out`: the last mark the
+    /// device has reached, or `current` while it has reached none.
+    fn reached(&self, frames_out: u64, current: (u64, u64)) -> (u64, u64) {
+        let Ok(held) = self.0.lock() else {
+            return current;
+        };
+        held.iter()
+            .take_while(|(at, _)| *at <= frames_out)
+            .last()
+            .copied()
+            .unwrap_or(current)
+    }
+}
+
+/// The position being heard: [`track_position`] with the marks the device has
+/// reached applied, whether or not the engine has caught up with them.
+fn position_now(shared: &Shared, pending: &Pending) -> Duration {
+    let frames_out = shared.frames_out.load(Ordering::Relaxed);
+    let (track_start, offset) = pending.reached(
+        frames_out,
+        (
+            shared.track_start.load(Ordering::Relaxed),
+            shared.position_offset.load(Ordering::Relaxed),
+        ),
+    );
+    track_position(
+        frames_out,
+        track_start,
+        offset,
+        shared.position_rate.load(Ordering::Relaxed),
+        shared.speed(),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum State {
     #[default]
@@ -168,6 +221,7 @@ pub struct Player {
     tx: Sender<Msg>,
     status: Arc<Mutex<Status>>,
     shared: Arc<Shared>,
+    pending: Arc<Pending>,
     events: Events,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -184,13 +238,21 @@ impl Player {
         let (tx, rx) = std::sync::mpsc::channel();
         let status = Arc::new(Mutex::new(Status::default()));
         let shared = Arc::new(Shared::new());
+        let pending: Arc<Pending> = Arc::default();
         let events: Events = Arc::default();
 
         let handle = {
-            let (status, shared, events) = (status.clone(), shared.clone(), events.clone());
+            let (status, shared, pending, events) = (
+                status.clone(),
+                shared.clone(),
+                pending.clone(),
+                events.clone(),
+            );
             std::thread::Builder::new()
                 .name("playr-audio".into())
-                .spawn(move || Engine::new(Box::new(backend), rx, status, shared, events).run())
+                .spawn(move || {
+                    Engine::new(Box::new(backend), rx, status, shared, pending, events).run()
+                })
                 .map_err(|e| output::OutputError::Build(e.to_string()))?
         };
 
@@ -198,6 +260,7 @@ impl Player {
             tx,
             status,
             shared,
+            pending,
             events,
             handle: Some(handle),
         })
@@ -265,13 +328,7 @@ impl Player {
         if requested != self.shared.flush_done.load(Ordering::Relaxed) {
             return Duration::from_nanos(self.shared.seek_target.load(Ordering::Relaxed));
         }
-        track_position(
-            self.shared.frames_out.load(Ordering::Relaxed),
-            self.shared.track_start.load(Ordering::Relaxed),
-            self.shared.position_offset.load(Ordering::Relaxed),
-            self.shared.position_rate.load(Ordering::Relaxed),
-            self.shared.speed(),
-        )
+        position_now(&self.shared, &self.pending)
     }
 
     pub fn volume(&self) -> f32 {
@@ -351,6 +408,8 @@ struct Engine {
     rx: Receiver<Msg>,
     status: Arc<Mutex<Status>>,
     shared: Arc<Shared>,
+    /// `marks` past the first, for readers. See [`Pending`].
+    pending: Arc<Pending>,
     events: Events,
     /// The state and index last published, to send an event when either changes.
     published: (State, usize),
@@ -398,6 +457,7 @@ impl Engine {
         rx: Receiver<Msg>,
         status: Arc<Mutex<Status>>,
         shared: Arc<Shared>,
+        pending: Arc<Pending>,
         events: Events,
     ) -> Self {
         Engine {
@@ -405,6 +465,7 @@ impl Engine {
             rx,
             status,
             shared,
+            pending,
             events,
             published: (State::Stopped, 0),
             device_events: std::sync::mpsc::channel(),
@@ -616,13 +677,7 @@ impl Engine {
         if let Some(flush) = self.flush {
             return flush.at;
         }
-        track_position(
-            self.shared.frames_out.load(Ordering::Relaxed),
-            self.shared.track_start.load(Ordering::Relaxed),
-            self.shared.position_offset.load(Ordering::Relaxed),
-            self.shared.position_rate.load(Ordering::Relaxed),
-            self.shared.speed(),
-        )
+        position_now(&self.shared, &self.pending)
     }
 
     fn teardown(&mut self) {
@@ -634,6 +689,7 @@ impl Engine {
         self.flush = None;
         self.carry.clear();
         self.marks.clear();
+        self.publish_marks();
         self.written = 0;
         // Dropping the output drops the ring, discarding anything buffered.
         self.out = None;
@@ -675,8 +731,7 @@ impl Engine {
         let duration = stream.duration();
         self.stream = Some(stream);
         self.decoded = (first.len() / spec.channels.max(1) as usize) as u64;
-        self.marks.clear();
-        self.marks.push_back((0, i, duration, 0));
+        self.reset_marks(i, duration);
         self.shared.track_start.store(0, Ordering::Relaxed);
         // A new track starts from its own beginning, not a previous seek.
         self.shared.position_offset.store(0, Ordering::Relaxed);
@@ -923,8 +978,7 @@ impl Engine {
         let dur = self.stream.as_ref().and_then(|s| s.duration());
         let idx = self.index;
         self.written = 0;
-        self.marks.clear();
-        self.marks.push_back((0, idx, dur, 0));
+        self.reset_marks(idx, dur);
 
         // The device discards the pre-seek audio in its callback; nothing is
         // pushed until it has. Reopening the device instead cost a gap and
@@ -1126,7 +1180,7 @@ impl Engine {
                 self.finish_track();
                 self.conv = Some(Converter::new(spec, plan, speed));
             }
-            self.marks.push_back((self.written, next, duration, 0));
+            self.push_mark(self.written, next, duration, 0);
             self.stream = Some(stream);
             self.decoded = (first.len() / spec.channels.max(1) as usize) as u64;
             self.convert_and_carry(&first);
@@ -1160,8 +1214,7 @@ impl Engine {
         self.stream = Some(staged.stream);
         self.decoded = (staged.first.len() / staged.spec.channels.max(1) as usize) as u64;
         self.written = 0;
-        self.marks.clear();
-        self.marks.push_back((0, staged.index, duration, 0));
+        self.reset_marks(staged.index, duration);
         self.shared.track_start.store(0, Ordering::Relaxed);
         // A new track starts from its own beginning, not a previous seek.
         self.shared.position_offset.store(0, Ordering::Relaxed);
@@ -1222,7 +1275,7 @@ impl Engine {
         let heard = self.written + (self.carry.len() / out.plan.channels.max(1) as usize) as u64;
         let output_rate = self.shared.position_rate.load(Ordering::Relaxed) as f64;
         let offset = (at.as_secs_f64() * output_rate) as u64;
-        self.marks.push_back((heard, l.index, duration, offset));
+        self.push_mark(heard, l.index, duration, offset);
     }
 
     /// Ends a one-shot range: leaves the decoder at `l`'s end and marks the
@@ -1249,7 +1302,7 @@ impl Engine {
         let duration = stream.duration();
         let output_rate = self.shared.position_rate.load(Ordering::Relaxed) as f64;
         let offset = (at.as_secs_f64() * output_rate) as u64;
-        self.marks.push_back((heard, l.index, duration, offset));
+        self.push_mark(heard, l.index, duration, offset);
     }
 
     /// Loops `bounds` of the audible track, or stops looping.
@@ -1334,15 +1387,40 @@ impl Engine {
         }
     }
 
+    /// Publishes the marks the device has yet to reach, for [`Player::position`].
+    ///
+    /// The first is left out: it is already in `track_start` and
+    /// `position_offset`, and after a seek its offset is zero until
+    /// [`Engine::poll_flush`] stores the real one.
+    fn publish_marks(&self) {
+        self.pending
+            .set(self.marks.iter().skip(1).map(|&(at, _, _, off)| (at, off)));
+    }
+
+    /// Adds a mark the device reaches at output frame `at`.
+    fn push_mark(&mut self, at: u64, index: usize, duration: Option<Duration>, offset: u64) {
+        self.marks.push_back((at, index, duration, offset));
+        self.publish_marks();
+    }
+
+    /// Replaces the marks with `index` alone, playing from its own start.
+    fn reset_marks(&mut self, index: usize, duration: Option<Duration>) {
+        self.marks.clear();
+        self.marks.push_back((0, index, duration, 0));
+        self.publish_marks();
+    }
+
     /// Moves the reported track forward once the device has reached its boundary.
     fn advance_marks(&mut self) {
         let played = self.shared.frames_out.load(Ordering::Relaxed);
+        let mut moved = false;
         while self.marks.len() > 1 {
             let next_start = self.marks[1].0;
             if played < next_start {
                 break;
             }
             self.marks.pop_front();
+            moved = true;
             let (start, idx, _, offset) = self.marks[0];
             self.index = idx;
             self.shared.track_start.store(start, Ordering::Relaxed);
@@ -1351,6 +1429,9 @@ impl Engine {
             if self.looping.is_some_and(|l| l.index != idx) {
                 self.looping = None;
             }
+        }
+        if moved {
+            self.publish_marks();
         }
     }
 

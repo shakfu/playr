@@ -684,8 +684,13 @@ fn a_loop_repeats_its_frames_exactly_and_follows_new_bounds() {
     let seen = until_heard(&control, 0, |s| returns(s) >= 5);
     assert_loops(&seen, 8_001, 8_400);
     assert_eq!(player.status().looping, Some((8_000, 8_400)));
-    let at = player.position().as_secs_f64();
-    assert!((1.0..1.05).contains(&at), "position {at}");
+    // Read over several passes: the position must stay inside the loop even
+    // between the device reaching the wrap and the engine's next pass.
+    for _ in 0..200 {
+        let at = player.position().as_secs_f64();
+        assert!((1.0..1.05).contains(&at), "position {at}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
 
     // Narrower bounds apply once the audio decoded under the old ones is gone.
     player.send(Cmd::Loop(Some((8_100, 8_300))));
