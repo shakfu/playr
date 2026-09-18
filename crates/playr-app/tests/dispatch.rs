@@ -359,19 +359,27 @@ fn clearing_marks_clears_the_track_asked_about_after_the_track_changes() {
 fn pruning_asks_first_and_starts_on_a_yes() {
     let (mut f, dir) = headless();
     let nowhere = dir.path().join("nowhere");
-    dispatch(Action::Prune(nowhere.clone()), &mut f);
+    dispatch(Action::Prune(Some(nowhere.clone())), &mut f);
     assert_eq!(last(&f), Some(&Refusal::NotADirectory(nowhere).into()));
     assert_eq!(f.asked, None, "asked about a directory that is not there");
 
     let music = dir.path().to_path_buf();
-    dispatch(Action::Prune(music.clone()), &mut f);
+    dispatch(Action::Prune(Some(music.clone())), &mut f);
     let question = f.asked.take().unwrap();
-    assert_eq!(question, Confirm::Prune(music.clone()));
+    assert_eq!(question, Confirm::Prune(Some(music.clone())));
     assert_ne!(
         last(&f),
-        Some(&Outcome::PruneStarted { dir: music.clone() }.into()),
+        Some(
+            &Outcome::PruneStarted {
+                dir: Some(music.clone())
+            }
+            .into()
+        ),
         "pruned before a yes"
     );
     confirmed(question, &mut f);
-    assert_eq!(last(&f), Some(&Outcome::PruneStarted { dir: music }.into()));
+    assert_eq!(
+        last(&f),
+        Some(&Outcome::PruneStarted { dir: Some(music) }.into())
+    );
 }

@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use crate::audio::{Cmd, Mode, Player, State};
 use crate::db;
 use crate::db::query::{self, Mark, Playlist};
-use crate::db::Track;
+use crate::db::{Pruned, Track};
 use crate::event::{Event, EventSink, JobId};
 use crate::notice::{Notice, Outcome, Refusal, Task};
 use crate::samples::{self, Cut, Job, Plan};
@@ -574,6 +574,7 @@ impl Session {
     /// Scans `dir` into the library file, creating it if there is none.
     /// Sends [`Event::ScanProgress`] as it goes and finishes with
     /// [`Event::Scanned`], after which the frontend calls [`Session::scanned`].
+    /// The directory is recorded so a later [`Session::rescan`] covers it.
     pub fn scan(&mut self, dir: PathBuf) -> Result<JobId, Refusal> {
         let Some(library) = self.library.clone() else {
             return Err(Refusal::NoLibraryPath);
@@ -598,7 +599,49 @@ impl Session {
                 })
             });
             scanning.store(false, Ordering::Relaxed);
-            Some(Event::Scanned { job, dir, result })
+            Some(Event::Scanned {
+                job,
+                dir: Some(dir),
+                result,
+            })
+        }))
+    }
+
+    /// Re-scans every directory previously given to [`Session::scan`] or
+    /// `playr scan`. Sends the same progress events as a single scan.
+    pub fn rescan(&mut self) -> Result<JobId, Refusal> {
+        let Some(library) = self.library.clone() else {
+            return Err(Refusal::NoLibraryPath);
+        };
+        if !self.has_library_file() {
+            return Err(Refusal::NoLibraryFile);
+        }
+        let roots = db::roots(&self.conn).unwrap_or_default();
+        if roots.is_empty() {
+            return Err(Refusal::NoRoots);
+        }
+        if self.scanning.swap(true, Ordering::Relaxed) {
+            return Err(Refusal::ScanRunning);
+        }
+        let (scanning, events) = (self.scanning.clone(), self.events.clone());
+        Ok(self.spawn(move |job| {
+            let result = caught("scan", || {
+                scan::scan_roots(&library, &roots, |stats| {
+                    if stats.seen > 0 && stats.seen % crate::event::SCAN_PROGRESS_EVERY == 0 {
+                        events(Event::ScanProgress {
+                            job,
+                            seen: stats.seen,
+                            added: stats.added,
+                        });
+                    }
+                })
+            });
+            scanning.store(false, Ordering::Relaxed);
+            Some(Event::Scanned {
+                job,
+                dir: None,
+                result,
+            })
         }))
     }
 
@@ -616,27 +659,36 @@ impl Session {
         self.reload();
     }
 
-    /// Whether `dir` can be pruned, for a frontend to refuse before it asks.
-    pub fn check_prune(&self, dir: &Path) -> Result<(), Refusal> {
+    /// Whether `dir` can be pruned, or every recorded root when `None`, for a
+    /// frontend to refuse before it asks.
+    pub fn check_prune(&self, dir: Option<&Path>) -> Result<(), Refusal> {
         if !self.has_library_file() {
             Err(Refusal::NoLibraryFile)
-        } else if !dir.is_dir() {
-            Err(Refusal::NotADirectory(dir.to_path_buf()))
         } else if self.scanning.load(Ordering::Relaxed) {
             Err(Refusal::ScanRunning)
         } else {
-            Ok(())
+            match dir {
+                Some(dir) if !dir.is_dir() => Err(Refusal::NotADirectory(dir.to_path_buf())),
+                None if db::roots(&self.conn).ok().is_none_or(|r| r.is_empty()) => {
+                    Err(Refusal::NoRoots)
+                }
+                _ => Ok(()),
+            }
         }
     }
 
     /// Removes the tracks under `dir` whose files are gone, and the marks of
-    /// every file under it that is gone. Finishes with [`Event::Pruned`],
-    /// after which the frontend calls [`Session::pruned`]. Shares a scan's
-    /// turn: one of either runs at a time.
-    pub fn prune(&mut self, dir: PathBuf) -> Result<JobId, Refusal> {
-        self.check_prune(&dir)?;
+    /// every file under it that is gone; with `None`, every recorded root.
+    /// Finishes with [`Event::Pruned`], after which the frontend calls
+    /// [`Session::pruned`]. Shares a scan's turn: one of either runs at a time.
+    pub fn prune(&mut self, dir: Option<PathBuf>) -> Result<JobId, Refusal> {
+        self.check_prune(dir.as_deref())?;
         let Some(library) = self.library.clone() else {
             return Err(Refusal::NoLibraryFile);
+        };
+        let dirs = match &dir {
+            Some(d) => vec![d.clone()],
+            None => db::roots(&self.conn).unwrap_or_default(),
         };
         if self.scanning.swap(true, Ordering::Relaxed) {
             return Err(Refusal::ScanRunning);
@@ -646,11 +698,51 @@ impl Session {
             let result = caught("prune", || {
                 let fail = |e: rusqlite::Error| format!("{}: {e}", library.display());
                 let conn = db::open(&library).map_err(fail)?;
-                db::prune_missing(&conn, &dir).map_err(fail)
+                let mut removed = crate::db::Pruned::default();
+                for d in &dirs {
+                    let batch = db::prune_missing(&conn, d).map_err(fail)?;
+                    removed.tracks += batch.tracks;
+                    removed.marks += batch.marks;
+                }
+                Ok(removed)
             });
             scanning.store(false, Ordering::Relaxed);
             Some(Event::Pruned { job, dir, result })
         }))
+    }
+
+    /// Directories previously scanned into this library.
+    pub fn roots(&self) -> Vec<PathBuf> {
+        db::roots(&self.conn).unwrap_or_default()
+    }
+
+    /// Whether `dir` can be forgotten, for a frontend to refuse before it asks.
+    pub fn check_forget(&self, dir: &Path) -> Result<(), Refusal> {
+        if !self.has_library_file() {
+            Err(Refusal::NoLibraryFile)
+        } else if self.scanning.load(Ordering::Relaxed) {
+            Err(Refusal::ScanRunning)
+        } else if db::stored_root(&self.conn, dir).ok().flatten().is_none() {
+            Err(Refusal::NotARoot(dir.to_path_buf()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Forgets `dir` as a root and removes the tracks and marks under it,
+    /// then reads the library again.
+    ///
+    /// Done here rather than on a job: it asks the filesystem nothing, so it
+    /// is one transaction rather than a walk of every file. It still waits for
+    /// a scan, which writes the same rows.
+    pub fn forget_root(&mut self, dir: &Path) -> Result<Pruned, Refusal> {
+        self.check_forget(dir)?;
+        let removed = db::forget_root(&self.conn, dir)
+            .ok()
+            .flatten()
+            .ok_or_else(|| Refusal::NotARoot(dir.to_path_buf()))?;
+        self.pruned();
+        Ok(removed)
     }
 
     /// Takes in a finished prune: reads the library and its marks again.

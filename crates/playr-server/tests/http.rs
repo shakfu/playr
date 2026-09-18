@@ -4,7 +4,6 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,11 +23,12 @@ struct Server {
 }
 
 fn server() -> Server {
-    start(None, Some(TOKEN))
+    start(false, Some(TOKEN))
 }
 
-/// A server that may rescan `music`, needing `token` if one is given.
-fn start(music: Option<PathBuf>, token: Option<&str>) -> Server {
+/// A server whose library has a recorded root when `rescan`, needing `token`
+/// if one is given.
+fn start(rescan: bool, token: Option<&str>) -> Server {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (send, requests) = mpsc::channel();
@@ -38,7 +38,7 @@ fn start(music: Option<PathBuf>, token: Option<&str>) -> Server {
     let config = http::Config {
         token: token.map(String::from),
         hosts: vec!["pi.lan".into()],
-        music,
+        rescan,
     };
     let serving = latest.clone();
     std::thread::spawn(move || http::serve(listener, config, send, serving));
@@ -283,7 +283,7 @@ fn a_proxy_serving_tls_gives_an_https_origin() {
 
 #[test]
 fn an_open_server_needs_no_token_but_still_checks_host_and_origin() {
-    let server = start(None, None);
+    let server = start(false, None);
     let host = server.addr;
     let r = server.raw(&format!("GET / HTTP/1.1\r\nHost: {host}"), "");
     assert_eq!(r.status, 200);
@@ -395,12 +395,12 @@ fn reads_answer_with_what_the_owner_returns() {
 }
 
 #[test]
-fn a_rescan_scans_only_the_directory_given_at_startup() {
-    let server = start(Some("/music".into()), Some(TOKEN));
+fn a_rescan_covers_the_recorded_roots_and_names_no_directory() {
+    let server = start(true, Some(TOKEN));
     assert_eq!(server.json("GET", "/config", ""), json!({ "rescan": true }));
-    // A body naming another directory is ignored.
+    // A body naming a directory is ignored: the page cannot choose one.
     assert_eq!(server.send("POST", "/rescan", "/etc").status, 204);
-    assert_eq!(server.requests(), [r#"perform Scan("/music")"#]);
+    assert_eq!(server.requests(), ["perform Rescan"]);
 
     let server = self::server();
     assert_eq!(

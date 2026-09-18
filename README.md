@@ -171,7 +171,13 @@ playr formats               # show what this build can decode
 
 The library lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan`, or `:scan` inside playr, creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
 
-Rescanning only re-reads files whose size or modification time changed. A scan never removes anything: it counts the tracks under the scanned directory whose files are gone. `playr prune DIR` removes those tracks, and with them their places in playlists, and the marks of every file under `DIR` that is gone, whether it was in the library or not. Nothing outside `DIR` is touched, so pruning `~/music` leaves an unplugged drive mounted elsewhere alone. Prune after a file is moved or deleted for good, not while a drive under `DIR` is unplugged.
+Rescanning only re-reads files whose size or modification time changed. Each scanned directory is remembered as a root, so `:rescan` (or `:sync`) inside playr, and a bare `playr scan`, cover them again without naming them. A directory holding no audio file does not become a root, and neither does one inside a root: the root above it already covers its files.
+
+`:roots` lists the directories the library covers, and `playr roots` prints them. `:roots rm DIR`, or `playr roots rm DIR`, forgets one: the directory stops being part of the library, and the tracks under it go with it, along with their places in playlists and their marks. Unlike a prune this does not ask the filesystem anything, so it works on a directory that is already gone. `:roots add DIR` is another spelling of `:scan DIR`.
+
+A scan never removes anything itself. It counts the tracks under the scanned directory whose files are gone; inside playr it then asks whether to prune them, and `playr scan` prints the count and the command. `playr prune`, or `:prune`, covers every root; `playr prune DIR` and `:prune DIR` cover one. They remove those tracks, and with them their places in playlists, and the marks of every file under the directory that is gone, whether it was in the library or not. Nothing outside the named directories is touched, so pruning `~/music` leaves an unplugged drive mounted elsewhere alone. Prune after a file is moved or deleted for good, not while a drive under that directory is unplugged.
+
+Playlist entries and marks are the only things in the library that are not read back from the files, so pruning is the one operation that loses work. With `auto_prune = true` a scan inside playr prunes without asking, except when a directory read as empty although the library holds tracks under it: that is what an unmounted drive looks like, so playr asks instead.
 
 ### Desktop window
 
@@ -183,15 +189,15 @@ playr-gui --db other.db          # use a different library file
 
 It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
 
-File, Add folder to library scans a directory, as `playr scan` does, and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
+File, Add folder to library scans a directory, as `playr scan` does; File, Rescan library re-scans those folders; File, Library directories lists them, each with a Forget button; File, Remove missing files prunes every recorded folder; and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
 
 ### Server
 
 ```sh
-playr-server --listen 0.0.0.0:8080 --music ~/music   # prints the address to open
+playr-server --listen 0.0.0.0:8080   # prints the address to open
 ```
 
-`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page with the window's views, keys, `:` commands, dialogs and marks, without the sampler. The page adapts to a phone, a tablet or a desktop browser. It needs a token from the printed address, or none with `--open` on a network you trust. With `--osc`, OSC controls playback too. [docs/server-guide.md](docs/server-guide.md) covers access from other devices, TouchOSC, and running it as a service on a Raspberry Pi.
+`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page with the window's views, keys, `:` commands, dialogs and marks, without the sampler. The page adapts to a phone, a tablet or a desktop browser. It needs a token from the printed address, or none with `--open` on a network you trust. The page cannot name a path, so it cannot open, scan or prune one; its Rescan library re-scans the directories `playr scan` recorded, and nothing else. With `--osc`, OSC controls playback too. [docs/server-guide.md](docs/server-guide.md) covers access from other devices, TouchOSC, and running it as a service on a Raspberry Pi.
 
 ## Keys
 
@@ -327,7 +333,7 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 
 `:` opens a command line: `:seek 1:23`, `:volume 60`, `:playlist late night`. Every key's action has a command, and commands also take arguments no key can, such as a time or a name. Some commands work only in one view, as `:remove` in the selection. Tab completes, up recalls earlier lines, and `:help` lists every command. [docs/cheatsheet.md](docs/cheatsheet.md) has the full list.
 
-`:scan ~/music` adds a directory to the library without leaving playr. It runs in the background and counts files on the bottom line; once it finishes, the library view shows the new tracks. Saving a playlist or a mark while a scan runs waits for the scan to finish writing its current batch of 500 files, and fails with "database is locked" if that takes more than 5 seconds. `:prune ~/music` does what `playr prune` does, after asking. `:open ~/music/some/album` plays a file or directory, as `playr <path>` does, and adds its tracks to the end of the selection.
+`:scan ~/music` adds a directory to the library without leaving playr. It runs in the background and counts files on the bottom line; once it finishes, the library view shows the new tracks. `:rescan` or `:sync` re-scans every directory previously added that way, or by `playr scan`. If any tracks are missing, playr asks to prune them, unless `auto_prune` is set. `:prune` (or `:prune ~/music`) does what `playr prune` does, after asking. Saving a playlist or a mark while a scan runs waits for the scan to finish writing its current batch of 500 files, and fails with "database is locked" if that takes more than 5 seconds. `:open ~/music/some/album` plays a file or directory, as `playr <path>` does, and adds its tracks to the end of the selection.
 
 ## Configuration
 
@@ -339,6 +345,7 @@ mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in f
 speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 samples = "~/Music/playr/samples"  # where :slice writes
+auto_prune = true                  # after a scan, prune missing tracks without asking
 theme = "light"                    # system, light or dark
 
 [keys]                             # every view

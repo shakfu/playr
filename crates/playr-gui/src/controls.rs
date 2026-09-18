@@ -175,5 +175,8 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("Activate", "a double click on a row"),
     ("Open", "File, Open files and Open folder"),
     ("Scan", "File, Add folder to library"),
+    ("Rescan", "File, Rescan library"),
+    ("ShowRoots", "File, Library directories"),
+    ("ForgetRoot", "Forget, in File, Library directories"),
     ("Prune", "File, Remove missing files"),
 ];

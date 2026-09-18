@@ -206,6 +206,100 @@ pub struct Pruned {
     pub marks: usize,
 }
 
+/// Records `root` as a library root, once it resolves. A relative root that
+/// does not resolve is ignored, as [`crate::scan::scan_dir`] would scan nothing.
+///
+/// Callers record a root only once a scan of it has seen an audio file. A
+/// directory holding none is not a library root: it would be walked by every
+/// later rescan and counted among the roots that make one possible. The test
+/// is on files seen, not files added, so a rescan that finds nothing new
+/// keeps its root.
+///
+/// A root that reads as empty is never dropped here. It may be a drive that is
+/// not mounted, and forgetting it would make that unrecoverable. A root nested
+/// inside another is dropped, since the wider one already covers its files:
+/// keeping both walks them twice and counts what is missing twice.
+pub fn add_root(conn: &Connection, root: &Path) -> Result<()> {
+    let Some(path) = root
+        .canonicalize()
+        .ok()
+        .as_ref()
+        .and_then(|p| p.to_str())
+        .map(str::to_owned)
+    else {
+        return Ok(());
+    };
+    // Component-wise, so `/music2` is not taken to be under `/music`.
+    let new = Path::new(&path);
+    let existing = roots(conn)?;
+    if existing.iter().any(|r| new.starts_with(r)) {
+        return Ok(());
+    }
+    for inner in existing.iter().filter(|r| r.starts_with(new)) {
+        conn.execute(
+            "DELETE FROM roots WHERE path = ?1",
+            [inner.to_string_lossy()],
+        )?;
+    }
+    conn.execute("INSERT OR IGNORE INTO roots (path) VALUES (?1)", [&path])?;
+    Ok(())
+}
+
+/// Directories previously scanned into this library, in path order.
+pub fn roots(conn: &Connection) -> Result<Vec<PathBuf>> {
+    let mut stmt = conn.prepare("SELECT path FROM roots ORDER BY path")?;
+    let paths = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(paths.into_iter().map(PathBuf::from).collect())
+}
+
+/// The recorded root `root` names: the path as stored, a path that resolves
+/// to it, or `None` when no root matches.
+///
+/// The literal spelling has to work, because a root whose directory is gone
+/// cannot be canonicalized, and that is the root most worth forgetting.
+pub(crate) fn stored_root(conn: &Connection, root: &Path) -> Result<Option<String>> {
+    let resolved = root.canonicalize().ok();
+    Ok(roots(conn)?
+        .into_iter()
+        .find(|r| r == root || resolved.as_deref() == Some(r.as_path()))
+        .map(|r| r.to_string_lossy().into_owned()))
+}
+
+/// Forgets `root` and removes everything the library held under it: the
+/// tracks, with their places in playlists, and the marks of every file under
+/// it, in the library or not. `None` if no root matches.
+///
+/// Unlike [`prune_missing`] this does not ask the filesystem anything. A
+/// directory that is no longer a root is no longer part of the library,
+/// whether or not its files are still there.
+pub fn forget_root(conn: &Connection, root: &Path) -> Result<Option<Pruned>> {
+    let Some(stored) = stored_root(conn, root)? else {
+        return Ok(None);
+    };
+    let prefix = Path::new(&stored).join("").to_string_lossy().into_owned();
+    let tracks = query::under_path(conn, &prefix)?;
+    let marked: Vec<String> = conn
+        .prepare("SELECT DISTINCT path FROM marks WHERE substr(path, 1, length(?1)) = ?1")?
+        .query_map([&prefix], |r| r.get(0))?
+        .collect::<Result<_>>()?;
+    let tx = conn.unchecked_transaction()?;
+    for t in &tracks {
+        tx.execute("DELETE FROM tracks WHERE id = ?1", [t.id])?;
+    }
+    let mut marks = 0;
+    for path in &marked {
+        marks += query::clear_marks(&tx, path)?;
+    }
+    tx.execute("DELETE FROM roots WHERE path = ?1", [&stored])?;
+    tx.commit()?;
+    Ok(Some(Pruned {
+        tracks: tracks.len(),
+        marks,
+    }))
+}
+
 /// `root` as a path prefix, or `None` if it does not resolve.
 ///
 /// The trailing separator keeps `/music` from matching `/music2`.

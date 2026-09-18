@@ -9,7 +9,6 @@
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
@@ -55,8 +54,11 @@ pub struct Config {
     /// Host names accepted besides IP addresses, `localhost` and `.local`
     /// names, compared without case.
     pub hosts: Vec<String>,
-    /// The directory the page may rescan; the page cannot name another.
-    pub music: Option<PathBuf>,
+    /// Whether the library had a recorded root when the server started. The
+    /// page may re-scan those roots but cannot name a directory, and nothing
+    /// can add one while the server holds the instance lock, so this is read
+    /// once.
+    pub rescan: bool,
 }
 
 /// What every connection's thread shares.
@@ -219,7 +221,7 @@ fn handle(stream: &mut TcpStream, context: &Context) -> io::Result<()> {
             PAGE.as_bytes(),
         ),
         ("GET", "/events") => events(stream, &context.latest),
-        ("GET", "/config") => json(stream, &json!({ "rescan": config.music.is_some() })),
+        ("GET", "/config") => json(stream, &json!({ "rescan": config.rescan })),
         ("POST", "/command") => {
             let line = body.trim().to_string();
             refusable(stream, context, |reply| Request::Command { line, reply })
@@ -275,10 +277,10 @@ fn handle(stream: &mut TcpStream, context: &Context) -> io::Result<()> {
         },
         ("POST", "/name") => perform(stream, context, Request::Name(body.trim().to_string())),
         ("POST", "/close") => perform(stream, context, Request::Close),
-        ("POST", "/rescan") => match &config.music {
-            Some(dir) => perform(stream, context, Request::Perform(Action::Scan(dir.clone()))),
-            None => text(stream, 404, "playr-server was started without --music"),
-        },
+        ("POST", "/rescan") if config.rescan => {
+            perform(stream, context, Request::Perform(Action::Rescan))
+        }
+        ("POST", "/rescan") => text(stream, 404, "the library has no directory to re-scan"),
         ("GET", "/rows") => {
             let number = |name| {
                 request

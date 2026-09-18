@@ -14,6 +14,7 @@ use super::{
 };
 use playr_app::action::Action;
 use playr_app::command::{self, view_name};
+use playr_app::message;
 use playr_app::message::fmt_time;
 use playr_app::sampler::{self, Display};
 use playr_app::{meter, model};
@@ -61,6 +62,18 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
                 f,
                 f.area(),
                 "Commands",
+                &rows,
+                app.help_scroll,
+            )
+        }
+        Input::Roots(roots) => {
+            let paths: Vec<String> = roots.iter().map(|r| message::home_as_tilde(r)).collect();
+            let rows: Vec<(&str, &str)> = paths.iter().map(|p| (p.as_str(), "")).collect();
+            draw_help(
+                app.palette(),
+                f,
+                f.area(),
+                "Library directories",
                 &rows,
                 app.help_scroll,
             )

@@ -28,13 +28,16 @@ pub const VIEWS: [View; 3] = [View::Library, View::Selection, View::Playlists];
 /// Whether the page may perform `action`. Not quitting, which would stop the
 /// server; not a path from the page, which could name any file; not changing
 /// the keys, which the page reads once; and nothing of the sampler.
+/// `:rescan` is allowed: it only covers directories already recorded by a scan.
 ///
 /// Every variant is named, so a new action does not compile until it is
 /// decided here.
 pub fn allowed(action: &Action) -> bool {
     use Action::*;
     match action {
-        Quit | Scan(_) | Prune(_) | Open(_) | Map { .. } | Unmap { .. } => false,
+        Quit | Scan(_) | Prune(Some(_)) | ForgetRoot(_) | Open(_) | Map { .. } | Unmap { .. } => {
+            false
+        }
         ShowView(View::Sampler)
         | Slice(_)
         | Zoom(_)
@@ -52,10 +55,10 @@ pub fn allowed(action: &Action) -> bool {
         Help | CommandHelp | ShowView(_) | NextView | Cursor(_) | CursorFirst | CursorLast
         | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add | Remove
         | MoveTrack(_) | ClearSelection | StartSave | SaveAs(_) | DeletePlaylist | StartRename
-        | RenameTo(_) | PlayPlaylist(_) | TogglePause | Next | Prev | Stop | SeekBy(_)
-        | SeekTo(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | CycleMode(_)
-        | SetMode(_) | Mark | MarkAt(_) | UndoMark | ClearMarks | NextMark | PrevMark
-        | Theme(_) => true,
+        | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None) | TogglePause | Next
+        | Prev | Stop | SeekBy(_) | SeekTo(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_)
+        | SetSpeed(_) | CycleMode(_) | SetMode(_) | Mark | MarkAt(_) | UndoMark | ClearMarks
+        | NextMark | PrevMark | Theme(_) => true,
     }
 }
 
@@ -150,6 +153,11 @@ fn input(input: &Input) -> Value {
         Input::Confirm(question) => json!({ "kind": "confirm", "question": question.question() }),
         Input::Help => json!({ "kind": "keys" }),
         Input::CommandHelp => json!({ "kind": "commands" }),
+        // Carried with the state: the page has no path of its own to ask on.
+        Input::Roots(roots) => json!({
+            "kind": "roots",
+            "rows": roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>(),
+        }),
         Input::Command(line) => json!({ "kind": "command", "text": line.text }),
     }
 }
@@ -284,7 +292,7 @@ pub fn help(model: &Model, commands: bool) -> Value {
 /// Whether the command `usage`, listed under `heading`, is one the page may
 /// run. Its arguments are unknown here, so it is judged by name.
 fn usable_command(heading: Option<&str>, usage: &str) -> bool {
-    const REFUSED: [&str; 7] = ["quit", "scan", "prune", "open", "map", "unmap", "slice"];
+    const REFUSED: [&str; 6] = ["quit", "scan", "open", "map", "unmap", "slice"];
     let name = usage
         .trim_start_matches(':')
         .split(' ')

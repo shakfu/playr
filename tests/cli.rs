@@ -76,12 +76,24 @@ fn bad_arguments_are_refused_before_anything_runs() {
         (&["formats", "extra"], "unexpected argument 'extra'"),
         (&["search", "rock", "--db"], "a value is required for '--db"),
         (&["search"], "<QUERY>"),
-        (&["scan"], "<DIR>"),
+        (&["scan", "--bogus"], "unexpected argument '--bogus'"),
     ] {
         let (code, _, stderr) = output(&db, args);
         assert_eq!(code, Some(2), "playr {args:?}: {stderr}");
         assert!(stderr.contains(error), "playr {args:?}: {stderr}");
     }
+    let (code, _, stderr) = output(&db, &["scan"]);
+    assert_eq!(code, Some(1), "bare scan with no library: {stderr}");
+    assert!(
+        stderr.contains("no directories to scan"),
+        "bare scan with no library: {stderr}"
+    );
+    let (code, _, stderr) = output(&db, &["prune"]);
+    assert_eq!(code, Some(1), "bare prune with no library: {stderr}");
+    assert!(
+        stderr.contains("no library"),
+        "bare prune with no library: {stderr}"
+    );
     assert!(!db.exists());
 }
 
@@ -90,7 +102,11 @@ fn each_subcommand_has_its_own_help() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("library.db");
     // Windows names the program `playr.exe` in usage lines.
-    for (command, text) in [("scan", "scan [OPTIONS] <DIR>"), ("search", "--json")] {
+    for (command, text) in [
+        ("scan", "scan [OPTIONS] [DIR]..."),
+        ("prune", "prune [OPTIONS] [DIR]..."),
+        ("search", "--json"),
+    ] {
         let (code, stdout, _) = output(&db, &[command, "--help"]);
         assert_eq!(code, Some(0));
         assert!(stdout.contains(text), "playr {command} --help: {stdout}");
@@ -325,4 +341,35 @@ fn scan_keeps_missing_tracks_and_prune_removes_them_with_their_marks() {
     assert_eq!(code, Some(1), "{stderr}");
     assert!(stderr.contains("no library"), "{stderr}");
     assert!(!other.exists());
+}
+
+#[test]
+fn roots_lists_what_was_scanned_and_rm_forgets_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("playr/library.db");
+    let songs = dir.path().join("music");
+    std::fs::create_dir(&songs).unwrap();
+    std::fs::write(songs.join("a.wav"), b"not audio").unwrap();
+
+    // No library yet: listing and forgetting have nothing to read.
+    let (code, _, stderr) = output(&db, &["roots"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("no library"), "{stderr}");
+
+    playr(&db, &["scan", songs.to_str().unwrap()]);
+    let canonical = songs.canonicalize().unwrap();
+    let (code, stdout, _) = output(&db, &["roots"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(stdout.trim(), canonical.display().to_string());
+
+    // A directory that is not a root is reported and fails.
+    let (code, _, stderr) = output(&db, &["roots", "rm", dir.path().to_str().unwrap()]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("not one of the library's"), "{stderr}");
+
+    let (code, stdout, stderr) = output(&db, &["roots", "rm", songs.to_str().unwrap()]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("forgot"), "{stdout}");
+    let (_, stdout, _) = output(&db, &["roots"]);
+    assert!(stdout.trim().is_empty(), "still listed: {stdout}");
 }

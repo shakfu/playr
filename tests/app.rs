@@ -930,14 +930,14 @@ fn view_commands_act_on_the_view_they_belong_to() {
 fn tab_completes_only_commands_that_work_in_this_view() {
     let (mut app, _dir) = app();
     press(&mut app, ':');
-    typing(&mut app, "re");
+    typing(&mut app, "rem");
     key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
     assert_eq!(command_text(&mut app).as_deref(), Some("remove"));
     key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
 
     press(&mut app, '3');
     press(&mut app, ':');
-    typing(&mut app, "re");
+    typing(&mut app, "ren");
     key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
     assert_eq!(command_text(&mut app).as_deref(), Some("rename"));
 }

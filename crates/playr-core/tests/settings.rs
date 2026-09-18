@@ -121,3 +121,14 @@ fn onset_sensitivity_defaults_to_the_middle_and_stays_in_range() {
         );
     }
 }
+
+#[test]
+fn auto_prune_defaults_off_and_takes_a_boolean() {
+    assert!(!Settings::default().auto_prune);
+    assert!(parse("auto_prune = true").unwrap().auto_prune);
+    assert!(!parse("auto_prune = false").unwrap().auto_prune);
+    assert_eq!(
+        parse("auto_prune = 1").unwrap_err(),
+        ["line 1: auto_prune cannot be an integer"]
+    );
+}

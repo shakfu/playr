@@ -522,7 +522,7 @@ $("menu-button").addEventListener("click", () => {
   ];
   const buttons = items.map(([label, command]) =>
     button(label, () => { $("sheet").close(); run(command); }));
-  if (rescan) buttons.push(button("Rescan music folder", () => { $("sheet").close(); call("/rescan", ""); }));
+  if (rescan) buttons.push(button("Rescan library", () => { $("sheet").close(); call("/rescan", ""); }));
   $("sheet-heading").textContent = "playr";
   $("sheet-items").replaceChildren(...buttons);
   $("sheet").showModal();
@@ -636,7 +636,7 @@ async function followInput() {
   shownInput = kind;
   show($("confirm-dialog"), kind === "confirm");
   show($("name-dialog"), kind === "save" || kind === "rename");
-  show($("list-dialog"), kind === "keys" || kind === "commands");
+  show($("list-dialog"), kind === "keys" || kind === "commands" || kind === "roots");
   $("commandbar").hidden = kind !== "command";
   $("status").hidden = kind === "command";
   if (!opened) return;
@@ -652,6 +652,12 @@ async function followInput() {
     const rows = await call("/help?list=" + kind) || [];
     $("list-rows").replaceChildren(...rows.flatMap(([a, b]) =>
       b ? [span("keys", a), span("", b)] : [span("heading", a)]));
+  }
+  // The rows come with the state; the page has no path of its own to ask on.
+  if (kind === "roots") {
+    $("list-heading").textContent = "Library directories";
+    const rows = input.rows.length ? input.rows : ["none yet"];
+    $("list-rows").replaceChildren(...rows.map((p) => span("heading", p)));
   }
   if (kind === "search" && document.activeElement !== search) search.focus();
   if (kind === "command") openCommand(input.text);

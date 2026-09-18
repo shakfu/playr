@@ -281,7 +281,7 @@ impl App {
         match self.model.input() {
             // Anything but `y` cancels, so a stray key cannot confirm.
             Input::Confirm(_) => self.model.answer(typed(&key) == Some('y')),
-            Input::Help | Input::CommandHelp => {
+            Input::Help | Input::CommandHelp | Input::Roots(_) => {
                 // The lists can be longer than the screen.
                 match key.code {
                     KeyCode::Char('j') | KeyCode::Down => self.help_scroll += 1,
@@ -326,9 +326,12 @@ impl App {
         self.follow_help();
     }
 
-    /// Starts a key or command list at its top each time it opens.
+    /// Starts a key, command or root list at its top each time it opens.
     fn follow_help(&mut self) {
-        if !matches!(self.model.input(), Input::Help | Input::CommandHelp) {
+        if !matches!(
+            self.model.input(),
+            Input::Help | Input::CommandHelp | Input::Roots(_)
+        ) {
             self.help_scroll = 0;
         }
     }

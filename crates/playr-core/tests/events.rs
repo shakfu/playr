@@ -255,7 +255,7 @@ fn a_scan_reports_progress_then_what_it_found() {
             dir,
             result,
         } => {
-            assert_eq!((*j, dir), (job, &songs));
+            assert_eq!((*j, dir.as_ref()), (job, Some(&songs)));
             let report = result.as_ref().unwrap();
             assert_eq!(report.stats.added, SCAN_PROGRESS_EVERY + 20);
             assert_eq!(report.total, SCAN_PROGRESS_EVERY + 20);
@@ -273,6 +273,47 @@ fn a_scan_reports_progress_then_what_it_found() {
         session.scan(file.clone()),
         Err(Refusal::NotADirectory(file))
     );
+}
+
+#[test]
+fn a_rescan_covers_every_recorded_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("a");
+    let second = dir.path().join("b");
+    music(&first, 2);
+    music(&second, 3);
+    let (sink, events) = channel();
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+
+    assert_eq!(session.rescan(), Err(Refusal::NoRoots));
+    session.scan(first.clone()).unwrap();
+    until(&events, |e| matches!(e, Event::Scanned { .. }));
+    session.scanned();
+    session.scan(second).unwrap();
+    until(&events, |e| matches!(e, Event::Scanned { .. }));
+    session.scanned();
+    assert_eq!(session.tracks().len(), 5);
+
+    common::silence(&first.join("extra.wav"), 8000, 0.05);
+    let job = session.rescan().unwrap();
+    let seen = until(&events, |e| matches!(e, Event::Scanned { .. }));
+    match seen.last().unwrap() {
+        Event::Scanned {
+            job: j,
+            dir: None,
+            result,
+        } => {
+            assert_eq!(*j, job);
+            let report = result.as_ref().unwrap();
+            assert_eq!(report.stats.added, 1);
+            assert_eq!(report.total, 6);
+        }
+        other => panic!("{other:?}"),
+    }
+    session.scanned();
+    assert_eq!(session.tracks().len(), 6);
 }
 
 #[test]
@@ -408,11 +449,11 @@ fn a_prune_removes_missing_tracks_and_marks_then_the_session_reads_them_again() 
     let file = music.join("x");
     std::fs::write(&file, b"x").unwrap();
     assert_eq!(
-        session.prune(file.clone()),
+        session.prune(Some(file.clone())),
         Err(Refusal::NotADirectory(file))
     );
 
-    let job = session.prune(music.clone()).unwrap();
+    let job = session.prune(Some(music.clone())).unwrap();
     assert_eq!(session.scan(music.clone()), Err(Refusal::ScanRunning));
     let seen = until(&events, |e| matches!(e, Event::Pruned { .. }));
     match seen.last().unwrap() {
@@ -421,7 +462,7 @@ fn a_prune_removes_missing_tracks_and_marks_then_the_session_reads_them_again() 
             dir,
             result,
         } => {
-            assert_eq!((*j, dir), (job, &music));
+            assert_eq!((*j, dir.as_ref()), (job, Some(&music)));
             assert_eq!(
                 result,
                 &Ok(db::Pruned {
@@ -445,5 +486,103 @@ fn a_prune_removes_missing_tracks_and_marks_then_the_session_reads_them_again() 
         common::fake_player().0,
         event::ignore(),
     );
-    assert_eq!(memory.prune(music), Err(Refusal::NoLibraryFile));
+    assert_eq!(memory.prune(Some(music)), Err(Refusal::NoLibraryFile));
+}
+
+#[test]
+fn a_prune_with_no_directory_covers_every_recorded_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let (first, second) = (dir.path().join("a"), dir.path().join("b"));
+    music(&first, 2);
+    music(&second, 2);
+    let (sink, events) = channel();
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+
+    assert_eq!(session.check_prune(None), Err(Refusal::NoRoots));
+    for root in [&first, &second] {
+        session.scan(root.clone()).unwrap();
+        until(&events, |e| matches!(e, Event::Scanned { .. }));
+        session.scanned();
+    }
+    assert_eq!(session.tracks().len(), 4);
+
+    // One file gone under each root: a prune naming neither removes both.
+    std::fs::remove_file(first.join("000.wav")).unwrap();
+    std::fs::remove_file(second.join("disc 2/001.wav")).unwrap();
+    let job = session.prune(None).unwrap();
+    let seen = until(&events, |e| matches!(e, Event::Pruned { .. }));
+    match seen.last().unwrap() {
+        Event::Pruned {
+            job: j,
+            dir: None,
+            result,
+        } => {
+            assert_eq!(*j, job);
+            assert_eq!(result.as_ref().unwrap().tracks, 2);
+        }
+        other => panic!("{other:?}"),
+    }
+    session.pruned();
+    assert_eq!(session.tracks().len(), 2);
+}
+
+#[test]
+fn forgetting_a_root_removes_it_with_everything_under_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (keep, drop) = (dir.path().join("keep"), dir.path().join("drop"));
+    music(&keep, 2);
+    music(&drop, 2);
+    let (sink, events) = channel();
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+    for root in [&keep, &drop] {
+        session.scan(root.clone()).unwrap();
+        until(&events, |e| matches!(e, Event::Scanned { .. }));
+        session.scanned();
+    }
+    assert_eq!(session.tracks().len(), 4);
+
+    // A directory that was never scanned is not a root, whether or not it is
+    // there, and nothing under it is touched.
+    assert_eq!(
+        session.check_forget(dir.path()),
+        Err(Refusal::NotARoot(dir.path().to_path_buf()))
+    );
+
+    // Unlike a prune, forgetting does not care whether the files are there.
+    let removed = session.forget_root(&drop).unwrap();
+    assert_eq!(removed.tracks, 2);
+    assert_eq!(session.roots(), vec![keep.canonicalize().unwrap()]);
+    assert_eq!(session.tracks().len(), 2);
+    assert_eq!(
+        session.check_forget(&drop),
+        Err(Refusal::NotARoot(drop.clone())),
+        "forgotten twice"
+    );
+}
+
+#[test]
+fn a_root_whose_directory_is_gone_can_still_be_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let music_dir = dir.path().join("music");
+    music(&music_dir, 2);
+    let (sink, events) = channel();
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+    session.scan(music_dir.clone()).unwrap();
+    until(&events, |e| matches!(e, Event::Scanned { .. }));
+    session.scanned();
+    let stored = music_dir.canonicalize().unwrap();
+
+    // The path cannot be canonicalized once the directory is gone, so the
+    // spelling stored has to match on its own.
+    std::fs::remove_dir_all(&music_dir).unwrap();
+    assert!(music_dir.canonicalize().is_err());
+    let removed = session.forget_root(&stored).unwrap();
+    assert_eq!(removed.tracks, 2);
+    assert!(session.roots().is_empty());
 }

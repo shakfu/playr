@@ -276,6 +276,7 @@ fn the_menu_bar_performs_its_items() {
     harness.run_steps(2);
     assert_eq!(model(&harness).input(), &Input::CommandHelp);
     harness.get_by_label(":scan DIR");
+    harness.get_by_label(":rescan");
 }
 
 /// The command bar's text field.

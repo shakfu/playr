@@ -44,6 +44,11 @@ pub struct ScanReport {
     /// Tracks under the directory whose files are gone. A scan keeps them;
     /// [`db::prune_missing`] removes them.
     pub missing: usize,
+    /// Directories the scan walked without finding one audio file, though the
+    /// library holds tracks under them. A drive that is not mounted reads
+    /// exactly like one emptied, and every track under it counts as missing,
+    /// so a caller that prunes without asking leaves this alone.
+    pub unavailable: usize,
     /// Tracks in the library once the scan is done.
     pub total: usize,
 }
@@ -215,11 +220,60 @@ pub fn scan_into(
     let fail = |e: rusqlite::Error| format!("{}: {e}", library.display());
     let mut conn = db::open(library).map_err(fail)?;
     let stats = scan_dir(&mut conn, dir, |s, _| progress(s)).map_err(fail)?;
+    if stats.seen > 0 {
+        db::add_root(&conn, dir).map_err(fail)?;
+    }
     let missing = db::missing_under(&conn, dir).map_err(fail)?.len();
     let total = db::query::count(&conn).map_err(fail)? as usize;
     Ok(ScanReport {
         stats,
         missing,
+        unavailable: usize::from(stats.seen == 0 && missing > 0),
+        total,
+    })
+}
+
+/// Scans every `root` into `library`, reporting progress across them as one
+/// run. Each root is recorded; missing tracks are counted under each.
+pub fn scan_roots(
+    library: &Path,
+    roots: &[PathBuf],
+    mut progress: impl FnMut(&ScanStats),
+) -> Result<ScanReport, String> {
+    let fail = |e: rusqlite::Error| format!("{}: {e}", library.display());
+    let mut conn = db::open(library).map_err(fail)?;
+    let mut stats = ScanStats::default();
+    let (mut missing, mut unavailable) = (0, 0);
+    for root in roots {
+        let batch = scan_dir(&mut conn, root, |s, _| {
+            let mut shown = stats;
+            shown.seen += s.seen;
+            shown.added += s.added;
+            shown.skipped += s.skipped;
+            shown.failed += s.failed;
+            progress(&shown);
+        })
+        .map_err(fail)?;
+        stats.seen += batch.seen;
+        stats.added += batch.added;
+        stats.skipped += batch.skipped;
+        stats.failed += batch.failed;
+        if batch.seen > 0 {
+            db::add_root(&conn, root).map_err(fail)?;
+        }
+        // Counted per root: one unmounted drive among several would otherwise
+        // hide behind the files the others found.
+        let gone = db::missing_under(&conn, root).map_err(fail)?.len();
+        if batch.seen == 0 && gone > 0 {
+            unavailable += 1;
+        }
+        missing += gone;
+    }
+    let total = db::query::count(&conn).map_err(fail)? as usize;
+    Ok(ScanReport {
+        stats,
+        missing,
+        unavailable,
         total,
     })
 }

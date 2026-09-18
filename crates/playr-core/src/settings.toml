@@ -14,3 +14,5 @@ speed = 0
 onset_sensitivity = 0.5
 # Where :slice writes, one directory per slicing. ~ is your home.
 samples = "~/Music/playr/samples"
+# After a scan, remove tracks whose files are gone, without asking.
+auto_prune = false

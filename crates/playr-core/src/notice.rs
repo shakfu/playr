@@ -80,7 +80,8 @@ pub enum Outcome {
         slices: usize,
     },
     ScanStarted {
-        dir: PathBuf,
+        /// The directory being scanned, or `None` when every recorded root is.
+        dir: Option<PathBuf>,
     },
     /// A scan in progress has seen `seen` files, `added` of them new or changed.
     Scanning {
@@ -88,13 +89,21 @@ pub enum Outcome {
         added: usize,
     },
     Scanned {
-        dir: PathBuf,
+        /// The directory scanned, or `None` when every recorded root was.
+        dir: Option<PathBuf>,
         report: ScanReport,
     },
     PruneStarted {
-        dir: PathBuf,
+        /// The directory being pruned, or `None` when every recorded root is.
+        dir: Option<PathBuf>,
     },
     Pruned {
+        /// The directory pruned, or `None` when every recorded root was.
+        dir: Option<PathBuf>,
+        removed: Pruned,
+    },
+    /// A root was forgotten, with everything the library held under it.
+    Forgot {
         dir: PathBuf,
         removed: Pruned,
     },
@@ -134,6 +143,10 @@ pub enum Refusal {
     NotADirectory(PathBuf),
     /// One scan or prune at a time: a second would write the same file.
     ScanRunning,
+    /// A rescan needs at least one directory previously given to a scan.
+    NoRoots,
+    /// `:roots rm` was given a directory the library does not have as a root.
+    NotARoot(PathBuf),
 }
 
 /// An operation that can fail, for [`Notice::Failed`].

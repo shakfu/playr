@@ -10,10 +10,14 @@
 [Unit]
 Description=playr, controlled from a web page and OSC
 Documentation=https://github.com/shakfu/playr/blob/main/docs/server-guide.md
+# Music on a separate disk: name its mount point here, so the server does not
+# start before it is mounted and read an empty directory.
+#RequiresMountsFor=%h/Music
 
 [Service]
 # Add --open to serve the page without a token, on a network you trust.
-ExecStart=%h/.local/bin/playr-server --listen 0.0.0.0:8080 --music %h/Music
+# The page re-scans the directories `playr scan` recorded; it names none itself.
+ExecStart=%h/.local/bin/playr-server --listen 0.0.0.0:8080
 # Tries again after a failure, such as no audio device yet at boot.
 Restart=on-failure
 RestartSec=5

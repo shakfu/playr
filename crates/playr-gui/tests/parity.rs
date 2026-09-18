@@ -37,7 +37,10 @@ fn every_action() -> Vec<Action> {
         Action::RenameTo("n".into()),
         Action::PlayPlaylist("n".into()),
         Action::Scan("/m".into()),
-        Action::Prune("/m".into()),
+        Action::Rescan,
+        Action::ShowRoots,
+        Action::ForgetRoot("/m".into()),
+        Action::Prune(Some("/m".into())),
         Action::Open(vec!["/m".into()]),
         Action::TogglePause,
         Action::Next,
@@ -106,6 +109,9 @@ fn every_action() -> Vec<Action> {
             | Action::RenameTo(_)
             | Action::PlayPlaylist(_)
             | Action::Scan(_)
+            | Action::Rescan
+            | Action::ShowRoots
+            | Action::ForgetRoot(_)
             | Action::Prune(_)
             | Action::Open(_)
             | Action::TogglePause

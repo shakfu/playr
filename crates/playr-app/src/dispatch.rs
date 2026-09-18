@@ -31,8 +31,11 @@ pub enum Confirm {
     ReplacePlaylist(String),
     /// Empty the selection, which holds this many tracks.
     ClearSelection(usize),
-    /// Remove the tracks and marks under this directory whose files are gone.
-    Prune(PathBuf),
+    /// Remove the tracks and marks under this directory whose files are gone,
+    /// or under every recorded root when `None`.
+    Prune(Option<PathBuf>),
+    /// Forget this root, and every track and mark under it.
+    ForgetRoot(PathBuf),
     /// Remove `count` marks from the track at `path`, which was playing when asked.
     ClearMarks {
         path: PathBuf,
@@ -49,8 +52,15 @@ impl Confirm {
                 format!("replace playlist \"{name}\" with the selection?")
             }
             Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection?"),
-            Confirm::Prune(dir) => format!(
+            Confirm::Prune(Some(dir)) => format!(
                 "remove tracks and marks under {} whose files are gone?",
+                crate::message::home_as_tilde(dir)
+            ),
+            Confirm::Prune(None) => {
+                "remove tracks and marks of missing files from the library?".into()
+            }
+            Confirm::ForgetRoot(dir) => format!(
+                "forget {}, and every track and mark under it?",
                 crate::message::home_as_tilde(dir)
             ),
             Confirm::ClearMarks { path, count } => {
@@ -85,6 +95,8 @@ pub enum Presentation {
     KeyList,
     /// Every `:` command.
     CommandList,
+    /// The directories the library covers.
+    RootList,
     Zoom(Zoom),
     /// Draw the waveform this way, or the next way when `None`.
     Display(Option<Display>),
@@ -208,10 +220,19 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             None => f.notify(Message::NoPlaylistUnderCursor),
         },
         Action::Scan(dir) => match f.session_mut().scan(dir.clone()) {
-            Ok(_) => f.notify(Outcome::ScanStarted { dir }.into()),
+            Ok(_) => f.notify(Outcome::ScanStarted { dir: Some(dir) }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
-        Action::Prune(dir) => match f.session().check_prune(&dir) {
+        Action::Rescan => match f.session_mut().rescan() {
+            Ok(_) => f.notify(Outcome::ScanStarted { dir: None }.into()),
+            Err(refusal) => f.notify(refusal.into()),
+        },
+        Action::ShowRoots => f.present(Presentation::RootList),
+        Action::ForgetRoot(dir) => match f.session().check_forget(&dir) {
+            Ok(()) => f.confirm(Confirm::ForgetRoot(dir)),
+            Err(refusal) => f.notify(refusal.into()),
+        },
+        Action::Prune(dir) => match f.session().check_prune(dir.as_deref()) {
             Ok(()) => f.confirm(Confirm::Prune(dir)),
             Err(refusal) => f.notify(refusal.into()),
         },
@@ -434,6 +455,10 @@ pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
         }
         Confirm::Prune(dir) => match f.session_mut().prune(dir.clone()) {
             Ok(_) => f.notify(Outcome::PruneStarted { dir }.into()),
+            Err(refusal) => f.notify(refusal.into()),
+        },
+        Confirm::ForgetRoot(dir) => match f.session_mut().forget_root(&dir) {
+            Ok(removed) => f.notify(Outcome::Forgot { dir, removed }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
         Confirm::ClearSelection(_) => {

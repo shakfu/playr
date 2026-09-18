@@ -12,6 +12,7 @@ mod sampler;
 mod transport;
 mod views;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use controls::Control;
@@ -216,9 +217,23 @@ impl Gui {
                     ui.close();
                     chosen = rfd::FileDialog::new().pick_folder().map(Action::Scan);
                 }
-                if ui.button("Remove missing files...").clicked() {
+                if ui.button("Rescan library").clicked() {
                     ui.close();
-                    chosen = rfd::FileDialog::new().pick_folder().map(Action::Prune);
+                    chosen = Some(Action::Rescan);
+                }
+                if ui.button("Library directories...").clicked() {
+                    ui.close();
+                    chosen = Some(Action::ShowRoots);
+                }
+                if ui.button("Remove missing files").clicked() {
+                    ui.close();
+                    chosen = Some(Action::Prune(None));
+                }
+                if ui.button("Remove missing under folder...").clicked() {
+                    ui.close();
+                    chosen = rfd::FileDialog::new()
+                        .pick_folder()
+                        .map(|dir| Action::Prune(Some(dir)));
                 }
                 ui.separator();
                 items(ui, controls::FILE_MENU, &mut chosen);
@@ -446,7 +461,42 @@ impl Gui {
                 self.list(ctx, &title, &rows);
             }
             Input::CommandHelp => self.list(ctx, "Commands", &command::command_rows()),
+            Input::Roots(roots) => self.roots_dialog(ctx, &roots),
             _ => {}
+        }
+    }
+
+    /// The directories the library covers, each with a button that forgets it.
+    /// The question that follows says what forgetting removes.
+    fn roots_dialog(&mut self, ctx: &egui::Context, roots: &[PathBuf]) {
+        let mut open = true;
+        let mut forget = None;
+        egui::Window::new("Library directories")
+            .collapsible(false)
+            .open(&mut open)
+            .default_height(320.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::Grid::new("roots").striped(true).show(ui, |ui| {
+                        for root in roots {
+                            ui.label(playr_app::message::home_as_tilde(root));
+                            if ui.button("Forget").clicked() {
+                                forget = Some(root.to_path_buf());
+                            }
+                            ui.end_row();
+                        }
+                    });
+                });
+                if roots.is_empty() {
+                    ui.label("None yet. File, Add folder to library adds one.");
+                }
+            });
+        if !open {
+            self.model.set_input(Input::None);
+        }
+        if let Some(dir) = forget {
+            self.model.set_input(Input::None);
+            self.perform(Action::ForgetRoot(dir));
         }
     }
 

@@ -55,7 +55,13 @@ pub const COMMANDS: &[Command] = &[
     any("playlist", "NAME", "play a saved playlist"),
     any("save", "[NAME]", "save the selection as a playlist"),
     any("scan", "DIR", "add a directory to the library"),
-    any("prune", "DIR", "remove tracks and marks of missing files"),
+    any("rescan", "", "re-scan directories previously added"),
+    any(
+        "roots",
+        "[add|rm DIR]",
+        "list the directories the library covers",
+    ),
+    any("prune", "[DIR]", "remove tracks and marks of missing files"),
     any("open", "PATH", "play a file or directory, and select it"),
     any("pause", "", "play or pause"),
     any("next", "", "next track"),
@@ -275,7 +281,11 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         RenameTo(name) => format!("rename {name}"),
         PlayPlaylist(name) => format!("playlist {name}"),
         Scan(dir) => format!("scan {}", dir.display()),
-        Prune(dir) => format!("prune {}", dir.display()),
+        Rescan => "rescan".into(),
+        ShowRoots => "roots".into(),
+        ForgetRoot(dir) => format!("roots rm {}", dir.display()),
+        Prune(Some(dir)) => format!("prune {}", dir.display()),
+        Prune(None) => "prune".into(),
         Open(paths) => {
             let paths: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
             format!("open {}", paths.join(" "))
@@ -512,6 +522,8 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
     if line.is_empty() {
         return Err("no command".into());
     }
+    // `:sync` is an alias, so help and completion list only `:rescan`.
+    let word = if word == "sync" { "rescan" } else { word };
     let command = resolve_command(word, view)?;
     let name = command.name;
     let usage = || format!("usage: :{} {}", name, command.args);
@@ -545,9 +557,19 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "search" => Ok(Action::Search(rest.to_string())),
         "playlist" if rest.is_empty() => Err(usage()),
         "playlist" => Ok(Action::PlayPlaylist(unquote(rest).to_string())),
-        "scan" | "open" | "prune" if rest.is_empty() => Err(usage()),
+        "scan" | "open" if rest.is_empty() => Err(usage()),
         "scan" => Ok(Action::Scan(path(rest))),
-        "prune" => Ok(Action::Prune(path(rest))),
+        "rescan" => nothing(Action::Rescan),
+        // `:roots add DIR` is `:scan DIR`: recording a root without scanning
+        // it would leave a root the library holds nothing for.
+        "roots" if rest.is_empty() => Ok(Action::ShowRoots),
+        "roots" => match rest.split_once(char::is_whitespace) {
+            Some(("add", dir)) if !dir.trim().is_empty() => Ok(Action::Scan(path(dir.trim()))),
+            Some(("rm", dir)) if !dir.trim().is_empty() => Ok(Action::ForgetRoot(path(dir.trim()))),
+            _ => Err(usage()),
+        },
+        "prune" if rest.is_empty() => Ok(Action::Prune(None)),
+        "prune" => Ok(Action::Prune(Some(path(rest)))),
         "open" => Ok(Action::Open(vec![path(rest)])),
         "save" if rest.is_empty() => Ok(Action::StartSave),
         "save" => Ok(Action::SaveAs(unquote(rest).to_string())),

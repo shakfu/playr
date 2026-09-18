@@ -14,7 +14,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 - `[ ]` marks an optional argument. Without it, `:search`, `:save` and `:rename` open their prompt.
 
-- `PATH` and `DIR` run to the end of the line; a leading `~` is the home directory, and a relative path is relative to where playr started. `:scan` runs in the background, reports progress on the bottom line, and creates the library if there is none. It keeps tracks whose files are gone, and counts them; `:prune` removes them, their places in playlists, and the marks of missing files under `DIR`, after asking. `:open` adds the files to the end of the selection and plays them.
+- `PATH` and `DIR` run to the end of the line; a leading `~` is the home directory, and a relative path is relative to where playr started. `:scan` runs in the background, reports progress on the bottom line, and creates the library if there is none. It keeps tracks whose files are gone and counts them, then asks to prune, or prunes at once if `auto_prune` is set. `:rescan`, or `:sync`, re-scans every directory previously given to `:scan` or `playr scan`. `:roots` lists those directories; `:roots add DIR` is another spelling of `:scan DIR`, and `:roots rm DIR` forgets one, removing the tracks and marks under it after asking. `:prune` removes the tracks of missing files, their places in playlists, and the marks of missing files under `DIR`, after asking; with no directory it covers every directory previously scanned. `:open` adds the files to the end of the selection and plays them.
 
 - `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
 
@@ -36,7 +36,9 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:playlist NAME`                      |                         | play a saved playlist                       |
 | `:save [NAME]`                        | `s`                     | save the selection as a playlist            |
 | `:scan DIR`                           |                         | add a directory to the library              |
-| `:prune DIR`                          |                         | remove tracks and marks of missing files    |
+| `:rescan`                             |                         | re-scan directories previously added; `:sync` |
+| `:roots [add\|rm DIR]`                |                         | list the directories the library covers      |
+| `:prune [DIR]`                        |                         | remove tracks and marks of missing files    |
 | `:open PATH`                          |                         | play a file or directory, and select it     |
 | `:pause`                              | `space`                 | play or pause                               |
 | `:next`                               | `n`                     | next track                                  |

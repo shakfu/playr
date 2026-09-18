@@ -15,6 +15,7 @@ release:
 	@cargo build --release -p playr -p playr-gui -p playr-server
 
 test:
+	@cargo fmt --check
 	@cargo test --workspace
 	@cargo test --workspace --features opus
 

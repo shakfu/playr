@@ -313,9 +313,15 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
         ["play", "playlist", "prune", "pause", "prev", "prev-mark"]
     );
     assert_eq!(completions("", Library, &playlists).len(), usable(Library));
-    assert_eq!(completions("re", Selection, &playlists), ["remove"]);
-    assert_eq!(completions("re", Playlists, &playlists), ["rename"]);
-    assert!(completions("re", Library, &playlists).is_empty());
+    assert_eq!(
+        completions("re", Selection, &playlists),
+        ["rescan", "remove"]
+    );
+    assert_eq!(
+        completions("re", Playlists, &playlists),
+        ["rescan", "rename"]
+    );
+    assert_eq!(completions("re", Library, &playlists), ["rescan"]);
     assert_eq!(
         completions("mode r", Library, &playlists),
         ["mode repeat", "mode repeat-one"]
@@ -704,4 +710,31 @@ fn scan_and_open_take_a_path_with_home_as_tilde() {
     assert_eq!(lib("scan ~bob"), Ok(Action::Scan("~bob".into())));
     assert_eq!(lib("scan"), Err("usage: :scan DIR".into()));
     assert_eq!(lib("open"), Err("usage: :open PATH".into()));
+    assert_eq!(lib("rescan"), Ok(Action::Rescan));
+    assert_eq!(lib("sync"), Ok(Action::Rescan));
+    assert_eq!(
+        lib("rescan ~/music"),
+        Err(":rescan takes no arguments".into())
+    );
+    assert_eq!(lib("prune"), Ok(Action::Prune(None)));
+    assert_eq!(lib("roots"), Ok(Action::ShowRoots));
+    // `:roots add DIR` is another spelling of `:scan DIR`.
+    assert_eq!(
+        lib("roots add ~/music"),
+        Ok(Action::Scan(home.join("music")))
+    );
+    assert_eq!(
+        lib("roots rm ~/music"),
+        Ok(Action::ForgetRoot(home.join("music")))
+    );
+    assert_eq!(lib("roots add"), Err("usage: :roots [add|rm DIR]".into()));
+    assert_eq!(lib("roots rm"), Err("usage: :roots [add|rm DIR]".into()));
+    assert_eq!(
+        lib("roots wat ~/music"),
+        Err("usage: :roots [add|rm DIR]".into())
+    );
+    assert_eq!(
+        lib("prune ~/music"),
+        Ok(Action::Prune(Some(home.join("music"))))
+    );
 }

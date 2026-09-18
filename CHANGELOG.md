@@ -2,6 +2,22 @@
 
 Notable changes to playr. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `:rescan`, or `:sync`, re-scans every directory previously given to `:scan` or `playr scan`, so new files are picked up without retyping paths. Each scan records its directory in a `roots` table, and a bare `playr scan`, a bare `playr prune`, `:prune` with no argument and the window's File, Rescan library all cover the recorded ones. A directory holding no audio file is not recorded; nor is one inside a directory already recorded, since the wider one covers its files, and recording a wider one drops the narrower. A scan that finds missing tracks asks before pruning them, or prunes at once with `auto_prune = true` in `settings.toml`. It does not ask over a prompt being typed, and `auto_prune` steps aside when a directory could not be read: an unmounted drive whose mount point survives counts every track under it as missing.
+
+  Library API: `db::add_root`, `db::roots`; `scan::scan_roots`; `Session::rescan`, `Session::roots`; `Action::Rescan`; `Refusal::NoRoots`; `Settings::auto_prune`; `ScanReport::unavailable`. `Event::Scanned`, `Event::Pruned`, their outcomes, `Action::Prune` and `Confirm::Prune` take `Option<PathBuf>`, `None` meaning every recorded root.
+
+- `:roots` lists the directories the library covers, `:roots rm DIR` forgets one, and `:roots add DIR` is another spelling of `:scan DIR`. `playr roots`, `playr roots rm DIR` and `playr roots add DIR` do the same; the window has File, Library directories, with a Forget button per row. Forgetting removes the tracks under the directory, their places in playlists and their marks. Unlike `:prune` it asks the filesystem nothing, so a directory that is already gone can still be forgotten, matched by the path as stored when it no longer resolves. The web page may list the directories but not change them, since the two that change them name a path.
+
+  Library API: `db::forget_root`; `Session::check_forget`, `Session::forget_root`; `Action::ShowRoots`, `Action::ForgetRoot`; `Confirm::ForgetRoot`; `Presentation::RootList`; `Input::Roots`; `Outcome::Forgot`; `Refusal::NotARoot`.
+
+### Changed
+
+- `playr-server` drops `--music DIR`. The page's Rescan library re-scans the directories `playr scan` recorded, so the one place a root is named is the library. The button appears once the library has one. A unit file or script passing `--music` must drop it; nothing replaces it.
+
 ## [0.8.0]
 
 ### Added

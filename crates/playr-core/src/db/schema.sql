@@ -74,3 +74,9 @@ CREATE TABLE IF NOT EXISTS marks (
   rate  INTEGER NOT NULL,  -- the source sample rate `frame` counts in
   PRIMARY KEY (path, frame)
 );
+
+-- Directories given to a scan. A bare `playr scan`, or `:rescan`, covers them
+-- all. Compatible with older libraries: CREATE IF NOT EXISTS needs no version bump.
+CREATE TABLE IF NOT EXISTS roots (
+  path TEXT NOT NULL PRIMARY KEY
+);

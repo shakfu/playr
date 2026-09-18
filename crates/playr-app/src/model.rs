@@ -55,6 +55,8 @@ pub enum Input {
     Help,
     /// The command list is open.
     CommandHelp,
+    /// The list of the library's directories is open, read as it was opened.
+    Roots(Vec<PathBuf>),
     /// A `:` command being typed.
     Command(CommandLine),
 }
@@ -105,6 +107,8 @@ pub struct Model {
     keys: Keymap,
     /// For `:slice onsets` without a sensitivity.
     onset_sensitivity: f32,
+    /// After a scan, remove missing tracks without asking.
+    auto_prune: bool,
     /// Events from the session's engine and background work, drained each frame.
     events: Receiver<Event>,
     sampler: Sampler,
@@ -154,6 +158,7 @@ impl Model {
             history: History::default(),
             keys: config.keys,
             onset_sensitivity: config.settings.onset_sensitivity,
+            auto_prune: config.settings.auto_prune,
             events,
             sampler: Sampler::default(),
             theme: config.theme,
@@ -476,7 +481,16 @@ impl Model {
                     self.session.scanned();
                     self.choose_first_rows();
                     match result {
-                        Ok(report) => self.notify(Outcome::Scanned { dir, report }),
+                        Ok(report) => {
+                            let (missing, unavailable) = (report.missing, report.unavailable);
+                            self.notify(Outcome::Scanned {
+                                dir: dir.clone(),
+                                report,
+                            });
+                            if missing > 0 {
+                                after_missing(self, dir, unavailable == 0);
+                            }
+                        }
                         Err(error) => self.notify(Notice::Failed {
                             task: Task::Scan,
                             error,
@@ -704,6 +718,7 @@ impl Frontend for Model {
             Presentation::Quit => self.quit = true,
             Presentation::KeyList => self.input = Input::Help,
             Presentation::CommandList => self.input = Input::CommandHelp,
+            Presentation::RootList => self.input = Input::Roots(self.session.roots()),
             Presentation::Zoom(zoom) => {
                 self.sampler.zoom = match zoom {
                     Zoom::In => self.sampler.zoom + 1,
@@ -736,6 +751,31 @@ impl Frontend for Model {
 
     fn take_plan(&mut self) -> Option<Plan> {
         self.sampler.pending.take()
+    }
+}
+
+/// After a scan found missing files: prune them, or ask first.
+///
+/// A scan finishes on a background thread, so the question is asked only when
+/// nothing else is open. Asking over a `:` line or a search would take the
+/// next keystroke as the answer. The count is on the bottom line either way,
+/// and `:prune` asks again whenever the user is ready.
+///
+/// `read` is whether every directory the scan covered could be read. When one
+/// could not, `auto_prune` steps aside and the question is asked instead: an
+/// unmounted drive counts every track under it as missing, and nobody is
+/// watching a machine that prunes on its own.
+fn after_missing(model: &mut Model, dir: Option<PathBuf>, read: bool) {
+    if model.session.check_prune(dir.as_deref()).is_err() {
+        return;
+    }
+    if model.auto_prune && read {
+        match model.session.prune(dir.clone()) {
+            Ok(_) => model.notify(Outcome::PruneStarted { dir }),
+            Err(refusal) => model.notify(refusal),
+        }
+    } else if model.input == Input::None {
+        model.confirm(Confirm::Prune(dir));
     }
 }
 

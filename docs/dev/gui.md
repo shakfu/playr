@@ -35,6 +35,9 @@ A GUI user may never open a terminal, but today a library is created only by `pl
 | action | command | GUI |
 |-|-|-|
 | scan a directory into the library, in the background, with progress | `:scan DIR` | Library menu, Add folder; a progress line in the status bar |
+| re-scan the recorded roots | `:rescan` | File menu, Rescan library |
+| list the library's directories, and forget one | `:roots`, `:roots rm DIR` | File menu, Library directories, with a Forget button per row |
+| remove the tracks and marks of missing files | `:prune [DIR]` | File menu, Remove missing files, and Remove missing under folder |
 | play files or directories without adding them | `:open PATH...` | File menu, Open; dropping files on the window |
 
 Startup errors differ too. The terminal prints bad settings to stderr and exits. A GUI started from a desktop has no visible stderr, so it lists the errors in a window with a Quit button.

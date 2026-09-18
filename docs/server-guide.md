@@ -18,17 +18,19 @@ Only one of `playr`, `playr-gui` and `playr-server` runs at a time. They share t
 
 ```sh
 playr scan ~/Music                   # once, to build the library
-playr-server --music ~/Music         # prints the address to open
+playr-server                         # prints the address to open
 ```
 
 It prints `playr-server: http://127.0.0.1:8080/?token=...`. Open that address on the same machine. It stops on Ctrl-C.
 
-With `--music DIR`, the page's Menu has Rescan music folder, which scans that directory into the library, and no other.
+The page's Menu has Rescan library, which re-scans the directories `playr scan` recorded. The page cannot name a directory of its own, so it re-scans those and nothing else. It appears only once the library has a recorded directory; `playr scan DIR` adds one.
+
+Run `playr scan` again yourself after adding music, or use that button. Stop the server first: `playr`, `playr-gui` and `playr-server` share one lock, so only one runs at a time.
 
 ## From other devices
 
 ```sh
-playr-server --listen 0.0.0.0:8080 --music ~/Music
+playr-server --listen 0.0.0.0:8080
 ```
 
 Open `http://<name>.local:8080/` from a device on the same network, where `<name>` is the machine's host name, or use its IP address.
@@ -54,7 +56,7 @@ Delete `server.token` and restart to make a new token. Browsers holding the old 
 ### No token: --open
 
 ```sh
-playr-server --listen 0.0.0.0:8080 --open --music ~/Music
+playr-server --listen 0.0.0.0:8080 --open
 ```
 
 `--open` serves the page without a token, for a network where every device is trusted. Anyone who can reach the address controls playr. Two checks still apply:
@@ -115,7 +117,9 @@ loginctl enable-linger "$USER"          # start at boot, without logging in
 
 From a clone, `make install install-service` does the first two lines.
 
-The unit runs `~/.local/bin/playr-server --listen 0.0.0.0:8080 --music ~/Music`.
+The unit runs `~/.local/bin/playr-server --listen 0.0.0.0:8080`.
+
+With music on a separate disk, uncomment `RequiresMountsFor=` in the unit and name the mount point. Without it the server can start before the disk is mounted and re-scan an empty directory.
 
 | to | run |
 |-|-|
@@ -140,7 +144,6 @@ systemctl --user start playr-server
 | `--listen ADDR:PORT` | `127.0.0.1:8080` | where the page is served |
 | `--open` | off | serve the page without a token |
 | `--host NAME` | none | a name the page may be opened by; repeatable |
-| `--music DIR` | none | the directory the page may rescan |
 | `--osc ADDR:PORT` | off | receive OSC |
 | `--osc-reply ADDR:PORT` | off | send the state as OSC |
 | `--db PATH` | `~/.local/share/playr/library.db` | the library |

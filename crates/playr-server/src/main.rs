@@ -44,10 +44,6 @@ struct Cli {
     #[arg(long = "host", value_name = "NAME")]
     hosts: Vec<String>,
 
-    /// The directory the page's Rescan button scans into the library
-    #[arg(long, value_name = "DIR")]
-    music: Option<PathBuf>,
-
     /// Address and port to receive OSC on; off unless given
     #[arg(long, value_name = "ADDR:PORT")]
     osc: Option<SocketAddr>,
@@ -94,10 +90,6 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
             Some(token)
         }
     };
-    // Checked now, not at the first rescan, when no one reads stderr.
-    if let Some(dir) = cli.music.as_ref().filter(|d| !d.is_dir()) {
-        return Err(vec![format!("{}: not a directory", dir.display())]);
-    }
     let listener =
         TcpListener::bind(cli.listen).map_err(|e| vec![format!("{}: {e}", cli.listen)])?;
     let osc_socket = match cli.osc {
@@ -130,7 +122,8 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
     let server = http::Config {
         token,
         hosts: cli.hosts,
-        music: cli.music,
+        // Read once: `playr scan` cannot run while the server holds the lock.
+        rescan: !model.session().roots().is_empty(),
     };
     match &server.token {
         Some(token) => println!("playr-server: http://{}/?token={token}", cli.listen),

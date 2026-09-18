@@ -29,6 +29,8 @@ pub struct Settings {
     pub samples: PathBuf,
     /// The onset sensitivity `:slice onsets` uses when given none, 0 to 1.
     pub onset_sensitivity: f32,
+    /// After a scan, remove tracks whose files are gone, without asking.
+    pub auto_prune: bool,
 }
 
 impl Default for Settings {
@@ -39,6 +41,7 @@ impl Default for Settings {
             speed: 0,
             samples: PathBuf::new(),
             onset_sensitivity: 0.5,
+            auto_prune: false,
         };
         let (_, errors) = settings.apply(DEFAULT_SETTINGS, &[]);
         if let Err(errors) = errors.finish() {
@@ -149,11 +152,12 @@ impl Settings {
                     Some(n) if (0.0..=1.0).contains(&n) => self.onset_sensitivity = n as f32,
                     _ => errors.add(at, "onset_sensitivity is a number from 0 to 1"),
                 },
+                ("auto_prune", DeValue::Boolean(b)) => self.auto_prune = *b,
                 ("samples", DeValue::String(s)) => match expand_home(s) {
                     Some(path) => self.samples = path,
                     None => errors.add(at, "samples must be an absolute path or start with ~/"),
                 },
-                ("mode" | "samples", v) => {
+                ("mode" | "samples" | "auto_prune", v) => {
                     errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v)))
                 }
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),

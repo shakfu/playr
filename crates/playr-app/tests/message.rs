@@ -124,15 +124,17 @@ fn scans_and_opened_files_are_worded() {
             failed: 1,
         },
         missing: 2,
+        unavailable: 0,
         total: 5000,
     };
     for (outcome, words) in [
         (
             Outcome::ScanStarted {
-                dir: home.join("music"),
+                dir: Some(home.join("music")),
             },
             "scanning ~/music",
         ),
+        (Outcome::ScanStarted { dir: None }, "rescanning library"),
         (
             Outcome::Scanning {
                 seen: 1200,
@@ -142,14 +144,44 @@ fn scans_and_opened_files_are_worded() {
         ),
         (
             Outcome::Scanned {
-                dir: home.join("music"),
+                dir: Some(home.join("music")),
                 report,
             },
-            "scanned ~/music: 300 added, 1 unreadable, 2 missing (:prune removes); 5000 tracks",
+            "scanned ~/music: 300 added, 1 unreadable, 2 missing; 5000 tracks",
         ),
         (
             Outcome::Scanned {
-                dir: home.join("music"),
+                dir: Some(home.join("music")),
+                report: ScanReport {
+                    unavailable: 1,
+                    ..report
+                },
+            },
+            "scanned ~/music: 300 added, 1 unreadable, 2 missing, a directory unreadable; 5000 tracks",
+        ),
+        (
+            Outcome::Scanned {
+                dir: None,
+                report: ScanReport {
+                    unavailable: 2,
+                    ..report
+                },
+            },
+            "scanned library: 300 added, 1 unreadable, 2 missing, 2 directories unreadable; 5000 tracks",
+        ),
+        (
+            Outcome::Scanned {
+                dir: None,
+                report: ScanReport {
+                    missing: 0,
+                    ..report
+                },
+            },
+            "scanned library: 300 added, 1 unreadable; 5000 tracks",
+        ),
+        (
+            Outcome::Scanned {
+                dir: Some(home.join("music")),
                 report: ScanReport {
                     missing: 0,
                     ..report
@@ -159,19 +191,40 @@ fn scans_and_opened_files_are_worded() {
         ),
         (
             Outcome::PruneStarted {
-                dir: home.join("music"),
+                dir: Some(home.join("music")),
             },
             "pruning ~/music",
         ),
+        (Outcome::PruneStarted { dir: None }, "pruning library"),
         (
             Outcome::Pruned {
-                dir: home.join("music"),
+                dir: Some(home.join("music")),
                 removed: playr_core::db::Pruned {
                     tracks: 1,
                     marks: 3,
                 },
             },
             "pruned ~/music: 1 track and 3 marks of missing files",
+        ),
+        (
+            Outcome::Pruned {
+                dir: None,
+                removed: playr_core::db::Pruned {
+                    tracks: 1,
+                    marks: 3,
+                },
+            },
+            "pruned library: 1 track and 3 marks of missing files",
+        ),
+        (
+            Outcome::Forgot {
+                dir: home.join("music"),
+                removed: playr_core::db::Pruned {
+                    tracks: 12,
+                    marks: 1,
+                },
+            },
+            "forgot ~/music: 12 tracks and 1 mark removed",
         ),
         (Outcome::Opening, "opening"),
         (
@@ -226,6 +279,14 @@ fn refusals_are_worded() {
             "not a directory: /opt/nothing",
         ),
         (Refusal::ScanRunning, "a scan or prune is already running"),
+        (
+            Refusal::NoRoots,
+            "no directories recorded; :scan DIR adds one",
+        ),
+        (
+            Refusal::NotARoot("/opt/nothing".into()),
+            "not one of the library's directories: /opt/nothing; :roots lists them",
+        ),
     ] {
         assert_eq!(text(&refusal.into()), words);
     }

@@ -30,10 +30,12 @@ Decisions taken:
 | edit the selection; save, rename and delete playlists | yes | no |
 | marks: add, undo, clear, next, previous; ticks on the progress bar | yes | no |
 | key bindings, `:` command line, key and command lists, theme | yes | no |
-| rescan the `--music` directory | yes | no |
+| re-scan the recorded roots | yes | no |
 | messages | yes | no |
 
-Neither client has the sampler, `open`, `scan`, `prune`, `:map` or quitting.
+Neither client has the sampler, `open`, `scan`, `:map` or quitting.
+
+The page may not name a path. `:rescan`, `:roots` and a bare `:prune` take none, so all three are allowed: they act on the directories `playr scan` recorded and nothing else. `:scan DIR`, `:prune DIR` and `:roots rm DIR` stay refused, so the page lists the library's directories but cannot change them.
 
 ## Process
 
@@ -64,7 +66,7 @@ playr-server
 | `POST /row` | a view, row, the row's key and a command: set the cursor there, then run it |
 | `POST /search` | the query as typed, and whether the search is done |
 | `POST /answer`, `POST /name`, `POST /close` | answer a question, name a playlist, close a prompt or list |
-| `GET /config`, `POST /rescan` | whether `--music` was given; scan it |
+| `GET /config`, `POST /rescan` | whether the library has a recorded root; re-scan them |
 
 - **Server-sent events over WebSocket.** Plain HTTP in one direction, and `EventSource` reconnects on its own. WebSocket needs another crate, and axum brings tokio into a core built on threads.
 
@@ -133,7 +135,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 - To use the terminal over SSH, stop the service first.
 
-- `--music DIR` gives the web page a rescan button. The directory comes only from the command line.
+- The page's rescan button appears when the library has a recorded root, and re-scans those roots. The directories come from `playr scan DIR`, never from a flag or a setting: a directory named in the server's configuration would be a second place roots live.
 
 ## Raspberry Pi
 
@@ -181,7 +183,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 - **`/play` carries the track's id.** The owner searches again before playing. A scan between the two can move rows, so a row whose track is not that id is not played, and the page is told to search again.
 
-- **`/library` in place of `/playlists`.** It also says whether `--music` was given, so the page shows the Rescan button only then.
+- **`/library` in place of `/playlists`.** It also says whether the library has a recorded root, so the page shows the Rescan button only then.
 
 - **Playlists play by name.** The page sends `playlist NAME` to `/command`. OSC's index needs step 4.
 

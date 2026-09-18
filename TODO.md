@@ -20,7 +20,7 @@ What is missing, grouped by priority:
 
 ### All interfaces
 
-- [ ] **refresh/resync library**. Re-scans the given the music library for additions.
+- [x] **refresh/resync library**. Re-scans the given the music library for additions.
 
 - [ ] **Media keys and the now-playing panel.** The keyboard's play and pause keys, MPRIS on Linux, and the macOS and Windows now-playing panels. Under the parity rule in `docs/dev/gui.md`, the terminal and the window gain them together.
 
@@ -34,7 +34,7 @@ What is missing, grouped by priority:
 
 ### Library
 
-- [ ] **Multiple roots.** `scan` takes directories but nothing records them, so a rescan means retyping the paths. Pruning only checks the directories named, so rows for files deleted under a root never pruned stay. Recorded roots would allow a bare `playr scan` and `playr prune` that cover them all.
+- [x] **Multiple roots.** Roots are recorded on scan, so `:rescan`, `:prune`, and a bare `playr scan` / `playr prune` cover them. A scan that finds missing files asks to prune (or prunes when `auto_prune` is set).
 
 ### Output
 

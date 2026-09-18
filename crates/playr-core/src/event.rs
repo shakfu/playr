@@ -69,18 +69,20 @@ pub enum Event {
         seen: usize,
         added: usize,
     },
-    /// A scan of `dir` finished. The session reads the library again once
-    /// told with `Session::scanned`.
+    /// A scan of `dir` finished, or of every recorded root when `dir` is
+    /// `None`. The session reads the library again once told with
+    /// `Session::scanned`.
     Scanned {
         job: JobId,
-        dir: PathBuf,
+        dir: Option<PathBuf>,
         result: Result<ScanReport, String>,
     },
-    /// Tracks and marks under `dir` whose files are gone were removed. The
-    /// session reads the library again once told with `Session::pruned`.
+    /// Tracks and marks under `dir` whose files are gone were removed, or
+    /// under every recorded root when `dir` is `None`. The session reads the
+    /// library again once told with `Session::pruned`.
     Pruned {
         job: JobId,
-        dir: PathBuf,
+        dir: Option<PathBuf>,
         result: Result<Pruned, String>,
     },
     /// Paths given to `Session::open` are gathered into tracks to play.

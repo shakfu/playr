@@ -187,24 +187,44 @@ fn outcome_text(outcome: &Outcome) -> String {
         Outcome::Exported { dir, slices: n } => {
             format!("exported {} to {}", slices(*n), home_as_tilde(dir))
         }
-        Outcome::ScanStarted { dir } => format!("scanning {}", home_as_tilde(dir)),
+        Outcome::ScanStarted { dir: Some(dir) } => format!("scanning {}", home_as_tilde(dir)),
+        Outcome::ScanStarted { dir: None } => "rescanning library".into(),
         Outcome::Scanning { seen, added } => format!("scanning: {seen} files, {added} added"),
         Outcome::Scanned { dir, report } => {
-            let missing = match report.missing {
-                0 => String::new(),
-                n => format!(", {n} missing (:prune removes)"),
+            let missing = match (report.missing, report.unavailable) {
+                (0, _) => String::new(),
+                (n, 0) => format!(", {n} missing"),
+                // Said plainly: the tracks are counted missing, but the
+                // directory could not be read, so they may well be there.
+                (n, 1) => format!(", {n} missing, a directory unreadable"),
+                (n, u) => format!(", {n} missing, {u} directories unreadable"),
+            };
+            let where_ = match dir {
+                Some(dir) => home_as_tilde(dir),
+                None => "library".into(),
             };
             format!(
-                "scanned {}: {} added, {} unreadable{missing}; {} tracks",
-                home_as_tilde(dir),
-                report.stats.added,
-                report.stats.failed,
-                report.total
+                "scanned {where_}: {} added, {} unreadable{missing}; {} tracks",
+                report.stats.added, report.stats.failed, report.total
             )
         }
-        Outcome::PruneStarted { dir } => format!("pruning {}", home_as_tilde(dir)),
-        Outcome::Pruned { dir, removed } => format!(
-            "pruned {}: {} and {} of missing files",
+        Outcome::PruneStarted { dir: Some(dir) } => {
+            format!("pruning {}", home_as_tilde(dir))
+        }
+        Outcome::PruneStarted { dir: None } => "pruning library".into(),
+        Outcome::Pruned { dir, removed } => {
+            let where_ = match dir {
+                Some(dir) => home_as_tilde(dir),
+                None => "library".into(),
+            };
+            format!(
+                "pruned {where_}: {} and {} of missing files",
+                count(removed.tracks, "track"),
+                count(removed.marks, "mark")
+            )
+        }
+        Outcome::Forgot { dir, removed } => format!(
+            "forgot {}: {} and {} removed",
             home_as_tilde(dir),
             count(removed.tracks, "track"),
             count(removed.marks, "mark")
@@ -241,6 +261,11 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::NoLibraryPath => "no library file to scan into".into(),
         Refusal::NotADirectory(path) => format!("not a directory: {}", home_as_tilde(path)),
         Refusal::ScanRunning => "a scan or prune is already running".into(),
+        Refusal::NoRoots => "no directories recorded; :scan DIR adds one".into(),
+        Refusal::NotARoot(path) => format!(
+            "not one of the library's directories: {}; :roots lists them",
+            home_as_tilde(path)
+        ),
     }
 }
 

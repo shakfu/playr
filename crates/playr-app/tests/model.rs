@@ -16,7 +16,7 @@ use playr_app::model::{hold_peak, Input, Model, PEAK_HOLD};
 use playr_app::View;
 use playr_core::audio::Mode;
 use playr_core::db::{self, query, Track};
-use playr_core::notice::{Notice, Outcome, Task};
+use playr_core::notice::{Notice, Outcome, Refusal, Task};
 
 fn track(path: &str) -> Track {
     Track {
@@ -444,7 +444,7 @@ fn a_scan_fills_a_library_that_started_empty() {
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Done(Outcome::ScanStarted {
-            dir: songs.clone()
+            dir: Some(songs.clone())
         })))
     );
     refresh_until(&mut model, |m| {
@@ -599,4 +599,159 @@ fn only_the_latest_slicing_is_shown() {
         model.message()
     );
     assert!(!plan_text(model.sampler()).contains("planning"));
+}
+
+/// A model on a library file in `dir`, with `auto_prune` as given.
+fn model_in(dir: &Path, auto_prune: bool) -> Model {
+    let library = dir.join("library.db");
+    let conn = db::open(&library).unwrap();
+    let mut config = Config::default();
+    config.settings.auto_prune = auto_prune;
+    let mut model = Model::new(conn, common::fake_player().0, Vec::new(), config);
+    model.session_mut().set_library_path(library);
+    model
+}
+
+/// Scans `songs` and refreshes until the scan reports.
+fn scan_and_wait(model: &mut Model, songs: &Path) {
+    model.perform(Action::Scan(songs.to_path_buf()));
+    refresh_until(model, |m| {
+        matches!(m, Message::Core(Notice::Done(Outcome::Scanned { .. })))
+    });
+}
+
+#[test]
+fn a_scan_that_finds_missing_files_asks_to_prune() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let mut model = model_in(dir.path(), false);
+    scan_and_wait(&mut model, &songs);
+    assert_eq!(model.input(), &Input::None, "asked with nothing missing");
+    assert_eq!(model.session().tracks().len(), 3);
+
+    std::fs::remove_file(songs.join("a.wav")).unwrap();
+    scan_and_wait(&mut model, &songs);
+    assert_eq!(
+        model.input(),
+        &Input::Confirm(Confirm::Prune(Some(songs.clone())))
+    );
+    assert_eq!(model.session().tracks().len(), 3, "pruned without a yes");
+}
+
+#[test]
+fn a_finished_scan_does_not_ask_over_something_being_typed() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let mut model = model_in(dir.path(), false);
+    scan_and_wait(&mut model, &songs);
+    std::fs::remove_file(songs.join("a.wav")).unwrap();
+
+    // The scan finishes on its own thread, so the question would land on
+    // whatever is open and take the next keystroke as the answer.
+    model.perform(Action::Scan(songs.clone()));
+    let typed = Input::Command(CommandLine::default());
+    model.set_input(typed.clone());
+    refresh_until(&mut model, |m| {
+        matches!(m, Message::Core(Notice::Done(Outcome::Scanned { .. })))
+    });
+    assert_eq!(model.input(), &typed, "asked over the command line");
+}
+
+#[test]
+fn auto_prune_removes_missing_files_without_asking() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let mut model = model_in(dir.path(), true);
+    scan_and_wait(&mut model, &songs);
+
+    std::fs::remove_file(songs.join("a.wav")).unwrap();
+    model.perform(Action::Scan(songs.clone()));
+    refresh_until(&mut model, |m| {
+        matches!(m, Message::Core(Notice::Done(Outcome::Pruned { .. })))
+    });
+    assert_eq!(
+        model.input(),
+        &Input::None,
+        "asked although auto_prune is set"
+    );
+    assert_eq!(model.session().tracks().len(), 2);
+}
+
+#[test]
+fn auto_prune_asks_instead_when_the_directory_could_not_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let mut model = model_in(dir.path(), true);
+    scan_and_wait(&mut model, &songs);
+
+    // Every file gone and the directory still there: an unmounted drive reads
+    // the same way, so auto_prune steps aside and asks.
+    for name in ["a.wav", "b.wav", "c.wav"] {
+        std::fs::remove_file(songs.join(name)).unwrap();
+    }
+    scan_and_wait(&mut model, &songs);
+    assert_eq!(
+        model.input(),
+        &Input::Confirm(Confirm::Prune(Some(songs.clone()))),
+        "pruned a directory it could not read"
+    );
+    assert_eq!(model.session().tracks().len(), 3);
+}
+
+#[test]
+fn forgetting_a_root_asks_first_then_removes_its_tracks() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let mut model = model_in(dir.path(), false);
+    scan_and_wait(&mut model, &songs);
+    assert_eq!(model.session().tracks().len(), 3);
+
+    // A directory that is not a root is refused without a question.
+    let elsewhere = dir.path().join("elsewhere");
+    model.perform(Action::ForgetRoot(elsewhere.clone()));
+    assert_eq!(
+        model.input(),
+        &Input::None,
+        "asked about a directory that is not a root"
+    );
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NotARoot(
+            elsewhere
+        ))))
+    );
+
+    model.perform(Action::ForgetRoot(songs.clone()));
+    assert_eq!(
+        model.input(),
+        &Input::Confirm(Confirm::ForgetRoot(songs.clone()))
+    );
+    assert_eq!(model.session().tracks().len(), 3, "forgot before a yes");
+
+    model.answer(true);
+    assert_eq!(model.session().tracks().len(), 0);
+    assert!(model.session().roots().is_empty());
+}
+
+#[test]
+fn the_root_list_shows_what_the_library_covers() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let mut model = model_in(dir.path(), false);
+    model.perform(Action::ShowRoots);
+    assert_eq!(model.input(), &Input::Roots(Vec::new()));
+
+    model.set_input(Input::None);
+    scan_and_wait(&mut model, &songs);
+    model.perform(Action::ShowRoots);
+    assert_eq!(
+        model.input(),
+        &Input::Roots(vec![songs.canonicalize().unwrap()])
+    );
 }

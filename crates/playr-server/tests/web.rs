@@ -52,6 +52,9 @@ fn the_page_may_do_what_the_window_does_but_the_sampler_and_paths() {
         StartCommand,
         Theme(playr_app::Theme::Light),
         ShowView(View::Playlists),
+        Rescan,
+        ShowRoots,
+        Prune(None),
     ] {
         assert!(allowed(&action), "{action:?}");
     }
@@ -59,7 +62,8 @@ fn the_page_may_do_what_the_window_does_but_the_sampler_and_paths() {
         Quit,
         Scan("/".into()),
         Open(vec!["/".into()]),
-        Prune("/".into()),
+        Prune(Some("/".into())),
+        ForgetRoot("/".into()),
         ShowView(View::Sampler),
         Slice(playr_app::action::Slicing::Marks),
         WriteSlices,
@@ -103,13 +107,17 @@ fn help_lists_only_what_the_page_may_do() {
     let commands = rows(true);
     assert!(commands.iter().any(|r| r.starts_with(":delete")));
     for refused in [
-        ":quit", ":scan", ":open", ":prune", ":slice", ":zoom", ":loop", ":map",
+        ":quit", ":scan", ":open", ":slice", ":zoom", ":loop", ":map",
     ] {
         assert!(
             !commands.iter().any(|r| r.starts_with(refused)),
             "{refused} in {commands:?}"
         );
     }
+    assert!(
+        commands.iter().any(|r| r.starts_with(":prune")),
+        "bare prune missing from {commands:?}"
+    );
     assert!(!commands.iter().any(|r| r.trim() == "sampler"));
 }
 

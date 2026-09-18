@@ -105,6 +105,47 @@ fn scan_reads_tags_recursively_and_skips_unchanged_files() {
 }
 
 #[test]
+fn scan_into_records_the_directory_as_a_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir(&music).unwrap();
+    common::silence(&music.join("a.wav"), 8000, 0.05);
+    let library = dir.path().join("library.db");
+    let report = scan::scan_into(&library, &music, |_| {}).unwrap();
+    assert_eq!(report.stats.added, 1);
+    let conn = db::open(&library).unwrap();
+    assert_eq!(
+        db::roots(&conn).unwrap(),
+        vec![music.canonicalize().unwrap()]
+    );
+
+    // The test is on files seen, not files added, so a rescan that finds
+    // nothing new keeps its root.
+    let again = scan::scan_into(&library, &music, |_| {}).unwrap();
+    assert_eq!((again.stats.added, again.stats.skipped), (0, 1));
+    assert_eq!(
+        db::roots(&conn).unwrap(),
+        vec![music.canonicalize().unwrap()]
+    );
+}
+
+#[test]
+fn a_directory_holding_no_audio_is_not_recorded_as_a_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let empty = dir.path().join("empty");
+    std::fs::create_dir_all(empty.join("sub")).unwrap();
+    std::fs::write(empty.join("notes.txt"), b"x").unwrap();
+    let library = dir.path().join("library.db");
+    let report = scan::scan_into(&library, &empty, |_| {}).unwrap();
+    assert_eq!(report.stats.seen, 0);
+    let conn = db::open(&library).unwrap();
+    assert!(
+        db::roots(&conn).unwrap().is_empty(),
+        "an empty directory became a root"
+    );
+}
+
+#[test]
 fn a_changed_file_is_picked_up_again() {
     if !have_ffmpeg() {
         return;
@@ -517,4 +558,79 @@ fn prune_removes_the_marks_of_missing_files_under_the_root() {
     assert_eq!((marks(&conn, &gone), marks(&conn, &played)), (0, 0));
     assert_eq!(marks(&conn, &here), 1, "a present file lost its mark");
     assert_eq!(marks(&conn, &elsewhere), 1, "pruned outside the root");
+}
+
+#[test]
+fn a_root_that_reads_empty_is_reported_unavailable_not_just_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir(&music).unwrap();
+    common::silence(&music.join("a.wav"), 8000, 0.05);
+    common::silence(&music.join("b.wav"), 8000, 0.05);
+    let library = dir.path().join("library.db");
+    let report = scan::scan_into(&library, &music, |_| {}).unwrap();
+    assert_eq!((report.missing, report.unavailable), (0, 0));
+
+    // The directory survives with nothing in it, as an unmounted drive does.
+    std::fs::remove_file(music.join("a.wav")).unwrap();
+    std::fs::remove_file(music.join("b.wav")).unwrap();
+    let report = scan::scan_into(&library, &music, |_| {}).unwrap();
+    assert_eq!(report.stats.seen, 0);
+    assert_eq!(
+        (report.missing, report.unavailable),
+        (2, 1),
+        "both tracks read as gone, so the root cannot be trusted"
+    );
+
+    // One file back is enough to trust it again.
+    common::silence(&music.join("a.wav"), 8000, 0.05);
+    let report = scan::scan_into(&library, &music, |_| {}).unwrap();
+    assert_eq!((report.missing, report.unavailable), (1, 0));
+}
+
+#[test]
+fn a_root_nested_in_another_does_not_become_a_second_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    let rock = music.join("rock");
+    std::fs::create_dir_all(&rock).unwrap();
+    common::silence(&music.join("a.wav"), 8000, 0.05);
+    common::silence(&rock.join("b.wav"), 8000, 0.05);
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+
+    scan::scan_into(&library, &rock, |_| {}).unwrap();
+    assert_eq!(
+        db::roots(&conn).unwrap(),
+        vec![rock.canonicalize().unwrap()]
+    );
+
+    // The wider directory replaces the one inside it.
+    scan::scan_into(&library, &music, |_| {}).unwrap();
+    assert_eq!(
+        db::roots(&conn).unwrap(),
+        vec![music.canonicalize().unwrap()]
+    );
+
+    // And scanning the inner one again does not add it back.
+    scan::scan_into(&library, &rock, |_| {}).unwrap();
+    assert_eq!(
+        db::roots(&conn).unwrap(),
+        vec![music.canonicalize().unwrap()]
+    );
+
+    // A sibling whose name extends the root's is its own root.
+    let music2 = dir.path().join("music2");
+    std::fs::create_dir(&music2).unwrap();
+    common::silence(&music2.join("c.wav"), 8000, 0.05);
+    scan::scan_into(&library, &music2, |_| {}).unwrap();
+    let mut roots = db::roots(&conn).unwrap();
+    roots.sort();
+    assert_eq!(
+        roots,
+        vec![
+            music.canonicalize().unwrap(),
+            music2.canonicalize().unwrap()
+        ]
+    );
 }

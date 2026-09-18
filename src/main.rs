@@ -40,14 +40,19 @@ struct Cli {
 enum Command {
     /// Add directories to the library, creating it if there is none
     Scan {
-        /// Directories to scan, recursively
-        #[arg(required = true, value_name = "DIR")]
+        /// Directories to scan, recursively. With none, re-scans those recorded.
+        #[arg(value_name = "DIR")]
         dirs: Vec<PathBuf>,
+    },
+    /// List the directories the library covers, or change them
+    Roots {
+        #[command(subcommand)]
+        op: Option<RootsOp>,
     },
     /// Remove tracks under directories whose files are gone, with their marks
     Prune {
-        /// Directories to check, recursively
-        #[arg(required = true, value_name = "DIR")]
+        /// Directories to check. With none, checks every directory previously scanned.
+        #[arg(value_name = "DIR")]
         dirs: Vec<PathBuf>,
     },
     /// Play everything matching a search; put a query that starts with - after --
@@ -71,6 +76,20 @@ enum Command {
     Formats,
 }
 
+#[derive(Subcommand)]
+enum RootsOp {
+    /// Record a directory and scan it, as `playr scan DIR` does
+    Add {
+        #[arg(required = true, value_name = "DIR")]
+        dirs: Vec<PathBuf>,
+    },
+    /// Forget a directory, and the tracks and marks under it
+    Rm {
+        #[arg(required = true, value_name = "DIR")]
+        dirs: Vec<PathBuf>,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
@@ -92,7 +111,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     // claim. Held until `run` returns.
     let reads_only = matches!(
         cli.command,
-        Some(Command::Playlists | Command::Search { json: true, .. })
+        Some(Command::Playlists | Command::Search { json: true, .. } | Command::Roots { op: None })
     );
     let _instance = if reads_only {
         None
@@ -103,9 +122,35 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     // Only `scan` creates the library. Without one, everything else runs on an
     // empty in-memory library, so playing a file leaves nothing behind.
     let db_path = cli.db.unwrap_or_else(db::default_path);
-    let scanning = matches!(cli.command, Some(Command::Scan { .. }));
-    if matches!(cli.command, Some(Command::Prune { .. })) && !db_path.try_exists()? {
+    let scanning = matches!(
+        cli.command,
+        Some(
+            Command::Scan { .. }
+                | Command::Roots {
+                    op: Some(RootsOp::Add { .. })
+                }
+        )
+    );
+    if matches!(
+        cli.command,
+        Some(
+            Command::Prune { .. }
+                | Command::Roots {
+                    op: None | Some(RootsOp::Rm { .. })
+                }
+        )
+    ) && !db_path.try_exists()?
+    {
         return Err(format!("no library at {}", db_path.display()).into());
+    }
+    // A bare `playr scan` covers the recorded roots, and without a library
+    // there are none. Checked before the library is opened, which would
+    // otherwise leave an empty file behind. `prune` already returned above.
+    if let Some(Command::Scan { ref dirs }) = cli.command {
+        if dirs.is_empty() && !db_path.try_exists()? {
+            eprintln!("{NO_SCAN_DIRS}");
+            return Ok(ExitCode::FAILURE);
+        }
     }
     let mut conn = if scanning || db_path.try_exists()? {
         db::open(&db_path)?
@@ -117,6 +162,20 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let start: Vec<Track> = match cli.command {
         Some(Command::Formats) => unreachable!("handled above"),
         Some(Command::Scan { dirs }) => return cmd_scan(&mut conn, &dirs),
+        // `roots add` is `scan`: recording a root without scanning it would
+        // leave a root the library holds nothing for.
+        Some(Command::Roots {
+            op: Some(RootsOp::Add { dirs }),
+        }) => return cmd_scan(&mut conn, &dirs),
+        Some(Command::Roots {
+            op: Some(RootsOp::Rm { dirs }),
+        }) => return cmd_forget(&conn, &dirs),
+        Some(Command::Roots { op: None }) => {
+            for root in db::roots(&conn)? {
+                println!("{}", root.display());
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
         Some(Command::Prune { dirs }) => return cmd_prune(&conn, &dirs),
         Some(Command::Playlists) => {
             for p in db::query::playlists(&conn)? {
@@ -224,10 +283,25 @@ fn tracks_json(tracks: &[Track]) -> String {
     serde_json::Value::Array(rows).to_string()
 }
 
+/// Refusing a bare `playr scan`, from `run` before the library is opened and
+/// from `cmd_scan` once it is.
+const NO_SCAN_DIRS: &str = "playr: no directories to scan; give one, as `playr scan DIR`";
+
 fn cmd_scan(
     conn: &mut rusqlite::Connection,
     dirs: &[PathBuf],
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let recorded;
+    let dirs = if dirs.is_empty() {
+        recorded = db::roots(conn)?;
+        if recorded.is_empty() {
+            eprintln!("{NO_SCAN_DIRS}");
+            return Ok(ExitCode::FAILURE);
+        }
+        recorded.as_slice()
+    } else {
+        dirs
+    };
     let mut total = scan::ScanStats::default();
     let multi = dirs.len() > 1;
     for path in dirs {
@@ -248,6 +322,9 @@ fn cmd_scan(
                 let _ = std::io::stdout().flush();
             }
         })?;
+        if stats.seen > 0 {
+            db::add_root(conn, path)?;
+        }
         println!(
             "\r  {} files, {} added, {} unchanged, {} unreadable{:<20}",
             stats.seen, stats.added, stats.skipped, stats.failed, ""
@@ -276,6 +353,17 @@ fn cmd_prune(
     conn: &rusqlite::Connection,
     dirs: &[PathBuf],
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let recorded;
+    let dirs = if dirs.is_empty() {
+        recorded = db::roots(conn)?;
+        if recorded.is_empty() {
+            eprintln!("playr: no directories to prune; give one, or scan one first");
+            return Ok(ExitCode::FAILURE);
+        }
+        recorded.as_slice()
+    } else {
+        dirs
+    };
     for path in dirs {
         if !path.is_dir() {
             eprintln!("playr: not a directory: {}", path.display());
@@ -291,6 +379,34 @@ fn cmd_prune(
     }
     println!("library now holds {} tracks", db::query::count(conn)?);
     Ok(ExitCode::SUCCESS)
+}
+
+/// Forgets each root named, with the tracks and marks under it. A path that
+/// is not a root is reported and the rest still run.
+fn cmd_forget(
+    conn: &rusqlite::Connection,
+    dirs: &[PathBuf],
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let mut code = ExitCode::SUCCESS;
+    for path in dirs {
+        match db::forget_root(conn, path)? {
+            Some(removed) => println!(
+                "forgot {}: removed {} tracks and {} marks",
+                path.display(),
+                removed.tracks,
+                removed.marks
+            ),
+            None => {
+                eprintln!(
+                    "playr: not one of the library's directories: {}",
+                    path.display()
+                );
+                code = ExitCode::FAILURE;
+            }
+        }
+    }
+    println!("library now holds {} tracks", db::query::count(conn)?);
+    Ok(code)
 }
 
 /// The tracks the paths on the command line name, with each problem reported.
