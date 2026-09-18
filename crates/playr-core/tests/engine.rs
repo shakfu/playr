@@ -155,7 +155,7 @@ fn enqueueing_after_the_queue_ends_starts_playback() {
     silence(&second, 8_000, 1.0);
     let (player, control) = fake_player();
     player.send(Cmd::Play(vec![first], 0));
-    until_heard(&control, 0, |s| s.contains(&800));
+    until_heard(&player, &control, 0, |s| s.contains(&800));
 
     let s = wait_for(&player, |s| s.state == State::Stopped);
     assert_eq!(s.state, State::Stopped, "first track never ended");
@@ -641,7 +641,12 @@ fn heard(control: &common::Control, from: usize) -> Vec<i64> {
 }
 
 /// Waits until `done` holds for what has been heard since `from`.
-fn until_heard(control: &common::Control, from: usize, done: impl Fn(&[i64]) -> bool) -> Vec<i64> {
+fn until_heard(
+    player: &Player,
+    control: &common::Control,
+    from: usize,
+    done: impl Fn(&[i64]) -> bool,
+) -> Vec<i64> {
     // The same budget `wait_for` allows the engine: a loaded runner plays late.
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -649,7 +654,16 @@ fn until_heard(control: &common::Control, from: usize, done: impl Fn(&[i64]) -> 
         if done(&seen) {
             return seen;
         }
-        assert!(Instant::now() < deadline, "heard {} frames", seen.len());
+        if Instant::now() >= deadline {
+            let s = player.status();
+            panic!(
+                "heard {} frames; {:?} at track {}; {}",
+                seen.len(),
+                s.state,
+                s.index,
+                control.report()
+            );
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -681,7 +695,7 @@ fn a_loop_repeats_its_frames_exactly_and_follows_new_bounds() {
     // Frames 8,000 to 8,399 carry 8,001 to 8,400; the playhead is before them.
     player.send(Cmd::Loop(Some((8_000, 8_400))));
     let returns = |seen: &[i64]| seen.windows(2).filter(|p| p == &[8_400, 8_001]).count();
-    let seen = until_heard(&control, 0, |s| returns(s) >= 5);
+    let seen = until_heard(&player, &control, 0, |s| returns(s) >= 5);
     assert_loops(&seen, 8_001, 8_400);
     assert_eq!(player.status().looping, Some((8_000, 8_400)));
     // Read over several passes: the position must stay inside the loop even
@@ -696,14 +710,14 @@ fn a_loop_repeats_its_frames_exactly_and_follows_new_bounds() {
     player.send(Cmd::Loop(Some((8_100, 8_300))));
     std::thread::sleep(Duration::from_millis(300));
     let from = control.played.lock().unwrap().len();
-    let seen = until_heard(&control, from, |s| {
+    let seen = until_heard(&player, &control, from, |s| {
         s.windows(2).filter(|p| p == &[8_300, 8_101]).count() >= 5
     });
     assert_loops(&seen, 8_101, 8_300);
 
     // Off: playback runs on past the end.
     player.send(Cmd::Loop(None));
-    until_heard(&control, from, |s| s.iter().any(|&v| v > 9_000));
+    until_heard(&player, &control, from, |s| s.iter().any(|&v| v > 9_000));
     assert_eq!(player.status().looping, None);
 }
 
@@ -718,7 +732,7 @@ fn a_loop_past_the_end_returns_from_the_end_and_a_new_track_ends_it() {
     wait_for(&player, |s| s.state == State::Playing);
     // Asked past the end, it ends there: 7,801 to 8,000, again and again.
     player.send(Cmd::Loop(Some((7_800, 99_000))));
-    let seen = until_heard(&control, 0, |s| {
+    let seen = until_heard(&player, &control, 0, |s| {
         s.windows(2).filter(|p| p == &[8_000, 7_801]).count() >= 5
     });
     assert_loops(&seen, 7_801, 8_000);
@@ -765,7 +779,7 @@ fn a_one_shot_range_plays_through_once_and_pauses_at_its_end() {
     // Playing on continues after the range rather than restarting the track.
     let from = control.played.lock().unwrap().len();
     player.send(Cmd::TogglePause);
-    let after = until_heard(&control, from, |s| s.iter().any(|&v| v > 8_400));
+    let after = until_heard(&player, &control, from, |s| s.iter().any(|&v| v > 8_400));
     assert!(
         after.iter().all(|&v| v > 8_000),
         "went back into the track: {:?}",

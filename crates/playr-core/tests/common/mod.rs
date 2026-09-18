@@ -15,6 +15,7 @@ use cpal::SampleFormat;
 use playr_core::audio::meter::Meter;
 use playr_core::audio::output::{render, Backend, DeviceEvent, OutputError, Plan, Shared};
 use playr_core::audio::{Player, Spec};
+use playr_core::event::Event;
 
 /// Reports a test skipped for want of `what`, or fails it when `var` is set.
 ///
@@ -106,6 +107,8 @@ pub struct Control {
     pub played: Mutex<Vec<f32>>,
     /// Event channel of the most recently opened stream.
     events: Mutex<Option<Sender<DeviceEvent>>>,
+    /// What the engine has reported, for [`Control::report`].
+    reported: Mutex<Vec<String>>,
 }
 
 impl Control {
@@ -118,6 +121,22 @@ impl Control {
         while self.stalled_passes.load(Ordering::Relaxed) <= seen && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    /// What the device and the engine have done, for a failure message.
+    ///
+    /// A test that waits to hear something hears nothing whether the file
+    /// would not open, the device would not open or the engine stopped, and
+    /// the engine's own report of it goes nowhere unless a sink is attached.
+    pub fn report(&self) -> String {
+        let opened = self.opened.load(Ordering::Relaxed);
+        let played = self.played.lock().map_or(0, |p| p.len());
+        let reported = match self.reported.lock() {
+            Ok(r) if r.is_empty() => "nothing".to_string(),
+            Ok(r) => r.join("; "),
+            Err(_) => "lost to a panic".to_string(),
+        };
+        format!("{opened} streams opened, {played} samples played, engine reported: {reported}")
     }
 
     pub fn send(&self, event: DeviceEvent) {
@@ -218,5 +237,17 @@ impl Backend for Fake {
 pub fn fake_player() -> (Player, Arc<Control>) {
     let control = Arc::new(Control::default());
     let player = Player::with_backend(Fake(control.clone())).unwrap();
+    let recorder = control.clone();
+    player.set_events(Arc::new(move |event| {
+        let line = match event {
+            Event::PlaybackError(e) => format!("playback error: {e}"),
+            Event::StateChanged(state) => format!("{state:?}"),
+            Event::TrackChanged { index, .. } => format!("track {index}"),
+            other => format!("{other:?}"),
+        };
+        if let Ok(mut reported) = recorder.reported.lock() {
+            reported.push(line);
+        }
+    }));
     (player, control)
 }
