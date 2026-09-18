@@ -22,7 +22,7 @@ What is missing, grouped by priority:
 
 - [x] **refresh/resync library**. Re-scans the given the music library for additions.
 
-- [x] **Media keys and the now-playing panel.** Through souvlaki, with zbus rather than libdbus on Linux. Both frontends call `Model::attach_media`; a machine with no bus or panel runs as before, and on Windows the terminal has no window to attach to.
+- [x] **Media keys and the now-playing panel.** Through souvlaki, with zbus rather than libdbus on Linux. `playr` and `playr-gui` call `Model::attach_media`; `playr-server` does not, by choice, since a machine without a screen has no panel to show and no keyboard to press. A machine with no bus or panel runs as before, and on Windows the terminal has no window to attach to.
 
 - [x] **Resume on start.** A one-row `resume` table, written on quit and at each track change, offered at the next start when nothing was handed over and the file is still there.
 

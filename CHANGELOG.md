@@ -4,6 +4,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.8.1]
+
 ### Added
 
 - `:rescan`, or `:sync`, re-scans every directory previously given to `:scan` or `playr scan`, so new files are picked up without retyping paths. Each scan records its directory in a `roots` table, and a bare `playr scan`, a bare `playr prune`, `:prune` with no argument and the window's File, Rescan library all cover the recorded ones. A directory holding no audio file is not recorded; nor is one inside a directory already recorded, since the wider one covers its files, and recording a wider one drops the narrower. A scan that finds missing tracks asks before pruning them, or prunes at once with `auto_prune = true` in `settings.toml`. It does not ask over a prompt being typed, and `auto_prune` steps aside when a directory could not be read: an unmounted drive whose mount point survives counts every track under it as missing.

@@ -1,9 +1,14 @@
 //! Media keys and the now-playing panel.
 //!
 //! The keyboard's play, pause, next and previous keys, MPRIS on Linux, and the
-//! macOS and Windows now-playing panels, through one crate. Both frontends have
-//! them because [`crate::model::Model`] holds this, as the parity rule in
-//! `docs/dev/gui.md` requires.
+//! macOS and Windows now-playing panels, through one crate.
+//!
+//! [`crate::model::Model`] holds this, but holding it attaches nothing: a
+//! frontend opts in by calling [`crate::model::Model::attach_media`]. `playr`
+//! and `playr-gui` call it. `playr-server` does not: a machine without a screen
+//! has no panel to show and no keyboard to press. The parity rule in
+//! `docs/dev/gui.md` does not reach an opt-in, so a new frontend has none of
+//! this until it calls that method.
 //!
 //! None of it is load bearing. A machine with no session bus, no panel, or a
 //! terminal on Windows, where the panel needs a window handle playr has not

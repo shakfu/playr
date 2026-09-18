@@ -1,8 +1,8 @@
 # playr
 
-A minimal music player, in a terminal or a desktop window. Plays a directory, a saved playlist, or the results of a search. Keeps a SQLite index of your library.
+A minimal music player with three interfaces: a terminal, a desktop window, and a server for a machine without a screen, controlled from a web page or OSC. Plays a directory, a saved playlist, or the results of a search. Keeps a SQLite index of your library.
 
-It contacts no server, fetches no metadata and scrobbles nothing. `playr` and `playr-gui` have no network code at all; `playr-server`, which plays on a machine without a screen and is controlled from a web page, is the one program that listens on a network.
+None of the three fetches metadata or images from the internet, and none contacts a service. Indeed, `playr` and `playr-gui` have no network code at all. `playr-server` listens on your own network, and serves only the browsers and OSC apps you point at it.
 
 ![Varispeed on a Boards of Canada record is a good use of an afternoon.](https://raw.githubusercontent.com/shakfu/playr/main/docs/media/playr.png)
 
@@ -65,7 +65,7 @@ It contacts no server, fetches no metadata and scrobbles nothing. `playr` and `p
 
 **Interface**
 
-- Four views: library, selection, playlists, and a sampler showing the playing track's waveform
+- Four views: library, selection, playlists, and a sampler showing the playing track's waveform; the web page has the first three
 
 - Dark and light themes; the terminal takes its colours from its own theme, and honours `NO_COLOR`
 
@@ -79,7 +79,7 @@ It contacts no server, fetches no metadata and scrobbles nothing. `playr` and `p
 
 - Skipped files and audio device errors shown in the status line
 
-- Vim and arrow key navigation
+- Vim and arrow key navigation; the window and the web page take the mouse as well, and the page takes touch
 
 - Vim-style `:` commands for every action, with Tab completion and a history; they also take arguments such as `:seek 1:23` or `:playlist late night`
 
@@ -89,9 +89,38 @@ It contacts no server, fetches no metadata and scrobbles nothing. `playr` and `p
 
 - The meter bar runs from -40 dB to full scale and fills green below -18 dB, yellow to -6 dB, and red above; the peak marker `|` takes the colour of where it sits. Red on the bar means near the top, which is normal for loud masters. The peak number turns red only at full scale, where the recording clips
 
-## Install
+## Interfaces
 
-playr is three programs: `playr`, the terminal interface; `playr-gui`, a desktop window with the same features, keys and `:` commands; and `playr-server`, for a machine without a screen, controlled from a web page or OSC. All read the same library and settings, and only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json` and `playr formats` only read, and run alongside any of them.
+playr is three programs over one core. All read the same library and the same `settings.toml`, and all take the same keys and `:` commands.
+
+- **`playr`**, the terminal interface, drawn with ratatui. It needs no display server, so it runs over SSH.
+
+- **`playr-gui`**, a desktop window, drawn with egui. Tables with right-click menus, menus for every action, file dialogs, and files dropped on the window.
+
+- **`playr-server`**, for a machine without a screen, such as a Raspberry Pi with a DAC. It plays on that machine, and a web page or OSC controls it. The only program with network code.
+
+Only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json`, `playr roots` and `playr formats` only read, and run alongside any of them.
+
+| | `playr` | `playr-gui` | `playr-server` |
+|-|-|-|-|
+| library, selection and playlists views | yes | yes | yes |
+| keys, `:` commands, `?` and `:help` | yes | yes | yes |
+| search, marks, playlists, themes | yes | yes | yes |
+| playback modes, varispeed, volume, level meter | yes | yes | yes |
+| sampler view and `:slice` | yes | yes | no |
+| mouse | no | yes | yes, and touch |
+| media keys and the now-playing panel | yes* | yes | no |
+| opens, scans or prunes a path it is given | yes | yes | no |
+| re-scans the directories already recorded | yes | yes | yes |
+| `:map` and `:unmap` | yes | yes | no |
+| quits from the interface | yes | yes | no |
+| network code | none | none | HTTP, and OSC with `--osc` |
+
+\* Not on Windows, where the panel attaches to a window and the terminal has none.
+
+The page reaches playr over a network, so it refuses the sampler, any command naming a path, `:map` and quitting. [docs/dev/server.md](docs/dev/server.md) holds the allow list.
+
+## Install
 
 ### Release archives
 
@@ -155,6 +184,16 @@ Without it, Opus files are reported as undecodable and skipped, the same as WMA 
 ## Use
 
 ```sh
+playr                                # the terminal
+playr-gui                            # the desktop window
+playr-server                         # the web page; prints the address to open
+```
+
+Each takes the same options, reads the same library and the same settings, and answers the same keys. [Interfaces](#interfaces) compares what each one has.
+
+### The terminal
+
+```sh
 playr scan ~/music          # index a directory
 playr prune ~/music         # remove tracks and marks of files gone from it
 playr                       # browse the library
@@ -169,27 +208,9 @@ playr formats               # show what this build can decode
 
 `playr <command> --help` describes each command. A search that starts with `-` goes after `--`, as in `playr search -- -ology`. `--json` prints an array with one object per track, holding every library column, `null` for a missing tag, and `duration_ms` in milliseconds; no match prints `[]` and exits with status 1. Bad arguments exit with status 2.
 
-The library lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan`, or `:scan` inside playr, creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
+Without a command it opens the four views on the library. It draws in any terminal, needs no display server, and runs over SSH. [Keys](#keys) lists the bindings, and `?` lists them for the view you are in.
 
-Rescanning only re-reads files whose size or modification time changed. Each scanned directory is remembered as a root, so `:rescan` (or `:sync`) inside playr, and a bare `playr scan`, cover them again without naming them. A directory holding no audio file does not become a root, and neither does one inside a root: the root above it already covers its files.
-
-`:roots` lists the directories the library covers, and `playr roots` prints them. `:roots rm DIR`, or `playr roots rm DIR`, forgets one: the directory stops being part of the library, and the tracks under it go with it, along with their places in playlists and their marks. Unlike a prune this does not ask the filesystem anything, so it works on a directory that is already gone. `:roots add DIR` is another spelling of `:scan DIR`.
-
-A scan never removes anything itself. It counts the tracks under the scanned directory whose files are gone; inside playr it then asks whether to prune them, and `playr scan` prints the count and the command. `playr prune`, or `:prune`, covers every root; `playr prune DIR` and `:prune DIR` cover one. They remove those tracks, and with them their places in playlists, and the marks of every file under the directory that is gone, whether it was in the library or not. Nothing outside the named directories is touched, so pruning `~/music` leaves an unplugged drive mounted elsewhere alone. Prune after a file is moved or deleted for good, not while a drive under that directory is unplugged.
-
-Playlist entries and marks are the only things in the library that are not read back from the files, so pruning is the one operation that loses work. With `auto_prune = true` a scan inside playr prunes without asking, except when a directory read as empty although the library holds tracks under it: that is what an unmounted drive looks like, so playr asks instead.
-
-### Media keys and the now-playing panel
-
-The keyboard's play, pause, next and previous keys work while playr runs, and the system's now-playing panel shows the track and takes its buttons: MPRIS on Linux, where playr appears as `org.mpris.MediaPlayer2.playr`, the macOS now-playing panel, and the Windows one. The terminal and the window have them alike.
-
-None of it is required. A machine with no session bus or no panel runs playr as before. On Windows the panel attaches to a window, which the terminal has not got, so there it works in `playr-gui` only. MPRIS is a local bus, not a network: playr still contacts nothing.
-
-### Taking up again
-
-playr remembers the track playing and how far into it when it closes, and offers it at the next start: "take up amen.flac again at 1:35?". Only `y` takes it up; anything else starts as playr always did. Nothing is offered when the command line named tracks to play, or when the file has gone. The position is stored in the library when playr closes and again at each track change, so a playr that is killed still leaves the track behind, if not the second.
-
-### Desktop window
+### The desktop window
 
 ```sh
 playr-gui                        # open the window on the library
@@ -201,15 +222,51 @@ It takes the terminal's options and reads the same settings file, so its keys an
 
 File, Add folder to library scans a directory, as `playr scan` does; File, Rescan library re-scans those folders; File, Library directories lists them, each with a Forget button; File, Remove missing files prunes every recorded folder; and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
 
-### Server
+### The server
 
 ```sh
-playr-server --listen 0.0.0.0:8080   # prints the address to open
+playr-server                         # serve on 127.0.0.1:8080, printing the address
+playr-server --listen 0.0.0.0:8080   # reach it from other devices
+playr-server --db other.db           # use a different library file
 ```
 
-`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page with the window's views, keys, `:` commands, dialogs and marks, without the sampler. The page adapts to a phone, a tablet or a desktop browser. It needs a token from the printed address, or none with `--open` on a network you trust. The page cannot name a path, so it cannot open, scan or prune one; its Rescan library re-scans the directories `playr scan` recorded, and nothing else. With `--osc`, OSC controls playback too. [docs/server-guide.md](docs/server-guide.md) covers access from other devices, TouchOSC, and running it as a service on a Raspberry Pi.
+`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page that controls it. It takes the terminal's options and reads the same settings file, so the page's keys and `:` commands are the terminal's. The page has the library, selection and playlists views, search, row menus, dialogs, marks, themes and the level meter, without the sampler. It adapts to a phone, a tablet or a desktop browser: click or tap a row to move the cursor, again to play, right-click or `...` for its menu, and shift-click the progress bar to add a mark.
+
+Every request needs a token, printed in the startup address and kept in `server.token` beside the library. Opening that address sets a cookie for a year, so each browser needs it once. `--open` serves the page without a token, for a network where every device is trusted; the `Host` and `Origin` checks still refuse a website whose domain resolves to the machine.
+
+The page cannot name a path, so it cannot open, scan or prune one, and it cannot quit the server. Its Rescan library re-scans the directories `playr scan` recorded, and nothing else.
+
+`--osc ADDR:PORT` receives OSC for playback, volume, speed, mode and playlists by index, and `--osc-reply ADDR:PORT` sends the title, position and level back. `playr-server osc-schema` prints every address as JSON, and each release has a TouchOSC layout built from it.
+
+[docs/server-guide.md](docs/server-guide.md) covers access from other devices, a QR code for a phone, running behind a proxy, and running it as a systemd service on a Raspberry Pi.
+
+### The library
+
+One library file serves all three interfaces and the `playr` subcommands.
+
+It lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan`, or `:scan` inside playr, creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
+
+Rescanning only re-reads files whose size or modification time changed. Each scanned directory is remembered as a root, so `:rescan` (or `:sync`) inside playr, and a bare `playr scan`, cover them again without naming them. A directory holding no audio file does not become a root, and neither does one inside a root: the root above it already covers its files.
+
+`:roots` lists the directories the library covers, and `playr roots` prints them. `:roots rm DIR`, or `playr roots rm DIR`, forgets one: the directory stops being part of the library, and the tracks under it go with it, along with their places in playlists and their marks. Unlike a prune this does not ask the filesystem anything, so it works on a directory that is already gone. `:roots add DIR` is another spelling of `:scan DIR`.
+
+A scan never removes anything itself. It counts the tracks under the scanned directory whose files are gone; inside playr it then asks whether to prune them, and `playr scan` prints the count and the command. `playr prune`, or `:prune`, covers every root; `playr prune DIR` and `:prune DIR` cover one. They remove those tracks, and with them their places in playlists, and the marks of every file under the directory that is gone, whether it was in the library or not. Nothing outside the named directories is touched, so pruning `~/music` leaves an unplugged drive mounted elsewhere alone. Prune after a file is moved or deleted for good, not while a drive under that directory is unplugged.
+
+Playlist entries and marks are the only things in the library that are not read back from the files, so pruning is the one operation that loses work. With `auto_prune = true` a scan inside playr prunes without asking, except when a directory read as empty although the library holds tracks under it: that is what an unmounted drive looks like, so playr asks instead.
+
+### Media keys and the now-playing panel
+
+The keyboard's play, pause, next and previous keys work while playr runs, and the system's now-playing panel shows the track and takes its buttons: MPRIS on Linux, where playr appears as `org.mpris.MediaPlayer2.playr`, the macOS now-playing panel, and the Windows one. The terminal and the window have them alike. `playr-server` has neither. A machine without a screen has no panel to show and no keyboard to press; its controls are the web page and OSC.
+
+None of it is required. A machine with no session bus or no panel runs playr as before. They belong to the machine playr runs on, so a `playr` reached over SSH has none: the media keys in front of you are routed by your own desktop, to its own players. On Windows the panel attaches to a window, which the terminal has not got, so there it works in `playr-gui` only. MPRIS is a local bus, not a network: playr still contacts nothing.
+
+### Taking up again
+
+playr remembers the track playing and how far into it when it closes, and offers it at the next start: "take up amen.flac again at 1:35?". Only `y` takes it up; anything else starts as playr always did. Nothing is offered when the command line named tracks to play, or when the file has gone. The position is stored in the library when playr closes and again at each track change, so a playr that is killed still leaves the track behind, if not the second.
 
 ## Keys
+
+These keys are the same in the terminal, the window and the web page, and any of them can be rebound in [`settings.toml`](#configuration). The window and the page take the mouse as well, and the page takes touch.
 
 | keys                     | action                                      |
 |--------------------------|---------------------------------------------|
@@ -420,7 +477,7 @@ Volume is a float gain applied before quantisation.
 
 ## Design
 
-[docs/architecture.md](docs/architecture.md) describes how the code splits into `playr-core`, `playr-app` and the terminal, so another frontend, such as an egui or Tauri app, can reuse everything but the terminal.
+[docs/architecture.md](docs/architecture.md) describes the split. `playr-core` holds audio, library, samples and session, with no presentation dependency; `playr-app` holds keys, commands and interface state. The terminal, the window and the server are three frontends over that pair, each supplying only its own presentation, and a fourth, such as a Tauri app, would too. [docs/dev/gui.md](docs/dev/gui.md) and [docs/dev/server.md](docs/dev/server.md) record the window's and the server's designs.
 
 ## Tests
 

@@ -2,7 +2,7 @@
 members = ["crates/playr-core", "crates/playr-app", "crates/playr-gui", "crates/playr-server"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"

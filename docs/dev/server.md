@@ -18,6 +18,8 @@ Decisions taken:
 
 - **Parity:** every request goes through `dispatch` (parity rule 1). The web page has the window's features but the sampler, quitting, paths and `:map`; OSC is a remote control.
 
+- **Media keys and the now-playing panel:** not attached. `main` never calls `Model::attach_media`, so the server registers no MPRIS name and no panel. A machine without a screen has no panel to show and no keyboard to press; the page and OSC are its controls. Wiring it is one line after `Model::new`, since `Model::refresh` already drains and publishes -- left out on purpose, not missed.
+
 ## What each client can do
 
 | | web | OSC |
