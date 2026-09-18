@@ -713,3 +713,39 @@ fn a_loop_past_the_end_returns_from_the_end_and_a_new_track_ends_it() {
     let status = wait_for(&player, |s| s.index == 1);
     assert_eq!((status.index, status.looping), (1, None));
 }
+
+#[test]
+fn a_one_shot_range_plays_through_once_and_pauses_at_its_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("count.wav");
+    counting(&file, 24_000);
+    let (player, control) = fake_player();
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+
+    // The same frames a loop would take, played once.
+    player.send(Cmd::PlayOnce(8_000, 8_400));
+    wait_for(&player, |s| s.state == State::Paused);
+    let seen = heard(&control, 0);
+    assert!(seen.contains(&8_400), "never reached the end of the range");
+    assert_eq!(
+        seen.windows(2).filter(|p| p == &[8_400, 8_001]).count(),
+        0,
+        "returned to the start, as a loop does"
+    );
+    assert!(
+        !seen.iter().any(|&v| v > 8_400),
+        "played past the end of the range"
+    );
+    assert_eq!(player.status().looping, None, "left a loop behind");
+
+    // Playing on continues after the range rather than restarting the track.
+    let from = control.played.lock().unwrap().len();
+    player.send(Cmd::TogglePause);
+    let after = until_heard(&control, from, |s| s.iter().any(|&v| v > 8_400));
+    assert!(
+        after.iter().all(|&v| v > 8_000),
+        "went back into the track: {:?}",
+        &after[..after.len().min(8)]
+    );
+}

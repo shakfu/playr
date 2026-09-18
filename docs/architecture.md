@@ -123,6 +123,13 @@ impl Session {
     pub fn prune(&mut self, dir: Option<PathBuf>) -> Result<JobId, Refusal>; // Event::Pruned
     pub fn roots(&self) -> Vec<PathBuf>;
     pub fn check_forget(&self, dir: &Path) -> Result<(), Refusal>;
+    pub fn mark_near(&mut self, frame: u64, within: u64) -> Option<Mark>;
+    pub fn move_mark(&mut self, from: u64, to: u64) -> Notice;
+    pub fn remove_mark(&mut self, frame: u64) -> Notice;
+    pub fn snap_mark(&mut self, from: u64, sensitivity: f32) -> Result<JobId, Refusal>;  // Event::Snapped
+    pub fn resume(&mut self, path: PathBuf, at: Duration);
+    pub fn resumable(&self) -> Option<(PathBuf, Duration)>;
+    pub fn remember(&self, path: &Path, at: Duration);
     pub fn forget_root(&mut self, dir: &Path) -> Result<Pruned, Refusal>;   // no job: one transaction
     pub fn pruned(&mut self);                                            // after Event::Pruned
     pub fn open(&mut self, paths: Vec<PathBuf>) -> JobId;                // Event::Opened
@@ -142,6 +149,10 @@ Conventions:
 - **A scan writes through its own connection.** It opens the library file on its thread, creating it when the session runs on an in-memory library, and a frontend calls `scanned` on `Event::Scanned` to read the result, which moves such a session onto the file. A directory the scan found audio under is stored in `roots`, so `rescan` and a bare `playr scan` cover it without naming it again; roots never nest. A scan never removes tracks; `prune` does, on its own connection too. One scan or prune runs at a time. A scan reads each batch of 500 files before its transaction opens, so a write on the session's connection waits only while a batch's rows are inserted.
 
 - **Roots are what the library covers, not a hint for rescanning.** `scan` adds one, `forget_root` removes it with every track and mark under it, and `prune` drops the rows under a root whose files are gone. Forgetting runs on the session's connection rather than a job: it asks the filesystem nothing, so it is one transaction instead of a walk, and it works on a directory that is already gone.
+
+- **The sampler's cursor is the selection.** `Sampler::cursor` is a frame apart from the playhead, `None` following it. Every mark action acts on the mark within a column of the cursor, so there is no separate "picked mark" to keep in step with the marks themselves. `:pick` moves the cursor onto a mark; the window's drag sets the cursor and then moves.
+
+- **A one-shot range is not a loop.** `Cmd::PlayOnce` sets the same `Loop` with `once`, and `Engine::halt` mirrors `Engine::wrap` forward to the end rather than back to the start: the ring holds exactly the range, the decoder is left at its end, and `pause_at` names the output frame to pause on. `Status::looping` leaves `once` out, so `:loop` cannot switch off a range that was only auditioned.
 
 - **A root that reads as empty is not trusted.** `ScanReport::unavailable` counts the roots a scan walked without finding one audio file while the library holds tracks under them. An unmounted drive whose mount point survives reads exactly that way, and every track under it counts as missing, so `auto_prune` asks rather than prunes. An explicit `prune` still goes ahead: the user named the directory and answered.
 

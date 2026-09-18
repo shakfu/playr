@@ -316,6 +316,16 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
             Style::default().fg(p.mark).add_modifier(Modifier::BOLD),
         );
     }
+    // Last, so the cursor is always visible: it is what the mark keys act on,
+    // and it may sit on the playhead, a mark or a range end.
+    if let Some(c) = app.sampler.cursor.and_then(|f| layout.column_of(f)) {
+        axis[c] = (
+            '#',
+            Style::default()
+                .fg(p.accent)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        );
+    }
     lines.push(runs(axis.into_iter()));
 
     // First, so a narrow terminal cuts the region detail rather than the keys.

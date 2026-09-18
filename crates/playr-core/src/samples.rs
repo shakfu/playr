@@ -80,6 +80,39 @@ pub fn region(marks: &[u64], at: u64) -> (u64, Option<u64>) {
     (start, end)
 }
 
+/// Frames read either side of a mark when snapping it to an onset.
+pub const SNAP_WINDOW: u64 = 2;
+
+/// The onset nearest `at` in the track at `path`, within [`SNAP_WINDOW`]
+/// seconds either side, or `None` when the window holds none.
+///
+/// The window's own start does not count as an onset: [`onsets`] always opens
+/// a slice there, and a mark dragged to the edge of the window is not a snap.
+///
+/// Only the window is decoded, so this costs milliseconds whatever the track's
+/// length. Onsets are found in the window alone, so a rise just outside it is
+/// not a candidate; that is the point of snapping to what is in view.
+pub fn nearest_onset(
+    path: &Path,
+    rate: u32,
+    at: u64,
+    sensitivity: f32,
+) -> Result<Option<u64>, String> {
+    let span = SNAP_WINDOW * rate.max(1) as u64;
+    let start = at.saturating_sub(span);
+    let detail = crate::wave::Detail::read(path, rate, start, at + span)?;
+    let held = detail.end.min(at + span);
+    let mono: Vec<f32> = (start..held).filter_map(|f| detail.mean(f)).collect();
+    // `onsets` opens the first slice at 0 whether or not anything rises there,
+    // so the window's own start is not a candidate: snapping to it would drag
+    // the mark to wherever the window happened to begin.
+    Ok(onsets(&mono, rate, sensitivity)
+        .into_iter()
+        .skip_while(|&i| i == 0)
+        .map(|i| start + i as u64)
+        .min_by_key(|&f| f.abs_diff(at)))
+}
+
 /// `len` frames in `n` equal spans; the last takes the remainder.
 pub fn equal_spans(len: u64, n: usize) -> Vec<(u64, u64)> {
     let size = len / n.max(1) as u64;

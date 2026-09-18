@@ -15,6 +15,7 @@ pub mod command;
 pub mod config;
 pub mod dispatch;
 pub mod instance;
+pub mod media;
 pub mod message;
 pub mod meter;
 pub mod model;

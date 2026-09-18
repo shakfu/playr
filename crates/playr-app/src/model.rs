@@ -14,11 +14,11 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use playr_core::audio::{Cmd, Player, Status};
+use playr_core::audio::{Cmd, Player, State, Status};
 use playr_core::db::query::{Mark, Playlist};
 use playr_core::db::Track;
 use playr_core::event::{Event, EventSink, JobId};
-use playr_core::notice::{Notice, Outcome, Task};
+use playr_core::notice::{Notice, Outcome, Refusal, Task};
 use playr_core::samples::Plan;
 use playr_core::session::Session;
 use rusqlite::Connection;
@@ -27,6 +27,7 @@ use crate::action::{Action, Keymap, Zoom};
 use crate::command::{self, CommandLine, History};
 use crate::config::Config;
 use crate::dispatch::{self, Confirm, Frontend, Presentation, Prompt};
+use crate::media::Media;
 use crate::message::{self, Message};
 use crate::sampler::{DetailRead, Sampler, Wave, DETAIL_MARGIN};
 use crate::View;
@@ -111,6 +112,12 @@ pub struct Model {
     auto_prune: bool,
     /// Events from the session's engine and background work, drained each frame.
     events: Receiver<Event>,
+    /// Called from a sending thread when something arrives, so a frontend that
+    /// sleeps between frames draws it. Kept so media controls can share it.
+    wake: Arc<dyn Fn() + Send + Sync>,
+    /// The system's media keys and now-playing panel; nothing until a frontend
+    /// calls [`Model::attach_media`], so tests stay off the bus.
+    media: Media,
     sampler: Sampler,
     theme: crate::Theme,
     /// The message showing, its words, and when it was shown.
@@ -141,9 +148,11 @@ impl Model {
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Model {
         let (send, events) = mpsc::channel();
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
+        let sending = wake.clone();
         let sink: EventSink = Arc::new(move |event| {
             let _ = send.send(event);
-            wake();
+            sending();
         });
         let mut session = Session::new(conn, player, sink);
         session.set_samples_dir(config.settings.samples);
@@ -160,6 +169,8 @@ impl Model {
             onset_sensitivity: config.settings.onset_sensitivity,
             auto_prune: config.settings.auto_prune,
             events,
+            wake,
+            media: Media::none(),
             sampler: Sampler::default(),
             theme: config.theme,
             message: None,
@@ -172,6 +183,10 @@ impl Model {
         model.session.send(Cmd::SetSpeed(config.settings.speed));
         if !tracks.is_empty() {
             model.open_tracks(tracks);
+        } else if let Some((path, at)) = model.session.resumable() {
+            // Only when nothing was handed over: a command line that named
+            // tracks has already said what to play.
+            model.input = Input::Confirm(Confirm::Resume { path, at });
         }
         model.reload();
         model
@@ -199,6 +214,14 @@ impl Model {
             .map(Mark::time)
             .collect();
         self.drain_events(current.as_ref());
+        // After the events, so what the panel asks for acts on this frame.
+        for action in self
+            .media
+            .drain(self.snapshot.status.state == State::Playing)
+        {
+            self.perform(action);
+        }
+        self.publish_media();
         self.follow_wave(current.as_ref());
     }
 
@@ -280,7 +303,59 @@ impl Model {
 
     /// Asks the interface to exit.
     pub fn quit(&mut self) {
+        self.remember_position();
         self.quit = true;
+    }
+
+    /// Stores the playing track and position, to offer at the next start.
+    ///
+    /// Written when playr closes and again at each track change, rather than
+    /// every frame: the position is worth a database write twice a session,
+    /// not sixty times a second, and a track change leaves something useful
+    /// behind if playr is killed rather than closed.
+    fn remember_position(&mut self) {
+        match self.snapshot.status.current() {
+            Some(path) => self.session.remember(path, self.snapshot.position),
+            None => self.session.forget_resume(),
+        }
+    }
+
+    /// Registers playr with the system's media keys and now-playing panel.
+    /// A frontend calls this once; without it playr has neither.
+    pub fn attach_media(&mut self) {
+        let wake = self.wake.clone();
+        self.media = Media::new(move || wake());
+    }
+
+    /// Hands the panel the playing track and position, once a frame.
+    fn publish_media(&mut self) {
+        let status = &self.snapshot.status;
+        let row = self.playing.get(status.index);
+        // A file played from outside the list has no row, so its name stands in.
+        let named = || {
+            status
+                .current()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+        };
+        let track = match row {
+            Some(t) => Some((
+                t.display_title(),
+                t.display_artist().to_string(),
+                t.display_album().to_string(),
+            )),
+            None => named().map(|n| (n, String::new(), String::new())),
+        };
+        let playing = match status.state {
+            State::Playing => Some(true),
+            State::Paused => Some(false),
+            State::Stopped => None,
+        };
+        let track = track
+            .as_ref()
+            .map(|(t, a, b)| (t.as_str(), a.as_str(), b.as_str(), status.duration));
+        let position = self.snapshot.position;
+        self.media.publish(track, playing, position);
     }
 
     /// Whether an action has asked the interface to exit.
@@ -413,8 +488,10 @@ impl Model {
         let mut error: Option<(String, u64)> = None;
         while let Ok(event) = self.events.try_recv() {
             match event {
-                // The frame's snapshot already shows the track and state.
-                Event::TrackChanged { .. } | Event::StateChanged(_) => {}
+                // The frame's snapshot already shows the track and state;
+                // the new track is stored so a kill still leaves it behind.
+                Event::TrackChanged { .. } => self.remember_position(),
+                Event::StateChanged(_) => {}
                 Event::PlaybackError(e) => {
                     let missed = error.map_or(0, |(_, n)| n + 1);
                     error = Some((e, missed));
@@ -470,6 +547,33 @@ impl Model {
                         }
                         Err(error) => self.notify(Notice::Failed {
                             task: Task::Slice,
+                            error,
+                        }),
+                    }
+                }
+                Event::Snapped {
+                    track,
+                    from,
+                    result,
+                    ..
+                } => {
+                    // The track may have changed while the window decoded; a
+                    // mark moved in one that is no longer playing would be a
+                    // surprise, so it is dropped.
+                    if current != Some(&track) {
+                        continue;
+                    }
+                    match result {
+                        Ok(Some(to)) => {
+                            let notice = self.session.move_mark(from, to);
+                            if matches!(notice, Notice::Done(Outcome::MarkMoved { .. })) {
+                                self.sampler.cursor = Some(to);
+                            }
+                            self.notify(notice);
+                        }
+                        Ok(None) => self.notify(Notice::Refused(Refusal::NoOnsetNear)),
+                        Err(error) => self.notify(Notice::Failed {
+                            task: Task::MoveMark,
                             error,
                         }),
                     }

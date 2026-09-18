@@ -69,6 +69,14 @@ fn every_action() -> Vec<Action> {
         Action::RangeOut,
         Action::SetRange(None),
         Action::Loop(None),
+        Action::Audition,
+        Action::MoveCursor(playr_app::action::Nudge::Columns(1)),
+        Action::SetCursor(None),
+        Action::PickMark(true),
+        Action::MoveMark(playr_app::action::Nudge::Columns(1)),
+        Action::MoveMarkTo(Duration::from_secs(1)),
+        Action::SnapMark,
+        Action::DeleteMark,
         Action::PickEdge(playr_app::sampler::Edge::Start),
         Action::MoveEdge(playr_app::action::Nudge::Columns(1)),
         Action::WriteSlices,
@@ -141,6 +149,14 @@ fn every_action() -> Vec<Action> {
             | Action::RangeOut
             | Action::SetRange(_)
             | Action::Loop(_)
+            | Action::Audition
+            | Action::MoveCursor(_)
+            | Action::SetCursor(_)
+            | Action::PickMark(_)
+            | Action::MoveMark(_)
+            | Action::MoveMarkTo(_)
+            | Action::SnapMark
+            | Action::DeleteMark
             | Action::PickEdge(_)
             | Action::MoveEdge(_)
             | Action::WriteSlices

@@ -172,6 +172,12 @@ impl App {
         }
     }
 
+    /// Registers with the system's media keys and now-playing panel. Called
+    /// once, by `main`, so tests that build an `App` stay off the bus.
+    pub fn attach_media(&mut self) {
+        self.model.attach_media();
+    }
+
     /// Sets the library file `:scan` writes to when playr started without one.
     pub fn set_library_path(&mut self, path: std::path::PathBuf) {
         self.model.session_mut().set_library_path(path);

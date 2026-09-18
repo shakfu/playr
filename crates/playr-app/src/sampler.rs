@@ -97,6 +97,9 @@ pub struct Sampler {
     pub edge: Edge,
     /// Frames decoded for a view finer than the peaks.
     pub detail: DetailRead,
+    /// A frame the view points at, apart from the playhead. `None` follows the
+    /// playhead, which is what the view did before there was a cursor.
+    pub cursor: Option<u64>,
 }
 
 /// Frames of the playing track decoded for a close view.

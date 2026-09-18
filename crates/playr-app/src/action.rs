@@ -113,6 +113,23 @@ pub enum Action {
     SetRange(Option<(Duration, Duration)>),
     /// Play the range over and over, or stop; switch when `None`.
     Loop(Option<bool>),
+    /// Move the sampler's cursor, which is apart from the playhead.
+    MoveCursor(Nudge),
+    /// Put the sampler's cursor at a time, or return it to the playhead.
+    SetCursor(Option<Duration>),
+    /// Move the cursor to the next mark, or the previous one.
+    PickMark(bool),
+    /// Move the mark under the cursor, and the cursor with it.
+    MoveMark(Nudge),
+    /// Move the mark under the cursor to this time; what a drag does.
+    MoveMarkTo(Duration),
+    /// Move the mark under the cursor to the nearest rise in the sound.
+    SnapMark,
+    /// Remove the mark under the cursor.
+    DeleteMark,
+    /// Play the range, the planned slice at the playhead, or the region
+    /// around it, once, and pause at its end.
+    Audition,
     /// Choose which end of the range edge moves shift.
     PickEdge(crate::sampler::Edge),
     /// Move the chosen end of the range, as a nudge moves the playhead.

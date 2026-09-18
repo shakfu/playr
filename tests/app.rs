@@ -605,7 +605,8 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
         path: path.clone(),
         ..Default::default()
     };
-    let mut app = App::with_selection(conn, common::fake_player().0, vec![track]);
+    let (player, device) = common::fake_player();
+    let mut app = App::with_selection(conn, player, vec![track]);
     let seconds = |app: &mut App| {
         std::thread::sleep(Duration::from_millis(300));
         app.refresh();
@@ -613,10 +614,20 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     };
     refresh_until(&mut app, |s| s.position > Duration::from_millis(200));
 
+    // The second press is meant to land on the mark the first made, so the
+    // position must not move between them. The device is stalled rather than
+    // the second taken on trust: on a loaded machine the two presses can fall
+    // either side of a second, and the second then makes a mark of its own.
+    device.stall();
+    app.refresh();
+    let at = app.screen().snapshot.position.as_secs();
     press(&mut app, 'b');
-    assert_eq!(mark_seconds(&app), Some(("Marked", 0)));
+    assert_eq!(mark_seconds(&app), Some(("Marked", at)));
     press(&mut app, 'b');
-    assert_eq!(mark_seconds(&app), Some(("AlreadyMarked", 0)));
+    assert_eq!(mark_seconds(&app), Some(("AlreadyMarked", at)));
+    device
+        .stall
+        .store(false, std::sync::atomic::Ordering::Relaxed);
 
     key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
     assert!(seconds(&mut app) > 30.0);

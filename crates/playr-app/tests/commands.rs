@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use playr_app::action::{Action, Key, Keymap};
 use playr_app::command::{completions, line, parse, CommandLine, History, COMMANDS, HISTORY_LEN};
-use playr_app::View::{self, Library, Playlists, Selection};
+use playr_app::View::{self, Library, Playlists, Sampler, Selection};
 use playr_core::audio::Mode;
 
 fn secs(s: f64) -> Duration {
@@ -737,4 +737,93 @@ fn scan_and_open_take_a_path_with_home_as_tilde() {
         lib("prune ~/music"),
         Ok(Action::Prune(Some(home.join("music"))))
     );
+}
+
+#[test]
+fn the_cursor_and_mark_commands_parse_in_the_sampler_only() {
+    use playr_app::action::Nudge;
+    use std::time::Duration;
+    let sampler = |line: &str| parse(line, Sampler);
+    let library = |line: &str| parse(line, Library);
+
+    assert_eq!(
+        sampler("cursor +1"),
+        Ok(Action::MoveCursor(Nudge::Columns(1)))
+    );
+    assert_eq!(
+        sampler("cursor -10%"),
+        Ok(Action::MoveCursor(Nudge::Percent(-10)))
+    );
+    assert_eq!(sampler("cursor off"), Ok(Action::SetCursor(None)));
+    assert_eq!(
+        sampler("cursor 1:30"),
+        Ok(Action::SetCursor(Some(Duration::from_secs(90))))
+    );
+    assert_eq!(sampler("pick next"), Ok(Action::PickMark(true)));
+    assert_eq!(sampler("pick prev"), Ok(Action::PickMark(false)));
+    assert_eq!(sampler("pick"), Err("usage: :pick next|prev".into()));
+    assert_eq!(
+        sampler("nudge-mark -1"),
+        Ok(Action::MoveMark(Nudge::Columns(-1)))
+    );
+    assert_eq!(
+        sampler("move-mark 0:02"),
+        Ok(Action::MoveMarkTo(Duration::from_secs(2)))
+    );
+    assert_eq!(sampler("move-mark"), Err("usage: :move-mark TIME".into()));
+    assert_eq!(sampler("snap-mark"), Ok(Action::SnapMark));
+    assert_eq!(sampler("del-mark"), Ok(Action::DeleteMark));
+
+    // They belong to the sampler, so elsewhere they say where to go.
+    assert_eq!(
+        library("cursor off"),
+        Err(":cursor works in the sampler view".into())
+    );
+    assert_eq!(
+        library("del-mark"),
+        Err(":del-mark works in the sampler view".into())
+    );
+}
+
+#[test]
+fn a_panel_request_becomes_the_action_playr_has_for_it() {
+    use playr_app::media::action;
+    use souvlaki::{MediaControlEvent as E, MediaPosition, SeekDirection};
+    use std::time::Duration;
+
+    // playr has one pause key, so play and pause are the same toggle; each is
+    // dropped when it asks for the state playr is already in.
+    assert_eq!(action(E::Play, false), Some(Action::TogglePause));
+    assert_eq!(action(E::Play, true), None);
+    assert_eq!(action(E::Pause, true), Some(Action::TogglePause));
+    assert_eq!(action(E::Pause, false), None);
+    assert_eq!(action(E::Toggle, true), Some(Action::TogglePause));
+    assert_eq!(action(E::Toggle, false), Some(Action::TogglePause));
+
+    assert_eq!(action(E::Next, true), Some(Action::Next));
+    assert_eq!(action(E::Previous, true), Some(Action::Prev));
+    assert_eq!(action(E::Stop, true), Some(Action::Stop));
+    assert_eq!(
+        action(E::Seek(SeekDirection::Forward), true),
+        Some(Action::SeekBy(10))
+    );
+    assert_eq!(
+        action(
+            E::SeekBy(SeekDirection::Backward, Duration::from_secs(30)),
+            true
+        ),
+        Some(Action::SeekBy(-30))
+    );
+    assert_eq!(
+        action(E::SetPosition(MediaPosition(Duration::from_secs(90))), true),
+        Some(Action::SeekTo(Duration::from_secs(90)))
+    );
+    assert_eq!(
+        action(E::SetVolume(0.5), true),
+        Some(Action::SetVolume(0.5))
+    );
+
+    // Opening a URI and raising a window are not playr's to do.
+    assert_eq!(action(E::OpenUri("http://example.com".into()), true), None);
+    assert_eq!(action(E::Raise, true), None);
 }

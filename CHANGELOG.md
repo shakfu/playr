@@ -14,6 +14,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
   Library API: `db::forget_root`; `Session::check_forget`, `Session::forget_root`; `Action::ShowRoots`, `Action::ForgetRoot`; `Confirm::ForgetRoot`; `Presentation::RootList`; `Input::Roots`; `Outcome::Forgot`; `Refusal::NotARoot`.
 
+- Media keys and the now-playing panel: the keyboard's play, pause, next and previous keys, MPRIS on Linux as `org.mpris.MediaPlayer2.playr`, and the macOS and Windows panels, through `souvlaki`. Linux uses its `use_zbus` feature, so nothing links libdbus. Both frontends call `Model::attach_media`, which is a no-op where there is no bus or panel, and playr runs as before; on Windows the panel needs a window, so the terminal has none. MPRIS is a local bus, not a network.
+
+- Taking up again where playr left off. The playing track and position go into a one-row `resume` table when playr closes, and again at each track change, so a playr that is killed still leaves the track behind. The next start offers it, unless the command line named tracks to play or the file has gone. Library API: `db::set_resume`, `db::resume`, `db::clear_resume`; `Session::remember`, `Session::resumable`, `Session::forget_resume`, `Session::resume`; `Confirm::Resume`.
+
+- A cursor in the sampler view, apart from the playhead, and mark editing through it. `:cursor` moves it and `h` returns it to the playhead; `:pick next|prev` puts it on a mark, which is how one is picked up. `:nudge-mark` moves that mark a column, `:move-mark TIME` puts it at a time, `:del-mark` removes it wherever it sits in the chain `B` undoes, and `:snap-mark` moves it to the nearest rise in the two seconds either side, read in the background. The window drags a mark along the waveform. A move onto another mark is refused rather than merging the two. Library API: `query::move_mark`, `query::remove_mark`; `samples::nearest_onset`, `samples::SNAP_WINDOW`; `Session::mark_near`, `move_mark`, `remove_mark`, `snap_mark`; `Event::Snapped`; `Sampler::cursor`.
+
+- `:audition`, `a` in the sampler, plays the range, the planned slice the playhead is in, or the region around it, once, and pauses at its end rather than returning to its start as `:loop` does. Playing on continues the track from there. `Cmd::PlayOnce` sets the same loop with `once`, and the engine leaves the decoder at the end rather than seeking back; `Status::looping` leaves a one-shot out, so `:loop` cannot switch off a range that was only auditioned.
+
 ### Changed
 
 - `playr-server` drops `--music DIR`. The page's Rescan library re-scans the directories `playr scan` recorded, so the one place a root is named is the library. The button appears once the library has one. A unit file or script passing `--music` must drop it; nothing replaces it.

@@ -37,6 +37,12 @@ pub enum Message {
     Loop(bool),
     /// A loop was asked for with no range set.
     NoRangeToLoop,
+    /// Nothing under the playhead has both ends, so there is nothing to hear.
+    NothingToAudition,
+    /// A span is playing once, and will pause at its end.
+    Auditioning,
+    /// The sound around a mark is being read, to find the rise to snap to.
+    Snapping,
     /// Edge moves now shift this end of the range.
     Edge(crate::sampler::Edge),
     /// An edge move found no such end of the range to move.
@@ -90,6 +96,7 @@ pub fn text(message: &Message) -> String {
                 Task::Save => "could not save",
                 Task::Rename => "could not rename",
                 Task::Mark => "could not mark",
+                Task::MoveMark => "could not move mark",
                 Task::RemoveMark => "could not remove mark",
                 Task::ClearMarks => "could not clear marks",
                 Task::Slice => "slicing failed",
@@ -132,6 +139,9 @@ pub fn text(message: &Message) -> String {
         Message::EmptyRange => "the range is empty".into(),
         Message::Loop(on) => format!("loop: {}", if *on { "on" } else { "off" }),
         Message::NoRangeToLoop => "no range to loop: set one with < and >, or drag".into(),
+        Message::NothingToAudition => "nothing to hear here: set a range, or mark one".into(),
+        Message::Auditioning => "playing once".into(),
+        Message::Snapping => "looking for the nearest rise".into(),
         Message::Edge(edge) => format!("moving the range {}", edge.name()),
         Message::NoEdge(edge) => format!("no range {} to move: set it with < or >", edge.name()),
         Message::Mapped(map) => command::line(map, None),
@@ -177,6 +187,9 @@ fn outcome_text(outcome: &Outcome) -> String {
             format!("marked {}{kept}", fmt_time(*at))
         }
         Outcome::MarkRemoved { at } => format!("removed mark at {}", fmt_time(*at)),
+        Outcome::MarkMoved { from, to } => {
+            format!("moved mark from {} to {}", fmt_time(*from), fmt_time(*to))
+        }
         Outcome::MarksCleared => "marks cleared".into(),
         Outcome::AtMark { at } => format!("mark at {}", fmt_time(*at)),
         Outcome::PlanStarted => "planning slices".into(),
@@ -262,6 +275,11 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::NotADirectory(path) => format!("not a directory: {}", home_as_tilde(path)),
         Refusal::ScanRunning => "a scan or prune is already running".into(),
         Refusal::NoRoots => "no directories recorded; :scan DIR adds one".into(),
+        Refusal::NoMarkHere => "no mark under the cursor; [ and ] move to one".into(),
+        Refusal::MarkInTheWay { at } => {
+            format!("a mark is already at {}", fmt_time(*at))
+        }
+        Refusal::NoOnsetNear => "no rise near that mark to snap to".into(),
         Refusal::NotARoot(path) => format!(
             "not one of the library's directories: {}; :roots lists them",
             home_as_tilde(path)

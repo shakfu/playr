@@ -755,3 +755,225 @@ fn the_root_list_shows_what_the_library_covers() {
         &Input::Roots(vec![songs.canonicalize().unwrap()])
     );
 }
+
+#[test]
+fn a_remembered_track_is_offered_at_the_next_start_and_plays_on_a_yes() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let first = songs.join("a.wav");
+    let library = dir.path().join("library.db");
+
+    // Nothing stored: no question.
+    let model = model_in(dir.path(), false);
+    assert_eq!(model.input(), &Input::None);
+    model.session().remember(&first, Duration::from_secs(42));
+    drop(model);
+
+    let mut model = model_in(dir.path(), false);
+    assert_eq!(
+        model.input(),
+        &Input::Confirm(Confirm::Resume {
+            path: first.clone(),
+            at: Duration::from_secs(42)
+        })
+    );
+    model.answer(true);
+    model.refresh();
+    assert_eq!(
+        model.session().player().status().queue.as_ref(),
+        std::slice::from_ref(&first),
+        "not playing the track taken up"
+    );
+
+    // Tracks handed over say what to play, so nothing is offered.
+    let conn = db::open(&library).unwrap();
+    let handed = Model::new(
+        conn,
+        common::fake_player().0,
+        vec![track("/x/one.wav")],
+        Config::default(),
+    );
+    assert_eq!(
+        handed.input(),
+        &Input::None,
+        "asked over handed-over tracks"
+    );
+}
+
+#[test]
+fn audition_takes_the_range_then_the_slice_then_the_region_under_the_playhead() {
+    use playr_app::sampler::Wave;
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model.perform(Action::TogglePause);
+    let settle = |model: &Model, done: &dyn Fn(&playr_core::audio::Status) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done(&model.session().player().status()) {
+            assert!(Instant::now() < deadline, "never settled");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    settle(&model, &|s| s.state == State::Paused);
+    let ms = Duration::from_millis;
+
+    // No range and no marks: the region is the whole track, so it plays.
+    model.perform(Action::Audition);
+    assert_eq!(model.message(), Some(&Message::Auditioning));
+    settle(&model, &|s| s.state == State::Playing);
+    // A one-shot range is not left behind as a loop.
+    assert_eq!(model.session().player().status().looping, None);
+
+    // A range wins over the region, and auditioning does not leave it looping.
+    model.perform(Action::SetRange(Some((ms(2_000), ms(3_000)))));
+    model.perform(Action::Audition);
+    assert_eq!(model.message(), Some(&Message::Auditioning));
+    settle(&model, &|s| s.state == State::Paused);
+    let at = model.session().player().position().as_secs_f64();
+    assert!(
+        (2.9..3.2).contains(&at),
+        "paused at {at}s, not the range end"
+    );
+    assert_eq!(model.session().player().status().looping, None);
+}
+
+/// A model on a track with a waveform read, in the sampler view.
+fn sampler_model(dir: &Path, file: &Path) -> Model {
+    use playr_app::sampler::Wave;
+    let mut model = Model::new(
+        db::open(&dir.join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model
+}
+
+#[test]
+fn the_cursor_moves_apart_from_the_playhead_and_returns_to_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+
+    assert_eq!(
+        model.sampler().cursor,
+        None,
+        "a cursor before one was asked for"
+    );
+    model.perform(Action::SetCursor(Some(Duration::from_secs(4))));
+    assert_eq!(model.sampler().cursor, Some(32_000));
+
+    // Seeking does not drag the cursor along with the playhead.
+    model.perform(Action::SeekTo(Duration::from_secs(1)));
+    assert_eq!(model.sampler().cursor, Some(32_000));
+
+    model.perform(Action::SetCursor(None));
+    assert_eq!(
+        model.sampler().cursor,
+        None,
+        "cursor did not return to the playhead"
+    );
+}
+
+#[test]
+fn a_mark_is_picked_by_the_cursor_then_moved_and_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+    let secs = |n| Duration::from_secs(n);
+
+    model.perform(Action::MarkAt(secs(2)));
+    model.perform(Action::MarkAt(secs(6)));
+
+    // Nothing under the cursor: refused rather than acting on the nearest.
+    model.perform(Action::SetCursor(Some(secs(4))));
+    model.perform(Action::DeleteMark);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NoMarkHere)))
+    );
+
+    // The cursor picks a mark up, and moving it carries the cursor along.
+    model.perform(Action::PickMark(false));
+    assert_eq!(model.sampler().cursor, Some(16_000));
+    model.perform(Action::MoveMarkTo(secs(3)));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::MarkMoved {
+            from: secs(2),
+            to: secs(3)
+        })))
+    );
+    assert_eq!(model.sampler().cursor, Some(24_000));
+
+    // It moved rather than being added: still two marks, and one is at 0:03.
+    model.perform(Action::PickMark(true));
+    assert_eq!(
+        model.sampler().cursor,
+        Some(48_000),
+        "the later mark moved too"
+    );
+    model.perform(Action::PickMark(false));
+    model.perform(Action::DeleteMark);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::MarkRemoved {
+            at: secs(3)
+        })))
+    );
+    model.perform(Action::PickMark(false));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NoEarlierMark))),
+        "the removed mark was still there"
+    );
+}
+
+#[test]
+fn a_mark_will_not_move_onto_another() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+    let secs = |n| Duration::from_secs(n);
+    model.perform(Action::MarkAt(secs(2)));
+    model.perform(Action::MarkAt(secs(6)));
+
+    model.perform(Action::SetCursor(Some(secs(2))));
+    model.perform(Action::MoveMarkTo(secs(6)));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::MarkInTheWay {
+            at: secs(6)
+        })))
+    );
+    // Both are still there, and neither moved.
+    model.perform(Action::SetCursor(Some(secs(2))));
+    model.perform(Action::PickMark(true));
+    assert_eq!(model.sampler().cursor, Some(48_000));
+}

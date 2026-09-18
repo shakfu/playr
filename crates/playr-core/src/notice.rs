@@ -102,6 +102,11 @@ pub enum Outcome {
         dir: Option<PathBuf>,
         removed: Pruned,
     },
+    /// A mark moved from one position to another.
+    MarkMoved {
+        from: Duration,
+        to: Duration,
+    },
     /// A root was forgotten, with everything the library held under it.
     Forgot {
         dir: PathBuf,
@@ -147,6 +152,14 @@ pub enum Refusal {
     NoRoots,
     /// `:roots rm` was given a directory the library does not have as a root.
     NotARoot(PathBuf),
+    /// Nothing is marked where the sampler's cursor is.
+    NoMarkHere,
+    /// A mark is already where this one would move to.
+    MarkInTheWay {
+        at: Duration,
+    },
+    /// The window around the mark holds no rise to snap to.
+    NoOnsetNear,
 }
 
 /// An operation that can fail, for [`Notice::Failed`].
@@ -155,6 +168,7 @@ pub enum Task {
     Save,
     Rename,
     Mark,
+    MoveMark,
     RemoveMark,
     ClearMarks,
     Slice,

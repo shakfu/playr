@@ -85,6 +85,14 @@ pub enum Event {
         dir: Option<PathBuf>,
         result: Result<Pruned, String>,
     },
+    /// The onset nearest a mark was looked for, to snap it to. `to` is `None`
+    /// when the window around it held none.
+    Snapped {
+        job: JobId,
+        track: PathBuf,
+        from: u64,
+        result: Result<Option<u64>, String>,
+    },
     /// Paths given to `Session::open` are gathered into tracks to play.
     Opened { job: JobId, playable: Playable },
 }

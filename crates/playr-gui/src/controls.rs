@@ -116,6 +116,7 @@ pub const RANGE_BAR: &[Control] = &[
     control("Range in", Action::RangeIn),
     control("Range out", Action::RangeOut),
     control("Clear range", Action::SetRange(None)),
+    control("Audition", Action::Audition),
 ];
 
 /// Choosing a range end and moving it a column, under the waveform.
@@ -124,6 +125,17 @@ pub const EDGE_BAR: &[Control] = &[
     control("Move end", Action::PickEdge(Edge::End)),
     control("Earlier", Action::MoveEdge(Nudge::Columns(-1))),
     control("Later", Action::MoveEdge(Nudge::Columns(1))),
+];
+
+/// Moving the cursor and editing the mark under it, under the waveform.
+pub const MARK_BAR: &[Control] = &[
+    control("Previous mark", Action::PickMark(false)),
+    control("Next mark", Action::PickMark(true)),
+    control("Mark earlier", Action::MoveMark(Nudge::Columns(-1))),
+    control("Mark later", Action::MoveMark(Nudge::Columns(1))),
+    control("Snap to rise", Action::SnapMark),
+    control("Delete mark", Action::DeleteMark),
+    control("Cursor to playhead", Action::SetCursor(None)),
 ];
 
 /// Buttons slicing the region or range, under the waveform; beside them, a
@@ -150,6 +162,7 @@ pub const TABLES: &[&[Control]] = &[
     SELECTION_BAR,
     PLAYLIST_ROW,
     SAMPLER_BAR,
+    MARK_BAR,
     RANGE_BAR,
     EDGE_BAR,
     SLICE_BAR,
@@ -175,6 +188,11 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("Activate", "a double click on a row"),
     ("Open", "File, Open files and Open folder"),
     ("Scan", "File, Add folder to library"),
+    (
+        "MoveCursor",
+        "the sampler's Cursor earlier and later buttons",
+    ),
+    ("MoveMarkTo", "a mark dragged along the waveform"),
     ("Rescan", "File, Rescan library"),
     ("ShowRoots", "File, Library directories"),
     ("ForgetRoot", "Forget, in File, Library directories"),

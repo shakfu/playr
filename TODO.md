@@ -22,15 +22,15 @@ What is missing, grouped by priority:
 
 - [x] **refresh/resync library**. Re-scans the given the music library for additions.
 
-- [ ] **Media keys and the now-playing panel.** The keyboard's play and pause keys, MPRIS on Linux, and the macOS and Windows now-playing panels. Under the parity rule in `docs/dev/gui.md`, the terminal and the window gain them together.
+- [x] **Media keys and the now-playing panel.** Through souvlaki, with zbus rather than libdbus on Linux. Both frontends call `Model::attach_media`; a machine with no bus or panel runs as before, and on Windows the terminal has no window to attach to.
 
-- [ ] **Resume on start.** Remember the last track and position, offer to resume. Needs a small state table. A new table is compatible with older playr, so like `marks` it needs no `PRAGMA user_version` bump.
+- [x] **Resume on start.** A one-row `resume` table, written on quit and at each track change, offered at the next start when nothing was handed over and the file is still there.
 
 ### Sampler
 
-- [ ] **Mark editing.** A cursor in the sampler view, independent of the playhead; select a mark and nudge it; snap it to the nearest onset; delete one mark; drag a mark in the window.
+- [x] **Mark editing.** `Sampler::cursor` is the selection: `:pick` puts it on a mark, and `:nudge-mark`, `:move-mark`, `:snap-mark` and `:del-mark` act on the mark under it. The window drags one along the waveform.
 
-- [ ] **Audition.** Play the region, range or the planned slice under the cursor once, then stop. The engine loops a range; playing one once needs it to stop at the end instead of returning.
+- [x] **Audition.** `Cmd::PlayOnce` sets the same `Loop` with `once`, and `Engine::halt` mirrors `wrap` forward to the end rather than back to the start.
 
 ### Library
 

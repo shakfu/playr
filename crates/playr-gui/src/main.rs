@@ -74,6 +74,7 @@ fn main() -> eframe::Result {
                     );
                     // `:scan` creates the library here when there is none yet.
                     model.session_mut().set_library_path(start.library);
+                    model.attach_media();
                     Ok(Box::new(Gui::new(model)))
                 }),
             )

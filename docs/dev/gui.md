@@ -39,6 +39,8 @@ A GUI user may never open a terminal, but today a library is created only by `pl
 | list the library's directories, and forget one | `:roots`, `:roots rm DIR` | File menu, Library directories, with a Forget button per row |
 | remove the tracks and marks of missing files | `:prune [DIR]` | File menu, Remove missing files, and Remove missing under folder |
 | play files or directories without adding them | `:open PATH...` | File menu, Open; dropping files on the window |
+| move the sampler's cursor, and the mark under it | `:cursor`, `:pick`, `:nudge-mark`, `:snap-mark`, `:del-mark` | buttons under the waveform; a mark dragged along it |
+| media keys and the now-playing panel | the keys themselves | the keys themselves; `Model::attach_media` in both |
 
 Startup errors differ too. The terminal prints bad settings to stderr and exits. A GUI started from a desktop has no visible stderr, so it lists the errors in a window with a Quit button.
 

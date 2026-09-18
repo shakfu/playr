@@ -18,6 +18,9 @@ hound = "3.5"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 walkdir = "2.5.0"
 rtrb = "0.4.0"
+# Media keys and the now-playing panel. `use_zbus` keeps Linux pure Rust:
+# the default `dbus` feature links libdbus-1, which nothing else here needs.
+souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
 tempfile = "3"
 toml = { version = "1.1", default-features = false, features = ["parse", "preserve_order"] }
 

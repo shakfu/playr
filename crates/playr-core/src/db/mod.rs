@@ -7,6 +7,7 @@ pub mod query;
 
 use rusqlite::{Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub type Result<T> = std::result::Result<T, rusqlite::Error>;
 
@@ -252,6 +253,39 @@ pub fn roots(conn: &Connection) -> Result<Vec<PathBuf>> {
         .query_map([], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>>>()?;
     Ok(paths.into_iter().map(PathBuf::from).collect())
+}
+
+/// Remembers `path` and how far into it playback had reached, replacing what
+/// was there. The row is keyed by a constant, so there is only ever one.
+///
+/// A path that is not valid UTF-8 is dropped rather than stored lossily: a
+/// mangled path would be offered at the next start and open nothing.
+pub fn set_resume(conn: &Connection, path: &Path, position: Duration) -> Result<()> {
+    let Some(path) = path.to_str() else {
+        return Ok(());
+    };
+    conn.execute(
+        "INSERT INTO resume (id, path, position) VALUES (0, ?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET path = excluded.path, position = excluded.position",
+        rusqlite::params![path, position.as_millis() as i64],
+    )?;
+    Ok(())
+}
+
+/// What playr was playing when it last closed, if anything, and how far in.
+pub fn resume(conn: &Connection) -> Result<Option<(PathBuf, Duration)>> {
+    conn.query_row("SELECT path, position FROM resume WHERE id = 0", [], |r| {
+        let path: String = r.get(0)?;
+        let ms: i64 = r.get(1)?;
+        Ok((PathBuf::from(path), Duration::from_millis(ms.max(0) as u64)))
+    })
+    .optional()
+}
+
+/// Forgets what was playing, so the next start offers nothing.
+pub fn clear_resume(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM resume WHERE id = 0", [])?;
+    Ok(())
 }
 
 /// The recorded root `root` names: the path as stored, a path that resolves

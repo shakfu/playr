@@ -138,6 +138,32 @@ impl Session {
         self.player.send(Cmd::Play(paths, index));
     }
 
+    /// Plays `path` alone, from `at`, without touching the selection. For
+    /// taking up where playr left off.
+    pub fn resume(&mut self, path: PathBuf, at: Duration) {
+        self.player.send(Cmd::Play(vec![path], 0));
+        self.player.send(Cmd::Seek(at));
+    }
+
+    /// What playr was playing when it last closed, if the file is still there.
+    ///
+    /// A file that has gone is not offered: the question would be about a
+    /// track that cannot play, and answering yes would do nothing.
+    pub fn resumable(&self) -> Option<(PathBuf, Duration)> {
+        let (path, at) = db::resume(&self.conn).ok().flatten()?;
+        path.is_file().then_some((path, at))
+    }
+
+    /// Remembers `path` and `at` as where to take up next time.
+    pub fn remember(&self, path: &Path, at: Duration) {
+        let _ = db::set_resume(&self.conn, path, at);
+    }
+
+    /// Forgets where to take up, after a refused offer or a stop.
+    pub fn forget_resume(&self) {
+        let _ = db::clear_resume(&self.conn);
+    }
+
     /// Sends a playback command: pause, next, seek, speed and so on.
     pub fn send(&self, cmd: Cmd) {
         self.player.send(cmd);
@@ -405,6 +431,89 @@ impl Session {
             kept: self.has_library_file(),
         }
         .into()
+    }
+
+    /// The mark within `within` frames of `frame` in the playing track, nearest
+    /// first. For a frontend acting on "the mark under the cursor".
+    pub fn mark_near(&mut self, frame: u64, within: u64) -> Option<Mark> {
+        let path = self.playing_track().ok()?.0;
+        self.marks_for(Some(&path));
+        self.marks
+            .iter()
+            .filter(|m| m.frame.abs_diff(frame) <= within)
+            .min_by_key(|m| m.frame.abs_diff(frame))
+            .copied()
+    }
+
+    /// Moves the mark at `from` to `to` in the playing track.
+    pub fn move_mark(&mut self, from: u64, to: u64) -> Notice {
+        let (path, rate) = match self.playing_track() {
+            Ok(track) => track,
+            Err(refusal) => return refusal.into(),
+        };
+        self.marks_for(Some(&path));
+        let time = |f: u64| Duration::from_secs_f64(f as f64 / rate.max(1) as f64);
+        if !self.marks.iter().any(|m| m.frame == from) {
+            return Refusal::NoMarkHere.into();
+        }
+        if let Some(other) = self.marks.iter().find(|m| m.frame == to && m.frame != from) {
+            return Refusal::MarkInTheWay { at: other.time() }.into();
+        }
+        match query::move_mark(&self.conn, &path.to_string_lossy(), from, to) {
+            Ok(true) => {
+                self.marks_for(None);
+                self.marks_for(Some(&path));
+                Outcome::MarkMoved {
+                    from: time(from),
+                    to: time(to),
+                }
+                .into()
+            }
+            Ok(false) => Refusal::NoMarkHere.into(),
+            Err(e) => Notice::Failed {
+                task: Task::MoveMark,
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Removes the mark at `frame` in the playing track, wherever it sits in
+    /// the order marks were made.
+    pub fn remove_mark(&mut self, frame: u64) -> Notice {
+        let (path, rate) = match self.playing_track() {
+            Ok(track) => track,
+            Err(refusal) => return refusal.into(),
+        };
+        self.marks_for(Some(&path));
+        match query::remove_mark(&self.conn, &path.to_string_lossy(), frame) {
+            Ok(true) => {
+                self.marks.retain(|m| m.frame != frame);
+                Outcome::MarkRemoved {
+                    at: Duration::from_secs_f64(frame as f64 / rate.max(1) as f64),
+                }
+                .into()
+            }
+            Ok(false) => Refusal::NoMarkHere.into(),
+            Err(e) => Notice::Failed {
+                task: Task::RemoveMark,
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Looks for the onset nearest the mark at `from`, on a job, since it
+    /// decodes. Finishes with [`Event::Snapped`].
+    pub fn snap_mark(&mut self, from: u64, sensitivity: f32) -> Result<JobId, Refusal> {
+        let (track, rate) = self.playing_track()?;
+        Ok(self.spawn(move |job| {
+            let result = crate::samples::nearest_onset(&track, rate, from, sensitivity);
+            Some(Event::Snapped {
+                job,
+                track,
+                from,
+                result,
+            })
+        }))
     }
 
     /// Removes the mark added most recently to the playing track: marks are a

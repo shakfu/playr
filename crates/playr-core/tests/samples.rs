@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use playr_core::samples::{
-    equal_spans, export, onsets, region, spans_at, Cut, Exported, Job, MAX_SLICES,
+    equal_spans, export, nearest_onset, onsets, region, spans_at, Cut, Exported, Job, MAX_SLICES,
 };
 
 /// A distinct, non-zero value for every frame and channel, so any frame read
@@ -466,4 +466,52 @@ fn exports_that_cannot_be_done_leave_nothing_behind() {
         .map(|d| d.collect())
         .unwrap_or_default();
     assert!(left.is_empty(), "left behind: {left:?}");
+}
+
+/// Writes `data` as a mono 16-bit WAV.
+fn mono_wav(path: &Path, rate: u32, data: &[f32]) {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    for &s in data {
+        w.write_sample((s.clamp(-1.0, 1.0) * 32_767.0) as i16)
+            .unwrap();
+    }
+    w.finalize().unwrap();
+}
+
+#[test]
+fn nearest_onset_finds_the_rise_beside_a_mark_and_nothing_in_silence() {
+    let dir = tempfile::tempdir().unwrap();
+    let rate = 44_100;
+    let file = dir.path().join("hits.wav");
+    // Hits at 1 s and 5 s, in ten seconds of otherwise silent audio.
+    let hit = |at: usize| (at, 1.0f32);
+    mono_wav(
+        &file,
+        rate,
+        &bursts(
+            rate as usize * 10,
+            &[hit(rate as usize), hit(rate as usize * 5)],
+        ),
+    );
+
+    // A mark 200 ms late snaps back to the hit, within a window or two.
+    let at = rate as u64 + rate as u64 / 5;
+    let found = nearest_onset(&file, rate, at, 0.5).unwrap().unwrap();
+    assert!(
+        (rate as u64).abs_diff(found) <= rate as u64 / 100,
+        "snapped to {found}, not the hit at {rate}"
+    );
+
+    // The window is two seconds either side, so the hit at 5 s is not a
+    // candidate for a mark at 8 s; that stretch is silent.
+    assert_eq!(
+        nearest_onset(&file, rate, rate as u64 * 8, 0.5).unwrap(),
+        None
+    );
 }

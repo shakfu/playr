@@ -40,6 +40,14 @@ pub fn allowed(action: &Action) -> bool {
         }
         ShowView(View::Sampler)
         | Slice(_)
+        | Audition
+        | MoveCursor(_)
+        | SetCursor(_)
+        | PickMark(_)
+        | MoveMark(_)
+        | MoveMarkTo(_)
+        | SnapMark
+        | DeleteMark
         | Zoom(_)
         | Display(_)
         | Nudge(_)

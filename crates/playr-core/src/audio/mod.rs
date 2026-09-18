@@ -108,6 +108,9 @@ pub enum Cmd {
     /// Play source frames `start..end` of the current track over and over,
     /// or play on for `None`. A playhead outside them starts at `start`.
     Loop(Option<(u64, u64)>),
+    /// Play source frames `start..end` of the current track once, then pause
+    /// at `end`. The track is not torn down, so playing on continues past it.
+    PlayOnce(u64, u64),
     Quit,
 }
 
@@ -324,12 +327,14 @@ struct Flush {
     offset: u64,
 }
 
-/// A stretch of one track played over and over, in its source frames.
+/// A stretch of one track, in its source frames, played over and over or,
+/// when `once`, played through and paused at its end.
 #[derive(Clone, Copy)]
 struct Loop {
     index: usize,
     start: u64,
     end: u64,
+    once: bool,
 }
 
 /// A track queued behind the current one whose format needs a new stream.
@@ -377,6 +382,8 @@ struct Engine {
     /// The source frame `stream` decodes next.
     decoded: u64,
     looping: Option<Loop>,
+    /// The output frame to pause at, set when a one-shot range is decoded.
+    pause_at: Option<u64>,
     /// Next track, held back because it needs a different output format.
     staged: Option<Staged>,
     /// A seek whose pre-seek audio the device has not yet discarded.
@@ -414,6 +421,7 @@ impl Engine {
             marks: VecDeque::new(),
             decoded: 0,
             looping: None,
+            pause_at: None,
             staged: None,
             flush: None,
             carry: Vec::new(),
@@ -460,6 +468,7 @@ impl Engine {
                 self.pump();
             }
             self.advance_marks();
+            self.pause_when_reached();
             self.publish();
         }
     }
@@ -542,7 +551,17 @@ impl Engine {
             Cmd::SpeedReset => self.set_semitones(0),
             Cmd::SetSpeed(semitones) => self.set_semitones(semitones),
             Cmd::SetMode(mode) => self.set_mode(mode),
-            Cmd::Loop(bounds) => self.set_loop(bounds),
+            Cmd::Loop(bounds) => self.set_loop(bounds, false),
+            Cmd::PlayOnce(start, end) => {
+                self.set_loop(Some((start, end)), true);
+                // Auditioning from a pause plays: the point is to hear it.
+                if self.looping.is_some() && self.state != State::Playing {
+                    if let Some(o) = &self.out {
+                        o.play();
+                    }
+                    self.state = State::Playing;
+                }
+            }
             Cmd::Quit => {}
         }
     }
@@ -608,6 +627,7 @@ impl Engine {
 
     fn teardown(&mut self) {
         self.looping = None;
+        self.pause_at = None;
         self.stream = None;
         self.conv = None;
         self.staged = None;
@@ -1160,7 +1180,11 @@ impl Engine {
             Some(l) if self.decoded < l.end && self.decoded + frames >= l.end => {
                 let keep = (l.end - self.decoded) as usize * channels;
                 self.convert_and_carry(&chunk[..keep]);
-                self.wrap(l);
+                if l.once {
+                    self.halt(l);
+                } else {
+                    self.wrap(l);
+                }
             }
             _ => {
                 self.decoded += frames;
@@ -1198,12 +1222,41 @@ impl Engine {
         self.marks.push_back((heard, l.index, duration, offset));
     }
 
+    /// Ends a one-shot range: leaves the decoder at `l`'s end and marks the
+    /// output frame the device reaches it at, so nothing past the range is
+    /// fed and the pause lands on the last frame of it.
+    ///
+    /// As [`Engine::wrap`], but forward to the end rather than back to the
+    /// start, so playing on afterwards continues the track from there.
+    fn halt(&mut self, l: Loop) {
+        self.looping = None;
+        let (Some(stream), Some(conv), Some(out)) =
+            (self.stream.as_mut(), self.conv.as_ref(), self.out.as_ref())
+        else {
+            return;
+        };
+        let rate = conv.src().rate.max(1);
+        let at = Duration::from_secs_f64(l.end as f64 / rate as f64);
+        let heard = self.written + (self.carry.len() / out.plan.channels.max(1) as usize) as u64;
+        self.pause_at = Some(heard);
+        if stream.seek(at).is_err() {
+            return;
+        }
+        self.decoded = l.end;
+        let duration = stream.duration();
+        let output_rate = self.shared.position_rate.load(Ordering::Relaxed) as f64;
+        let offset = (at.as_secs_f64() * output_rate) as u64;
+        self.marks.push_back((heard, l.index, duration, offset));
+    }
+
     /// Loops `bounds` of the audible track, or stops looping.
     ///
     /// The decoder runs ahead of the device, so it may already have passed a
     /// new end, or returned under the old bounds. Seeking to the position then
     /// discards that audio, at the cost of a short gap.
-    fn set_loop(&mut self, bounds: Option<(u64, u64)>) {
+    fn set_loop(&mut self, bounds: Option<(u64, u64)>, once: bool) {
+        // A range set again replaces any pause the last one scheduled.
+        self.pause_at = None;
         let (Some(&(_, audible, duration, _)), Some(conv)) = (self.marks.front(), &self.conv)
         else {
             self.looping = None;
@@ -1228,6 +1281,7 @@ impl Engine {
             index: audible,
             start,
             end,
+            once,
         });
         let now = frame(at);
         if now < start || now >= end {
@@ -1252,6 +1306,21 @@ impl Engine {
         if n > 0 {
             self.carry.drain(..n);
             self.written += (n / channels) as u64;
+        }
+    }
+
+    /// Pauses once the device has played to the end of a one-shot range.
+    fn pause_when_reached(&mut self) {
+        let Some(at) = self.pause_at else { return };
+        if self.shared.frames_out.load(Ordering::Relaxed) < at {
+            return;
+        }
+        self.pause_at = None;
+        if self.state == State::Playing {
+            if let Some(o) = &self.out {
+                o.pause();
+            }
+            self.state = State::Paused;
         }
     }
 
@@ -1295,9 +1364,11 @@ impl Engine {
         // `queue` is written by `Player::send`; the engine's may be older.
         s.index = self.index;
         s.duration = self.marks.front().and_then(|m| m.2);
+        // A one-shot range is not a loop: `Cmd::Loop` toggles on this, and a
+        // range playing through once must not read as one to switch off.
         s.looping = self
             .looping
-            .filter(|l| l.index == self.index)
+            .filter(|l| !l.once && l.index == self.index)
             .map(|l| (l.start, l.end));
         s.source = self.conv.as_ref().map(Converter::src);
         s.output_rate = self.out.as_ref().map(|o| o.plan.rate).unwrap_or(0);

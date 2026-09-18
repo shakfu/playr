@@ -281,6 +281,30 @@ pub fn add_mark(conn: &Connection, path: &str, mark: Mark) -> Result<()> {
     Ok(())
 }
 
+/// Removes the mark at `frame` in the track at `path`. Returns whether one
+/// was there.
+pub fn remove_mark(conn: &Connection, path: &str, frame: u64) -> Result<bool> {
+    let gone = conn.execute(
+        "DELETE FROM marks WHERE path = ?1 AND frame = ?2",
+        rusqlite::params![path, frame as i64],
+    )?;
+    Ok(gone > 0)
+}
+
+/// Moves the mark at `from` to `to`, keeping its place in the order marks were
+/// added, so undo still takes the most recent. Returns whether it moved: it
+/// does not when `from` holds no mark, or `to` already holds one.
+pub fn move_mark(conn: &Connection, path: &str, from: u64, to: u64) -> Result<bool> {
+    if from == to {
+        return Ok(false);
+    }
+    let moved = conn.execute(
+        "UPDATE OR IGNORE marks SET frame = ?3 WHERE path = ?1 AND frame = ?2",
+        rusqlite::params![path, from as i64, to as i64],
+    )?;
+    Ok(moved > 0)
+}
+
 /// Removes the mark most recently added to the track at `path`, and returns it.
 ///
 /// Marks are removed in the reverse of the order they were added, whatever

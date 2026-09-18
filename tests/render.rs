@@ -711,7 +711,7 @@ fn help_command_lists_every_command_with_its_arguments_by_view() {
     // Tall enough for the whole list; 80 columns, the smallest common width.
     let joined = Case::new(View::Library, &stopped())
         .input(&input)
-        .size(80, 64)
+        .size(80, 72)
         .text();
     for c in playr_app::command::COMMANDS {
         let usage = format!(":{} {}", c.name, c.args);

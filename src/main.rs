@@ -248,6 +248,9 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     ratatui::crossterm::style::force_color_output(true);
     // `:scan` creates the library here when there is none yet.
     app.set_library_path(db_path);
+    // The terminal and the window gain media keys together, under the parity
+    // rule in docs/dev/gui.md.
+    app.attach_media();
     let result = app.run(&mut terminal);
     ratatui::restore();
     result?;

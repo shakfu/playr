@@ -179,6 +179,16 @@ A scan never removes anything itself. It counts the tracks under the scanned dir
 
 Playlist entries and marks are the only things in the library that are not read back from the files, so pruning is the one operation that loses work. With `auto_prune = true` a scan inside playr prunes without asking, except when a directory read as empty although the library holds tracks under it: that is what an unmounted drive looks like, so playr asks instead.
 
+### Media keys and the now-playing panel
+
+The keyboard's play, pause, next and previous keys work while playr runs, and the system's now-playing panel shows the track and takes its buttons: MPRIS on Linux, where playr appears as `org.mpris.MediaPlayer2.playr`, the macOS now-playing panel, and the Windows one. The terminal and the window have them alike.
+
+None of it is required. A machine with no session bus or no panel runs playr as before. On Windows the panel attaches to a window, which the terminal has not got, so there it works in `playr-gui` only. MPRIS is a local bus, not a network: playr still contacts nothing.
+
+### Taking up again
+
+playr remembers the track playing and how far into it when it closes, and offers it at the next start: "take up amen.flac again at 1:35?". Only `y` takes it up; anything else starts as playr always did. Nothing is offered when the command line named tracks to play, or when the file has gone. The position is stored in the library when playr closes and again at each track change, so a playr that is killed still leaves the track behind, if not the second.
+
 ### Desktop window
 
 ```sh
@@ -257,7 +267,7 @@ A mode applies to whatever list is playing: the library, search results, the sel
 
 Marks form a chain: `B` removes the mark added most recently, then the one before, whatever their positions in the track. `C` clears all of the track's marks; it asks first, and only `y` confirms.
 
-Marks are stored in the library by file path and source frame, so they survive a rescan and stay exact at any playback speed. Without a library file they last until playr exits. A mark lands slightly after the moment you meant, by your reaction time; in the sampler view, nudging and snapping place one exactly.
+Marks are stored in the library by file path and source frame, so they survive a rescan and stay exact at any playback speed. Without a library file they last until playr exits. A mark lands slightly after the moment you meant, by your reaction time; in the [sampler view](#sampler-view) it can be picked up with the cursor and moved, dragged in the window, or snapped to the nearest rise in the sound.
 
 ### Samples
 
@@ -287,7 +297,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 ### Sampler view
 
-`4` opens a view of the playing track's waveform, read from the file the first time the view opens for that track. Marks show as `|` under it, the playhead as `^`, and the region between the marks either side of the playhead in the accent colour. The detail line gives the region's times to the millisecond.
+`4` opens a view of the playing track's waveform, read from the file the first time the view opens for that track. Marks show as `|` under it, the playhead as `^`, the cursor as `#`, and the region between the marks either side of the playhead in the accent colour. The detail line gives the region's times to the millisecond.
 
 | key     | command                 | does                                              |
 |---------|-------------------------|---------------------------------------------------|
@@ -302,6 +312,13 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `l`     | `:loop`                 | play the range over and over, or stop             |
 | `[` `]` | `:edge start`, `:edge end` | choose the range end to move, shown reversed   |
 | `{` `}` | `:edge -1`, `:edge +1`  | move that end a column earlier or later           |
+| `a`     | `:audition`             | play the range, slice or region once, then pause  |
+| `;` `'` | `:cursor -1`, `:cursor +1` | move the cursor a column                       |
+| `h`     | `:cursor off`           | return the cursor to the playhead                 |
+| `u` `i` | `:pick prev`, `:pick next` | move the cursor to a mark                      |
+| `y` `o` | `:nudge-mark -1`, `:nudge-mark +1` | move the mark under the cursor         |
+| `#`     | `:snap-mark`            | move it to the nearest rise in the sound          |
+| delete  | `:del-mark`             | remove it                                         |
 | `enter` | `:write`                | write the slices planned                          |
 | `esc`   | `:discard`              | discard them, or with none planned, clear the range |
 
@@ -310,6 +327,12 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 - **dB.** The dB display draws the same bars on a scale from -48 dBFS to full scale, not scaled to the track. A linear scale puts RMS 12 dB below full scale a quarter of the way up; this puts it three quarters of the way, which spreads out quiet passages and the level changes between sections. Levels below -48 dB draw nothing.
 
 - **Zoom.** Each step halves the time a column shows, down to one frame a cell; the window goes on to 16 points a frame. Down to 64 frames, 1.5 ms at 44.1 kHz, columns start on the 32-frame buckets the peaks are kept in, so a column never shows a neighbour's hit. Closer than that, the view reads the frames it shows, and 2 s either side, in the background; until they arrive, each column shows its bucket's peaks. At a frame a column the window's line display draws each frame's channels' mean around a zero line, with a dot per frame once frames are 4 points apart, so a crossing can be picked out by eye.
+
+- **The cursor.** The cursor is a second position, apart from the playhead, and it is what the mark keys act on. It starts on the playhead and follows it until moved; `h` returns it. `u` and `i` put it on the mark before or after it, which is how a mark is picked up: every mark key acts on the mark the cursor is on, within a column of the view, and says so when there is none. In the window, a mark is dragged along the waveform instead.
+
+- **Editing a mark.** `y` and `o` move the picked mark a column at a time, `:move-mark TIME` puts it at a time, and delete removes it, wherever it sits in the chain `B` undoes. `#` moves it to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
+
+- **Audition.** `a` plays the range, or the planned slice the playhead is in, or the region around it, once, and pauses at its end rather than returning to its start as `l` does. Playing on afterwards continues the track from there.
 
 - **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track. Outside the view, `:slice` writes at once.
 

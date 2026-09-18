@@ -91,6 +91,21 @@ S = "snap"
 ">" = "out"
 backspace = "range"
 l = "loop"
+# Hear the range, slice or region once, without leaving it playing.
+a = "audition"
+# The cursor, which is apart from the playhead: a column at a time, or home
+# to the playhead again.
+";" = "cursor -1"
+"'" = "cursor +1"
+h = "cursor off"
+# y u i o: the inner pair moves the cursor to a mark, the outer pair moves the
+# mark it landed on.
+u = "pick prev"
+i = "pick next"
+y = "nudge-mark -1"
+o = "nudge-mark +1"
+"#" = "snap-mark"
+delete = "del-mark"
 # Pick a range end, then move it a column at a time.
 "[" = "edge start"
 "]" = "edge end"

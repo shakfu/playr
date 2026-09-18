@@ -37,6 +37,8 @@ pub struct State {
     wheel: f32,
     /// Where a drag across the waveform started, and where it is now.
     drag: Option<(Duration, Duration)>,
+    /// The mark a drag picked up, as the time it sat at when the drag began.
+    mark_drag: Option<Duration>,
     /// The count and sensitivity the equal and onset buttons slice with; the
     /// sensitivity starts from the settings.
     slices: usize,
@@ -48,6 +50,7 @@ impl Default for State {
         State {
             wheel: 0.0,
             drag: None,
+            mark_drag: None,
             slices: 8,
             sensitivity: None,
         }
@@ -110,7 +113,34 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     if response.drag_started() {
         // A drag starts once the pointer has moved a little; it runs from the press.
         let origin = ui.input(|i| i.pointer.press_origin()).or(pointer);
-        state.drag = origin.map(|p| {
+        // A mark under the press is dragged rather than a range drawn. Checked
+        // after the range's edges, so an edge sitting on a mark still wins and
+        // the drag that was there before this behaves as it did.
+        let on_edge = |p: egui::Pos2| {
+            let (a, b) = layout.range;
+            [a, b].into_iter().flatten().any(|f| {
+                layout
+                    .column_of(f)
+                    .is_some_and(|c| ((rect.left() + c as f32) - p.x).abs() <= EDGE_REACH)
+            })
+        };
+        state.mark_drag = origin.filter(|p| !on_edge(*p)).and_then(|p| {
+            layout
+                .marks
+                .iter()
+                .copied()
+                .filter(|&m| {
+                    layout
+                        .column_of(m)
+                        .is_some_and(|c| ((rect.left() + c as f32) - p.x).abs() <= EDGE_REACH)
+                })
+                .min_by_key(|&m| {
+                    let c = layout.column_of(m).unwrap_or(0);
+                    (((rect.left() + c as f32) - p.x).abs() * 100.0) as i64
+                })
+                .map(|m| sampler::time_of(m, layout.rate))
+        });
+        state.drag = origin.filter(|_| state.mark_drag.is_none()).map(|p| {
             // From near an edge it moves that edge, holding the other one.
             let x = |frame: u64| layout.column_of(frame).map(|c| rect.left() + c as f32);
             let near = |frame: Option<u64>| {
@@ -130,9 +160,18 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         drag.1 = at(p);
     }
     let dragged = state.drag;
+    let dragging_mark = state.mark_drag.zip(pointer.map(at));
     if response.drag_stopped() {
         if let Some((from, to)) = state.drag.take().filter(|(from, to)| from != to) {
             actions.push(Action::SetRange(Some((from.min(to), from.max(to)))));
+        }
+        // The cursor picks the mark up, then it moves: `MoveMarkTo` acts on
+        // whatever the cursor is on, as the keys do.
+        if let Some((from, to)) = state.mark_drag.take().zip(pointer.map(at)) {
+            if from != to {
+                actions.push(Action::SetCursor(Some(from)));
+                actions.push(Action::MoveMarkTo(to));
+            }
         }
     }
     paint(
@@ -143,6 +182,18 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         display,
         model,
     );
+    // The mark follows the pointer while it is held, so the drop is not a guess.
+    if let Some((_, to)) = dragging_mark.filter(|_| response.dragged()) {
+        let frame = sampler::frame_of(to, layout.rate);
+        let x = rect.left()
+            + frame.saturating_sub(layout.start) as f32 * layout.per_frame as f32
+                / layout.per_column as f32;
+        ui.painter_at(rect).vline(
+            x,
+            rect.y_range(),
+            egui::Stroke::new(1.0, ui.visuals().selection.stroke.color),
+        );
+    }
     if let Some((from, to)) = dragged.filter(|_| response.dragged()) {
         let x = |t: Duration| {
             let frame = sampler::frame_of(t, layout.rate);

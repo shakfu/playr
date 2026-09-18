@@ -93,6 +93,13 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:out`                             | `>`                     | end the range at the playhead          |
 | `:range [START END]`               | `backspace`             | set the range to slice, or clear it    |
 | `:loop [on\|off]`                  | `l`                     | play the range over and over           |
+| `:audition`                       | `a`                     | play the range, slice or region once   |
+| `:cursor TIME\|+N\|-N\|N%\|off`     | `;` `'` `h`             | move the cursor; `h` returns it to the playhead |
+| `:pick next\|prev`                 | `u` `i`                 | move the cursor to a mark              |
+| `:nudge-mark +N\|-N\|N%`           | `y` `o`                 | move the mark under the cursor         |
+| `:move-mark TIME`                 | drag it                 | move it to a time                      |
+| `:snap-mark`                      | `#`                     | move it to the nearest rise            |
+| `:del-mark`                       | `delete`                | remove it                              |
 | `:edge start\|end \| +N \| -N \| +N%` | `[` `]`, then `{` `}`   | pick a range end, or move it N columns |
 | `:write`                           | `enter`                 | write the slices :slice planned        |
 | `:discard`                         | `esc`                   | discard planned slices, else the range |

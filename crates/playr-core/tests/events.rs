@@ -586,3 +586,37 @@ fn a_root_whose_directory_is_gone_can_still_be_forgotten() {
     assert_eq!(removed.tracks, 2);
     assert!(session.roots().is_empty());
 }
+
+#[test]
+fn what_was_playing_is_remembered_and_offered_only_while_the_file_is_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs, 1);
+    let track = songs.join("000.wav");
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let session = Session::new(conn, common::fake_player().0, event::ignore());
+
+    assert_eq!(session.resumable(), None, "offered with nothing stored");
+    session.remember(&track, Duration::from_millis(90_500));
+    assert_eq!(
+        session.resumable(),
+        Some((track.clone(), Duration::from_millis(90_500)))
+    );
+
+    // Storing again replaces the one row rather than adding another.
+    session.remember(&track, Duration::from_secs(5));
+    assert_eq!(
+        session.resumable(),
+        Some((track.clone(), Duration::from_secs(5)))
+    );
+
+    // A file that has gone is not offered: answering yes would do nothing.
+    std::fs::remove_file(&track).unwrap();
+    assert_eq!(session.resumable(), None);
+
+    common::silence(&track, 8000, 0.05);
+    assert!(session.resumable().is_some());
+    session.forget_resume();
+    assert_eq!(session.resumable(), None);
+}

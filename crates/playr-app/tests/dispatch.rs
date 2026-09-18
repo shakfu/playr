@@ -383,3 +383,19 @@ fn pruning_asks_first_and_starts_on_a_yes() {
         Some(&Outcome::PruneStarted { dir: Some(music) }.into())
     );
 }
+
+#[test]
+fn the_new_questions_say_what_they_will_do() {
+    assert_eq!(
+        Confirm::ForgetRoot("/mnt/music".into()).question(),
+        "forget /mnt/music, and every track and mark under it?"
+    );
+    assert_eq!(
+        Confirm::Resume {
+            path: "/mnt/music/amen.flac".into(),
+            at: std::time::Duration::from_secs(95),
+        }
+        .question(),
+        "take up amen.flac again at 1:35?"
+    );
+}

@@ -13,6 +13,7 @@ categories = ["multimedia::audio"]
 [dependencies]
 playr-core.workspace = true
 rusqlite.workspace = true
+souvlaki.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
