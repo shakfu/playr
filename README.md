@@ -1,8 +1,10 @@
 # playr
 
-A minimal music player with three interfaces: a terminal, a desktop window, and a server for a machine without a screen, controlled from a web page or OSC. Plays a directory, a saved playlist, or the results of a search. Keeps a SQLite index of your library.
+A minimal music player which plays a directory, a saved playlist, or the results of a search. Keeps a SQLite index of your library.
 
-None of the three fetches metadata or images from the internet, and none contacts a service. Indeed, `playr` and `playr-gui` have no network code at all. `playr-server` listens on your own network, and serves only the browsers and OSC apps you point at it.
+When you download playr, you get three implementations: `playr`, a terminal app, `playr-gui`, a desktop gui app, and `playr-server`, a server for a machine without a screen, controlled from a web page or Open Sound Control (OSC).
+
+None of the three contact external services or download any metadata and images. Indeed, `playr` and `playr-gui` have no network code at all. `playr-server` runs on your local network and communicates only with the browsers and OSC apps you connect to it.
 
 ![Varispeed on a Boards of Canada record is a good use of an afternoon.](https://raw.githubusercontent.com/shakfu/playr/main/docs/media/playr.png)
 
