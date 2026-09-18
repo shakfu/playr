@@ -280,6 +280,14 @@ pub struct Shared {
     pub flush_requested: AtomicU64,
     /// The last `flush_requested` value the callback has acted on.
     pub flush_done: AtomicU64,
+    /// The last `flush_requested` whose position the engine has reset.
+    ///
+    /// The callback raises `flush_done` as soon as it discards, but
+    /// `frames_out`, `track_start` and `position_offset` still describe the
+    /// audio from before the seek until the engine's next pass. A position
+    /// read in between was the one from before it, so a reader holds the seek
+    /// target until this catches up.
+    pub flush_applied: AtomicU64,
     /// Where the latest seek resumes, in nanoseconds, which is the position
     /// until the callback has acted on its flush.
     pub seek_target: AtomicU64,
@@ -301,6 +309,7 @@ impl Shared {
             speed_bits: AtomicU32::new(1.0f32.to_bits()),
             flush_requested: AtomicU64::new(0),
             flush_done: AtomicU64::new(0),
+            flush_applied: AtomicU64::new(0),
             seek_target: AtomicU64::new(0),
             momentary_bits: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             peak_bits: AtomicU32::new(0),

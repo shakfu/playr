@@ -323,9 +323,10 @@ impl Player {
 
     /// Audible position in the current track.
     pub fn position(&self) -> Duration {
-        // Until the device discards, the counters describe the audio before a seek.
+        // Until the engine has reset them, the counters describe the audio
+        // before a seek.
         let requested = self.shared.flush_requested.load(Ordering::Relaxed);
-        if requested != self.shared.flush_done.load(Ordering::Relaxed) {
+        if requested != self.shared.flush_applied.load(Ordering::Relaxed) {
             return Duration::from_nanos(self.shared.seek_target.load(Ordering::Relaxed));
         }
         position_now(&self.shared, &self.pending)
@@ -699,6 +700,7 @@ impl Engine {
         self.shared.track_start.store(0, Ordering::Relaxed);
         // A new track starts from its own beginning, not a previous seek.
         self.shared.position_offset.store(0, Ordering::Relaxed);
+        self.settle_position();
     }
 
     /// Opens track `i`, or the first playable track after it (before it, when
@@ -1039,12 +1041,22 @@ impl Engine {
         self.shared
             .position_offset
             .store(flush.offset, Ordering::Relaxed);
+        self.settle_position();
     }
 
     /// Marks every flush done, once no callback can act on the ring it named.
     fn settle_flush(&self) {
         let requested = self.shared.flush_requested.load(Ordering::Relaxed);
         self.shared.flush_done.store(requested, Ordering::Relaxed);
+    }
+
+    /// Marks the position counters current, so readers stop reporting the
+    /// seek target. Called once they describe the audio now playing.
+    fn settle_position(&self) {
+        let requested = self.shared.flush_requested.load(Ordering::Relaxed);
+        self.shared
+            .flush_applied
+            .store(requested, Ordering::Relaxed);
     }
 
     /// Converts decoded source samples to the output layout and appends to `carry`.

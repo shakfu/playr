@@ -8,6 +8,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Fixed
 
+- Just after a seek, the position could report where playback was before it, for one pass of the engine. The device discards the pre-seek audio and raises `flush_done` at once, but `frames_out`, `track_start` and `position_offset` still describe that audio until the engine resets them, and a reader took the device's word for it. Anything reading the position in that window acted on the old playhead: `:slice` planned the region around it, `b` marked it, and `,` and `.` stepped from it. The position now holds the seek target until the engine has reset the counters.
+
 - While looping, the reported position ran past the loop's end before returning to its start, by up to one pass of the engine. The audio callback advances the device's frame count; the engine advances the matching track start and offset on its next pass, so a position read between the two was measured from the loop's previous return. The player now applies the returns the device has reached when it is asked for a position. Applying them in the callback would be as exact but would put a queue on the realtime thread.
 
 ### Added

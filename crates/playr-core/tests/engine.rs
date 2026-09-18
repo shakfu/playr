@@ -582,6 +582,42 @@ fn the_position_is_the_seek_target_until_the_device_discards() {
 }
 
 #[test]
+fn a_seek_the_position_has_reported_does_not_fall_back() {
+    let (player, _control) = fake_player();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    silence(&file, 8000, 20.0);
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+
+    // The device discards the pre-seek audio and says so a pass before the
+    // engine resets the counters, and a read in between gave the old position.
+    for round in 0..20 {
+        player.send(Cmd::Seek(Duration::from_millis(100)));
+        std::thread::sleep(Duration::from_millis(12));
+        player.send(Cmd::Seek(Duration::from_secs(7)));
+
+        // From when the engine has taken it: before that the old position is honest.
+        let taken = Instant::now() + Duration::from_secs(5);
+        while player.position() < Duration::from_secs(7) && Instant::now() < taken {
+            std::thread::sleep(Duration::from_micros(200));
+        }
+        assert!(
+            player.position() >= Duration::from_secs(7),
+            "the seek was never taken"
+        );
+        let until = Instant::now() + Duration::from_millis(15);
+        while Instant::now() < until {
+            let at = player.position();
+            assert!(
+                at >= Duration::from_secs(7),
+                "round {round}: position {at:?} after a seek to 7 s"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_track_change_before_a_seek_is_discarded_keeps_the_next_track_whole() {
     let (player, control) = fake_player();
     let dir = tempfile::tempdir().unwrap();
