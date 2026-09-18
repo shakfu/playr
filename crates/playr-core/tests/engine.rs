@@ -146,7 +146,17 @@ fn playing(secs: f32) -> (Player, PathBuf, tempfile::TempDir) {
 
 #[test]
 fn enqueueing_after_the_queue_ends_starts_playback() {
-    let (player, second, _dir) = playing(0.1);
+    let dir = tempfile::tempdir().unwrap();
+    let (first, second) = (dir.path().join("1.wav"), dir.path().join("2.wav"));
+    // A tenth of a second, which the device can make up in a single catch-up
+    // burst, so no poll need ever see `Playing`. Counted frames do not pass:
+    // hearing the last one is what shows the track played.
+    counting(&first, 800);
+    silence(&second, 8_000, 1.0);
+    let (player, control) = fake_player();
+    player.send(Cmd::Play(vec![first], 0));
+    until_heard(&control, 0, |s| s.contains(&800));
+
     let s = wait_for(&player, |s| s.state == State::Stopped);
     assert_eq!(s.state, State::Stopped, "first track never ended");
 
@@ -632,7 +642,8 @@ fn heard(control: &common::Control, from: usize) -> Vec<i64> {
 
 /// Waits until `done` holds for what has been heard since `from`.
 fn until_heard(control: &common::Control, from: usize, done: impl Fn(&[i64]) -> bool) -> Vec<i64> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // The same budget `wait_for` allows the engine: a loaded runner plays late.
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let seen = heard(control, from);
         if done(&seen) {
@@ -726,15 +737,22 @@ fn a_one_shot_range_plays_through_once_and_pauses_at_its_end() {
     // The same frames a loop would take, played once.
     player.send(Cmd::PlayOnce(8_000, 8_400));
     wait_for(&player, |s| s.state == State::Paused);
+    // Playback can already be past 8,400 when the command lands, and the engine
+    // then seeks back, so the one-shot run is the last entry into the range.
     let seen = heard(&control, 0);
-    assert!(seen.contains(&8_400), "never reached the end of the range");
+    let entered = seen
+        .iter()
+        .rposition(|&v| v == 8_001)
+        .expect("never entered the range");
+    let run = &seen[entered..];
+    assert!(run.contains(&8_400), "never reached the end of the range");
     assert_eq!(
-        seen.windows(2).filter(|p| p == &[8_400, 8_001]).count(),
+        run.windows(2).filter(|p| p == &[8_400, 8_001]).count(),
         0,
         "returned to the start, as a loop does"
     );
     assert!(
-        !seen.iter().any(|&v| v > 8_400),
+        !run.iter().any(|&v| v > 8_400),
         "played past the end of the range"
     );
     assert_eq!(player.status().looping, None, "left a loop behind");

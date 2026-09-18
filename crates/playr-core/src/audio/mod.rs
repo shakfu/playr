@@ -885,6 +885,9 @@ impl Engine {
         let Some(&(_, audible, _, _)) = self.marks.front() else {
             return;
         };
+        // The discard resets `written`, which the pause is counted in, and a
+        // seek leaves the range behind in any case.
+        self.pause_at = None;
         let src = if self.marks.len() > 1 || self.stream.is_none() {
             let Some(path) = self.queue.get(audible).cloned() else {
                 return;
@@ -1300,7 +1303,14 @@ impl Engine {
         // Whole frames only: `slots` read during a callback can be odd, and a
         // split frame would undercount `written` and could swap channels.
         let channels = out.plan.channels as usize;
-        let whole = out.producer.slots().min(self.carry.len()) / channels * channels;
+        // A one-shot range ends at `pause_at`, and the audio after it is
+        // already decoded. Holding it back until the pause lands leaves the
+        // device to underrun into silence: a late pause spills no audio.
+        let mut room = self.carry.len();
+        if let Some(at) = self.pause_at {
+            room = room.min(at.saturating_sub(self.written) as usize * channels);
+        }
+        let whole = out.producer.slots().min(room) / channels * channels;
         let (written, _) = out.producer.push_partial_slice(&self.carry[..whole]);
         let n = written.len();
         if n > 0 {
