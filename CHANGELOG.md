@@ -4,6 +4,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Added
+
+- Output device selection. `--device ID` on all three programs, or `device` in `settings.toml`, plays to a device other than the default; `playr devices` lists the IDs, which are cpal's `<host>:<id>`, and a bare `hw:2,0` means the default host. Matching is by ID only: on ALSA one card's name labels up to 15 PCMs. A device that is not found stops playr at startup with the list, rather than falling back to the default, which would play through the wrong speakers and hide why output is not bit-perfect. A device another program holds is reported as busy rather than as a failed stream. Design in `docs/dev/device.md`.
+
+  cpal 0.18.2 cannot find some IDs it lists, such as `alsa:sysdefault:CARD=X`: its ALSA lookup appends `,DEV=0` to an ID with a card and no device. playr matches the exact ID first.
+
+  Library API: `output::device`, `output::devices`, `output::by_index`, `output::DeviceInfo`; `OutputError::NotFound`, `OutputError::Busy`; `Settings::device`. `Player::new` takes the device ID; `output::default_device` is gone.
+
 ## [0.8.1]
 
 ### Fixed

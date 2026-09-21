@@ -30,6 +30,11 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     settings: Option<PathBuf>,
 
+    /// Play to this output device instead of the default, overriding the
+    /// device setting; `playr devices` lists them
+    #[arg(long, value_name = "ID")]
+    device: Option<String>,
+
     /// Address and port for the web page; 0.0.0.0 reaches it from the network
     #[arg(long, value_name = "ADDR:PORT", default_value = "127.0.0.1:8080")]
     listen: SocketAddr,
@@ -113,7 +118,8 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
         (None, Some(path)) => Config::load(&path, false),
         (None, None) => Ok(Config::default()),
     }?;
-    let player = Player::new().map_err(|e| fail(&e))?;
+    let player = Player::new(cli.device.as_deref().or(config.settings.device.as_deref()))
+        .map_err(|e| fail(&e))?;
     let mut model = Model::new(conn, player, Vec::new(), config);
     model.session_mut().set_library_path(library);
 

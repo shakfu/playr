@@ -45,6 +45,8 @@ None of the three contact external services or download any metadata and images.
 
 - Plays to float, 32-bit, 24-bit and 16-bit integer devices
 
+- Plays to the default output device, or one chosen by ID, such as an ALSA `hw:` device
+
 - Lock-free ring between the decoder and the realtime callback
 
 - Underruns emit silence rather than repeating stale samples
@@ -101,7 +103,7 @@ playr is three programs over one core. All read the same library and the same `s
 
 - **`playr-server`**, for a machine without a screen, such as a Raspberry Pi with a DAC. It plays on that machine, and a web page or OSC controls it. The only program with network code.
 
-Only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json`, `playr roots` and `playr formats` only read, and run alongside any of them.
+Only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json`, `playr roots`, `playr formats` and `playr devices` only read, and run alongside any of them.
 
 | | `playr` | `playr-gui` | `playr-server` |
 |-|-|-|-|
@@ -206,6 +208,8 @@ playr search --json evans   # print the matches as JSON instead of playing them
 playr playlist "late night" # play a saved playlist
 playr playlists             # list saved playlists
 playr formats               # show what this build can decode
+playr devices               # list output devices; * marks the default
+playr --device ID           # play to that device instead of the default
 ```
 
 `playr <command> --help` describes each command. A search that starts with `-` goes after `--`, as in `playr search -- -ology`. `--json` prints an array with one object per track, holding every library column, `null` for a missing tag, and `duration_ms` in milliseconds; no match prints `[]` and exits with status 1. Bad arguments exit with status 2.
@@ -428,6 +432,7 @@ speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 samples = "~/Music/playr/samples"  # where :slice writes
 auto_prune = true                  # after a scan, prune missing tracks without asking
+device = "alsa:hw:CARD=DAC,DEV=0"  # output device from `playr devices`; "" is the default
 theme = "light"                    # system, light or dark
 
 [keys]                             # every view
@@ -469,7 +474,7 @@ Not decoded: WavPack, WMA, Musepack, APE, DSD, TTA, TAK, and Opus unless the fea
 
 The output stream is opened at the file's own sample rate whenever the device accepts it, so nothing is resampled in the common case. When a rate is refused, a sinc resampler converts it rather than linear interpolation. Decoding, mixing and volume are all f32, quantised once at the device. The device format is chosen in the order f32, f64, 32-bit, 24-bit, then 16-bit integer.
 
-This is not bit-perfect output. On a PipeWire system the ALSA `default` device accepts every rate and may convert internally. Bit-perfect playback would need a `hw:` device, which playr does not yet select.
+This is not bit-perfect output by default. On a PipeWire system the ALSA `default` device accepts every rate and may convert internally. A `hw:` device avoids that: `--device` or the `device` setting selects one by the ID `playr devices` prints. It offers only the card's own rates and formats, and cannot be opened while PipeWire or PulseAudio holds it. `--device` overrides the setting in all three programs. A device that does not exist stops playr at startup with the list, rather than playing somewhere else.
 
 Volume is a float gain applied before quantisation.
 

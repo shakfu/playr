@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
-    Device, ErrorKind, SampleFormat, StreamConfig, SupportedStreamConfig,
+    Device, DeviceId, ErrorKind, SampleFormat, StreamConfig, SupportedStreamConfig,
     SupportedStreamConfigRange,
 };
 
@@ -25,6 +25,13 @@ const BUFFER_SECONDS: u32 = 2;
 #[derive(Debug)]
 pub enum OutputError {
     NoDevice,
+    /// No device has the ID asked for; `available` lists those that do.
+    NotFound {
+        want: String,
+        available: Vec<String>,
+    },
+    /// Another program holds the device, as PipeWire holds a `hw:` device.
+    Busy,
     NoConfig,
     Build(String),
 }
@@ -33,6 +40,17 @@ impl std::fmt::Display for OutputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OutputError::NoDevice => write!(f, "no audio output device"),
+            OutputError::NotFound { want, available } => {
+                write!(f, "no output device {want}; `playr devices` lists them")?;
+                if !available.is_empty() {
+                    write!(f, ":")?;
+                }
+                available.iter().try_for_each(|id| write!(f, "\n  {id}"))
+            }
+            OutputError::Busy => write!(
+                f,
+                "the output device is busy; another program, such as PipeWire or PulseAudio, holds it"
+            ),
             OutputError::NoConfig => write!(f, "device offers no usable output format"),
             OutputError::Build(s) => write!(f, "could not open audio stream: {s}"),
         }
@@ -40,6 +58,16 @@ impl std::fmt::Display for OutputError {
 }
 
 impl std::error::Error for OutputError {}
+
+impl OutputError {
+    /// `e` from opening a stream, as [`OutputError::Busy`] where it says so.
+    fn build(e: cpal::Error) -> Self {
+        match e.kind() {
+            ErrorKind::DeviceBusy => OutputError::Busy,
+            _ => OutputError::Build(e.to_string()),
+        }
+    }
+}
 
 /// What a device reports while its stream runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,9 +161,7 @@ impl Backend for Cpal {
         }?;
         // The device runs continuously; silence is produced in the callback
         // when paused. See `Shared::paused`.
-        stream
-            .play()
-            .map_err(|e| OutputError::Build(e.to_string()))?;
+        stream.play().map_err(OutputError::build)?;
         Ok(Box::new(stream))
     }
 }
@@ -159,7 +185,10 @@ impl Plan {
 pub fn negotiate(device: &Device, src: Spec) -> Result<Plan, OutputError> {
     let ranges: Vec<SupportedStreamConfigRange> = device
         .supported_output_configs()
-        .map_err(|_| OutputError::NoConfig)?
+        .map_err(|e| match e.kind() {
+            ErrorKind::DeviceBusy => OutputError::Busy,
+            _ => OutputError::NoConfig,
+        })?
         .collect();
     choose(&ranges, device.default_output_config().ok(), src).ok_or(OutputError::NoConfig)
 }
@@ -242,10 +271,78 @@ fn format_rank(f: SampleFormat) -> Option<u8> {
     }
 }
 
-pub fn default_device() -> Result<Device, OutputError> {
-    cpal::default_host()
-        .default_output_device()
-        .ok_or(OutputError::NoDevice)
+/// The output device `want` names, or the host default for `None`.
+///
+/// `want` is a cpal device ID, `<host>:<id>` as `playr devices` prints it.
+/// Without a known host in front, as in `hw:2,0`, it is an ID on the default
+/// host.
+pub fn device(want: Option<&str>) -> Result<Device, OutputError> {
+    let Some(want) = want else {
+        return cpal::default_host()
+            .default_output_device()
+            .ok_or(OutputError::NoDevice);
+    };
+    let (host, id) = match want.parse::<DeviceId>() {
+        Ok(id) => (cpal::host_from_id(id.host()).ok(), id),
+        Err(_) => (None, DeviceId::new(cpal::default_host().id(), want)),
+    };
+    let host = host.unwrap_or_else(cpal::default_host);
+    // The exact ID first: cpal 0.18.2's ALSA lookup appends `,DEV=0` to an ID
+    // with a card and no device, so it misses `sysdefault:CARD=X`, which it lists.
+    let exact = host
+        .output_devices()
+        .ok()
+        .and_then(|mut all| all.find(|d| d.id().ok().as_ref() == Some(&id)));
+    exact
+        .or_else(|| host.device_by_id(&id))
+        .ok_or_else(|| OutputError::NotFound {
+            want: want.to_owned(),
+            available: devices()
+                .map(|all| all.into_iter().map(|d| d.id).collect())
+                .unwrap_or_default(),
+        })
+}
+
+/// An output device as `playr devices` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceInfo {
+    /// What `--device` and the `device` setting take.
+    pub id: String,
+    pub name: String,
+    pub default: bool,
+}
+
+/// The default host's output devices, without the duplicates [`by_index`]
+/// finds.
+pub fn devices() -> Result<Vec<DeviceInfo>, OutputError> {
+    let host = cpal::default_host();
+    let default = host.default_output_device().and_then(|d| d.id().ok());
+    let all = host
+        .output_devices()
+        .map_err(|e| OutputError::Build(e.to_string()))?;
+    Ok(all
+        .filter_map(|d| {
+            let id = d.id().ok()?;
+            let name = d
+                .description()
+                .map_or_else(|_| String::new(), |n| n.name().to_owned());
+            Some(DeviceInfo {
+                default: Some(&id) == default.as_ref(),
+                id: id.to_string(),
+                name,
+            })
+        })
+        .filter(|d| !by_index(&d.id))
+        .collect())
+}
+
+/// Whether `id` names an ALSA card by index, as `CARD=2`, which ALSA lists
+/// beside the same device by name. Card indices can change at boot, so
+/// names are the ones to keep.
+pub fn by_index(id: &str) -> bool {
+    id.split([':', ','])
+        .filter_map(|part| part.strip_prefix("CARD="))
+        .any(|card| !card.is_empty() && card.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// State the realtime callback shares with the rest of the player.
@@ -425,7 +522,7 @@ where
             },
             None,
         )
-        .map_err(|e| OutputError::Build(e.to_string()))
+        .map_err(OutputError::build)
 }
 
 /// Fills `out` from the ring, meters it, and counts the frames played.

@@ -32,6 +32,11 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     settings: Option<PathBuf>,
 
+    /// Play to this output device instead of the default, overriding the
+    /// device setting; `playr devices` lists them
+    #[arg(long, value_name = "ID")]
+    device: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -74,6 +79,8 @@ enum Command {
     Playlists,
     /// Show which formats this build can decode
     Formats,
+    /// List output devices, by the ID --device and the device setting take
+    Devices,
 }
 
 #[derive(Subcommand)]
@@ -104,6 +111,10 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     if let Some(Command::Formats) = cli.command {
         print_formats();
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(Command::Devices) = cli.command {
+        print_devices()?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -160,7 +171,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
 
     // Everything else opens the interface, with tracks chosen by the arguments.
     let start: Vec<Track> = match cli.command {
-        Some(Command::Formats) => unreachable!("handled above"),
+        Some(Command::Formats | Command::Devices) => unreachable!("handled above"),
         Some(Command::Scan { dirs }) => return cmd_scan(&mut conn, &dirs),
         // `roots add` is `scan`: recording a root without scanning it would
         // leave a root the library holds nothing for.
@@ -236,7 +247,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     if !std::io::stdout().is_terminal() {
         return Err("playr needs a terminal: stdout is not one".into());
     }
-    let player = Player::new()?;
+    let player = Player::new(cli.device.as_deref().or(config.settings.device.as_deref()))?;
 
     // `ratatui::init` panics without a terminal; report it instead, since
     // running playr from a pipe or a service is an easy mistake to make.
@@ -449,4 +460,15 @@ fn print_formats() {
     }
     println!("WavPack, WMA, Musepack, APE, DSD, TTA, TAK.");
     println!("playr reports such files and moves to the next track.");
+}
+
+/// One output device a line, its ID then its name, with the default marked `*`.
+fn print_devices() -> Result<(), Box<dyn std::error::Error>> {
+    let devices = playr_core::audio::output::devices()?;
+    let width = devices.iter().map(|d| d.id.len()).max().unwrap_or(0);
+    for d in &devices {
+        let mark = if d.default { '*' } else { ' ' };
+        println!("{mark} {:<width$}  {}", d.id, d.name);
+    }
+    Ok(())
 }

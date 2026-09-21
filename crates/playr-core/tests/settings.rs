@@ -132,3 +132,20 @@ fn auto_prune_defaults_off_and_takes_a_boolean() {
         ["line 1: auto_prune cannot be an integer"]
     );
 }
+
+#[test]
+fn the_device_defaults_to_none_and_takes_an_id() {
+    assert_eq!(Settings::default().device, None);
+    assert_eq!(parse("device = \"\"").unwrap().device, None);
+    assert_eq!(
+        parse("device = \"alsa:hw:CARD=DAC,DEV=0\"")
+            .unwrap()
+            .device
+            .as_deref(),
+        Some("alsa:hw:CARD=DAC,DEV=0")
+    );
+    assert_eq!(
+        parse("device = 2").unwrap_err(),
+        ["line 1: device cannot be an integer"]
+    );
+}

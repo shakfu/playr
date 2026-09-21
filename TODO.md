@@ -38,7 +38,7 @@ What is missing, grouped by priority:
 
 ### Output
 
-- [ ] **Device selection.** No way to choose an output device; it is always the default. Needs a command-line flag, a setting, and a control in the window. Design in `docs/dev/device.md`.
+- [x] **Device selection.** `--device`, the `device` setting and `playr devices`. A control in the window waits on writing settings; see phase 2 in `docs/dev/device.md`.
 
 ## Medium
 
@@ -76,7 +76,7 @@ What is missing, grouped by priority:
 
 ### Output
 
-- [ ] **Bit-perfect output.** Select a `hw:` ALSA device so PipeWire cannot resample behind us. Today the `default` device accepts every rate and may convert internally, so "no resampling" means playr does not resample, not that nothing does. Negotiation already accepts the 32-bit and 24-bit integer formats such devices offer; choosing the device is what remains.
+- [ ] **Bit-perfect output.** Select a `hw:` ALSA device so PipeWire cannot resample behind us. Today the `default` device accepts every rate and may convert internally, so "no resampling" means playr does not resample, not that nothing does. Negotiation accepts the 32-bit and 24-bit integer formats such devices offer, and `--device` selects one. Untested: playing to a `hw:` device while PipeWire holds it, which should report the device as busy.
 
 ### Server
 

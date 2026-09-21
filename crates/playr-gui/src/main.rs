@@ -30,6 +30,11 @@ struct Cli {
     /// Use a different settings file
     #[arg(long, value_name = "PATH")]
     settings: Option<PathBuf>,
+
+    /// Play to this output device instead of the default, overriding the
+    /// device setting; `playr devices` lists them
+    #[arg(long, value_name = "ID")]
+    device: Option<String>,
 }
 
 /// What the window starts with.
@@ -115,7 +120,8 @@ fn start(cli: Cli) -> Result<Start, Vec<String>> {
         }
         tracks = found.tracks;
     }
-    let player = Player::new().map_err(|e| fail(&e))?;
+    let player = Player::new(cli.device.as_deref().or(config.settings.device.as_deref()))
+        .map_err(|e| fail(&e))?;
     Ok(Start {
         instance: Some(instance),
         conn,

@@ -104,6 +104,8 @@ A TouchOSC layout for these addresses is attached to each release as `playr-<ver
   defaults.ctl.card 1
   ```
 
+  Or name the device with `--device` in the unit, or `device` in `settings.toml`. `playr devices` lists the IDs they take, such as `alsa:hw:CARD=DAC,DEV=0`. A named device that is not there stops the server, and systemd restarts it until the device appears.
+
 ### As a service
 
 `playr-server.service` is in the Linux archives and in `packaging/linux/`. It runs as a systemd user service, as the user who owns the library:
@@ -148,3 +150,4 @@ systemctl --user start playr-server
 | `--osc-reply ADDR:PORT` | off | send the state as OSC |
 | `--db PATH` | `~/.local/share/playr/library.db` | the library |
 | `--settings PATH` | `~/.config/playr/settings.toml` | the settings |
+| `--device ID` | the default device | the output device, as `playr devices` lists it |

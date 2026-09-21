@@ -227,10 +227,10 @@ pub struct Player {
 }
 
 impl Player {
-    /// Starts the engine thread on the default output device. Fails only if
-    /// no output device exists.
-    pub fn new() -> Result<Self, output::OutputError> {
-        Self::with_backend(output::Cpal(output::default_device()?))
+    /// Starts the engine thread on the output device `device` names, or the
+    /// default for `None`. See [`output::device`].
+    pub fn new(device: Option<&str>) -> Result<Self, output::OutputError> {
+        Self::with_backend(output::Cpal(output::device(device)?))
     }
 
     /// Starts the engine thread, playing to `backend`.

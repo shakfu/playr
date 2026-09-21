@@ -1,6 +1,6 @@
 # Output device selection
 
-Design, written 2026-09-21 against playr 0.8.1, before any of it was built. It answers "Device selection" under Output in `TODO.md`.
+Design, written 2026-09-21 against playr 0.8.1, before any of it was built. It answers "Device selection" under Output in `TODO.md`. Phase 1 was built the same day, with each open decision taken as recommended; "Built" at the end records where it differs.
 
 ## Goal
 
@@ -94,6 +94,16 @@ Not checked: macOS and Windows, a USB DAC, and a Raspberry Pi.
 ## Alternative considered
 
 Leave routing to the system. PipeWire moves a stream between devices (`wpctl`, `pavucontrol`, the `target.object` property), and `default.clock.allowed-rates` reduces its resampling. playr would then only need `--device` for bit-perfect `hw:` output, with no window control. This fits Linux; macOS and Windows have no equivalent, which decides it by how many users run there.
+
+## Built
+
+Phase 1, 2026-09-21. Differences from the design above:
+
+- **Exact match first.** cpal 0.18.2's `canonical_pcm_id` appends `,DEV=0` to an ID with `CARD=` and no comma, so `device_by_id` misses `alsa:sysdefault:CARD=X`, which cpal itself lists. `output::device` looks for the exact ID among the output devices, then falls back to `device_by_id` for forms such as `hw:2,0`.
+- **Bare IDs.** A string without a known host in front is an ID on the default host, so `hw:2,0` works without `alsa:`.
+- **No config probing in `playr devices`.** Marking devices with no configs, and listing rates and formats, would open every PCM. Left out.
+- **Busy is unverified.** `OutputError::Busy` comes from `ErrorKind::DeviceBusy` at config query or stream build. On the test machine PipeWire had suspended the idle card, so `hw:` opened and played; EBUSY was not reproduced.
+- **`alsa:null` does not pace.** It played 2 s of audio in under 0.8 s (one run). Phase 3 therefore needs its own `Backend` for CI, not `--device alsa:null`.
 
 ## Phases
 

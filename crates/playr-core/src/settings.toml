@@ -16,3 +16,5 @@ onset_sensitivity = 0.5
 samples = "~/Music/playr/samples"
 # After a scan, remove tracks whose files are gone, without asking.
 auto_prune = false
+# The output device, as `playr devices` lists it; "" is the default device.
+device = ""

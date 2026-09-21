@@ -31,6 +31,8 @@ pub struct Settings {
     pub onset_sensitivity: f32,
     /// After a scan, remove tracks whose files are gone, without asking.
     pub auto_prune: bool,
+    /// The output device's ID, or `None` for the default.
+    pub device: Option<String>,
 }
 
 impl Default for Settings {
@@ -42,6 +44,7 @@ impl Default for Settings {
             samples: PathBuf::new(),
             onset_sensitivity: 0.5,
             auto_prune: false,
+            device: None,
         };
         let (_, errors) = settings.apply(DEFAULT_SETTINGS, &[]);
         if let Err(errors) = errors.finish() {
@@ -157,7 +160,12 @@ impl Settings {
                     Some(path) => self.samples = path,
                     None => errors.add(at, "samples must be an absolute path or start with ~/"),
                 },
-                ("mode" | "samples" | "auto_prune", v) => {
+                // Checked when the device opens, since a settings file may be
+                // read on a machine without that device.
+                ("device", DeValue::String(s)) => {
+                    self.device = (!s.is_empty()).then(|| s.to_string())
+                }
+                ("mode" | "samples" | "auto_prune" | "device", v) => {
                     errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v)))
                 }
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),
