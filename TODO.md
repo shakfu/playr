@@ -38,7 +38,7 @@ What is missing, grouped by priority:
 
 ### Output
 
-- [ ] **Device selection.** No way to choose an output device; it is always the default. Needs a command-line flag, a setting, and a control in the window.
+- [ ] **Device selection.** No way to choose an output device; it is always the default. Needs a command-line flag, a setting, and a control in the window. Design in `docs/dev/device.md`.
 
 ## Medium
 
