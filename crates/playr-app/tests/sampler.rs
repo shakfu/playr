@@ -367,3 +367,39 @@ fn the_waveform_waits_for_its_track_with_a_reason() {
     sampler.planning = Some(1);
     assert_eq!(plan_text(&sampler), "planning slices");
 }
+
+#[test]
+fn the_spectrum_maps_bands_to_rows_from_the_quiet_end_to_the_loudest() {
+    // A second of 200 Hz, then a second of 4 kHz, at 16 kHz.
+    let rate = 16_000;
+    let tone = |hz: f32, i: usize| (std::f32::consts::TAU * hz * i as f32 / rate as f32).sin();
+    let data: Vec<f32> = (0..2 * rate as usize)
+        .map(|i| {
+            if i < rate as usize {
+                tone(200.0, i)
+            } else {
+                tone(4000.0, i)
+            }
+        })
+        .collect();
+    let peaks = Arc::new(Peaks::from_interleaved(&data, 1, rate));
+    let l = Layout::new(peaks, 10, 0, Duration::ZERO, &[], 1);
+    // The loudest row of a column, lowest frequency first.
+    let loudest = |c: usize, rows: usize| {
+        let levels = l.spectrum(c, rows);
+        assert_eq!(levels.len(), rows);
+        assert!(levels.iter().all(|v| (0.0..=1.0).contains(v)));
+        (0..rows)
+            .max_by(|&a, &b| levels[a].total_cmp(&levels[b]))
+            .unwrap()
+    };
+    for rows in [7, 16, 128, 300] {
+        assert!(loudest(2, rows) < loudest(7, rows), "{rows} rows");
+    }
+    // Both tones are full scale, so each column's loudest row reaches 1.
+    assert!(l.spectrum(2, 16)[loudest(2, 16)] > 0.95);
+    // A column past the end has no rows.
+    let short = Arc::new(Peaks::from_interleaved(&data[..1000], 1, rate));
+    let l = Layout::new(short, 10, 0, Duration::ZERO, &[], 1);
+    assert!(l.spectrum(9, 16).is_empty());
+}

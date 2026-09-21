@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, current as of playr 0.8.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal, the desktop window, `playr-gui`, and a server controlled from a web page, `playr-server`.
+Design note, current as of playr 0.9.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal, the desktop window, `playr-gui`, and a server controlled from a web page, `playr-server`.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -313,7 +313,7 @@ pub fn rename(f: &mut impl Frontend, from: &Playlist, name: &str);       // afte
 
 - **Words** come from `playr_app::message::text`, except the confirmation question, `ui::confirm_prompt`, which names the `y` key.
 
-- **The sampler's glyphs** are in `ui::sampler`: eighth blocks and Braille. Its state and geometry are in `playr_app::sampler`.
+- **The sampler's glyphs** are in `ui::sampler`: eighth blocks, Braille, and half blocks and shades for the spectrogram. Its state and geometry are in `playr_app::sampler`.
 
 - **The command line** is parsed with clap in `src/main.rs`. `playr search --json` builds its objects with `serde_json::json!` over `Track`'s fields, not a derive, since the core has no `serde` feature yet.
 

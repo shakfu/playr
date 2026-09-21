@@ -259,6 +259,32 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
                 })
                 .collect()
         }
+        Display::Spectrogram => {
+            let columns: Vec<Vec<f32>> = (0..width).map(|c| layout.spectrum(c, 2 * rows)).collect();
+            let ramp = &super::palette::MAGMA;
+            // Outside the region at half the level, as the waveform dims there.
+            let colour = |c: usize, level: f32| {
+                let level = if layout.in_region(c) {
+                    level
+                } else {
+                    level / 2.0
+                };
+                Color::Indexed(ramp[(level * (ramp.len() - 1) as f32).round() as usize])
+            };
+            glyphs::spectrum_rows(&columns, rows)
+                .iter()
+                .map(|row| {
+                    runs(row.iter().enumerate().map(|(c, cell)| match *cell {
+                        None => (' ', Style::default()),
+                        Some((upper, lower)) if app.colour => (
+                            glyphs::UPPER_HALF,
+                            Style::default().fg(colour(c, upper)).bg(colour(c, lower)),
+                        ),
+                        Some((upper, lower)) => (glyphs::shade(upper.max(lower)), Style::default()),
+                    }))
+                })
+                .collect()
+        }
         Display::Braille => {
             let extents: Vec<(f32, f32)> = (0..width)
                 .flat_map(|c| {

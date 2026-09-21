@@ -131,8 +131,8 @@ pub const COMMANDS: &[Command] = &[
     only(
         Sampler,
         "display",
-        "[envelope|db|braille]",
-        "draw the waveform another way",
+        "[DISPLAY]",
+        "envelope, db, braille or spectrogram",
     ),
     only(
         Sampler,
@@ -676,6 +676,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             "envelope" => Ok(Action::Display(Some(Display::Envelope))),
             "db" => Ok(Action::Display(Some(Display::Decibels))),
             "braille" => Ok(Action::Display(Some(Display::Braille))),
+            "spectrogram" => Ok(Action::Display(Some(Display::Spectrogram))),
             _ => Err(usage()),
         },
         "theme" => choose(rest, THEMES, "theme").map(Action::Theme),

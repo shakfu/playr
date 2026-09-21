@@ -89,6 +89,12 @@ pub const LIGHT: Palette = Palette {
     red: Color::Indexed(160),
 };
 
+/// The spectrogram's ramp, quiet to loud: the 256-colour entries nearest
+/// matplotlib's magma in OKLab, in both themes. Each is lighter than the last.
+pub const MAGMA: [u8; 16] = [
+    16, 232, 233, 17, 53, 54, 90, 126, 161, 167, 203, 209, 216, 222, 223, 229,
+];
+
 /// The set `theme` draws in.
 pub fn of(theme: Theme) -> &'static Palette {
     match theme {

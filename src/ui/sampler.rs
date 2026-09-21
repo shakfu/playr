@@ -6,7 +6,9 @@
 //! draws the same bars from `DB_FLOOR` to full scale, which spreads out the
 //! quiet and middle levels a linear scale squeezes into the bottom rows. The
 //! Braille display draws the waveform around a centre line, 2 dots across and
-//! 4 down a cell, which shows its shape.
+//! 4 down a cell, which shows its shape. The spectrogram draws two rows a cell
+//! in upper half blocks, one in the glyph's colour and one behind it, or in
+//! shades where colour is off.
 //! Only these glyphs are not ASCII; everything else in the view is. The view's
 //! state and column geometry are in `playr_app::sampler`.
 
@@ -98,4 +100,31 @@ pub fn braille_rows(extents: &[(f32, f32)], height: usize) -> Vec<String> {
                 .collect()
         })
         .collect()
+}
+
+/// Draws the upper of a cell's two spectrogram rows in its colour, and the
+/// lower in the colour behind it.
+pub const UPPER_HALF: char = '\u{2580}';
+
+/// Shades from empty to full, for a spectrogram without colour.
+const SHADES: [char; 5] = [' ', '\u{2591}', '\u{2592}', '\u{2593}', '\u{2588}'];
+
+/// Rows, top first, of each column's `(upper, lower)` levels, from columns
+/// of `2 * height` levels, lowest frequency first. A column with no levels
+/// is empty in every row.
+pub fn spectrum_rows(columns: &[Vec<f32>], height: usize) -> Vec<Vec<Option<(f32, f32)>>> {
+    (0..height)
+        .map(|row| {
+            let upper = 2 * (height - row) - 1;
+            columns
+                .iter()
+                .map(|levels| Some((*levels.get(upper)?, *levels.get(upper - 1)?)))
+                .collect()
+        })
+        .collect()
+}
+
+/// The shade for a level from 0 to 1.
+pub fn shade(level: f32) -> char {
+    SHADES[(level.clamp(0.0, 1.0) * (SHADES.len() - 1) as f32).round() as usize]
 }

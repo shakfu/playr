@@ -4,6 +4,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.9.0]
+
 ### Added
 
 - Output device selection. `--device ID` on all three programs, or `device` in `settings.toml`, plays to a device other than the default; `playr devices` lists the IDs, which are cpal's `<host>:<id>`, and a bare `hw:2,0` means the default host. Matching is by ID only: on ALSA one card's name labels up to 15 PCMs. A device that is not found stops playr at startup with the list, rather than falling back to the default, which would play through the wrong speakers and hide why output is not bit-perfect. A device another program holds is reported as busy rather than as a failed stream. Design in `docs/dev/device.md`.
@@ -11,6 +13,12 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
   cpal 0.18.2 cannot find some IDs it lists, such as `alsa:sysdefault:CARD=X`: its ALSA lookup appends `,DEV=0` to an ID with a card and no device. playr matches the exact ID first.
 
   Library API: `output::device`, `output::devices`, `output::by_index`, `output::DeviceInfo`; `OutputError::NotFound`, `OutputError::Busy`; `Settings::device`. `Player::new` takes the device ID; `output::default_device` is gone.
+
+- A spectrogram display in the sampler view, `:display spectrogram`, between dB and Braille in the `w` cycle; the window has a Spectrogram button. It shows level by frequency on a log scale, to separate hits the waveform merges and to show a lossy source's cutoff. It is read in the same pass as the peaks, rather than on demand in a second decode: 2048-point transforms every 512 frames into 128 bands, about 90 ms more per 4-minute track. Both draw in magma: the terminal two rows a cell in half blocks, from the 256-colour entries nearest it, or in shades without colour; the window as one texture, its frequency labels on panels. Magma over a ramp in the waveform's blue: one hue from the ground colour spans too little lightness, and most of a 90 dB range drew as the same mid-blue.
+
+  Below about 340 Hz at 44.1 kHz a band is narrower than a transform bin. Such a band reads the level interpolated between the bins either side of its centre, rather than the nearest bin, which drew runs of identical rows as stepped bands that looked like content. Widening those bands to a bin each was the alternative; it left 20 to 600 Hz 21% of the height rather than 48%. `:display` in the command help now reads `[DISPLAY]`, since the four names widened the usage column and cut other commands' help at 80 columns.
+
+  Library API: `spectrum::Spectrogram`, `Peaks::spectrum`, `Display::Spectrogram`, `Layout::spectrum`, `sampler::SPECTRUM_RANGE_DB`.
 
 ## [0.8.1]
 

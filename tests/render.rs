@@ -1755,3 +1755,77 @@ fn the_db_display_draws_levels_from_minus_48_db() {
     assert_eq!(column(6), '\u{2583}');
     assert_eq!(column(5), ' ');
 }
+
+#[test]
+fn the_spectrogram_draws_two_rows_a_cell_low_frequencies_at_the_bottom() {
+    use playr::ui::palette::MAGMA;
+    use playr::ui::sampler::UPPER_HALF;
+    use playr_app::sampler::Display;
+    // Two seconds of 200 Hz, then two of 4 kHz, at 16 kHz.
+    let rate = 16_000;
+    let tone = |hz: f32, i: usize| (std::f32::consts::TAU * hz * i as f32 / rate as f32).sin();
+    let data: Vec<f32> = (0..4 * rate as usize)
+        .map(|i| match i < 2 * rate as usize {
+            true => tone(200.0, i),
+            false => tone(4000.0, i),
+        })
+        .collect();
+    let sampler = || Sampler {
+        wave: playr_app::sampler::Wave::Ready {
+            path: "/m/t.wav".into(),
+            peaks: std::sync::Arc::new(playr_core::wave::Peaks::from_interleaved(&data, 1, rate)),
+        },
+        display: Display::Spectrogram,
+        ..Sampler::default()
+    };
+    let snapshot = sampling("/m/t.wav", Duration::ZERO, &[]);
+    // 42 by 20: 40 columns and 11 rows of cells inside the pane.
+    let rows = 2..13u16;
+    let buf = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler())
+        .size(42, 20)
+        .buffer();
+    // A cell's place in the ramp, 0 the quietest.
+    let step = |c: ratatui::style::Color| match c {
+        ratatui::style::Color::Indexed(i) => MAGMA.iter().position(|&m| m == i).unwrap(),
+        other => panic!("not in the ramp: {other:?}"),
+    };
+    let loudest = |buf: &ratatui::buffer::Buffer, x: u16, y: u16| {
+        let cell = &buf[(x, y)];
+        assert_eq!(cell.symbol(), UPPER_HALF.to_string());
+        step(cell.fg).max(step(cell.bg))
+    };
+    // The brightest cell of column `x`, counted from the top.
+    let brightest = |x: u16| rows.clone().max_by_key(|&y| loudest(&buf, x, y)).unwrap();
+    assert!(
+        brightest(5) > brightest(35),
+        "{} {}",
+        brightest(5),
+        brightest(35)
+    );
+    // The whole track is the region, so its loudest cell is at the top of the ramp.
+    assert_eq!(loudest(&buf, 5, brightest(5)), MAGMA.len() - 1);
+
+    // The light theme draws the same ramp.
+    let light = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler())
+        .size(42, 20)
+        .theme(Theme::Light)
+        .buffer();
+    for y in rows.clone() {
+        assert_eq!(light[(5, y)].fg, buf[(5, y)].fg);
+        assert_eq!(light[(5, y)].bg, buf[(5, y)].bg);
+    }
+
+    // Without colour, shades.
+    let plain = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler())
+        .size(42, 20)
+        .no_colour()
+        .render();
+    let shades = [' ', '\u{2591}', '\u{2592}', '\u{2593}', '\u{2588}'];
+    for line in &plain[rows.start as usize..rows.end as usize] {
+        assert!(columns(line).iter().all(|c| shades.contains(c)), "{line:?}");
+    }
+    assert!(plain.iter().any(|l| columns(l).contains(&'\u{2588}')));
+}

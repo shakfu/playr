@@ -100,6 +100,8 @@ pub enum Display {
     Decibels,
     /// The waveform around a centre line.
     Braille,
+    /// Level by frequency and time, frequency on a log scale.
+    Spectrogram,
 }
 
 impl Display {
@@ -109,6 +111,7 @@ impl Display {
             Display::Envelope => "envelope",
             Display::Decibels => "db",
             Display::Braille => "braille",
+            Display::Spectrogram => "spectrogram",
         }
     }
 
@@ -116,7 +119,8 @@ impl Display {
     pub fn next(self) -> Display {
         match self {
             Display::Envelope => Display::Decibels,
-            Display::Decibels => Display::Braille,
+            Display::Decibels => Display::Spectrogram,
+            Display::Spectrogram => Display::Braille,
             Display::Braille => Display::Envelope,
         }
     }

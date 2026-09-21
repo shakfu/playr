@@ -140,3 +140,14 @@ fn light_peaks_recede_towards_white() {
         );
     }
 }
+
+#[test]
+fn the_spectrogram_ramp_gets_lighter_at_every_step() {
+    let steps: Vec<f32> = palette::MAGMA
+        .iter()
+        .map(|&i| luminance(rgb(Color::Indexed(i))))
+        .collect();
+    assert!(steps.windows(2).all(|w| w[1] > w[0]), "{steps:?}");
+    let ends = |i: usize| rgb(Color::Indexed(palette::MAGMA[i]));
+    assert!(contrast(ends(0), ends(palette::MAGMA.len() - 1)) > 15.0);
+}

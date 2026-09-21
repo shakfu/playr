@@ -57,3 +57,24 @@ impl Palette {
         }
     }
 }
+
+/// matplotlib's magma at nine even steps, from quiet to loud. Lightness rises
+/// throughout, so the order survives colour blindness and greyscale.
+const MAGMA: [Color32; 9] = [
+    Color32::from_rgb(0x00, 0x00, 0x04),
+    Color32::from_rgb(0x1c, 0x10, 0x44),
+    Color32::from_rgb(0x4f, 0x12, 0x7b),
+    Color32::from_rgb(0x81, 0x25, 0x81),
+    Color32::from_rgb(0xb5, 0x36, 0x7a),
+    Color32::from_rgb(0xe5, 0x50, 0x64),
+    Color32::from_rgb(0xfb, 0x87, 0x61),
+    Color32::from_rgb(0xfe, 0xc2, 0x87),
+    Color32::from_rgb(0xfc, 0xfd, 0xbf),
+];
+
+/// A spectrogram level from 0 to 1 as a magma colour, linear between steps.
+pub fn magma(level: f32) -> Color32 {
+    let at = level.clamp(0.0, 1.0) * (MAGMA.len() - 1) as f32;
+    let i = (at as usize).min(MAGMA.len() - 2);
+    MAGMA[i].lerp_to_gamma(MAGMA[i + 1], at - i as f32)
+}

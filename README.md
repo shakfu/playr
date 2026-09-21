@@ -29,6 +29,8 @@ None of the three contact external services or download any metadata and images.
 
 - Sampler view: zoom to single frames, nudge the playhead and snap it to zero crossings, and set a range to slice or loop, with its ends moved while it loops
 
+- Spectrogram of the playing track in the sampler view, read with its waveform, in the terminal and the window
+
 - Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
 
 - Volume as a float gain applied before quantisation
@@ -69,7 +71,7 @@ None of the three contact external services or download any metadata and images.
 
 **Interface**
 
-- Four views: library, selection, playlists, and a sampler showing the playing track's waveform; the web page has the first three
+- Four views: library, selection, playlists, and a sampler showing the playing track's waveform or spectrogram; the web page has the first three
 
 - Dark and light themes; the terminal takes its colours from its own theme, and honours `NO_COLOR`
 
@@ -366,7 +368,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 |---------|-------------------------|---------------------------------------------------|
 | `z` `Z` | `:zoom +`, `:zoom -`    | zoom in or out, centred on the playhead           |
 | `0`     | `:zoom all`             | show the whole track                              |
-| `w`     | `:display`              | switch display: Braille, envelope, dB             |
+| `w`     | `:display`              | switch display: Braille, envelope, dB, spectrogram |
 | left, right | `:nudge -1`, `:nudge +1` | move the playhead a column                   |
 | shift-left, shift-right | `:nudge -10%`, `:nudge +10%` | move it a tenth of the view      |
 | `S`     | `:snap`                 | snap to zero crossings, on or off                 |
@@ -388,6 +390,8 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 - **Displays.** The envelope draws each column as two bars in eighth blocks: its RMS level in the bright colour, inside its peak level in a darker one. The waveform is folded, with negative samples counted by their size, so the bars use the full height. RMS shows loudness, such as a verse against a chorus, where a mastered track's peaks are near full scale everywhere; peak shows where each hit starts. The Braille display, which the view starts with, draws the waveform around a centre line, two dots across and four down a cell, which shows its shape. Both scale to the loudest sample in the track.
 
 - **dB.** The dB display draws the same bars on a scale from -48 dBFS to full scale, not scaled to the track. A linear scale puts RMS 12 dB below full scale a quarter of the way up; this puts it three quarters of the way, which spreads out quiet passages and the level changes between sections. Levels below -48 dB draw nothing.
+
+- **Spectrogram.** `:display spectrogram` draws level by frequency and time: 20 Hz at the bottom to half the sample rate at the top, on a log scale, brighter where louder, down to 90 dB below the loudest level in the track. It separates hits that the waveform merges, such as a kick under a hi-hat, and shows a lossy source's cutoff: an MP3 transcoded to FLAC stops somewhere from 16 to 20 kHz, by bitrate. On the log scale the top 16 to 22 kHz is about 3% of the height, so the cutoff shows in the window but seldom in the terminal. Both draw in magma, black through purple and orange to pale yellow, with the track outside the region dimmed: the terminal two rows a cell from the 256-colour table, the window as one image with 100 Hz, 1 kHz and 10 kHz marked. Each column is a 2048-point transform every 512 frames, 11.6 ms at 44.1 kHz, so at closer zoom neighbouring columns repeat. The transform resolves 21.5 Hz at 44.1 kHz, so below about 340 Hz a row is narrower than that; those rows blend between the neighbouring frequencies it does resolve, and bass shows as a smooth blur, not detail.
 
 - **Zoom.** Each step halves the time a column shows, down to one frame a cell; the window goes on to 16 points a frame. Down to 64 frames, 1.5 ms at 44.1 kHz, columns start on the 32-frame buckets the peaks are kept in, so a column never shows a neighbour's hit. Closer than that, the view reads the frames it shows, and 2 s either side, in the background; until they arrive, each column shows its bucket's peaks. At a frame a column the window's line display draws each frame's channels' mean around a zero line, with a dot per frame once frames are 4 points apart, so a crossing can be picked out by eye.
 

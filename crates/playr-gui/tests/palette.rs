@@ -1,7 +1,7 @@
 //! Both colour sets stay legible on the backgrounds of the theme they serve.
 
 use eframe::egui::{Color32, Visuals};
-use playr_gui::palette::{Palette, DARK, LIGHT};
+use playr_gui::palette::{magma, Palette, DARK, LIGHT};
 
 /// Relative luminance, as WCAG 2 defines it.
 fn luminance(c: Color32) -> f32 {
@@ -93,4 +93,16 @@ fn peaks_recede_towards_the_ground() {
             );
         }
     }
+}
+
+#[test]
+fn the_spectrogram_ramp_gets_lighter_at_every_step() {
+    let steps: Vec<f32> = (0..=64)
+        .map(|i| luminance(magma(i as f32 / 64.0)))
+        .collect();
+    assert!(steps.windows(2).all(|w| w[1] > w[0]), "{steps:?}");
+    // Nearly black to nearly white: the full range of lightness.
+    assert!(contrast(magma(0.0), magma(1.0)) > 18.0);
+    assert_eq!(magma(-1.0), magma(0.0));
+    assert_eq!(magma(2.0), magma(1.0));
 }

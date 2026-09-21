@@ -652,3 +652,31 @@ fn slices_planned_in_the_sampler_are_written_with_a_button() {
     assert_eq!(written, 1, "one export directory");
     assert!(model(&harness).sampler().pending.is_none());
 }
+
+#[test]
+fn the_spectrogram_button_paints_one_texture_the_size_of_the_waveform() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    let spectrograms = |harness: &Harness<'_, Gui>| -> Vec<[usize; 2]> {
+        let textures = harness.ctx.tex_manager();
+        let textures = textures.read();
+        textures
+            .allocated()
+            .filter(|(_, meta)| meta.name == "spectrogram")
+            .map(|(_, meta)| meta.size)
+            .collect()
+    };
+    assert!(spectrograms(&harness).is_empty());
+    harness.get_by_label("Spectrogram").click();
+    harness.run_steps(3);
+    assert_eq!(
+        model(&harness).sampler().display,
+        playr_app::Display::Spectrogram
+    );
+    // Reused across frames, a pixel a column and a row a point.
+    let rect = harness.get_by_label("Track waveform").rect();
+    let sizes = spectrograms(&harness);
+    assert_eq!(sizes.len(), 1, "{sizes:?}");
+    assert_eq!(sizes[0][1], rect.height() as usize);
+    assert!(sizes[0][0] > 0 && sizes[0][0] <= rect.width() as usize);
+}

@@ -45,9 +45,9 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 `4` opens the sampler view. It draws the playing track's waveform, its marks as `|`, the playhead as `^`, and the region in the accent colour. The detail line gives the region's times to the millisecond.
 
-- **Peaks.** The waveform is read from the file on a background thread while the view is open, the first time the view opens for a track. playr keeps the minimum, maximum and mean square of every 32 frames, and coarser levels built from them, so any zoom draws from exact values.
+- **Peaks.** The waveform is read from the file on a background thread while the view is open, the first time the view opens for a track. playr keeps the minimum, maximum and mean square of every 32 frames, and coarser levels built from them, so any zoom draws from exact values. The same pass keeps the spectrogram: 128 bands for every 512 frames, about 2.6 MB for a 4-minute track at 44.1 kHz, and adds about 90 ms to the read (one machine, release build).
 
-- **Displays.** `w` switches between three: an envelope (RMS inside peak, in eighth blocks), the same bars on a dB scale from -48 dBFS, and a Braille waveform around a centre line. The README describes when each helps.
+- **Displays.** `w` switches between four: an envelope (RMS inside peak, in eighth blocks), the same bars on a dB scale from -48 dBFS, a spectrogram, and a Braille waveform around a centre line. The README describes when each helps.
 
 - **Zoom.** `z` and `Z` zoom around the playhead, down to a frame a cell, or 16 points a frame in the window; `0` shows the whole track. Down to 64 frames a column, columns start on 32-frame boundaries, so a hit never shows in the column before it. Closer, the view decodes the frames it shows in the background.
 

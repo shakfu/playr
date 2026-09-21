@@ -75,7 +75,7 @@ Every row is a feature the terminal has today.
 | command line | `:` prompt, Tab completion, history | a command bar that `:` opens, with completions in a drop-down and the same history | `StartCommand`, `command::parse` |
 | key bindings | `:map`, `:unmap` | the same commands | `Map`, `Unmap` |
 | theme | `:theme`; `system` and `dark` use the terminal's ANSI colours, `light` a 256-colour set | View, Theme; `system` follows the system's appearance | `Theme` |
-| sampler waveform | eighth blocks, dB, Braille | painted: envelope, dB, and a min/max line waveform | `Display` |
+| sampler waveform | eighth blocks, dB, half-block spectrogram, Braille | painted: envelope, dB, a spectrogram texture, and a min/max line waveform | `Display` |
 | zoom | `z` `Z` `0` | mouse wheel over the waveform; the same keys | `Zoom` |
 | sampler seek and mark | arrows nudge a column or a tenth of the view; `S` snaps | click to seek; a modifier-click adds a mark at that point; the same keys; a Snap to zero tick box | `SeekTo`, `MarkAt`, `Nudge`, `Snap` |
 | range | `<` `>` `backspace` `esc`, `:range`; ends drawn as `[` `]` | a drag across the waveform, or from an edge to move it; Range in, Range out and Clear range buttons; `esc`; ends drawn as lines | `RangeIn`, `RangeOut`, `SetRange`, `DiscardSlices` |
@@ -263,9 +263,11 @@ Fine movement, snapping, a range and looping it, in both frontends.
 
 - **A column is a point wide.** The window asks the layout for as many columns as it has points, so zoom stops at 64 frames a point, as it stops at 64 frames a cell in the terminal. Columns start on whole peak buckets, so a track can end short of the right edge, as in the terminal.
 
+- **The spectrogram is one texture.** A pixel a column and a row a point, set into one `TextureHandle` kept in the view's state, replaced each frame it shows. Painting it as shapes would be one per point, about 300,000 a frame.
+
 - **The third display draws lines.** Each column is a line from its lowest to its highest sample around the centre. Its button reads "Waveform", while `:display braille` and the message still name it braille, for the terminal's sake.
 
-- **Controls.** Zoom in, Zoom out, Whole track, the three displays, and Write slices and Discard slices, which are enabled only while slices are planned, sit under the waveform and are in `controls::SAMPLER_BAR`. The Slice menu from step 5 plans slices while this view shows.
+- **Controls.** Zoom in, Zoom out, Whole track, the four displays, and Write slices and Discard slices, which are enabled only while slices are planned, sit under the waveform and are in `controls::SAMPLER_BAR`. The Slice menu from step 5 plans slices while this view shows.
 
 - **Tests.** Window tests shift-click the waveform to mark, click it to seek, zoom with the wheel, and plan and write a region slice into a temporary directory. `crates/playr-app/tests/sampler.rs` checks the layout's columns, region, levels, extents and words.
 

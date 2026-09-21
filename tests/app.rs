@@ -1294,7 +1294,8 @@ fn zoom_and_display_keys_work_only_in_the_sampler() {
     press(&mut app, 'Z');
     assert_eq!(app.screen().sampler.zoom, 0);
 
-    // The terminal starts on Braille; `w` goes on to the envelope, then dB.
+    // The terminal starts on Braille; `w` goes on to the envelope, dB, then
+    // the spectrogram.
     assert_eq!(app.screen().sampler.display, Display::Braille);
     press(&mut app, 'w');
     assert_eq!(app.screen().sampler.display, Display::Envelope);
@@ -1305,7 +1306,11 @@ fn zoom_and_display_keys_work_only_in_the_sampler() {
     command(&mut app, "display db");
     assert_eq!(app.screen().sampler.display, Display::Decibels);
     press(&mut app, 'w');
+    assert_eq!(app.screen().sampler.display, Display::Spectrogram);
     press(&mut app, 'w');
+    assert_eq!(app.screen().sampler.display, Display::Braille);
+    command(&mut app, "display spectrogram");
+    assert_eq!(app.screen().sampler.display, Display::Spectrogram);
     command(&mut app, "display envelope");
     assert_eq!(app.screen().sampler.display, Display::Envelope);
     command(&mut app, "zoom all");

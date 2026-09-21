@@ -31,7 +31,6 @@ const EDGE_REACH: f32 = 5.0;
 const POINTS_PER_FRAME: u64 = 16;
 
 /// What the view keeps between frames that the model does not.
-#[derive(Debug)]
 pub struct State {
     /// Wheel movement not yet turned into a zoom step.
     wheel: f32,
@@ -43,6 +42,8 @@ pub struct State {
     /// sensitivity starts from the settings.
     slices: usize,
     sensitivity: Option<f32>,
+    /// The spectrogram's pixels, replaced each frame it is drawn.
+    spectrogram: Option<egui::TextureHandle>,
 }
 
 impl Default for State {
@@ -53,6 +54,7 @@ impl Default for State {
             mark_drag: None,
             slices: 8,
             sensitivity: None,
+            spectrogram: None,
         }
     }
 }
@@ -181,6 +183,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         &layout,
         display,
         model,
+        &mut state.spectrogram,
     );
     // The mark follows the pointer while it is held, so the drop is not a guess.
     if let Some((_, to)) = dragging_mark.filter(|_| response.dragged()) {
@@ -326,6 +329,7 @@ fn paint(
     layout: &Layout,
     display: Display,
     model: &Model,
+    texture: &mut Option<egui::TextureHandle>,
 ) {
     let colours = Palette::of(visuals);
     painter.rect_filled(rect, 2.0, visuals.extreme_bg_color);
@@ -379,7 +383,10 @@ fn paint(
         }
     }
 
-    for c in (0..columns).filter(|_| !traced) {
+    if display == Display::Spectrogram {
+        spectrogram(&painter, visuals, rect, layout, columns, texture);
+    }
+    for c in (0..columns).filter(|_| !traced && display != Display::Spectrogram) {
         let inside = layout.in_region(c);
         let (rms_colour, peak_colour) = if inside {
             (colours.rms, colours.peak)
@@ -403,6 +410,7 @@ fn paint(
                     column(y(rms), rect.bottom(), rms_colour);
                 }
             }
+            Display::Spectrogram => {}
             Display::Braille => {
                 let (a, b) = layout.span_of(c);
                 let (lo, hi) = layout.extent(a, b);
@@ -442,5 +450,68 @@ fn paint(
     }
     if let Some(c) = playhead {
         line(c, visuals.strong_text_color(), 2.0);
+    }
+}
+
+/// Frequencies marked beside the spectrogram.
+const GRID_HZ: [(f32, &str); 3] = [(100.0, "100 Hz"), (1000.0, "1 kHz"), (10_000.0, "10 kHz")];
+
+/// Paints the spectrogram of `columns` columns of `layout` into `rect` as one
+/// texture, a pixel a column and a row a point, in magma; outside the region,
+/// halfway to the ground colour.
+fn spectrogram(
+    painter: &egui::Painter,
+    visuals: &egui::Visuals,
+    rect: egui::Rect,
+    layout: &Layout,
+    columns: usize,
+    texture: &mut Option<egui::TextureHandle>,
+) {
+    let ground = visuals.extreme_bg_color;
+    let rows = rect.height().max(1.0) as usize;
+    let mut pixels = vec![ground; columns * rows];
+    for c in 0..columns {
+        let dim = if layout.in_region(c) { 0.0 } else { 0.5 };
+        // Lowest frequency first, so the bottom row.
+        for (r, level) in layout.spectrum(c, rows).into_iter().enumerate() {
+            pixels[(rows - 1 - r) * columns + c] =
+                crate::palette::magma(level).lerp_to_gamma(ground, dim);
+        }
+    }
+    if columns > 0 {
+        let image = egui::ColorImage::new([columns, rows], pixels);
+        let options = egui::TextureOptions::NEAREST;
+        let texture = match texture {
+            Some(t) => {
+                t.set(image, options);
+                t
+            }
+            None => texture.insert(painter.ctx().load_texture("spectrogram", image, options)),
+        };
+        let shown = egui::Rect::from_min_size(rect.min, egui::vec2(columns as f32, rect.height()));
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        painter.image(texture.id(), shown, uv, egui::Color32::WHITE);
+    }
+    let spectrum = &layout.peaks.spectrum;
+    for (hz, label) in GRID_HZ {
+        let Some(h) = spectrum.height_of(hz) else {
+            continue;
+        };
+        let y = rect.bottom() - h * rect.height();
+        painter.hline(
+            rect.x_range(),
+            y,
+            egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.4)),
+        );
+        // On a panel of the ground colour, so it reads over any level.
+        let galley = painter.layout_no_wrap(
+            label.to_owned(),
+            egui::FontId::proportional(11.0),
+            visuals.text_color(),
+        );
+        let at = egui::pos2(rect.left() + 6.0, y - 2.0 - galley.size().y);
+        let panel = egui::Rect::from_min_size(at, galley.size()).expand2(egui::vec2(3.0, 1.0));
+        painter.rect_filled(panel, 2.0, ground.gamma_multiply(0.8));
+        painter.galley(at, galley, visuals.text_color());
     }
 }

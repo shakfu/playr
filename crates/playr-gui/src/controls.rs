@@ -108,6 +108,7 @@ pub const SAMPLER_BAR: &[Control] = &[
     control("Whole track", Action::Zoom(Zoom::All)),
     control("Envelope", Action::Display(Some(Display::Envelope))),
     control("dB", Action::Display(Some(Display::Decibels))),
+    control("Spectrogram", Action::Display(Some(Display::Spectrogram))),
     control("Waveform", Action::Display(Some(Display::Braille))),
 ];
 

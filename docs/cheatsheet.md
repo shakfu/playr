@@ -86,7 +86,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | command                            | key                     | does                                   |
 |------------------------------------|-------------------------|----------------------------------------|
 | `:zoom + \| - \| all`              | `z` `Z` `0`             | zoom in, out, or to the whole track    |
-| `:display [envelope\|db\|braille]` | `w`                     | draw the waveform another way          |
+| `:display [DISPLAY]`               | `w`                     | envelope, db, braille or spectrogram   |
 | `:nudge +N \| -N \| +N% \| -N%`     | left, right, with shift | move N columns, or N% of the view      |
 | `:snap [on\|off]`                  | `S`                     | snap moves and marks to zero crossings |
 | `:in`                              | `<`                     | start the range at the playhead        |

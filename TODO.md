@@ -50,9 +50,11 @@ What is missing, grouped by priority:
 
 ### Sampler
 
-- [ ] **Waveform cache.** The sampler decodes the whole track each time a new track is shown there. Peaks are about 8 MB for a 4-minute track and could be kept per file.
+- [ ] **Waveform cache.** The sampler decodes the whole track each time a new track is shown there. Peaks and spectrogram are about 13 MB for a 4-minute track and could be kept per file.
 
 - [ ] **Loop points.** Write loop points to `samples.json` as `loop_start`, `loop_end` and `loop_enabled`, which rtrack reads.
+
+- [ ] **Spectrogram at high sample rates.** The transform is 2048 frames at every rate, so a bin is 21.5 Hz at 44.1 kHz and 94 Hz at 192 kHz, and bass on hi-res files blurs further. Scaling the transform with the rate, 4096 at 96 kHz and 8192 at 192 kHz, keeps about 46 ms and 21 Hz everywhere, at more CPU per read on those files.
 
 - [ ] **Slice edges.** Slices start and end on whatever sample falls there. rtrack snaps loop points to zero crossings; the same for slice edges, or a short fade, would remove clicks at the cost of a slice that is no longer an exact copy.
 
@@ -135,6 +137,8 @@ What is missing, grouped by priority:
 - [ ] **Six open pages per browser.** A browser opens six connections to a host at most, and each page's event stream holds one, so with about six tabs of the same server open, a page's requests wait for a free connection and it stalls. Accepted for one user. Sharing one stream between tabs, with a `SharedWorker`, would lift it.
 
 ### Output
+
+- [ ] **Reopening a device that returns.** A device lost during playback stops it, as does unplugging a USB DAC mid-track; playr stays stopped until restarted. Reopening the same device when it reappears, never falling back to another, would suit `playr-server` on a Pi. Undecided.
 
 - [ ] **Native PipeWire backend.** cpal 0.18 has a `pipewire` feature. Untested here; the ALSA path works, so this is a quality experiment, not a fix.
 

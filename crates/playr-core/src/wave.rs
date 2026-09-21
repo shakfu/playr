@@ -11,11 +11,15 @@
 //!
 //! Signs take a bit a frame, about 1.3 MB for the same track. Kept over
 //! decoding around each snap, which would stall the interface on a slow seek.
+//!
+//! The same pass reads the track's [`Spectrogram`], so the sampler view's
+//! displays need one decode between them.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::audio::decode::AudioStream;
+use crate::spectrum::{self, Spectrogram};
 
 /// Frames per entry at the finest scale.
 pub const BUCKET: u64 = 32;
@@ -45,6 +49,7 @@ pub struct Peaks {
     levels: Vec<Vec<Entry>>,
     /// Bit `f` is set where the channels' mean at frame `f` is 0 or more.
     signs: Vec<u64>,
+    pub spectrum: Spectrogram,
 }
 
 impl Peaks {
@@ -262,6 +267,7 @@ struct Builder {
     frames: u64,
     base: Vec<Entry>,
     signs: Vec<u64>,
+    spectrum: spectrum::Builder,
     /// The bucket being filled: extremes, sum of squares, and frames in it.
     min: f32,
     max: f32,
@@ -276,6 +282,7 @@ impl Builder {
             frames: 0,
             base: Vec::new(),
             signs: Vec::new(),
+            spectrum: spectrum::Builder::new(rate),
             min: f32::INFINITY,
             max: f32::NEG_INFINITY,
             squares: 0.0,
@@ -300,6 +307,7 @@ impl Builder {
             if sum >= 0.0 {
                 *self.signs.last_mut().expect("pushed") |= 1 << (self.frames % 64);
             }
+            self.spectrum.push((sum * per_channel) as f32);
             self.squares += square * per_channel;
             self.filled += 1;
             self.frames += 1;
@@ -345,6 +353,7 @@ impl Builder {
             frames,
             levels,
             signs: self.signs,
+            spectrum: self.spectrum.finish(),
         }
     }
 }

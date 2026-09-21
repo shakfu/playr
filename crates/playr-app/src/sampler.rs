@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::action::Nudge;
 use playr_core::event::JobId;
 use playr_core::samples::Plan;
+use playr_core::spectrum::BANDS;
 use playr_core::wave::{Detail, Extent, Peaks};
 
 pub use crate::Display;
@@ -34,6 +35,9 @@ pub const SNAP_WITHIN: Duration = Duration::from_millis(10);
 
 /// The level the dB display draws as empty, in dBFS.
 pub const DB_FLOOR: f32 = -48.0;
+
+/// How far below the track's loudest level the spectrogram reaches, in dB.
+pub const SPECTRUM_RANGE_DB: f32 = 90.0;
 
 /// A sample magnitude as a height from 0 at [`DB_FLOOR`] to 1 at full scale.
 pub fn db_height(magnitude: f32) -> f32 {
@@ -545,6 +549,26 @@ impl Layout {
         self.range(a, b).map_or((1.0, -1.0), |e| {
             (e.min / self.loudest, e.max / self.loudest)
         })
+    }
+
+    /// Column `c`'s spectrogram in `rows` rows, lowest frequency first, each
+    /// the loudest of its bands from 0, [`SPECTRUM_RANGE_DB`] below the
+    /// track's loudest level, to 1 at it. Empty where the column holds no frames.
+    pub fn spectrum(&self, c: usize, rows: usize) -> Vec<f32> {
+        let spectrum = &self.peaks.spectrum;
+        let (a, b) = self.span_of(c);
+        let Some(bands) = spectrum.column(a, b.min(self.peaks.frames)) else {
+            return Vec::new();
+        };
+        let top = spectrum.loudest();
+        (0..rows)
+            .map(|r| {
+                let lo = r * BANDS / rows;
+                let hi = ((r + 1) * BANDS / rows).max(lo + 1);
+                let db = bands[lo..hi].iter().copied().fold(f32::MIN, f32::max);
+                ((db - top) / SPECTRUM_RANGE_DB + 1.0).clamp(0.0, 1.0)
+            })
+            .collect()
     }
 
     /// The time at `columns` columns from the left edge, which may fall
