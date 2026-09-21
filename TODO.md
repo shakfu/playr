@@ -78,7 +78,7 @@ What is missing, grouped by priority:
 
 ### Output
 
-- [ ] **Bit-perfect output.** Select a `hw:` ALSA device so PipeWire cannot resample behind us. Today the `default` device accepts every rate and may convert internally, so "no resampling" means playr does not resample, not that nothing does. Negotiation accepts the 32-bit and 24-bit integer formats such devices offer, and `--device` selects one. Untested: playing to a `hw:` device while PipeWire holds it, which should report the device as busy.
+- [ ] **Bit-perfect output.** Select a `hw:` ALSA device so PipeWire cannot resample behind us. Today the `default` device accepts every rate and may convert internally, so "no resampling" means playr does not resample, not that nothing does. Negotiation accepts the 32-bit and 24-bit integer formats such devices offer, and `--device` selects one. A `hw:` device PipeWire holds is reported as busy; PipeWire holds only the device it is playing to, and releases an idle card after a few seconds.
 
 ### Server
 

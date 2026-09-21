@@ -31,6 +31,7 @@ Open decisions, with the recommendation first:
 `output::device(want: Option<&str>) -> Result<Device, OutputError>` replaces `default_device()`:
 
 - `None`: the host default.
+
 - A string: parsed as a `DeviceId` and looked up with `device_by_id`, so `hw:2,0` and `hw:CARD=Generic_1,DEV=0` both work.
 
 Matching by `description().name()` is left out: on ALSA the name is the card's, shared by its `hw`, `plughw`, `dmix`, `front` and `surround*` PCMs. Whether it is usable on macOS and Windows is untested.
@@ -46,6 +47,7 @@ Parsing checks the type only. Existence is checked at open, since a settings fil
 ### Command line
 
 - `--device ID` on all three binaries, overriding the setting.
+
 - `playr devices` lists output devices: ID, name, and which is the default. It drops the `CARD=<index>` duplicates cpal lists, since card numbers can change at boot, and marks devices that offer no config. Optionally it shows each device's rates and formats, to check a `hw:` device before relying on it for bit-perfect output.
 
 `playr-gui` and `playr-server` have no subcommands; their `--help` for `--device` points to `playr devices`.
@@ -55,7 +57,9 @@ Parsing checks the type only. Existence is checked at open, since a settings fil
 Startup fails with the list of devices. No fallback.
 
 - It matches `playr-app/src/config.rs`: any settings error stops playr starting.
+
 - A fallback plays through the wrong speakers, and hides why output is not bit-perfect.
+
 - Under systemd, `playr-server` restarts until a USB DAC appears.
 
 A `hw:` device held by PipeWire fails with `EBUSY`, which cpal maps to `ErrorKind::DeviceBusy`. `Cpal::start` reports this as a generic `OutputError::Build` today; it gets its own message naming the likely holder.
@@ -75,8 +79,11 @@ On Linux, ALSA already lists `alsa:null`, which needs no sound card. `--device a
 ## Tests
 
 - Resolution: an unknown ID is an error listing the available IDs; the `CARD=<index>` filter in `playr devices` is a pure function over IDs.
+
 - `Settings`: `device` parses, and a non-string is an error.
+
 - CLI: `--device` overrides the setting; an unknown device exits non-zero with the list.
+
 - Opening a real device needs hardware, as `the_default_output_device_plays` in `crates/playr-core/tests/engine.rs` already does.
 
 ## Checked on ALSA
@@ -84,9 +91,13 @@ On Linux, ALSA already lists `alsa:null`, which needs no sound card. `--device a
 Checked 2026-09-21 on one Linux machine (3 cards, PipeWire, cpal 0.18.2), with a throwaway program listing `output_devices()` and calling `device_by_id`.
 
 - **ID forms.** Enumeration lists both forms: 46 IDs with `CARD=<name>` and 20 duplicates with `CARD=<index>` (73 devices in all). `hw:2,0` resolves to the index form, `hw:Generic_1,0` to the name form.
+
 - **User PCMs.** PCMs from `~/.asoundrc` are listed and found by `device_by_id`, with or without a `hint` block. The description is the hint's text, or else the PCM's name.
+
 - **Names.** "HD-Audio Generic, ALC269VC Analog" names 15 PCMs. Names identify a card, not a device.
+
 - **Unusable entries.** An HDMI output with its monitor off is listed with 0 configs.
+
 - **Null.** `alsa:null` is listed, offering 832 configs.
 
 Not checked: macOS and Windows, a USB DAC, and a Raspberry Pi.
@@ -99,14 +110,20 @@ Leave routing to the system. PipeWire moves a stream between devices (`wpctl`, `
 
 Phase 1, 2026-09-21. Differences from the design above:
 
-- **Exact match first.** cpal 0.18.2's `canonical_pcm_id` appends `,DEV=0` to an ID with `CARD=` and no comma, so `device_by_id` misses `alsa:sysdefault:CARD=X`, which cpal itself lists. `output::device` looks for the exact ID among the output devices, then falls back to `device_by_id` for forms such as `hw:2,0`.
+- **Exact match first.** cpal 0.18.2's `canonical_pcm_id` appends `,DEV=0` to an ID with `CARD=` and no comma, so `device_by_id` misses `alsa:sysdefault:CARD=X`, which cpal itself lists. `output::device` looks for the exact ID among the output devices, then falls back to `device_by_id` for forms such as `hw:2,0`. The upstream report is drafted in `docs/dev/cpal-issue.md`.
+
 - **Bare IDs.** A string without a known host in front is an ID on the default host, so `hw:2,0` works without `alsa:`.
+
 - **No config probing in `playr devices`.** Marking devices with no configs, and listing rates and formats, would open every PCM. Left out.
-- **Busy is unverified.** `OutputError::Busy` comes from `ErrorKind::DeviceBusy` at config query or stream build. On the test machine PipeWire had suspended the idle card, so `hw:` opened and played; EBUSY was not reproduced.
+
+- **Busy, checked 2026-09-21.** `OutputError::Busy` comes from `ErrorKind::DeviceBusy` at config query or stream build. With PipeWire playing to HDMI (`card0/pcm7p` open, owner `pipewire`), `alsa:hw:CARD=Generic,DEV=7` failed at the config query and playback stopped with the busy message. The analog `hw:CARD=Generic_1,DEV=0` on the other card opened and played alongside it: PipeWire holds only the device it plays to. The message shows at play, not at startup, since the device opens when a track starts.
+
 - **`alsa:null` does not pace.** It played 2 s of audio in under 0.8 s (one run). Phase 3 therefore needs its own `Backend` for CI, not `--device alsa:null`.
 
 ## Phases
 
 1. Core resolution, setting, `--device`, `playr devices`, busy-device message, tests.
+
 2. Window control, once persistence is decided.
+
 3. Null device.
