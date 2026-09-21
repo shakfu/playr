@@ -110,7 +110,7 @@ Leave routing to the system. PipeWire moves a stream between devices (`wpctl`, `
 
 Phase 1, 2026-09-21. Differences from the design above:
 
-- **Exact match first.** cpal 0.18.2's `canonical_pcm_id` appends `,DEV=0` to an ID with `CARD=` and no comma, so `device_by_id` misses `alsa:sysdefault:CARD=X`, which cpal itself lists. `output::device` looks for the exact ID among the output devices, then falls back to `device_by_id` for forms such as `hw:2,0`. The upstream report is drafted in `docs/dev/cpal-issue.md`.
+- **Exact match first.** cpal 0.18.2's `canonical_pcm_id` appends `,DEV=0` to an ID with `CARD=` and no comma, so `device_by_id` misses `alsa:sysdefault:CARD=X`, which cpal itself lists. `output::device` looks for the exact ID among the output devices, then falls back to `device_by_id` for forms such as `hw:2,0`. The upstream report is drafted in `docs/dev/issues/cpal-issue.md`.
 
 - **Bare IDs.** A string without a known host in front is an ID on the default host, so `hw:2,0` works without `alsa:`.
 

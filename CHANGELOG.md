@@ -4,6 +4,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Fixed
+
+- `a_seek_near_the_end_of_a_track_stays_in_that_track` failed now and then on the Windows runner. It allowed the engine 100 ms to take a seek, and until the engine takes it the position is the one before it. It now waits for the seek, as the other engine tests do.
+
+### Changed
+
+- A `hw:` device that PipeWire holds is now checked to fail as busy, and is recorded so in `docs/dev/device.md`. PipeWire holds only the device it plays to, so another card's `hw:` device plays alongside it. The cpal lookup bug playr works around is drafted as an upstream report in `docs/dev/issues/cpal-issue.md`.
+
 ## [0.9.0]
 
 ### Added

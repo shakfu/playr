@@ -220,15 +220,23 @@ fn a_seek_near_the_end_of_a_track_stays_in_that_track() {
     assert_eq!(player.status().index, 0, "first track ended too soon");
 
     player.send(Cmd::Seek(Duration::from_millis(500)));
-    std::thread::sleep(Duration::from_millis(100));
+    // Until the engine takes the seek, the position is the one before it; a
+    // loaded runner may take longer than a fixed sleep allows.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while player.position() >= Duration::from_secs(1) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let position = player.position();
     let s = player.status();
+    // A seek ignored, or taken in the second track, also ends under 1 s, but
+    // in track 1.
     assert_eq!(s.index, 0);
     assert!(
         s.duration.is_some_and(|d| d < Duration::from_secs(3)),
         "the first track shows the second track's duration: {:?}",
         s.duration
     );
-    assert!(player.position() < Duration::from_secs(1));
+    assert!(position < Duration::from_secs(1), "{position:?}");
 
     let s = wait_for(&player, |s| s.state == State::Stopped);
     assert_eq!(s.state, State::Stopped);

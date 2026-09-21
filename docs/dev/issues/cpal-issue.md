@@ -15,9 +15,7 @@ On ALSA, `HostTrait::device_by_id` cannot find a device whose ID has a `CARD=` a
 ### Environment
 
 - cpal 0.18.2, the latest release when this was written
-
 - Ubuntu 24.04.5, Linux 7.0.0, alsa-lib 1.2.11, PipeWire 1.0.5
-
 - rustc 1.98.1
 
 ### Reproduction
@@ -89,13 +87,9 @@ Compare canonical forms on both sides:
      self.devices()
          .ok()?
 -        .find(|d| d.id().ok().as_ref() == Some(&canonical_id))
-
 +        .find(|d| {
-
 +            d.id()
-
 +                .is_ok_and(|d| DeviceId::new(d.host(), canonical_pcm_id(d.id())) == canonical_id)
-
 +        })
  }
 ```
