@@ -4,7 +4,11 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.9.1]
+
 ### Fixed
+
+- Playback could start with the channels swapped, and stay swapped. The audio callback popped samples one at a time, filling silence while the ring was empty; when the engine pushed during the callback, the next pop succeeded, so the track began wherever the callback had reached, which could be partway through a frame. Every frame after was then one sample off, left in the right channel. This can happen whenever the ring runs empty: at the start of a track, after a seek, or on an underrun. The callback now takes only the whole frames the ring holds when it starts, and leaves anything pushed later for the next callback. Found by `enqueueing_after_the_queue_ends_starts_playback`, which failed about 1 run in 200 under load on macOS CI; `crates/playr-core/tests/render.rs` reproduces the race directly. The swap was not heard, only reproduced against the fake device.
 
 - `a_seek_near_the_end_of_a_track_stays_in_that_track` failed now and then on the Windows runner. It allowed the engine 100 ms to take a seek, and until the engine takes it the position is the one before it. It now waits for the seek, as the other engine tests do.
 

@@ -554,14 +554,14 @@ pub fn render<T>(
         return;
     }
     let gain = shared.volume();
-    let mut filled = 0usize;
-    for slot in out.iter_mut() {
-        let s = match consumer.pop() {
-            Ok(s) => {
-                filled += 1;
-                s
-            }
-            Err(_) => 0.0,
+    // Whole frames, counted once: the engine pushes whole frames, but a pop
+    // that found the ring empty and then saw a push land mid-callback would
+    // start a frame on the wrong channel, and swap channels from there on.
+    let filled = consumer.slots().min(out.len()) / channels as usize * channels as usize;
+    for (i, slot) in out.iter_mut().enumerate() {
+        let s = match i < filled {
+            true => consumer.pop().unwrap_or(0.0),
+            false => 0.0,
         };
         if let Some(lufs) = meter.sample(s) {
             shared
