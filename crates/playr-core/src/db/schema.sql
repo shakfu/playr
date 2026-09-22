@@ -89,3 +89,44 @@ CREATE TABLE IF NOT EXISTS resume (
   path     TEXT NOT NULL,
   position INTEGER NOT NULL  -- milliseconds into the track
 );
+
+-- What `playr analyze` measured in each file: measurements, not verdicts, so
+-- a report's thresholds can change without decoding again. Keyed by path,
+-- like `marks`. A row is current while `mtime`, `size` and `version` match
+-- the track's. Compatible with older libraries: CREATE IF NOT EXISTS needs
+-- no version bump.
+CREATE TABLE IF NOT EXISTS analysis (
+  path          TEXT PRIMARY KEY,
+  mtime         INTEGER NOT NULL,  -- the track's, when analysed
+  size          INTEGER NOT NULL,
+  version       INTEGER NOT NULL,  -- analyser version; older rows are redone
+  error         TEXT,              -- decoding failed or stopped early
+  rate          INTEGER NOT NULL,
+  frames        INTEGER NOT NULL,  -- decoded
+  header_frames INTEGER,           -- as the header gives them
+  skipped       INTEGER NOT NULL,  -- packets that failed to decode
+  lossless      INTEGER NOT NULL,
+  bits          INTEGER,           -- header bits per sample, integer formats
+  md5           TEXT,              -- 'ok', 'bad' or 'absent'; NULL: not FLAC
+  md5_hex       TEXT,              -- the header's, for duplicates
+  bits_used     INTEGER,
+  cutoff_hz     INTEGER,
+  cutoff_db     REAL,              -- fall across the cutoff
+  loudness      REAL,              -- integrated, LUFS; NULL: silent
+  peak          REAL,              -- sample peak, linear
+  histogram     BLOB,              -- gating blocks, for album loudness
+  bpm           REAL,
+  bpm_alt       REAL,              -- half or double bpm, where it pulses there
+  bpm_conf      REAL,
+  bpm_tag       REAL
+);
+
+-- Loudness of each album, pooled from its tracks' histograms. `tracks` short
+-- of the album's count in `tracks` means one was added since: the row is
+-- stale and unused.
+CREATE TABLE IF NOT EXISTS album_loudness (
+  album_key TEXT PRIMARY KEY,
+  loudness  REAL NOT NULL,
+  peak      REAL NOT NULL,
+  tracks    INTEGER NOT NULL
+);

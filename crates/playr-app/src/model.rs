@@ -9,7 +9,7 @@
 //! scroll offsets, and turns its own input into calls here.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -58,6 +58,8 @@ pub enum Input {
     CommandHelp,
     /// The list of the library's directories is open, read as it was opened.
     Roots(Vec<PathBuf>),
+    /// What analysis measured about one track is open.
+    Info(TrackInfo),
     /// A `:` command being typed.
     Command(CommandLine),
 }
@@ -72,6 +74,13 @@ pub struct Cursors {
 
 /// What the interface shows about playback, sampled once per frame.
 ///
+/// What `:info` shows: a track named, and label and value rows under it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackInfo {
+    pub title: String,
+    pub rows: Vec<(String, String)>,
+}
+
 /// Taken once and shared by everything drawn: reading the player separately
 /// for each part can mix three different instants into a single frame, showing
 /// a track title from before a change next to a position from after it.
@@ -110,6 +119,7 @@ pub struct Model {
     onset_sensitivity: f32,
     /// After a scan, remove missing tracks without asking.
     auto_prune: bool,
+    analyze_on_scan: bool,
     /// Events from the session's engine and background work, drained each frame.
     events: Receiver<Event>,
     /// Called from a sending thread when something arrives, so a frontend that
@@ -127,6 +137,10 @@ pub struct Model {
     /// The peak shown, as a sample magnitude, and when it was reached.
     peak_hold: Option<(f32, Instant)>,
     snapshot: Snapshot,
+    /// The playing track's tempo, and which track it was read for. Read on
+    /// each track change rather than every frame.
+    bpm: Option<f32>,
+    bpm_for: Option<PathBuf>,
 }
 
 impl Model {
@@ -168,6 +182,7 @@ impl Model {
             keys: config.keys,
             onset_sensitivity: config.settings.onset_sensitivity,
             auto_prune: config.settings.auto_prune,
+            analyze_on_scan: config.settings.analyze_on_scan,
             events,
             wake,
             media: Media::none(),
@@ -176,11 +191,15 @@ impl Model {
             message: None,
             quit: false,
             peak_hold: None,
+            bpm: None,
+            bpm_for: None,
             snapshot: Snapshot::default(),
         };
         model.session.send(Cmd::SetVolume(config.settings.volume));
         model.session.send(Cmd::SetMode(config.settings.mode));
         model.session.send(Cmd::SetSpeed(config.settings.speed));
+        // Silent, as the other settings are: nothing was asked for.
+        let _ = model.session.set_replaygain(config.settings.replaygain);
         if !tracks.is_empty() {
             model.open_tracks(tracks);
         } else if let Some((path, at)) = model.session.resumable() {
@@ -213,6 +232,10 @@ impl Model {
             .iter()
             .map(Mark::time)
             .collect();
+        if current != self.bpm_for {
+            self.bpm = current.as_deref().and_then(|p| self.session.bpm(p));
+            self.bpm_for = current.clone();
+        }
         self.drain_events(current.as_ref());
         // After the events, so what the panel asks for acts on this frame.
         for action in self
@@ -403,9 +426,59 @@ impl Model {
         &self.sampler
     }
 
+    /// The track `:info` describes: the row under the cursor in the library
+    /// and selection views, and the playing track in the others, since
+    /// neither lists tracks to point at.
+    fn info_for_cursor(&self) -> Option<TrackInfo> {
+        let track = match self.view {
+            View::Library => self.cursor_row(self.listed(), self.cursors.library),
+            View::Selection => self.cursor_row(self.session.selection(), self.cursors.selection),
+            _ => None,
+        };
+        let track = track.or_else(|| {
+            let path = self.snapshot.status.current()?;
+            self.session
+                .tracks()
+                .iter()
+                .find(|t| Path::new(&t.path) == path)
+                .cloned()
+                .or_else(|| {
+                    Some(Track {
+                        path: path.to_string_lossy().into_owned(),
+                        ..Default::default()
+                    })
+                })
+        })?;
+        let path = PathBuf::from(&track.path);
+        Some(TrackInfo {
+            title: format!("{} - {}", track.display_title(), track.display_artist()),
+            rows: message::info_rows(
+                &track,
+                self.session.analysis_of(&path).as_ref(),
+                self.session.gains_of(&path),
+            ),
+        })
+    }
+
+    fn cursor_row(&self, rows: &[Track], at: Option<usize>) -> Option<Track> {
+        rows.get(at?).cloned()
+    }
+
+    /// The playing track's tempo as it sounds, so varispeed moves it.
+    /// `None` until `playr analyze` has measured the track.
+    pub fn bpm(&self) -> Option<f32> {
+        let speed = playr_core::audio::speed_for(self.snapshot.status.semitones) as f32;
+        self.bpm.map(|bpm| bpm * speed)
+    }
+
     /// The colours to draw in, from the settings or `:theme`.
     pub fn theme(&self) -> crate::Theme {
         self.theme
+    }
+
+    /// Which ReplayGain applies, from the settings or `:replaygain`.
+    pub fn replaygain(&self) -> playr_core::gain::ReplayGain {
+        self.session.replaygain()
     }
 
     /// Sets how the sampler draws the waveform, as a frontend does to choose
@@ -581,16 +654,43 @@ impl Model {
                 Event::ScanProgress { seen, added, .. } => {
                     self.notify(Outcome::Scanning { seen, added })
                 }
+                Event::AnalyzeProgress { done, total, .. } => {
+                    self.notify(Outcome::Analysing { done, total })
+                }
+                Event::Analysed { result, .. } => {
+                    self.session.analysed();
+                    match result {
+                        Ok(stats) => self.notify(Outcome::Analysed {
+                            analysed: stats.analysed,
+                            failed: stats.failed,
+                        }),
+                        Err(error) => self.notify(Notice::Failed {
+                            task: Task::Analyze,
+                            error,
+                        }),
+                    }
+                }
                 Event::Scanned { dir, result, .. } => {
                     self.session.scanned();
                     self.choose_first_rows();
                     match result {
                         Ok(report) => {
                             let (missing, unavailable) = (report.missing, report.unavailable);
+                            let added = report.stats.added > 0;
                             self.notify(Outcome::Scanned {
                                 dir: dir.clone(),
                                 report,
                             });
+                            // The scan has written the new rows, so an
+                            // analysis now finds exactly them out of date.
+                            if self.analyze_on_scan && added {
+                                match self.session.analyze(dir.clone()) {
+                                    Ok(_) => {
+                                        self.notify(Outcome::AnalysisStarted { dir: dir.clone() })
+                                    }
+                                    Err(refusal) => self.notify(refusal),
+                                }
+                            }
                             if missing > 0 {
                                 after_missing(self, dir, unavailable == 0);
                             }
@@ -823,6 +923,15 @@ impl Frontend for Model {
             Presentation::KeyList => self.input = Input::Help,
             Presentation::CommandList => self.input = Input::CommandHelp,
             Presentation::RootList => self.input = Input::Roots(self.session.roots()),
+            Presentation::TrackInfo => {
+                self.input = match self.info_for_cursor() {
+                    Some(info) => Input::Info(info),
+                    None => {
+                        self.notify(Notice::Refused(Refusal::NothingPlaying));
+                        Input::None
+                    }
+                }
+            }
             Presentation::Zoom(zoom) => {
                 self.sampler.zoom = match zoom {
                     Zoom::In => self.sampler.zoom + 1,

@@ -97,6 +97,9 @@ pub struct Screen<'a> {
     /// Rows the key or command list is scrolled by.
     pub help_scroll: usize,
     pub message: Option<&'a str>,
+    /// The playing track's tempo, as it sounds. `None` until `playr analyze`
+    /// has measured it.
+    pub bpm: Option<f32>,
     pub lists: Lists,
     /// Whether to draw in colour. Without it the cursor row is reversed.
     pub colour: bool,
@@ -121,6 +124,7 @@ impl<'a> Screen<'a> {
             selection: &[],
             playlists: &[],
             input: &NO_INPUT,
+            bpm: None,
             keys,
             sampler,
             help_scroll: 0,
@@ -205,6 +209,7 @@ impl App {
             colour: self.colour,
             theme: m.theme(),
             message: m.message_text(),
+            bpm: m.bpm(),
             lists: Lists {
                 library: scroll(c.library, o.library),
                 selection: scroll(c.selection, o.selection),
@@ -287,7 +292,7 @@ impl App {
         match self.model.input() {
             // Anything but `y` cancels, so a stray key cannot confirm.
             Input::Confirm(_) => self.model.answer(typed(&key) == Some('y')),
-            Input::Help | Input::CommandHelp | Input::Roots(_) => {
+            Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_) => {
                 // The lists can be longer than the screen.
                 match key.code {
                     KeyCode::Char('j') | KeyCode::Down => self.help_scroll += 1,
@@ -336,7 +341,7 @@ impl App {
     fn follow_help(&mut self) {
         if !matches!(
             self.model.input(),
-            Input::Help | Input::CommandHelp | Input::Roots(_)
+            Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_)
         ) {
             self.help_scroll = 0;
         }

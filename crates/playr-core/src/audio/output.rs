@@ -530,7 +530,7 @@ where
 /// The body of every output callback, so it must not lock or allocate. It
 /// emits silence while paused, and on underrun rather than repeating stale
 /// samples, which would click. Metering is before the volume, so it describes
-/// the recording rather than the volume setting.
+/// what plays, ReplayGain included, rather than the volume setting.
 pub fn render<T>(
     out: &mut [T],
     consumer: &mut rtrb::Consumer<f32>,

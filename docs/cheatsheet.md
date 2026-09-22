@@ -38,6 +38,8 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:scan DIR`                           |                         | add a directory to the library              |
 | `:rescan`                             |                         | re-scan directories previously added; `:sync` |
 | `:roots [add\|rm DIR]`                |                         | list the directories the library covers      |
+| `:info`                               |                         | what analysis measured about this track     |
+| `:analyze [DIR]`                      |                         | measure loudness, tempo and file health     |
 | `:prune [DIR]`                        |                         | remove tracks and marks of missing files    |
 | `:open PATH`                          |                         | play a file or directory, and select it     |
 | `:pause`                              | `space`                 | play or pause                               |
@@ -48,6 +50,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the volume, or change it: 60, +10       |
 | `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | set varispeed in semitones, or change it    |
 | `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |
+| `:replaygain SETTING`                 |                         | level by loudness: off, track, album, auto  |
 | `:mark [TIME]`                        | `b`                     | mark the playing position, or a time        |
 | `:unmark`                             | `B`                     | undo the last mark                          |
 | `:delmarks`                           | `C`                     | clear all marks in this track; asks y/n     |
@@ -110,7 +113,7 @@ In this view `:slice` plans slices and draws their edges as `+` under the wavefo
 
 - A command, mode or view can be shortened to a prefix that names only one of those usable in the current view: `:vol 60`, `:mode shuf`.
 
-- Tab completes command names usable in the current view, then the argument of `:edge`, `:loop`, `:mode`, `:snap`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
+- Tab completes command names usable in the current view, then the argument of `:edge`, `:loop`, `:mode`, `:replaygain`, `:snap`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
 
 - Up recalls earlier lines that start with the typed text; down returns towards it. The history holds 100 lines and lasts until playr exits.
 

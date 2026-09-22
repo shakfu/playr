@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::analysis::RunStats;
 use crate::audio::State;
 use crate::db::Pruned;
 use crate::samples::{Exported, Plan};
@@ -76,6 +77,18 @@ pub enum Event {
         job: JobId,
         dir: Option<PathBuf>,
         result: Result<ScanReport, String>,
+    },
+    /// An analysis has finished `done` of `total` files. Sent for each file.
+    AnalyzeProgress {
+        job: JobId,
+        done: usize,
+        total: usize,
+    },
+    /// An analysis finished. The session reads the library's gains again
+    /// once told with `Session::analysed`.
+    Analysed {
+        job: JobId,
+        result: Result<RunStats, String>,
     },
     /// Tracks and marks under `dir` whose files are gone were removed, or
     /// under every recorded root when `dir` is `None`. The session reads the

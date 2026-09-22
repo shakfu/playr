@@ -43,7 +43,7 @@ playr-tauri   Tauri backend      -----------------> playr-core [serde]
 
 The Rust frontends also depend on `playr-core` directly, for `Session` and the types `dispatch` passes; the arrows show only where each frontend gets its interaction from. `playr-gui` is described in `docs/dev/gui.md`, `playr-server` in `docs/dev/server.md`; `playr-tauri` does not exist. `[serde]` is step 8.
 
-- **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
+- **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `analysis`, `gain`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
 
 - **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state) and `sampler` (the sampler view's state and column geometry). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
 
@@ -82,6 +82,8 @@ impl Session {
     pub fn volume_by(&self, delta: f32);
     pub fn set_mode(&self, mode: Mode) -> Notice;
     pub fn cycle_mode(&self, forward: bool) -> Notice;
+    pub fn set_replaygain(&mut self, r: ReplayGain) -> Notice;    // loads the library's gains
+    pub fn replaygain(&self) -> ReplayGain;
     pub fn play_playlist(&mut self, id: i64) -> Notice;
     pub fn play_playlist_named(&mut self, name: &str) -> Notice;
     pub fn playing_track(&self) -> Result<(PathBuf, u32), Refusal>;
@@ -119,6 +121,9 @@ impl Session {
     pub fn scan(&mut self, dir: PathBuf) -> Result<JobId, Refusal>;      // Event::ScanProgress, Event::Scanned
     pub fn rescan(&mut self) -> Result<JobId, Refusal>;                  // every recorded root
     pub fn scanned(&mut self);                                           // after Event::Scanned
+    pub fn analyze(&mut self, dir: Option<PathBuf>) -> Result<JobId, Refusal>; // Event::AnalyzeProgress, Event::Analysed
+    pub fn analysed(&mut self);                                          // after Event::Analysed
+    pub fn bpm(&self, path: &Path) -> Option<f32>;
     pub fn check_prune(&self, dir: Option<&Path>) -> Result<(), Refusal>;
     pub fn prune(&mut self, dir: Option<PathBuf>) -> Result<JobId, Refusal>; // Event::Pruned
     pub fn roots(&self) -> Vec<PathBuf>;

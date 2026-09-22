@@ -35,6 +35,8 @@ None of the three contact external services or download any metadata and images.
 
 - Volume as a float gain applied before quantisation
 
+- ReplayGain by track, by album, or by album only while tracks play in order, from `playr analyze` or the files' tags; off by default
+
 - A file it cannot decode is reported and skipped, never fatal
 
 **Audio quality**
@@ -59,11 +61,13 @@ None of the three contact external services or download any metadata and images.
 
 - Rescan skips files whose size and modification time are unchanged
 
+- `playr analyze`, or `:analyze` in the background, decodes each track once and records loudness, tempo and checks: damaged files, FLAC checksums, padded bit depth, likely transcodes and upsampling, and duplicates. It never writes to the files
+
 - Tracks whose files are gone are kept until `playr prune` removes them, so an unplugged drive does not empty playlists
 
 - Scans commit every 500 files, so an interrupted scan keeps its progress
 
-- Full-text search over title, artist, album, album artist and file name, or within one of them with `artist:evans`
+- Full-text search over title, artist, album, album artist and file name, or within one of them with `artist:evans`, and over analysed tempos with `bpm:120..130`
 
 - Search results play directly, in library order
 
@@ -105,7 +109,7 @@ playr is three programs over one core. All read the same library and the same `s
 
 - **`playr-server`**, for a machine without a screen, such as a Raspberry Pi with a DAC. It plays on that machine, and a web page or OSC controls it. The only program with network code.
 
-Only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json`, `playr roots`, `playr formats` and `playr devices` only read, and run alongside any of them.
+Only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json`, `playr roots`, `playr formats` and `playr devices` only read, and run alongside any of them. `playr analyze` runs alongside them too: it writes only its own tables, which none of them caches.
 
 | | `playr` | `playr-gui` | `playr-server` |
 |-|-|-|-|
@@ -113,6 +117,7 @@ Only one runs at a time: while one is running, the others, `playr scan` and `pla
 | keys, `:` commands, `?` and `:help` | yes | yes | yes |
 | search, marks, playlists, themes | yes | yes | yes |
 | playback modes, varispeed, volume, level meter | yes | yes | yes |
+| ReplayGain | yes | yes | yes |
 | sampler view and `:slice` | yes | yes | no |
 | mouse | no | yes | yes, and touch |
 | media keys and the now-playing panel | yes* | yes | no |
@@ -209,6 +214,8 @@ playr search album:blue     # match the album only
 playr search --json evans   # print the matches as JSON instead of playing them
 playr playlist "late night" # play a saved playlist
 playr playlists             # list saved playlists
+playr analyze               # decode new and changed tracks once; print findings
+playr analyze --report      # print what is recorded, decoding nothing
 playr formats               # show what this build can decode
 playr devices               # list output devices; * marks the default
 playr --device ID           # play to that device instead of the default
@@ -261,6 +268,31 @@ Rescanning only re-reads files whose size or modification time changed. Each sca
 A scan never removes anything itself. It counts the tracks under the scanned directory whose files are gone; inside playr it then asks whether to prune them, and `playr scan` prints the count and the command. `playr prune`, or `:prune`, covers every root; `playr prune DIR` and `:prune DIR` cover one. They remove those tracks, and with them their places in playlists, and the marks of every file under the directory that is gone, whether it was in the library or not. Nothing outside the named directories is touched, so pruning `~/music` leaves an unplugged drive mounted elsewhere alone. Prune after a file is moved or deleted for good, not while a drive under that directory is unplugged.
 
 Playlist entries and marks are the only things in the library that are not read back from the files, so pruning is the one operation that loses work. With `auto_prune = true` a scan inside playr prunes without asking, except when a directory read as empty although the library holds tracks under it: that is what an unmounted drive looks like, so playr asks instead.
+
+### Analysis
+
+`playr analyze` decodes each library track once and stores what it measured in the library: loudness and peak for ReplayGain, tempo, and the checks below. It then prints the findings. `:analyze` does the same from inside playr, in the background, over the whole library or one directory; the window has File, Analyze library. With `analyze_on_scan`, a scan inside playr analyses what it added or found changed, so gains and tempos are there without asking; `playr scan` says how many tracks are waiting instead, since it reads no settings. A later run decodes only tracks added or changed since; `--force` decodes them all again. Paths limit it to the tracks under them. `--report` prints what is stored without decoding, and `--json` prints it as JSON. `--jobs N` sets how many files decode at once; the default leaves one processor free.
+
+It only reads the files. It runs beside a playing playr, which picks up the new gains at its next start or rescan. An interrupted run keeps every batch of 500 files it finished.
+
+| Finding | Meaning |
+|-|-|
+| unreadable | the file failed to decode, or stopped partway |
+| damaged | packets failed to decode, or a FLAC file's audio does not match its MD5 |
+| no checksum | a FLAC file with no MD5 to check |
+| wrong length | a lossless file that decodes to a length its header does not give |
+| padded | samples wider than the bits they use, such as 16 bits in a 24-bit file |
+| possible lossy source | a lossless file whose content stops in a cliff below 20 kHz, as an MP3 or AAC encoder leaves |
+| possible upsampling | a file above 48 kHz whose content stops in a cliff below 26 kHz |
+| duplicates | the same title and artist within 2 s of each other, or the same FLAC MD5 |
+
+The two "possible" findings are heuristics, tested against ffmpeg's encoders and resampler rather than a library of known files. They catch LAME at 192 kbit/s and below, and not at 320, whose cliff sits at 20.3 kHz. A dark recording falls gradually and is not flagged.
+
+The tempo is one BPM for the whole track, from the autocorrelation of its onsets. A BPM tag, when present, is used instead, and the report compares the two where a track has both. A pulse faster than about 170 BPM reads at half tempo, and music without a clear pulse gets none: on an ambient-leaning library expect a tempo for under half the tracks. Of those, about 60% match a second estimator exactly and another 28% at a simple ratio, such as half or three quarters; see `docs/dev/analyze.md`.
+
+`:info` shows what was measured about one track: its format, loudness and peak, the gain ReplayGain would apply, its tempo with how sure playr is of it, where its content stops, how many of its bits it uses, its FLAC checksum, and any findings. It describes the row under the cursor in the library and selection views, and the playing track elsewhere; the window has Track info in a row's menu and on the sampler's button bar, where it describes the playing track. A track that has not been analysed says so.
+
+An analysed track shows its tempo beside the now-playing line, as it sounds: varispeed moves it, so a track at 120 BPM reads 143 BPM at +3 semitones. `bpm:` searches the recorded tempos: `bpm:128` matches within 1 BPM, `bpm:120..130` a range, and `bpm:140..` or `bpm:..90` one end of one. It combines with text, as in `evans bpm:120..130`, and matches nothing for a track playr has not analysed or is unsure of. A track whose tempo was halved, which happens above about 170 BPM, also matches at the tempo it is heard at: one recorded at 87 answers to `bpm:174`.
 
 ### Media keys and the now-playing panel
 
@@ -421,6 +453,19 @@ The waveform glyphs are the view's only characters outside ASCII. Marks are plac
 
 This is not the pitch-preserving speed change of a podcast app. That is time-stretching, which needs a phase vocoder; this is a change of resampling ratio, which is what varispeed means.
 
+### ReplayGain
+
+ReplayGain plays each track at one fixed gain that brings it to -18 LUFS, as ReplayGain 2.0 does. It does not compress: the track's dynamics are unchanged. `:replaygain` or the `replaygain` setting chooses it:
+
+- `off`, the default: nothing changes, bit for bit.
+- `track`: each track at its own gain.
+- `album`: each track at its album's gain, so a quiet track stays quiet beside the others.
+- `auto`: album gain in normal and repeat modes, track gain in shuffle and repeat one.
+
+Gains come from `playr analyze`, else from the file's `REPLAYGAIN_*` or `R128_*` tags. The analysis is preferred, so the whole library is measured one way. An album's gain needs every track of the album analysed; until then its tracks take their own. An album is its album tag and album artist, or its album tag and directory when there is no album artist. A track with neither analysis nor tags plays at 0 dB.
+
+A gain never pushes the track's peak past full scale, and with no peak known it never boosts. The bottom line shows the gain applied, as `rg -6.2 dB`. The level meter reads after ReplayGain and before the volume.
+
 ### Commands
 
 `:` opens a command line: `:seek 1:23`, `:volume 60`, `:playlist late night`. Every key's action has a command, and commands also take arguments no key can, such as a time or a name. Some commands work only in one view, as `:remove` in the selection. Tab completes, up recalls earlier lines, and `:help` lists every command. [docs/cheatsheet.md](docs/cheatsheet.md) has the full list.
@@ -438,7 +483,9 @@ speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 samples = "~/Music/playr/samples"  # where :slice writes
 auto_prune = true                  # after a scan, prune missing tracks without asking
+analyze_on_scan = true             # after a scan, analyse what it added or changed
 device = "alsa:hw:CARD=DAC,DEV=0"  # output device from `playr devices`; "" is the default
+replaygain = "auto"                # off, track, album or auto
 theme = "light"                    # system, light or dark
 
 [keys]                             # every view
@@ -482,7 +529,7 @@ The output stream is opened at the file's own sample rate whenever the device ac
 
 This is not bit-perfect output by default. On a PipeWire system the ALSA `default` device accepts every rate and may convert internally. A `hw:` device avoids that: `--device` or the `device` setting selects one by the ID `playr devices` prints. It offers only the card's own rates and formats, and cannot be opened while PipeWire or PulseAudio holds it. `--device` overrides the setting in all three programs. A device that does not exist stops playr at startup with the list, rather than playing somewhere else.
 
-Volume is a float gain applied before quantisation.
+Volume is a float gain applied before quantisation. ReplayGain, when on, is a second gain beside it, and the only one that can exceed 1.
 
 ## Roadmap
 

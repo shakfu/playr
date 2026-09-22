@@ -506,3 +506,71 @@ fn an_aac_seek_matches_a_full_decode() {
     }
     assert_seeks_match_a_full_decode("m4a", 44100, &["-c:a", "aac", "-b:a", "256k"], 4410);
 }
+
+#[cfg(feature = "opus")]
+#[test]
+fn the_opus_header_output_gain_is_applied() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain.opus");
+    if let Err(why) = encode(&plain, 48000, &["-c:a", "libopus", "-b:a", "128k"]) {
+        skip(
+            "PLAYR_REQUIRE_FFMPEG",
+            &format!("cannot encode Opus: {why}"),
+        );
+        return;
+    }
+    // RFC 7845 section 5.1: a signed Q7.8 dB value at offset 16 of OpusHead,
+    // which ffmpeg writes as 0. -6.02 dB is half the amplitude.
+    let mut bytes = std::fs::read(&plain).unwrap();
+    let head = bytes
+        .windows(8)
+        .position(|w| w == b"OpusHead")
+        .expect("no OpusHead in the file");
+    let q78 = (-6.0206f32 * 256.0).round() as i16;
+    bytes[head + 16..head + 18].copy_from_slice(&q78.to_le_bytes());
+    // The page carrying the header now fails its checksum, so redo it.
+    let page = bytes[..head]
+        .windows(4)
+        .rposition(|w| w == b"OggS")
+        .expect("no Ogg page before the header");
+    reseat_ogg_crc(&mut bytes, page);
+    let quieter = dir.path().join("quieter.opus");
+    std::fs::write(&quieter, &bytes).unwrap();
+
+    let (_, _, frames, loud) = decode_all(&plain).expect("Opus failed to decode");
+    let (_, _, frames_q, quiet) = decode_all(&quieter).expect("patched Opus failed to decode");
+    assert_eq!(frames, frames_q, "the patch changed the length");
+    assert!(
+        (quiet / loud - 0.5).abs() < 0.02,
+        "gain not applied: {loud} then {quiet}"
+    );
+}
+
+/// Recomputes the checksum of the Ogg page starting at `at`, after its
+/// payload was edited.
+///
+/// Ogg uses CRC-32 with polynomial 0x04c11db7, no reflection and no final
+/// xor, over the whole page with the checksum field zeroed (RFC 3533
+/// section 6).
+#[cfg(feature = "opus")]
+fn reseat_ogg_crc(bytes: &mut [u8], at: usize) {
+    let segments = bytes[at + 26] as usize;
+    let table = &bytes[at + 27..at + 27 + segments];
+    let payload: usize = table.iter().map(|n| *n as usize).sum();
+    let end = at + 27 + segments + payload;
+    bytes[at + 22..at + 26].fill(0);
+    let mut crc: u32 = 0;
+    for byte in &bytes[at..end] {
+        crc ^= (*byte as u32) << 24;
+        for _ in 0..8 {
+            crc = match crc & 0x8000_0000 {
+                0 => crc << 1,
+                _ => (crc << 1) ^ 0x04c1_1db7,
+            };
+        }
+    }
+    bytes[at + 22..at + 26].copy_from_slice(&crc.to_le_bytes());
+}

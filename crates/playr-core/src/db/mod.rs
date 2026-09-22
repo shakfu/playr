@@ -3,6 +3,7 @@
 //! Search uses an FTS5 external-content index kept in sync by triggers. Rescan
 //! skips files whose `(mtime, size)` are unchanged, avoiding a tag re-read.
 
+pub mod analysis;
 pub mod query;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -142,6 +143,17 @@ fn init(conn: &Connection) -> Result<()> {
         )?;
     }
     tx.execute_batch(include_str!("schema.sql"))?;
+    // `CREATE TABLE IF NOT EXISTS` leaves a table made by an earlier playr as
+    // it was, so a column added to one needs adding here too. The rows stay:
+    // `analysis::VERSION` decides which are read again.
+    let has_alt: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info('analysis') WHERE name = 'bpm_alt')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_alt {
+        tx.execute_batch("ALTER TABLE analysis ADD COLUMN bpm_alt REAL;")?;
+    }
     if old_index || old_triggers {
         // Updating every row in place fires the new trigger, which indexes it.
         tx.execute_batch("UPDATE tracks SET path = path;")?;
@@ -302,8 +314,8 @@ pub(crate) fn stored_root(conn: &Connection, root: &Path) -> Result<Option<Strin
 }
 
 /// Forgets `root` and removes everything the library held under it: the
-/// tracks, with their places in playlists, and the marks of every file under
-/// it, in the library or not. `None` if no root matches.
+/// tracks, with their places in playlists, and the marks and analysis of
+/// every file under it, in the library or not. `None` if no root matches.
 ///
 /// Unlike [`prune_missing`] this does not ask the filesystem anything. A
 /// directory that is no longer a root is no longer part of the library,
@@ -322,6 +334,10 @@ pub fn forget_root(conn: &Connection, root: &Path) -> Result<Option<Pruned>> {
     for t in &tracks {
         tx.execute("DELETE FROM tracks WHERE id = ?1", [t.id])?;
     }
+    tx.execute(
+        "DELETE FROM analysis WHERE substr(path, 1, length(?1)) = ?1",
+        [&prefix],
+    )?;
     let mut marks = 0;
     for path in &marked {
         marks += query::clear_marks(&tx, path)?;
@@ -362,8 +378,8 @@ pub fn missing_under(conn: &Connection, root: &Path) -> Result<Vec<Track>> {
 }
 
 /// Removes the tracks [`missing_under`] finds, which also removes them from
-/// playlists, and the marks of every file under `root` that is gone, in the
-/// library or not.
+/// playlists, and the marks and analysis of every file under `root` that is
+/// gone, in the library or not.
 ///
 /// Files are checked before the transaction opens, so the write lock is held
 /// for the deletes alone.
@@ -376,10 +392,18 @@ pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
         .prepare("SELECT DISTINCT path FROM marks WHERE substr(path, 1, length(?1)) = ?1")?
         .query_map([&prefix], |r| r.get(0))?
         .collect::<Result<_>>()?;
+    let analysed: Vec<String> = conn
+        .prepare("SELECT path FROM analysis WHERE substr(path, 1, length(?1)) = ?1")?
+        .query_map([&prefix], |r| r.get(0))?
+        .collect::<Result<Vec<String>>>()?
+        .into_iter()
+        .filter(|p| gone(p))
+        .collect();
     let tx = conn.unchecked_transaction()?;
     for t in &tracks {
         tx.execute("DELETE FROM tracks WHERE id = ?1", [t.id])?;
     }
+    analysis::delete(&tx, &analysed)?;
     let mut marks = 0;
     for path in marked.iter().filter(|p| gone(p)) {
         marks += query::clear_marks(&tx, path)?;

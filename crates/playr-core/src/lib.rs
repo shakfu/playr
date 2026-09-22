@@ -4,9 +4,11 @@
 //! waveform peaks and spectrogram, and the settings file's own keys. Nothing here depends on a
 //! terminal or any other frontend; `docs/architecture.md` sets out the split.
 
+pub mod analysis;
 pub mod audio;
 pub mod db;
 pub mod event;
+pub mod gain;
 pub mod notice;
 pub mod samples;
 pub mod scan;

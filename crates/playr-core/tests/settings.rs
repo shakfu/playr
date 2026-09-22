@@ -134,6 +134,34 @@ fn auto_prune_defaults_off_and_takes_a_boolean() {
 }
 
 #[test]
+fn analyze_on_scan_defaults_off_and_takes_a_boolean() {
+    assert!(!Settings::default().analyze_on_scan);
+    assert!(parse("analyze_on_scan = true").unwrap().analyze_on_scan);
+    assert_eq!(
+        parse("analyze_on_scan = 1").unwrap_err(),
+        ["line 1: analyze_on_scan cannot be an integer"]
+    );
+}
+
+#[test]
+fn replaygain_defaults_off_and_takes_a_setting() {
+    use playr_core::gain::ReplayGain;
+    assert_eq!(Settings::default().replaygain, ReplayGain::Off);
+    assert_eq!(
+        parse("replaygain = \"Auto\"").unwrap().replaygain,
+        ReplayGain::Auto
+    );
+    assert_eq!(
+        parse("replaygain = \"loud\"").unwrap_err(),
+        ["line 1: unknown replaygain loud; choices: off, track, album, auto"]
+    );
+    assert_eq!(
+        parse("replaygain = true").unwrap_err(),
+        ["line 1: replaygain cannot be a boolean"]
+    );
+}
+
+#[test]
 fn the_device_defaults_to_none_and_takes_an_id() {
     assert_eq!(Settings::default().device, None);
     assert_eq!(parse("device = \"\"").unwrap().device, None);

@@ -8,8 +8,13 @@ use std::fs::File;
 use std::path::Path;
 use std::time::Duration;
 
-use symphonia::core::codecs::audio::well_known::{CODEC_ID_AAC, CODEC_ID_OPUS};
-use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::codecs::audio::well_known::{
+    CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_OPUS, CODEC_ID_PCM_F64BE_PLANAR,
+    CODEC_ID_PCM_S32LE, CODEC_ID_WAVPACK,
+};
+use symphonia::core::codecs::audio::{
+    AudioCodecId, AudioDecoder, AudioDecoderOptions, VerificationCheck,
+};
 use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::codecs::CodecParameters;
 use symphonia::core::errors::Error as SymphError;
@@ -96,6 +101,16 @@ pub struct AudioStream {
     /// How far before a seek target decoding starts, so the decoder has
     /// settled by the target. See `pre_roll`.
     pre_roll: Duration,
+    codec: AudioCodecId,
+    /// Bits per sample the header gives, for integer formats.
+    bits: Option<u32>,
+    /// Frames the header says the stream holds.
+    header_frames: Option<u64>,
+    /// The MD5 of the decoded audio a FLAC header gives; `None` when it is
+    /// absent, which FLAC writes as all zeros.
+    md5: Option<[u8; 16]>,
+    /// Packets that failed to decode and were skipped.
+    skipped: u64,
 }
 
 /// Decoding time a codec needs after a reset before its output is exact.
@@ -114,6 +129,16 @@ fn pre_roll(codec: symphonia::core::codecs::audio::AudioCodecId, rate: u32) -> D
 impl AudioStream {
     /// Opens `path` and prepares a decoder for its default audio track.
     pub fn open(path: &Path) -> Result<Self, DecodeError> {
+        Self::open_with(path, false)
+    }
+
+    /// As [`AudioStream::open`], with the decoder checking the decoded audio
+    /// against the header's checksum, which [`AudioStream::finalize`] reports.
+    pub fn open_verifying(path: &Path) -> Result<Self, DecodeError> {
+        Self::open_with(path, true)
+    }
+
+    fn open_with(path: &Path, verify: bool) -> Result<Self, DecodeError> {
         let file = File::open(path).map_err(DecodeError::Io)?;
         let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
 
@@ -135,6 +160,7 @@ impl AudioStream {
 
         let track_id = track.id;
         let time_base = track.time_base;
+        let header_frames = track.num_frames;
         let duration = track
             .duration
             .zip(time_base)
@@ -147,7 +173,12 @@ impl AudioStream {
             ));
         };
 
-        let decoder = codecs().make_audio_decoder(&params, &AudioDecoderOptions::default())?;
+        let options = AudioDecoderOptions::default().verify(verify);
+        let decoder = codecs().make_audio_decoder(&params, &options)?;
+        let md5 = match params.verification_check {
+            Some(VerificationCheck::Md5(md5)) => Some(md5),
+            _ => None,
+        };
 
         // OGG timestamps count Opus pre-skip, which the decoder trims, not
         // the demuxer. Matroska subtracts it already and reports no delay.
@@ -180,6 +211,11 @@ impl AudioStream {
             discard: 0,
             seek_offset,
             pre_roll,
+            codec: params.codec,
+            bits: params.bits_per_sample,
+            header_frames,
+            md5,
+            skipped: 0,
         })
     }
 
@@ -189,6 +225,44 @@ impl AudioStream {
 
     pub fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    /// Whether the codec is lossless: FLAC, ALAC, WavPack or linear PCM.
+    pub fn lossless(&self) -> bool {
+        // Symphonia numbers linear PCM contiguously; A-law and mu-law follow it.
+        matches!(self.codec, CODEC_ID_FLAC | CODEC_ID_ALAC | CODEC_ID_WAVPACK)
+            || (CODEC_ID_PCM_S32LE..=CODEC_ID_PCM_F64BE_PLANAR).contains(&self.codec)
+    }
+
+    /// Whether the stream is FLAC, whose header may carry an MD5.
+    pub fn is_flac(&self) -> bool {
+        self.codec == CODEC_ID_FLAC
+    }
+
+    /// Bits per sample the header gives, for integer formats.
+    pub fn bits(&self) -> Option<u32> {
+        self.bits
+    }
+
+    /// Frames the header says the stream holds, when it says.
+    pub fn header_frames(&self) -> Option<u64> {
+        self.header_frames
+    }
+
+    /// The MD5 a FLAC header gives, when it is not all zeros.
+    pub fn md5(&self) -> Option<[u8; 16]> {
+        self.md5
+    }
+
+    /// Packets that failed to decode and were skipped so far.
+    pub fn skipped(&self) -> u64 {
+        self.skipped
+    }
+
+    /// Ends decoding. For a stream opened with [`AudioStream::open_verifying`],
+    /// whether the decoded audio matched the header's checksum, when it has one.
+    pub fn finalize(&mut self) -> Option<bool> {
+        self.decoder.finalize().verify_ok
     }
 
     /// Decodes the next packet into interleaved f32. `Ok(None)` means end of stream.
@@ -238,7 +312,10 @@ impl AudioStream {
                     return Ok(Some(&self.buf[drop * ch..]));
                 }
                 // Recoverable per the Symphonia contract: skip and keep going.
-                Err(SymphError::DecodeError(_)) => continue,
+                Err(SymphError::DecodeError(_)) => {
+                    self.skipped += 1;
+                    continue;
+                }
                 Err(e) => return Err(e.into()),
             }
         }

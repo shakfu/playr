@@ -15,11 +15,13 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
+use crate::analysis;
 use crate::audio::{Cmd, Mode, Player, State};
 use crate::db;
 use crate::db::query::{self, Mark, Playlist};
 use crate::db::{Pruned, Track};
 use crate::event::{Event, EventSink, JobId};
+use crate::gain::ReplayGain;
 use crate::notice::{Notice, Outcome, Refusal, Task};
 use crate::samples::{self, Cut, Job, Plan};
 use crate::scan;
@@ -54,6 +56,10 @@ pub struct Session {
     library: Option<PathBuf>,
     /// Set while a scan or a prune runs.
     scanning: Arc<AtomicBool>,
+    /// Set while an analysis runs. Separate from `scanning`: an analysis
+    /// writes only its own tables, so the two may run together.
+    analysing: Arc<AtomicBool>,
+    replaygain: ReplayGain,
 }
 
 impl Session {
@@ -76,6 +82,8 @@ impl Session {
             reading: None,
             library,
             scanning: Arc::default(),
+            analysing: Arc::default(),
+            replaygain: ReplayGain::Off,
         };
         session.reload();
         session
@@ -92,10 +100,21 @@ impl Session {
         self.library = Some(path);
     }
 
-    /// Reads the library's tracks and playlists again.
+    /// Reads the library's tracks and playlists again, and its gains while
+    /// ReplayGain is on.
     pub fn reload(&mut self) {
         self.tracks = query::all(&self.conn).unwrap_or_default();
         self.playlists = query::playlists(&self.conn).unwrap_or_default();
+        self.send_gains();
+    }
+
+    /// Hands the player the library's gains; read only while ReplayGain is
+    /// on, so a library that never uses it never loads them.
+    fn send_gains(&self) {
+        if self.replaygain != ReplayGain::Off {
+            let gains = db::analysis::gains(&self.conn, &self.tracks).unwrap_or_default();
+            self.player.send(Cmd::SetGains(Arc::new(gains)));
+        }
     }
 
     /// The player, for reading its state. Changes go through the session.
@@ -174,6 +193,21 @@ impl Session {
         // The player's own value, not a frame-old copy, so quick presses all count.
         let v = (self.player.volume() + delta).clamp(0.0, 1.0);
         self.player.send(Cmd::SetVolume(v));
+    }
+
+    /// Which ReplayGain applies, from the audible position on.
+    pub fn set_replaygain(&mut self, replaygain: ReplayGain) -> Notice {
+        let loading = self.replaygain == ReplayGain::Off;
+        self.replaygain = replaygain;
+        if loading {
+            self.send_gains();
+        }
+        self.player.send(Cmd::SetReplayGain(replaygain));
+        Outcome::ReplayGain(replaygain).into()
+    }
+
+    pub fn replaygain(&self) -> ReplayGain {
+        self.replaygain
     }
 
     pub fn set_mode(&self, mode: Mode) -> Notice {
@@ -752,6 +786,74 @@ impl Session {
                 result,
             })
         }))
+    }
+
+    /// Analyses the library tracks under `dir`, or every track for `None`,
+    /// whose stored analysis is missing or out of date. Sends
+    /// [`Event::AnalyzeProgress`] per file and finishes with
+    /// [`Event::Analysed`], after which the frontend calls
+    /// [`Session::analysed`].
+    ///
+    /// It runs alongside playback and alongside a scan: it writes only the
+    /// `analysis` and `album_loudness` tables, which nothing here caches.
+    pub fn analyze(&mut self, dir: Option<PathBuf>) -> Result<JobId, Refusal> {
+        let Some(library) = self.library.clone() else {
+            return Err(Refusal::NoLibraryPath);
+        };
+        if !self.has_library_file() {
+            return Err(Refusal::NoLibraryFile);
+        }
+        if self.analysing.swap(true, Ordering::Relaxed) {
+            return Err(Refusal::AnalysisRunning);
+        }
+        let paths: Vec<PathBuf> = dir.into_iter().collect();
+        let (analysing, events) = (self.analysing.clone(), self.events.clone());
+        Ok(self.spawn(move |job| {
+            let result = caught("analysis", || {
+                analysis::run_into(
+                    &library,
+                    &paths,
+                    false,
+                    analysis::default_workers(),
+                    |done, total| events(Event::AnalyzeProgress { job, done, total }),
+                )
+            });
+            analysing.store(false, Ordering::Relaxed);
+            Some(Event::Analysed { job, result })
+        }))
+    }
+
+    /// Takes in a finished analysis: reads the library's gains again, so
+    /// tracks analysed just now play at their measured level.
+    pub fn analysed(&mut self) {
+        self.send_gains();
+    }
+
+    /// What `playr analyze` measured about `path`, when the row still
+    /// describes the file as the library knows it.
+    pub fn analysis_of(&self, path: &Path) -> Option<analysis::Analysis> {
+        let key = path.to_str()?;
+        let (stat, a) = db::analysis::row_of(&self.conn, key).ok().flatten()?;
+        let track = self.tracks.iter().find(|t| t.path == key)?;
+        analysis::is_current(track, Some(&stat)).then_some(a)
+    }
+
+    /// The gains `path` would play at, whether or not ReplayGain is on.
+    ///
+    /// It reads the whole library's gains, as turning ReplayGain on does, so
+    /// it belongs to a dialog rather than to a frame.
+    pub fn gains_of(&self, path: &Path) -> crate::gain::Gains {
+        db::analysis::gains(&self.conn, &self.tracks)
+            .ok()
+            .and_then(|mut gains| gains.remove(path))
+            .unwrap_or_default()
+    }
+
+    /// The tempo to show for `path`, from `playr analyze`.
+    pub fn bpm(&self, path: &Path) -> Option<f32> {
+        db::analysis::bpm_of(&self.conn, path.to_str()?)
+            .ok()
+            .flatten()
     }
 
     /// Takes in a finished scan: reads the library again, from its file if

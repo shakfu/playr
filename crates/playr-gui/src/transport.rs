@@ -8,10 +8,11 @@ use playr_app::action::Action;
 
 use crate::controls;
 use crate::palette::Palette;
-use playr_app::message::fmt_time;
+use playr_app::message::{self, fmt_time};
 use playr_app::meter::{self, Zone};
 use playr_app::model::{self, Model};
 use playr_core::audio::{speed_for, Mode, State};
+use playr_core::gain::ReplayGain;
 
 /// Draws the transport into `ui` and performs what its controls ask for.
 pub fn show(model: &mut Model, ui: &mut egui::Ui) {
@@ -42,6 +43,10 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
                 ));
             }
             ui.weak(format);
+        }
+        // As it sounds: varispeed moves it with the music.
+        if let Some(bpm) = model.bpm() {
+            ui.weak(format!("{bpm:.0} BPM"));
         }
         if status.state == State::Playing {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -106,6 +111,25 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
                         && status.mode != mode
                     {
                         actions.push(Action::SetMode(mode));
+                    }
+                }
+            });
+
+        let replaygain = model.replaygain();
+        let selected = match status.gain_db {
+            Some(db) => format!("{} ({})", replaygain.name(), message::replaygain(db)),
+            None => replaygain.name().to_string(),
+        };
+        egui::ComboBox::from_label("ReplayGain")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for (_, choice) in ReplayGain::NAMES {
+                    if ui
+                        .selectable_label(replaygain == choice, choice.name())
+                        .clicked()
+                        && replaygain != choice
+                    {
+                        actions.push(Action::SetReplayGain(choice));
                     }
                 }
             });

@@ -28,18 +28,39 @@ const OPUS_RATE: u32 = 48_000;
 /// Longest Opus frame is 120ms, which is 5760 samples per channel at 48kHz.
 const MAX_FRAME: usize = 5760;
 
-/// Reads the pre-skip field from an OpusHead identification header.
+/// An OpusHead identification header, when `extra_data` holds one.
 ///
-/// The header is `"OpusHead"`, version, channel count, then pre-skip as a
-/// little-endian u16 at offset 10. Containers do not report this as a packet
-/// trim, so discarding it is the decoder's job: left in, every Opus track
-/// begins with a few milliseconds of encoder warm-up.
+/// It is `"OpusHead"`, version, channel count, pre-skip, input sample rate,
+/// then output gain, so the fields below are at fixed offsets.
+fn opus_head(extra_data: Option<&[u8]>) -> Option<&[u8]> {
+    extra_data.filter(|d| d.len() >= 18 && d.starts_with(b"OpusHead"))
+}
+
+/// The pre-skip field, a little-endian u16 at offset 10.
+///
+/// Containers do not report this as a packet trim, so discarding it is the
+/// decoder's job: left in, every Opus track begins with a few milliseconds of
+/// encoder warm-up.
 fn pre_skip(extra_data: Option<&[u8]>) -> usize {
-    match extra_data {
-        Some(d) if d.len() >= 12 && d.starts_with(b"OpusHead") => {
-            u16::from_le_bytes([d[10], d[11]]) as usize
+    match opus_head(extra_data) {
+        Some(d) => u16::from_le_bytes([d[10], d[11]]) as usize,
+        None => 0,
+    }
+}
+
+/// The factor for the output gain field, a signed little-endian Q7.8 dB value
+/// at offset 16.
+///
+/// RFC 7845 section 5.1 requires a player to apply it. Encoders write 0 unless
+/// a tool such as `rsgain` has set the file's level there, and `R128_*_GAIN`
+/// tags count from it, so ignoring it left both wrong by the same amount.
+fn output_gain(extra_data: Option<&[u8]>) -> f32 {
+    match opus_head(extra_data) {
+        Some(d) => {
+            let q78 = i16::from_le_bytes([d[16], d[17]]);
+            10f32.powf(q78 as f32 / 256.0 / 20.0)
         }
-        _ => 0,
+        None => 1.0,
     }
 }
 
@@ -65,6 +86,8 @@ pub struct OpusDecoder {
     channels: usize,
     /// Frames of encoder pre-skip still to be discarded at the start of the stream.
     skip_left: usize,
+    /// The header's output gain as a factor; 1.0 leaves samples untouched.
+    gain: f32,
 }
 
 impl OpusDecoder {
@@ -99,6 +122,7 @@ impl OpusDecoder {
             scratch: vec![0.0; MAX_FRAME * channels],
             channels,
             skip_left: pre_skip(params.extra_data.as_deref()),
+            gain: output_gain(params.extra_data.as_deref()),
             params,
         })
     }
@@ -125,7 +149,7 @@ impl OpusDecoder {
                 None => return decode_error("opus: audio buffer has too few planes"),
             };
             for (i, sample) in plane.iter_mut().enumerate().take(frames) {
-                *sample = self.scratch[i * channels + ch];
+                *sample = self.scratch[i * channels + ch] * self.gain;
             }
         }
 

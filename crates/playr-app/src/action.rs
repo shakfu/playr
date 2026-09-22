@@ -58,8 +58,12 @@ pub enum Action {
     Scan(PathBuf),
     /// Re-scan every directory previously given to a scan.
     Rescan,
+    /// Analyse a directory's tracks, or every track for `None`.
+    Analyze(Option<PathBuf>),
     /// Show the directories the library covers.
     ShowRoots,
+    /// Show what analysis measured about the track under the cursor.
+    ShowInfo,
     /// Forget a directory, and the tracks and marks under it, once confirmed.
     ForgetRoot(PathBuf),
     /// Remove tracks and marks under a directory whose files are gone, once
@@ -84,6 +88,8 @@ pub enum Action {
     /// Next playback mode, or the previous one when false.
     CycleMode(bool),
     SetMode(Mode),
+    /// Choose which ReplayGain applies.
+    SetReplayGain(playr_core::gain::ReplayGain),
 
     /// Mark the playing position.
     Mark,

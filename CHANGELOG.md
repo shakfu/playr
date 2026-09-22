@@ -4,6 +4,30 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Fixed
+
+- The Opus header's output gain was ignored. RFC 7845 section 5.1 requires a player to apply the signed Q7.8 dB value at offset 16 of `OpusHead`; playr read only the pre-skip beside it, so a file whose level a tool such as `rsgain` had written there played at the wrong level, and `R128_*_GAIN` tags, which count from that gain, were wrong by the same amount. Encoders write 0, so a file straight from `opusenc` or ffmpeg was unaffected.
+
+### Added
+
+- `playr analyze` decodes each library track once and records loudness, peak, tempo and checks in two new tables, `analysis` and `album_loudness`. The checks are decode errors, FLAC MD5, decoded length against the header, padded bit depth, and the spectral cutoff. `--report` derives findings from the stored measurements, so a threshold can change without decoding again, and adds duplicates by tags and length or by FLAC MD5. A run decodes only tracks whose size, mtime or analyser version changed, and it runs beside a playing playr: it writes only its own tables, which no frontend caches. Files are never written. Design and calibration in `docs/dev/analyze.md`.
+
+  `:analyze [DIR]` runs the same work from inside playr, on a session job, and the window has File, Analyze library. The page may run it over the whole library, not over a directory, as with `:scan`. An analysed track shows its tempo beside the now-playing line, moved by varispeed, and `bpm:128`, `bpm:120..130`, `bpm:140..` or `bpm:..90` searches the recorded tempos, alone or with text.
+
+  `:info` shows one track's measurements in a dialog, in all three interfaces: without it an analysis wrote 22 columns a track and the interface showed one number, the tempo. The row under the cursor in the library and selection views, the playing track elsewhere.
+
+  `analyze_on_scan`, off by default, analyses what a scan inside playr added or found changed: without it the measurements wait for a command nobody runs, and ReplayGain quietly falls back to tags. `playr scan` reads no settings, so it prints how many tracks are waiting instead.
+
+  A tempo records the level above it as an alternate when the track pulses nearly as strongly there and the reading sits below the prior's 120 BPM centre, where halving happens. `bpm:` matches either, so a drum and bass track recorded at 87 is found by `bpm:174`; the number shown stays the one measured. Rows from analyser version 1 have no such column and are analysed again.
+
+  `MIN_CONFIDENCE` is 0.3, chosen against librosa over a 328-track library rather than guessed: at 0.2 a fifth of the tempos kept disagreed with librosa at no simple ratio, against an eighth at 0.3, for 13 points of coverage. The threshold applies when a tempo is read, so changing it reanalyses nothing.
+
+  The lossy-source and upsampling findings are heuristics, checked against ffmpeg's encoders and resampler only. They catch LAME at 192 kbit/s and AAC at 128, not LAME at 320, whose cliff at 20.3 kHz is above the 20 kHz threshold that spares CD masters. Tempo is one BPM a track; a pulse above about 170 BPM reads at half tempo, from the 120 BPM prior.
+
+- ReplayGain: `:replaygain` and the `replaygain` setting, `off` by default, `track`, `album`, or `auto`, which takes album gain in normal and repeat modes and track gain otherwise. Gains come from `playr analyze`, else from `REPLAYGAIN_*` or `R128_*` tags; analysis first, so the library is measured one way. The gain is applied where the engine decodes, not in the audio callback, because the ring spans track boundaries and the callback would change the gain up to 2 s from the boundary. It is capped at the track's peak, never boosts without one, and at exactly 0 dB leaves samples untouched. The bottom line shows it, as `rg -6.2 dB`; the level meter now reads after it. `crates/playr-core/src/audio/opus.rs` still ignores the Opus header's output gain, which `R128_*` tags are relative to.
+
+  Library API: `analysis`, `gain`, `db::analysis`; `Cmd::SetReplayGain`, `Cmd::SetGains`, `Status::gain_db`; `Session::analyze`, `Session::analysed`, `Session::bpm`, `Session::set_replaygain`, `Session::replaygain`; `Event::AnalyzeProgress`, `Event::Analysed`; `Settings::replaygain`, `Settings::analyze_on_scan`; `Action::Analyze`, `Action::SetReplayGain`; `Model::bpm`; `AudioStream::open_verifying`, `finalize`, `skipped`, `lossless`, `bits`, `header_frames`, `md5`.
+
 ## [0.9.1]
 
 ### Fixed

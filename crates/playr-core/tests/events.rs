@@ -620,3 +620,61 @@ fn what_was_playing_is_remembered_and_offered_only_while_the_file_is_there() {
     session.forget_resume();
     assert_eq!(session.resumable(), None);
 }
+
+#[test]
+fn an_analysis_reports_each_file_then_what_it_measured() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    std::fs::create_dir_all(&songs).unwrap();
+    for name in ["a.wav", "b.wav"] {
+        common::tone(&songs.join(name), 44100, 1.0, -12.0);
+    }
+    let (sink, events) = channel();
+    let mut conn = db::open(&dir.path().join("library.db")).unwrap();
+    playr_core::scan::scan_dir(&mut conn, &songs, |_, _| {}).unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+
+    let job = session.analyze(None).unwrap();
+    assert_eq!(
+        session.analyze(None),
+        Err(Refusal::AnalysisRunning),
+        "a second analysis started"
+    );
+    let seen = until(&events, |e| matches!(e, Event::Analysed { .. }));
+    assert!(
+        seen.iter().any(|e| matches!(
+            e,
+            Event::AnalyzeProgress { job: j, done, total } if *j == job && *done == 1 && *total == 2
+        )),
+        "{seen:?}"
+    );
+    match seen.last().unwrap() {
+        Event::Analysed { job: j, result } => {
+            assert_eq!(*j, job);
+            let stats = result.as_ref().unwrap();
+            assert_eq!((stats.analysed, stats.failed), (2, 0));
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // The tracks are measured, so a second run has nothing to do, and the
+    // session can read a tempo and the gains back.
+    session.analysed();
+    session.analyze(None).unwrap();
+    let seen = until(&events, |e| matches!(e, Event::Analysed { .. }));
+    match seen.last().unwrap() {
+        Event::Analysed { result, .. } => assert_eq!(result.as_ref().unwrap().analysed, 0),
+        other => panic!("{other:?}"),
+    }
+    // A 1 kHz tone has no pulse, so no tempo; the row is there all the same.
+    assert_eq!(session.bpm(&songs.join("a.wav")), None);
+    assert_eq!(session.bpm(Path::new("/nowhere.wav")), None);
+}
+
+#[test]
+fn an_analysis_refuses_without_a_library_file() {
+    let (sink, _events) = channel();
+    let conn = db::open_memory().unwrap();
+    let mut session = Session::new(conn, common::fake_player().0, sink);
+    assert_eq!(session.analyze(None), Err(Refusal::NoLibraryPath));
+}

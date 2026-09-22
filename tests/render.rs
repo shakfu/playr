@@ -44,6 +44,7 @@ struct Case<'a> {
     sampler: Sampler,
     colour: bool,
     theme: Theme,
+    bpm: Option<f32>,
 }
 
 impl<'a> Case<'a> {
@@ -66,7 +67,13 @@ impl<'a> Case<'a> {
             sampler: Sampler::default(),
             colour: true,
             theme: Theme::Dark,
+            bpm: None,
         }
+    }
+
+    fn bpm(mut self, v: f32) -> Self {
+        self.bpm = Some(v);
+        self
     }
 
     fn all(mut self, v: &'a [Track]) -> Self {
@@ -180,6 +187,7 @@ impl<'a> Case<'a> {
             selection: self.selection,
             playlists: self.playlists,
             input: self.input,
+            bpm: self.bpm,
             help_scroll: self.help_scroll,
             message: self.message,
             colour: self.colour,
@@ -332,6 +340,7 @@ fn now_playing_shows_title_position_and_source_format() {
             semitones: 0,
             mode: Default::default(),
             looping: None,
+            gain_db: None,
         },
         position: Duration::from_secs(151),
         volume: 0.75,
@@ -464,6 +473,33 @@ fn varispeed_is_shown_but_not_as_a_rate_conversion() {
         !joined.contains("->"),
         "spurious rate conversion shown:\n{joined}"
     );
+}
+
+#[test]
+fn the_tempo_shows_once_a_track_is_analysed() {
+    let snapshot = stopped();
+    let plain = Case::new(View::Library, &snapshot).text();
+    assert!(!plain.contains("BPM"), "tempo shown unmeasured:\n{plain}");
+
+    // The model hands over the tempo as it sounds, so varispeed has moved it.
+    let measured = Case::new(View::Library, &snapshot).bpm(128.4).text();
+    assert!(measured.contains("128 BPM"), "tempo not shown:\n{measured}");
+}
+
+#[test]
+fn replaygain_shows_its_gain_while_on() {
+    let mut snapshot = stopped();
+    let off = Case::new(View::Library, &snapshot).text();
+    assert!(!off.contains("rg "), "replaygain shown while off:\n{off}");
+
+    snapshot.status.gain_db = Some(-6.23);
+    let on = Case::new(View::Library, &snapshot).text();
+    assert!(on.contains("rg -6.2 dB"), "gain not shown:\n{on}");
+
+    // On, with nothing known about the track, it plays at 0 dB, and says so.
+    snapshot.status.gain_db = Some(-0.01);
+    let zero = Case::new(View::Library, &snapshot).text();
+    assert!(zero.contains("rg +0.0 dB"), "gain not shown:\n{zero}");
 }
 
 #[test]
@@ -1828,4 +1864,25 @@ fn the_spectrogram_draws_two_rows_a_cell_low_frequencies_at_the_bottom() {
         assert!(columns(line).iter().all(|c| shades.contains(c)), "{line:?}");
     }
     assert!(plain.iter().any(|l| columns(l).contains(&'\u{2588}')));
+}
+
+#[test]
+fn info_draws_the_measurements_as_a_list() {
+    let input = Input::Info(playr_app::model::TrackInfo {
+        title: "Peace Piece - Bill Evans".into(),
+        rows: vec![
+            ("loudness".into(), "-13.5 LUFS".into()),
+            (
+                "tempo".into(),
+                "87 BPM, or 174 BPM (confidence 0.62)".into(),
+            ),
+        ],
+    });
+    let joined = Case::new(View::Library, &stopped())
+        .input(&input)
+        .size(100, 30)
+        .text();
+    assert!(joined.contains("Peace Piece"), "no heading:\n{joined}");
+    assert!(joined.contains("-13.5 LUFS"), "no loudness:\n{joined}");
+    assert!(joined.contains("174 BPM"), "no tempo:\n{joined}");
 }

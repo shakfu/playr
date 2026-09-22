@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::action::{Action, Key, Keymap, Nudge, Slicing, Zoom};
 use crate::{Display, Theme, View};
 use playr_core::audio::Mode;
+use playr_core::gain::ReplayGain;
 use playr_core::samples::MAX_SLICES;
 
 /// A `:` command: its name, what may follow it, what it does, and the one
@@ -57,11 +58,17 @@ pub const COMMANDS: &[Command] = &[
     any("scan", "DIR", "add a directory to the library"),
     any("rescan", "", "re-scan directories previously added"),
     any(
+        "analyze",
+        "[DIR]",
+        "measure loudness, tempo and file health",
+    ),
+    any(
         "roots",
         "[add|rm DIR]",
         "list the directories the library covers",
     ),
     any("prune", "[DIR]", "remove tracks and marks of missing files"),
+    any("info", "", "what analysis measured about this track"),
     any("open", "PATH", "play a file or directory, and select it"),
     any("pause", "", "play or pause"),
     any("next", "", "next track"),
@@ -86,6 +93,11 @@ pub const COMMANDS: &[Command] = &[
         "mode",
         "MODE | + | -",
         "normal, shuffle, repeat, repeat-one, + or -",
+    ),
+    any(
+        "replaygain",
+        "SETTING",
+        "level by loudness: off, track, album, auto",
     ),
     any("mark", "[TIME]", "mark the playing position, or a time"),
     any("unmark", "", "undo the last mark"),
@@ -190,6 +202,8 @@ pub const COMMANDS: &[Command] = &[
 const MODES: &[(&str, Mode)] = &Mode::NAMES;
 
 const THEMES: &[(&str, Theme)] = &Theme::NAMES;
+
+const REPLAYGAINS: &[(&str, ReplayGain)] = &ReplayGain::NAMES;
 
 const VIEWS: &[(&str, View)] = &[
     ("library", Library),
@@ -299,7 +313,10 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         PlayPlaylist(name) => format!("playlist {name}"),
         Scan(dir) => format!("scan {}", dir.display()),
         Rescan => "rescan".into(),
+        Analyze(None) => "analyze".into(),
+        Analyze(Some(dir)) => format!("analyze {}", dir.display()),
         ShowRoots => "roots".into(),
+        ShowInfo => "info".into(),
         ForgetRoot(dir) => format!("roots rm {}", dir.display()),
         Prune(Some(dir)) => format!("prune {}", dir.display()),
         Prune(None) => "prune".into(),
@@ -328,6 +345,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
             "mode {}",
             MODES.iter().find(|x| x.1 == *m).expect("every mode").0
         ),
+        SetReplayGain(r) => format!("replaygain {}", r.name()),
         Mark => "mark".into(),
         MarkAt(d) => format!("mark {}", time(d)),
         UndoMark => "unmark".into(),
@@ -589,6 +607,8 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "scan" | "open" if rest.is_empty() => Err(usage()),
         "scan" => Ok(Action::Scan(path(rest))),
         "rescan" => nothing(Action::Rescan),
+        "analyze" if rest.is_empty() => Ok(Action::Analyze(None)),
+        "analyze" => Ok(Action::Analyze(Some(path(rest)))),
         // `:roots add DIR` is `:scan DIR`: recording a root without scanning
         // it would leave a root the library holds nothing for.
         "roots" if rest.is_empty() => Ok(Action::ShowRoots),
@@ -597,6 +617,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             Some(("rm", dir)) if !dir.trim().is_empty() => Ok(Action::ForgetRoot(path(dir.trim()))),
             _ => Err(usage()),
         },
+        "info" => nothing(Action::ShowInfo),
         "prune" if rest.is_empty() => Ok(Action::Prune(None)),
         "prune" => Ok(Action::Prune(Some(path(rest)))),
         "open" => Ok(Action::Open(vec![path(rest)])),
@@ -659,6 +680,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
                 choose(&typed, MODES, "mode").map(Action::SetMode)
             }
         },
+        "replaygain" => choose(rest, REPLAYGAINS, "replaygain").map(Action::SetReplayGain),
         "mark" if rest.is_empty() => Ok(Action::Mark),
         "mark" => Ok(Action::MarkAt(parse_time(rest)?)),
         "unmark" => nothing(Action::UndoMark),
@@ -799,6 +821,7 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
     let choices: Vec<String> = match command.name {
         "mode" => MODES.iter().map(|m| m.0.to_string()).collect(),
         "theme" => THEMES.iter().map(|t| t.0.to_string()).collect(),
+        "replaygain" => REPLAYGAINS.iter().map(|r| r.0.to_string()).collect(),
         "snap" | "loop" => vec!["on".into(), "off".into()],
         "edge" => vec!["start".into(), "end".into()],
         "pick" => vec!["next".into(), "prev".into()],

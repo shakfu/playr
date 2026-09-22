@@ -78,6 +78,21 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
                 app.help_scroll,
             )
         }
+        Input::Info(info) => {
+            let rows: Vec<(&str, &str)> = info
+                .rows
+                .iter()
+                .map(|(label, value)| (label.as_str(), value.as_str()))
+                .collect();
+            draw_help(
+                app.palette(),
+                f,
+                f.area(),
+                &info.title,
+                &rows,
+                app.help_scroll,
+            )
+        }
         _ => app.help_scroll,
     };
     if !app.colour {
@@ -711,6 +726,13 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         }
         spans.push(Span::styled(fmt, Style::default().fg(p.dim)));
     }
+    // As it sounds: varispeed moves it with the music.
+    if let Some(bpm) = app.bpm {
+        spans.push(Span::styled(
+            format!("  {bpm:.0} BPM"),
+            Style::default().fg(p.dim),
+        ));
+    }
     f.render_widget(Paragraph::new(Line::from(spans)), now);
 
     let total = status.duration.unwrap_or_default();
@@ -907,6 +929,13 @@ fn indicators(
         let speed = playr_core::audio::speed_for(semitones);
         spans.push(Span::styled(
             format!("{speed:.2}x ({semitones:+} st)  "),
+            Style::default().fg(p.notice),
+        ));
+    }
+    // Shown whenever ReplayGain is on, so its level change is never a mystery.
+    if let Some(db) = snapshot.status.gain_db {
+        spans.push(Span::styled(
+            format!("{}  ", playr_app::message::replaygain(db)),
             Style::default().fg(p.notice),
         ));
     }

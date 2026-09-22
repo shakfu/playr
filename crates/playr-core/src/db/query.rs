@@ -27,6 +27,15 @@ fn row_to_track(r: &Row) -> rusqlite::Result<Track> {
     })
 }
 
+/// [`COLS`] and [`ORDER`] qualified, for the join with `analysis`, which has
+/// a `path`, an `mtime` and a `size` of its own.
+const COLS_T: &str = "t.id, t.path, t.title, t.artist, t.album, t.album_artist, t.track_no,
+                      t.disc_no, t.year, t.genre, t.duration_ms, t.sample_rate, t.channels,
+                      t.bit_depth, t.mtime, t.size";
+
+const ORDER_T: &str = "ORDER BY t.album_artist IS NULL, t.album_artist, t.artist, t.album,
+                                t.disc_no, t.track_no, t.title, t.path";
+
 /// Sort order used everywhere a track list is shown.
 const ORDER: &str = "ORDER BY album_artist IS NULL, album_artist, artist, album,
                               disc_no, track_no, title, path";
@@ -43,8 +52,16 @@ pub fn count(conn: &Connection) -> Result<i64> {
     conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
 }
 
+/// The name `bpm:` is matched against the library's tempos, not the text
+/// index, so [`search`] takes it out before building the FTS5 query.
+const BPM: &str = "bpm";
+
+/// How far either side of a bare `bpm:128` a tempo still matches.
+const BPM_WITHIN: f32 = 1.0;
+
 /// Fields a search term can be limited to, as typed, and their FTS5 columns.
 const FIELDS: &[(&str, &str)] = &[
+    (BPM, BPM),
     ("title", "title"),
     ("artist", "artist"),
     ("album", "album"),
@@ -89,14 +106,31 @@ fn terms(input: &str) -> Vec<(Option<&'static str>, String)> {
     }
 }
 
+/// The tempo range `text` names: `120..130`, `120..`, `..130`, or `128` for
+/// [`BPM_WITHIN`] either side of it. `None` when it names no range, which
+/// matches nothing rather than everything.
+fn bpm_range(text: &str) -> Option<(f32, f32)> {
+    let number = |t: &str| t.trim().parse::<f32>().ok().filter(|n| n.is_finite());
+    match text.split_once("..") {
+        Some(("", "")) => None,
+        Some((lo, "")) => Some((number(lo)?, f32::INFINITY)),
+        Some(("", hi)) => Some((0.0, number(hi)?)),
+        Some((lo, hi)) => Some((number(lo)?, number(hi)?)),
+        None => {
+            let at = number(text)?;
+            Some((at - BPM_WITHIN, at + BPM_WITHIN))
+        }
+    }
+}
+
 /// Turns search input into an FTS5 query of prefix terms, all of which must match.
 ///
 /// Every term is quoted, so FTS operators in the input (`AND`, `*`, `"`) are
 /// matched as text rather than parsed or raising an error. `artist:evans`
 /// limits a term to one column, and `artist:"bill evans"` a phrase; a prefix
 /// that names no field, as in `op:1`, stays part of the text.
-fn fts_query(input: &str) -> Option<String> {
-    let terms: Vec<String> = terms(input)
+fn fts_query(terms: Vec<(Option<&'static str>, String)>) -> Option<String> {
+    let terms: Vec<String> = terms
         .into_iter()
         .filter(|(_, text)| !text.trim().is_empty())
         .map(|(column, text)| {
@@ -110,22 +144,66 @@ fn fts_query(input: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
-/// Full-text search over title, artist, album and album artist.
+/// Full-text search over title, artist, album and album artist, and over the
+/// tempos `playr analyze` recorded with `bpm:`.
+///
+/// A track matches on its BPM tag when it has one; otherwise on the tempo
+/// measured or on the metrical level either side of it, so a track recorded
+/// at 87 BPM is found by `bpm:174` as well.
 ///
 /// Results come in library order, so a matching album plays in track order.
 /// Empty or whitespace-only input returns an empty vector rather than every
-/// track.
+/// track. `bpm:` alone matches every track in the range; a track keeps its
+/// place in library order either way.
 pub fn search(conn: &Connection, input: &str) -> Result<Vec<Track>> {
-    let Some(q) = fts_query(input) else {
+    let (bpm, text): (Vec<_>, Vec<_>) = terms(input)
+        .into_iter()
+        .partition(|(field, _)| *field == Some(BPM));
+    let fts = fts_query(text);
+    let Some(range) = bpm.first().map(|(_, text)| bpm_range(text)) else {
+        let Some(q) = fts else {
+            return Ok(Vec::new());
+        };
+        let sql = format!(
+            "SELECT {COLS} FROM tracks
+             WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
+             {ORDER}"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        return stmt.query_map([&q], row_to_track)?.collect();
+    };
+    // A range that parses as nothing, such as `bpm:fast`, matches nothing.
+    let Some((lo, hi)) = range else {
         return Ok(Vec::new());
     };
+    let matching = match fts.is_some() {
+        true => "AND t.id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?4)",
+        false => "",
+    };
     let sql = format!(
-        "SELECT {COLS} FROM tracks
-         WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
-         {ORDER}"
+        "SELECT {COLS_T} FROM tracks t
+           JOIN analysis a ON a.path = t.path AND a.mtime = t.mtime AND a.size = t.size
+          WHERE a.version = ?5
+            AND CASE
+                  WHEN a.bpm_tag IS NOT NULL THEN a.bpm_tag BETWEEN ?1 AND ?2
+                  WHEN a.bpm_conf >= ?3 THEN a.bpm BETWEEN ?1 AND ?2
+                                          OR a.bpm_alt BETWEEN ?1 AND ?2
+                  ELSE 0
+                END
+            {matching}
+          {ORDER_T}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([&q], row_to_track)?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            lo,
+            hi,
+            crate::analysis::tempo::MIN_CONFIDENCE,
+            fts.unwrap_or_default(),
+            crate::analysis::VERSION,
+        ],
+        row_to_track,
+    )?;
     rows.collect()
 }
 

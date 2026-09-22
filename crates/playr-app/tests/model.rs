@@ -977,3 +977,159 @@ fn a_mark_will_not_move_onto_another() {
     model.perform(Action::PickMark(true));
     assert_eq!(model.sampler().cursor, Some(48_000));
 }
+
+#[test]
+fn the_tempo_shown_follows_varispeed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.wav");
+    common::tone(&path, 44100, 0.5, -12.0);
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let mut t = track(path.to_str().unwrap());
+    let meta = std::fs::metadata(&path).unwrap();
+    t.size = meta.len() as i64;
+    t.mtime = meta
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+    db::upsert(&conn, &t).unwrap();
+    db::analysis::put(
+        &conn,
+        &t,
+        playr_core::analysis::Analysis {
+            bpm_tag: Some(120.0),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut model = Model::new(conn, common::fake_player().0, vec![t], Config::default());
+
+    model.refresh();
+    assert_eq!(model.bpm(), Some(120.0));
+    // Twelve semitones is twice the speed, so the music is twice as fast.
+    // The engine publishes the speed on its own pass, so wait for it.
+    model.perform(Action::SetSpeed(12));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.bpm() != Some(240.0) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        model.refresh();
+    }
+    assert_eq!(model.bpm().map(f32::round), Some(240.0));
+}
+
+#[test]
+fn a_scan_analyses_what_it_added_when_the_setting_asks() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir(&music).unwrap();
+    common::tone(&music.join("t.wav"), 44100, 0.5, -12.0);
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let mut config = Config::default();
+    config.settings.analyze_on_scan = true;
+    let mut model = Model::new(conn, common::fake_player().0, Vec::new(), config);
+
+    model.perform(Action::Scan(music.clone()));
+    // The analysis writes through its own connection, so read the file.
+    let reader = db::open(&library).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut rows = 0;
+    while rows == 0 && Instant::now() < deadline {
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(20));
+        rows = db::analysis::stats(&reader).map(|s| s.len()).unwrap_or(0);
+    }
+    assert_eq!(rows, 1, "the scan did not analyse what it added");
+}
+
+/// `:info` on a track the library has measured, and on one it has not.
+#[test]
+fn info_shows_what_analysis_measured() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.wav");
+    common::tone(&path, 44100, 0.5, -12.0);
+    let library = dir.path().join("library.db");
+    let conn = db::open(&library).unwrap();
+    let mut t = track(path.to_str().unwrap());
+    t.title = Some("Peace Piece".into());
+    t.artist = Some("Bill Evans".into());
+    t.sample_rate = Some(44100);
+    t.channels = Some(2);
+    t.bit_depth = Some(16);
+    t.duration_ms = Some(500);
+    db::upsert(&conn, &t).unwrap();
+    let mut model = Model::new(conn, common::fake_player().0, Vec::new(), Config::default());
+
+    // Nothing measured yet: the dialog says so rather than showing blanks.
+    model.perform(Action::ShowInfo);
+    let rows = match model.input() {
+        Input::Info(info) => {
+            assert!(info.title.contains("Peace Piece"), "{}", info.title);
+            info.rows.clone()
+        }
+        other => panic!("{other:?}"),
+    };
+    let value = |label: &str| {
+        rows.iter()
+            .find(|(l, _)| l == label)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(
+        value("format").as_deref(),
+        Some("44.1 kHz, 2 ch, 16 bit, 0:00")
+    );
+    assert!(value("measured").is_some_and(|v| v.contains(":analyze")));
+    assert_eq!(value("loudness"), None);
+
+    // Analysed: the measurements and the gain that would apply.
+    model.perform(Action::Analyze(None));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut rows = Vec::new();
+    while Instant::now() < deadline {
+        model.refresh();
+        model.perform(Action::ShowInfo);
+        if let Input::Info(info) = model.input() {
+            rows = info.rows.clone();
+        }
+        if rows.iter().any(|(l, _)| l == "loudness") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let value = |label: &str| {
+        rows.iter()
+            .find(|(l, _)| l == label)
+            .map(|(_, v)| v.clone())
+    };
+    let loudness = value("loudness").expect("no loudness row");
+    assert!(loudness.contains("LUFS"), "{loudness}");
+    assert!(
+        value("peak").is_some_and(|v| v.contains("dBFS")),
+        "{rows:?}"
+    );
+    assert!(
+        value("track gain").is_some_and(|v| v.contains("dB")),
+        "{rows:?}"
+    );
+    // Half a second is too short for a tempo, and it says which.
+    assert!(
+        value("tempo").is_some_and(|v| v.contains("too short")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn info_refuses_when_there_is_no_track_to_describe() {
+    let (mut model, _dir) = model();
+    model.perform(Action::ShowView(View::Playlists));
+    model.perform(Action::ShowInfo);
+    assert!(matches!(model.input(), Input::None), "{:?}", model.input());
+    assert_eq!(
+        model.message_text(),
+        Some(playr_app::message::text(&Message::Core(Notice::Refused(
+            Refusal::NothingPlaying
+        ))))
+        .as_deref()
+    );
+}

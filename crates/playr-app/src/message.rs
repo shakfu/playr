@@ -13,6 +13,9 @@ use playr_core::notice::{Notice, Outcome, Refusal, Task};
 use crate::action::{Action, Key};
 use crate::command;
 use crate::{Display, Theme, View};
+use playr_core::analysis::{self, tempo, Analysis, Finding, Md5};
+use playr_core::db::Track;
+use playr_core::gain::Gains;
 
 /// A message for the person using the interface.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +105,7 @@ pub fn text(message: &Message) -> String {
                 Task::Slice => "slicing failed",
                 Task::Export => "export failed",
                 Task::Scan => "scan failed",
+                Task::Analyze => "analysis failed",
                 Task::Prune => "prune failed",
                 Task::Open => "could not open",
             };
@@ -177,6 +181,7 @@ fn outcome_text(outcome: &Outcome) -> String {
         Outcome::Deleted { name } => format!("deleted \"{name}\""),
         Outcome::PlayingPlaylist { name } => format!("playing \"{name}\""),
         Outcome::Mode(mode) => format!("mode: {}", mode.name()),
+        Outcome::ReplayGain(r) => format!("replaygain: {}", r.name()),
         Outcome::Marked { at, kept } => {
             // As with playlists: in memory, the mark is gone when playr exits.
             let kept = if *kept {
@@ -203,6 +208,21 @@ fn outcome_text(outcome: &Outcome) -> String {
         Outcome::ScanStarted { dir: Some(dir) } => format!("scanning {}", home_as_tilde(dir)),
         Outcome::ScanStarted { dir: None } => "rescanning library".into(),
         Outcome::Scanning { seen, added } => format!("scanning: {seen} files, {added} added"),
+        Outcome::AnalysisStarted { dir: None } => "analysing the library".into(),
+        Outcome::AnalysisStarted { dir: Some(dir) } => {
+            format!("analysing {}", home_as_tilde(dir))
+        }
+        Outcome::Analysing { done, total } => format!("analysing: {done}/{total} tracks"),
+        Outcome::Analysed { analysed: 0, .. } => {
+            "nothing to analyse; every track is up to date".into()
+        }
+        Outcome::Analysed { analysed, failed } => {
+            let failed = match failed {
+                0 => String::new(),
+                n => format!(", {n} unreadable"),
+            };
+            format!("analysed {analysed} tracks{failed}")
+        }
         Outcome::Scanned { dir, report } => {
             let missing = match (report.missing, report.unavailable) {
                 (0, _) => String::new(),
@@ -274,6 +294,7 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::NoLibraryPath => "no library file to scan into".into(),
         Refusal::NotADirectory(path) => format!("not a directory: {}", home_as_tilde(path)),
         Refusal::ScanRunning => "a scan or prune is already running".into(),
+        Refusal::AnalysisRunning => "an analysis is already running".into(),
         Refusal::NoRoots => "no directories recorded; :scan DIR adds one".into(),
         Refusal::NoMarkHere => "no mark under the cursor; [ and ] move to one".into(),
         Refusal::MarkInTheWay { at } => {
@@ -313,4 +334,128 @@ fn count(n: usize, thing: &str) -> String {
         1 => format!("1 {thing}"),
         n => format!("{n} {thing}s"),
     }
+}
+
+/// The ReplayGain applied, as the bottom line shows it: `rg -6.2 dB`.
+pub fn replaygain(db: f32) -> String {
+    // Rounding to one decimal would show a tiny cut as -0.0.
+    let db = if db.abs() < 0.05 { 0.0 } else { db };
+    format!("rg {db:+.1} dB")
+}
+
+/// What a [`Finding`] says beyond its name, for a report or a dialog.
+pub fn finding_detail(f: &Finding) -> String {
+    match f {
+        Finding::Unreadable(e) => e.clone(),
+        Finding::Damaged { skipped, md5_bad } => match (skipped, md5_bad) {
+            (0, _) => "audio does not match its MD5".into(),
+            (n, false) => format!("{n} packets skipped"),
+            (n, true) => format!("{n} packets skipped; audio does not match its MD5"),
+        },
+        Finding::NoChecksum => "no MD5 in the FLAC header".into(),
+        Finding::WrongLength { decoded, header } => {
+            format!("{decoded} frames decoded, header says {header}")
+        }
+        Finding::Padded { used, bits } => format!("{used} of {bits} bits used"),
+        Finding::PossibleLossySource { hz } | Finding::PossibleUpsampling { hz } => {
+            format!("content stops at {:.1} kHz", *hz as f32 / 1000.0)
+        }
+    }
+}
+
+/// The rows `:info` shows for `track`: what the library knows from its tags,
+/// then what `playr analyze` measured, then the problems it found.
+///
+/// `analysis` is `None` until the track is analysed, or once the file has
+/// changed since; `gains` is what ReplayGain would apply.
+pub fn info_rows(
+    track: &Track,
+    analysis: Option<&Analysis>,
+    gains: Gains,
+) -> Vec<(String, String)> {
+    let mut rows = vec![("file".into(), home_as_tilde(Path::new(&track.path)))];
+    if let Some(album) = &track.album {
+        rows.push(("album".into(), album.clone()));
+    }
+    let mut format = String::new();
+    if let Some(rate) = track.sample_rate {
+        format.push_str(&format!("{:.1} kHz", f64::from(rate) / 1000.0));
+    }
+    if let Some(channels) = track.channels {
+        format.push_str(&format!(", {channels} ch"));
+    }
+    if let Some(bits) = track.bit_depth {
+        format.push_str(&format!(", {bits} bit"));
+    }
+    if let Some(ms) = track.duration_ms {
+        format.push_str(&format!(", {}", fmt_time(Duration::from_millis(ms as u64))));
+    }
+    rows.push(("format".into(), format.trim_start_matches(", ").to_string()));
+
+    let Some(a) = analysis else {
+        rows.push(("measured".into(), "not yet; :analyze measures it".into()));
+        return rows;
+    };
+
+    match a.loudness {
+        Some(lufs) => rows.push(("loudness".into(), format!("{lufs:.1} LUFS"))),
+        None => rows.push(("loudness".into(), "silent".into())),
+    }
+    if let Some(peak) = a.peak {
+        let dbfs = match peak > 0.0 {
+            true => format!("{:.1} dBFS", 20.0 * peak.log10()),
+            false => "silent".into(),
+        };
+        rows.push(("peak".into(), format!("{peak:.3} ({dbfs})")));
+    }
+    let gain = |name: &str, g: Option<playr_core::gain::Gain>| {
+        let g = g?;
+        let capped = match g.linear() < 10f32.powf(g.db / 20.0) - 1e-6 {
+            true => ", held back by the peak",
+            false => "",
+        };
+        Some((name.to_string(), format!("{:+.1} dB{capped}", g.db)))
+    };
+    rows.extend(gain("track gain", gains.track));
+    rows.extend(gain("album gain", gains.album));
+
+    let tempo = match (a.bpm_tag, a.tempo) {
+        (Some(tag), _) => format!("{tag:.0} BPM, from the file's tag"),
+        (None, Some(t)) if t.confidence >= tempo::MIN_CONFIDENCE => {
+            let alt = match t.alt {
+                Some(alt) => format!(", or {alt:.0} BPM"),
+                None => String::new(),
+            };
+            format!("{:.0} BPM{alt} (confidence {:.2})", t.bpm, t.confidence)
+        }
+        (None, Some(t)) => format!("no clear pulse (confidence {:.2})", t.confidence),
+        (None, None) => "too short to measure".into(),
+    };
+    rows.push(("tempo".into(), tempo));
+
+    if let Some(c) = a.cutoff {
+        rows.push((
+            "content to".into(),
+            format!(
+                "{:.1} kHz, falling {:.0} dB",
+                c.hz as f32 / 1000.0,
+                c.fall_db
+            ),
+        ));
+    }
+    if let (Some(used), Some(bits)) = (a.bits_used, a.bits) {
+        rows.push(("bits used".into(), format!("{used} of {bits}")));
+    }
+    if let Some(md5) = a.md5 {
+        let says = match md5 {
+            Md5::Ok => "matches the FLAC header",
+            Md5::Bad => "does not match the FLAC header",
+            Md5::Absent => "none in the FLAC header",
+        };
+        rows.push(("checksum".into(), says.into()));
+    }
+    for finding in analysis::findings(a) {
+        rows.push((finding.name().into(), finding_detail(&finding)));
+    }
+    rows
 }

@@ -79,11 +79,13 @@ pub const HELP_MENU: &[Control] = &[
 pub const LIBRARY_ROW: &[Control] = &[
     control("Play from here", Action::Activate),
     control("Select or unselect", Action::Add),
+    control("Track info", Action::ShowInfo),
 ];
 
 pub const SELECTION_ROW: &[Control] = &[
     control("Play from here", Action::Activate),
     control("Remove", Action::Remove),
+    control("Track info", Action::ShowInfo),
     control("Move up", Action::MoveTrack(-1)),
     control("Move down", Action::MoveTrack(1)),
 ];
@@ -110,6 +112,8 @@ pub const SAMPLER_BAR: &[Control] = &[
     control("dB", Action::Display(Some(Display::Decibels))),
     control("Spectrogram", Action::Display(Some(Display::Spectrogram))),
     control("Waveform", Action::Display(Some(Display::Braille))),
+    // The sampler lists no tracks, so this describes the playing one.
+    control("Track info", Action::ShowInfo),
 ];
 
 /// Buttons setting the range to slice, under the waveform.
@@ -175,6 +179,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("SetVolume", "the volume slider"),
     ("SetSpeed", "the speed slider"),
     ("SetMode", "the mode menu"),
+    ("SetReplayGain", "the ReplayGain menu"),
     ("SeekTo", "a click on the progress bar or the waveform"),
     (
         "MarkAt",
@@ -195,6 +200,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ),
     ("MoveMarkTo", "a mark dragged along the waveform"),
     ("Rescan", "File, Rescan library"),
+    ("Analyze", "File, Analyze library and Analyze folder"),
     ("ShowRoots", "File, Library directories"),
     ("ForgetRoot", "Forget, in File, Library directories"),
     ("Prune", "File, Remove missing files"),

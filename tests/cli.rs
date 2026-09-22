@@ -373,3 +373,77 @@ fn roots_lists_what_was_scanned_and_rm_forgets_it() {
     let (_, stdout, _) = output(&db, &["roots"]);
     assert!(stdout.trim().is_empty(), "still listed: {stdout}");
 }
+
+/// Writes a second of a mono sine as a WAV of `bits` bits, the low `pad` of
+/// them always zero.
+fn sine_wav(path: &Path, bits: u16, pad: u32) {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100,
+        bits_per_sample: bits,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    let full = ((1i64 << (bits - 1)) - 1) as f64;
+    for i in 0..44100 {
+        let v = (i as f64 * 0.06).sin() * 0.25 * full;
+        w.write_sample(((v as i64 >> pad) << pad) as i32).unwrap();
+    }
+    w.finalize().unwrap();
+}
+
+#[test]
+fn analyze_records_findings_and_skips_what_is_current() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir(&music).unwrap();
+    sine_wav(&music.join("plain.wav"), 16, 0);
+    sine_wav(&music.join("padded.wav"), 24, 8);
+    let db = dir.path().join("library.db");
+
+    let (code, _, stderr) = output(&db, &["analyze"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("no library"), "{stderr}");
+
+    playr(&db, &["scan", music.to_str().unwrap()]);
+    // A running playr holds the lock; analysis runs beside it, a scan does not.
+    let _running = playr_app::instance::claim_at(&dir.path().join("playr/instance.lock")).unwrap();
+    let (code, stdout, stderr) = output(&db, &["analyze", "--jobs", "2"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("analysing 2 of 2 tracks"), "{stdout}");
+    assert!(stdout.contains("padded"), "{stdout}");
+    assert!(stdout.contains("16 of 24 bits used"), "{stdout}");
+    assert!(stdout.contains("2 tracks analysed; 1 padded"), "{stdout}");
+    let (code, _, stderr) = output(&db, &["scan", music.to_str().unwrap()]);
+    assert_eq!(code, Some(1), "scan ran beside a playr: {stderr}");
+
+    let (_, stdout, _) = output(&db, &["analyze"]);
+    assert!(stdout.contains("analysing 0 of 2 tracks"), "{stdout}");
+    let (_, stdout, _) = output(
+        &db,
+        &[
+            "analyze",
+            "--force",
+            music.join("plain.wav").to_str().unwrap(),
+        ],
+    );
+    assert!(stdout.contains("analysing 1 of 1 tracks"), "{stdout}");
+
+    let (code, stdout, stderr) = output(&db, &["analyze", "--report", "--json"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let tracks = report["tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 2);
+    for t in tracks {
+        // A -12 dBFS sine at 421 Hz, where K-weighting is flat, in one
+        // channel: -0.691 + 20 log10(0.25) - 3.01 = -15.74 LUFS.
+        let lufs = t["loudness"].as_f64().unwrap();
+        assert!((lufs + 15.74).abs() < 0.05, "{t}");
+    }
+    let padded = tracks
+        .iter()
+        .find(|t| t["path"].as_str().unwrap().ends_with("padded.wav"))
+        .unwrap();
+    assert_eq!(padded["findings"][0]["finding"], "padded");
+    assert_eq!(report["not_analysed"], 0);
+}

@@ -1,6 +1,6 @@
 # Library analysis and ReplayGain
 
-Design, written 2026-09-22 against playr 0.9.1, before any of it was built. It adds `playr analyze`, which decodes each file once and records checks, loudness and tempo in the library. ReplayGain applies the loudness at playback. It answers "ReplayGain" under Playback in `TODO.md`. Astra's integrity scanner (`src/main/services/libraryIntegrity.ts` in [Boof2015/astra](https://github.com/Boof2015/astra)) suggested the checks; Astra is GPL-3.0, so nothing is taken from its code.
+Design, written 2026-09-22 against playr 0.9.1, before any of it was built. All four phases were built the same day, with each open decision taken as recommended; "Built" at the end records where it differs. It adds `playr analyze`, which decodes each file once and records checks, loudness and tempo in the library. ReplayGain applies the loudness at playback. It answers "ReplayGain" under Playback in `TODO.md`. Astra's integrity scanner (`src/main/services/libraryIntegrity.ts` in [Boof2015/astra](https://github.com/Boof2015/astra)) suggested the checks; Astra is GPL-3.0, so nothing is taken from its code.
 
 ## Constraints
 
@@ -160,6 +160,34 @@ Analysis can take hours, so refusing to play during it is the larger cost. The o
 
 A `:analyze` command, running in the background as `:slice` does, can come later.
 
+### Tempo, against librosa
+
+No file in the library to hand carries a BPM tag, so the reference is a second
+algorithm: librosa's `feature.rhythm.tempo`, over the same 328 tracks (mostly
+ambient and electronic, decoded to mono at 22.05 kHz by ffmpeg). "Metrical" is
+an answer at a simple ratio of librosa's: half, double, 3:2, 3:4 and so on,
+within 4%.
+
+| `MIN_CONFIDENCE` | Tracks kept | Same | Metrical | Unrelated |
+|-|-|-|-|-|
+| 0.0 | 328 (100%) | 45% | 25% | 30% |
+| 0.2 | 196 (60%) | 55% | 26% | 19% |
+| **0.3** | **155 (47%)** | **60%** | **28%** | **12%** |
+| 0.4 | 129 (39%) | 63% | 27% | 10% |
+| 0.5 | 98 (30%) | 65% | 27% | 8% |
+| 0.6 | 68 (21%) | 63% | 31% | 6% |
+
+0.3 is the knee: unrelated answers fall from 19% to 12% for 13 points of
+coverage, and each step after that costs about 8 points of coverage for 2 of
+agreement. Confidence orders the library as it should, from 18% agreement
+below 0.1 to 63% above 0.6.
+
+Two things this does not say. librosa is not ground truth: on music with no
+pulse both estimators return a number, so "unrelated" counts a disagreement,
+not a proven error. And both weight lags towards 120 BPM, so they may share an
+octave bias; the 28% metrical share is a floor, and the 60% exact share is
+optimistic.
+
 ### Cost
 
 Unmeasured. Per file, the cost is a full decode plus a few FFTs a second. The FFT work is less than what the sampler's spectrogram does. The first run should report files per second so the README can quote a figure.
@@ -246,3 +274,58 @@ The frontend fills them with one query for the queue. When both are `None`, the 
 - **A PCM hash for duplicates** across formats. Needs a hash crate; `DefaultHasher` is not stable across Rust releases.
 
 - **Clipping and DC-offset detection.** Cheap in the same pass. No finding needs them yet.
+
+## Built
+
+All four phases, 2026-09-22. Where the build differs from the design above:
+
+- **Gains reach the engine as one map, not per queued path.** `Cmd::SetGains` carries gains by path, and the session sends it when ReplayGain turns on and on every reload. `Cmd::Play` keeps its shape, and a library that never uses ReplayGain never loads the map. The engine works out each queue index's factor once and keeps it until the queue or the setting changes, so a mode change or a rescan never steps a playing track's level. `Cmd::SetReplayGain` seeks to the audible position, as a speed change does, so the new gain is heard at once.
+
+- **Tempo confidence is the normalised autocorrelation at the chosen lag**, not the peak over the median. The ratio to the median grew with the number of lags searched: white noise read 1.3 to 1.7, either side of any threshold. The normalised value reads 0.85 to 1.0 for clicks and 0.01 to 0.02 for noise; `MIN_CONFIDENCE` is 0.2. BPM and confidence are both stored, and the threshold applies when read, as for the other findings.
+
+- **The onset curve is smoothed over five hops.** A period of 34.5 hops puts onsets 34 and 35 hops apart in turn, splitting the autocorrelation peak, and twice the period won instead: 150 BPM read as 75.
+
+- **A pulse above 120 * sqrt(2), about 170 BPM, reads at half tempo.** A strict pulse correlates as strongly at twice its period, so the prior decides. `a_pulse_above_170_bpm_reads_at_half_tempo` pins it.
+
+- **The cutoff window scales with the rate**, 500 Hz each side at 44.1 kHz and 1.09 kHz at 96 kHz. The fixed window read ffmpeg's default upsampler, whose transition is wide, as a 15.5 dB fall.
+
+- **More columns.** `rate`, `header_frames`, `lossless`, `bits` and `bpm_tag` make a row's findings computable without `tracks`. `error` also records a decode that stopped partway, and loudness is not stored then, so a partial measurement never sets a gain.
+
+- **The window and the page have a ReplayGain menu.** The terminal shows the gain in its bottom line; all three show it while ReplayGain is on.
+
+- **`:analyze` has its own lock, not the scan's.** `Session::analysing` is separate from `Session::scanning`, so an analysis and a scan may run together: an analysis writes only its own tables. One analysis runs at a time. It reports every file, not every hundredth as a scan does, since a file takes about half a second rather than a millisecond.
+
+- **The tempo shown is the tempo heard.** `Model::bpm` multiplies by the varispeed ratio, so 120 BPM reads 143 at +3 semitones. It is read on each track change, not each frame.
+
+- **A scan can analyse what it added.** `analyze_on_scan`, off by default, starts an analysis of the scanned directory once `Event::Scanned` lands and the scan added something. The rows the scan wrote are exactly the ones an analysis then finds out of date, so it needs no list of its own. `playr scan` loads no settings, so it prints the number waiting instead.
+
+- **`bpm:` is not an FTS column.** `search` takes the term out, then joins `analysis` for the range; with no text term it matches on tempo alone. The join qualifies the columns, since `analysis` has a `path`, an `mtime` and a `size` of its own. A bare `bpm:128` matches within 1 BPM, and a range that parses as nothing matches nothing rather than everything.
+
+### Built later
+
+- **The Opus header's output gain is applied** (RFC 7845 section 5.1), so `R128_*_GAIN` tags, which count from it, no longer need it added back. `crates/playr-core/tests/decode.rs` patches the field in an encoded file and redoes the Ogg page checksum, since no encoder to hand writes one.
+
+- **`:info` shows a track's measurements**, as a dialog rather than a fifth view. A view needs rows and a cursor of its own, and a per-track panel has neither: its content would follow another view's cursor. Browsing by measurement is a different feature, and belongs in the library view's columns and sorting, which `TODO.md` still holds. The rows are worded in `playr_app::message::info_rows`, which the report shares, so a finding reads the same in both.
+
+- **A tempo keeps the level above it**, as `bpm_alt`, when the track pulses nearly as strongly there and the reading is below the prior's centre. Only above: a pulse correlates at every multiple of its period, so the slower readings are always available and recording them would match searches for tempos the track never plays. Only below the centre: that is where the prior halves. `bpm:` matches either level; what playr shows is unchanged. The column is analyser version 2, so version 1 rows are measured again.
+
+### Calibration
+
+ffmpeg 9.0.2 on pink noise, 30 s, 44.1 kHz unless marked. Cutoff and fall as `playr analyze --report --json` gives them.
+
+| File | Cutoff | Fall | Finding |
+|-|-|-|-|
+| FLAC, genuine | 13.2 kHz | 0.8 dB | none |
+| FLAC from MP3, LAME 128 kbit/s | 16.8 kHz | 57.6 dB | possible lossy source |
+| FLAC from MP3, LAME 192 kbit/s | 18.9 kHz | 61.5 dB | possible lossy source |
+| FLAC from MP3, LAME 320 kbit/s | 20.3 kHz | 67.7 dB | none: above 20 kHz |
+| FLAC from AAC, ffmpeg 128 kbit/s | 17.3 kHz | 75.7 dB | possible lossy source |
+| FLAC, 96 kHz, genuine | 10.3 kHz | 1.2 dB | none |
+| FLAC, 44.1 upsampled to 96 kHz by ffmpeg's default resampler | 25.1 kHz | 26.5 dB | possible upsampling |
+
+A genuine file's "cutoff" is wherever its largest small fall happens to be; the fall, not the frequency, says there is none. The upsampled file clears `STEEP_DB` by 1.5 dB, so a gentler resampler would not be flagged. LAME at 320 kbit/s is missed on purpose: a threshold above 20.3 kHz would reach CD masters whose anti-alias filters start near 20 kHz. None of this is checked against real recordings.
+
+### Cost
+
+A release build on an Apple M1 analyses 14.3 of those 30 s stereo files a second on one worker: about 430 s of audio a second per core. By extrapolation, not measurement, 50,000 four-minute tracks take about an hour on seven workers.
+

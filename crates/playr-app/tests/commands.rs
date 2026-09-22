@@ -6,6 +6,7 @@ use playr_app::action::{Action, Key, Keymap};
 use playr_app::command::{completions, line, parse, CommandLine, History, COMMANDS, HISTORY_LEN};
 use playr_app::View::{self, Library, Playlists, Sampler, Selection};
 use playr_core::audio::Mode;
+use playr_core::gain::ReplayGain;
 
 fn secs(s: f64) -> Duration {
     Duration::from_secs_f64(s)
@@ -252,6 +253,41 @@ fn speed_is_whole_semitones_and_a_sign_makes_it_relative() {
 }
 
 #[test]
+fn analyze_takes_a_directory_or_none() {
+    assert_eq!(lib("analyze"), Ok(Action::Analyze(None)));
+    assert_eq!(
+        lib("analyze ~/music"),
+        Ok(Action::Analyze(Some(
+            std::env::home_dir().unwrap().join("music")
+        )))
+    );
+}
+
+#[test]
+fn replaygain_takes_a_setting_or_its_prefix() {
+    assert_eq!(
+        lib("replaygain au"),
+        Ok(Action::SetReplayGain(ReplayGain::Auto))
+    );
+    assert_eq!(
+        lib("replaygain off"),
+        Ok(Action::SetReplayGain(ReplayGain::Off))
+    );
+    assert_eq!(
+        lib("replaygain a"),
+        Err("ambiguous replaygain a: album, auto".into())
+    );
+    assert!(lib("replaygain").is_err());
+    assert_eq!(
+        completions("replaygain a", Library, &[]),
+        vec![
+            "replaygain album".to_string(),
+            "replaygain auto".to_string()
+        ]
+    );
+}
+
+#[test]
 fn mode_and_view_take_a_name_or_its_prefix() {
     assert_eq!(lib("mode shuf"), Ok(Action::SetMode(Mode::Shuffle)));
     // `repeat` is a whole name, so it is not ambiguous with `repeat-one`.
@@ -315,13 +351,16 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     assert_eq!(completions("", Library, &playlists).len(), usable(Library));
     assert_eq!(
         completions("re", Selection, &playlists),
-        ["rescan", "remove"]
+        ["rescan", "replaygain", "remove"]
     );
     assert_eq!(
         completions("re", Playlists, &playlists),
-        ["rescan", "rename"]
+        ["rescan", "replaygain", "rename"]
     );
-    assert_eq!(completions("re", Library, &playlists), ["rescan"]);
+    assert_eq!(
+        completions("re", Library, &playlists),
+        ["rescan", "replaygain"]
+    );
     assert_eq!(
         completions("mode r", Library, &playlists),
         ["mode repeat", "mode repeat-one"]
@@ -601,7 +640,10 @@ fn command_lines_round_trip_through_parse() {
         "volume +2.5",
         "speed -3",
         "speed =-3",
+        "analyze",
+        "analyze /music/new arrivals",
         "mode repeat-one",
+        "replaygain album",
         "theme light",
         "mark 1.25",
         "save late night",

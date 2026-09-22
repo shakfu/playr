@@ -218,7 +218,7 @@ dialog input[type=text] { width: 100%; }
 </main>
 
 <footer>
-  <div class="now"><span class="dim" aria-hidden="true">&gt;</span><strong id="now">nothing playing</strong><span class="dim" id="format"></span></div>
+  <div class="now"><span class="dim" aria-hidden="true">&gt;</span><strong id="now">nothing playing</strong><span class="dim" id="format"></span><span class="dim" id="bpm"></span></div>
   <div class="progress-row">
     <span class="clock" id="position">0:00</span>
     <div class="bar" id="bar" role="slider" tabindex="0" aria-label="Position; shift-click marks" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
@@ -253,6 +253,11 @@ dialog input[type=text] { width: 100%; }
         <option value="normal">normal</option><option value="shuffle">shuffle</option>
         <option value="repeat">repeat</option><option value="repeat-one">repeat one</option>
       </select></label>
+      <label>replaygain <select id="replaygain">
+        <option value="off">off</option><option value="track">track</option>
+        <option value="album">album</option><option value="auto">auto</option>
+      </select></label>
+      <span class="num" id="gain" hidden></span>
     </div>
   </div>
   <div class="status" id="status">
@@ -551,6 +556,7 @@ for (const [id, send] of [["volume", v => "volume " + v], ["speed", v => "speed 
   input.addEventListener("change", () => { adjusting = null; run(send(input.value)); });
 }
 $("mode").addEventListener("change", () => run("mode " + $("mode").value));
+$("replaygain").addEventListener("change", () => run("replaygain " + $("replaygain").value));
 
 // The progress bar: a click or a drag seeks once released; with shift, marks.
 let dragging = null;
@@ -636,7 +642,7 @@ async function followInput() {
   shownInput = kind;
   show($("confirm-dialog"), kind === "confirm");
   show($("name-dialog"), kind === "save" || kind === "rename");
-  show($("list-dialog"), kind === "keys" || kind === "commands" || kind === "roots");
+  show($("list-dialog"), kind === "keys" || kind === "commands" || kind === "roots" || kind === "info");
   $("commandbar").hidden = kind !== "command";
   $("status").hidden = kind === "command";
   if (!opened) return;
@@ -658,6 +664,11 @@ async function followInput() {
     $("list-heading").textContent = "Library directories";
     const rows = input.rows.length ? input.rows : ["none yet"];
     $("list-rows").replaceChildren(...rows.map((p) => span("heading", p)));
+  }
+  if (kind === "info") {
+    $("list-heading").textContent = input.heading;
+    $("list-rows").replaceChildren(...input.rows.flatMap(([label, value]) =>
+      [span("keys", label), span("", value)]));
   }
   if (kind === "search" && document.activeElement !== search) search.focus();
   if (kind === "command") openCommand(input.text);
@@ -838,12 +849,16 @@ function draw(next) {
 
   $("now").textContent = s.title ? (s.artist ? s.title + " - " + s.artist : s.title) : "nothing playing";
   $("format").textContent = s.format || "";
+  $("bpm").textContent = s.bpm != null ? "  " + s.bpm + " BPM" : "";
   $("pause").textContent = s.state === "playing" ? "Pause" : "Play";
   document.title = s.title ? s.title + " - playr" : "playr";
   showProgress();
   showTicks();
   showSliders();
   if (document.activeElement !== $("mode")) $("mode").value = s.mode;
+  if (document.activeElement !== $("replaygain")) $("replaygain").value = s.replaygain;
+  $("gain").hidden = s.gain_label == null;
+  $("gain").textContent = s.gain_label || "";
   showMeter();
 
   if (s.message) $("message").textContent = s.message;

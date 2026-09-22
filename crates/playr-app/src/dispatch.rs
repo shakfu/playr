@@ -109,6 +109,8 @@ pub enum Presentation {
     CommandList,
     /// The directories the library covers.
     RootList,
+    /// What analysis measured about one track.
+    TrackInfo,
     Zoom(Zoom),
     /// Draw the waveform this way, or the next way when `None`.
     Display(Option<Display>),
@@ -239,7 +241,12 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             Ok(_) => f.notify(Outcome::ScanStarted { dir: None }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
+        Action::Analyze(dir) => match f.session_mut().analyze(dir.clone()) {
+            Ok(_) => f.notify(Outcome::AnalysisStarted { dir }.into()),
+            Err(refusal) => f.notify(refusal.into()),
+        },
         Action::ShowRoots => f.present(Presentation::RootList),
+        Action::ShowInfo => f.present(Presentation::TrackInfo),
         Action::ForgetRoot(dir) => match f.session().check_forget(&dir) {
             Ok(()) => f.confirm(Confirm::ForgetRoot(dir)),
             Err(refusal) => f.notify(refusal.into()),
@@ -276,6 +283,10 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         }
         Action::SetMode(mode) => {
             let notice = f.session().set_mode(mode);
+            f.notify(notice.into());
+        }
+        Action::SetReplayGain(replaygain) => {
+            let notice = f.session_mut().set_replaygain(replaygain);
             f.notify(notice.into());
         }
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 use playr_app::action::{Action, Key, Keymap, Slicing, Zoom};
 use playr_app::{Theme, View};
 use playr_core::audio::Mode;
+use playr_core::gain::ReplayGain;
 use playr_gui::controls;
 
 /// One of each action.
@@ -38,7 +39,9 @@ fn every_action() -> Vec<Action> {
         Action::PlayPlaylist("n".into()),
         Action::Scan("/m".into()),
         Action::Rescan,
+        Action::Analyze(None),
         Action::ShowRoots,
+        Action::ShowInfo,
         Action::ForgetRoot("/m".into()),
         Action::Prune(Some("/m".into())),
         Action::Open(vec!["/m".into()]),
@@ -54,6 +57,7 @@ fn every_action() -> Vec<Action> {
         Action::SetSpeed(0),
         Action::CycleMode(true),
         Action::SetMode(Mode::Normal),
+        Action::SetReplayGain(ReplayGain::Off),
         Action::Mark,
         Action::MarkAt(Duration::ZERO),
         Action::UndoMark,
@@ -118,7 +122,9 @@ fn every_action() -> Vec<Action> {
             | Action::PlayPlaylist(_)
             | Action::Scan(_)
             | Action::Rescan
+            | Action::Analyze(_)
             | Action::ShowRoots
+            | Action::ShowInfo
             | Action::ForgetRoot(_)
             | Action::Prune(_)
             | Action::Open(_)
@@ -134,6 +140,7 @@ fn every_action() -> Vec<Action> {
             | Action::SetSpeed(_)
             | Action::CycleMode(_)
             | Action::SetMode(_)
+            | Action::SetReplayGain(_)
             | Action::Mark
             | Action::MarkAt(_)
             | Action::UndoMark

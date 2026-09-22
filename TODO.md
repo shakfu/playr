@@ -46,7 +46,7 @@ What is missing, grouped by priority:
 
 - [ ] **Loop the region.** The sampler view loops a range. One key setting the range to the region between the marks around the playhead would loop that too, for practice with varispeed, from any view.
 
-- [ ] **ReplayGain.** Read `REPLAYGAIN_*` and `R128_*` tags and apply track or album gain. Tag reading is already there; this is a gain stage and a preference.
+- [x] **ReplayGain.** `:replaygain` and the `replaygain` setting, from `playr analyze` or tags, applied where the engine decodes. See `docs/dev/analyze.md`.
 
 ### Sampler
 
@@ -62,6 +62,12 @@ What is missing, grouped by priority:
 
 - [ ] **Sort and group.** Library order is fixed: album artist, album, disc, track. No way to sort by date added, year or duration, and no sorting by column in the window.
 
+- [x] **`:analyze` in the frontends.** A session job, as `:slice` runs; it reloads the gains when it finishes.
+
+- [ ] **Calibrate the cutoff heuristics.** The two spectral findings were set against ffmpeg's encoders, not files whose provenance is known; a library of lossless files with known sources would settle them. The tempo confidence is calibrated, against librosa; see `docs/dev/analyze.md`.
+
+- [ ] **Tempo above 170 BPM.** The prior still halves it. The reading records the level above as an alternate, which `bpm:` matches, so such a track is found by the tempo it is heard at, but the number playr shows is the halved one. Choosing between the two needs accent or metrical modelling.
+
 - [ ] **Watch for changes.** A scan is manual. `notify` could pick up new files, at the cost of a watcher thread.
 
 - [ ] **Relative rows from 0.1.0.** A 0.1.0 scan with a relative path stored relative rows. Rescanning adds absolute duplicates, and pruning never matches the old rows. A one-off cleanup would delete them, and their playlist entries with them.
@@ -69,6 +75,8 @@ What is missing, grouped by priority:
 ### Interface
 
 - [ ] **Multi-row selection.** Select several rows at once, in the window especially. `dispatch` assumes one cursor row per view, so `Frontend` grows; see `docs/architecture.md`.
+
+- [x] **BPM in now playing, and a `bpm:` search field.** Shown as it sounds, so varispeed moves it; `bpm:` takes a number, a range, or one end of one.
 
 - [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. A table in the library would keep it.
 

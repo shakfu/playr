@@ -13,6 +13,7 @@ use toml::de::{DeTable, DeValue};
 use toml::Spanned;
 
 use crate::audio::Mode;
+use crate::gain::ReplayGain;
 
 /// The core's default settings, as shipped.
 pub const DEFAULT_SETTINGS: &str = include_str!("settings.toml");
@@ -31,8 +32,11 @@ pub struct Settings {
     pub onset_sensitivity: f32,
     /// After a scan, remove tracks whose files are gone, without asking.
     pub auto_prune: bool,
+    /// After a scan, analyse the tracks it added or found changed.
+    pub analyze_on_scan: bool,
     /// The output device's ID, or `None` for the default.
     pub device: Option<String>,
+    pub replaygain: ReplayGain,
 }
 
 impl Default for Settings {
@@ -44,7 +48,9 @@ impl Default for Settings {
             samples: PathBuf::new(),
             onset_sensitivity: 0.5,
             auto_prune: false,
+            analyze_on_scan: false,
             device: None,
+            replaygain: ReplayGain::Off,
         };
         let (_, errors) = settings.apply(DEFAULT_SETTINGS, &[]);
         if let Err(errors) = errors.finish() {
@@ -156,6 +162,7 @@ impl Settings {
                     _ => errors.add(at, "onset_sensitivity is a number from 0 to 1"),
                 },
                 ("auto_prune", DeValue::Boolean(b)) => self.auto_prune = *b,
+                ("analyze_on_scan", DeValue::Boolean(b)) => self.analyze_on_scan = *b,
                 ("samples", DeValue::String(s)) => match expand_home(s) {
                     Some(path) => self.samples = path,
                     None => errors.add(at, "samples must be an absolute path or start with ~/"),
@@ -165,9 +172,25 @@ impl Settings {
                 ("device", DeValue::String(s)) => {
                     self.device = (!s.is_empty()).then(|| s.to_string())
                 }
-                ("mode" | "samples" | "auto_prune" | "device", v) => {
-                    errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v)))
+                ("replaygain", DeValue::String(s)) => {
+                    match ReplayGain::NAMES
+                        .iter()
+                        .find(|r| r.0.eq_ignore_ascii_case(s))
+                    {
+                        Some(&(_, replaygain)) => self.replaygain = replaygain,
+                        None => {
+                            let names: Vec<&str> = ReplayGain::NAMES.iter().map(|r| r.0).collect();
+                            errors.add(
+                                at,
+                                format!("unknown replaygain {s}; choices: {}", names.join(", ")),
+                            )
+                        }
+                    }
                 }
+                (
+                    "mode" | "samples" | "auto_prune" | "analyze_on_scan" | "device" | "replaygain",
+                    v,
+                ) => errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v))),
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),
             }
         }

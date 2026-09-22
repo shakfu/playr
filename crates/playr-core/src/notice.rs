@@ -57,6 +57,21 @@ pub enum Outcome {
         name: String,
     },
     Mode(Mode),
+    /// An analysis finished: `failed` of `analysed` could not be decoded.
+    Analysed {
+        analysed: usize,
+        failed: usize,
+    },
+    /// An analysis started, over `dir` or over every track for `None`.
+    AnalysisStarted {
+        dir: Option<std::path::PathBuf>,
+    },
+    /// An analysis has finished `done` of `total` files.
+    Analysing {
+        done: usize,
+        total: usize,
+    },
+    ReplayGain(crate::gain::ReplayGain),
     /// A mark added at `at`; not `kept` when there is no library file.
     Marked {
         at: Duration,
@@ -148,6 +163,7 @@ pub enum Refusal {
     NotADirectory(PathBuf),
     /// One scan or prune at a time: a second would write the same file.
     ScanRunning,
+    AnalysisRunning,
     /// A rescan needs at least one directory previously given to a scan.
     NoRoots,
     /// `:roots rm` was given a directory the library does not have as a root.
@@ -174,6 +190,7 @@ pub enum Task {
     Slice,
     Export,
     Scan,
+    Analyze,
     Prune,
     Open,
 }

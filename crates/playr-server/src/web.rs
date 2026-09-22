@@ -12,7 +12,7 @@ use std::time::Duration;
 use playr_app::action::Action;
 use playr_app::command::{self, view_name};
 use playr_app::dispatch::Frontend;
-use playr_app::message::fmt_time;
+use playr_app::message::{self, fmt_time};
 use playr_app::meter;
 use playr_app::model::{Input, Model};
 use playr_app::View;
@@ -35,9 +35,14 @@ pub const VIEWS: [View; 3] = [View::Library, View::Selection, View::Playlists];
 pub fn allowed(action: &Action) -> bool {
     use Action::*;
     match action {
-        Quit | Scan(_) | Prune(Some(_)) | ForgetRoot(_) | Open(_) | Map { .. } | Unmap { .. } => {
-            false
-        }
+        Quit
+        | Scan(_)
+        | Analyze(Some(_))
+        | Prune(Some(_))
+        | ForgetRoot(_)
+        | Open(_)
+        | Map { .. }
+        | Unmap { .. } => false,
         ShowView(View::Sampler)
         | Slice(_)
         | Audition
@@ -63,10 +68,11 @@ pub fn allowed(action: &Action) -> bool {
         Help | CommandHelp | ShowView(_) | NextView | Cursor(_) | CursorFirst | CursorLast
         | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add | Remove
         | MoveTrack(_) | ClearSelection | StartSave | SaveAs(_) | DeletePlaylist | StartRename
-        | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None) | TogglePause | Next
-        | Prev | Stop | SeekBy(_) | SeekTo(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_)
-        | SetSpeed(_) | CycleMode(_) | SetMode(_) | Mark | MarkAt(_) | UndoMark | ClearMarks
-        | NextMark | PrevMark | Theme(_) => true,
+        | Analyze(None) | ShowInfo | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots
+        | Prune(None) | TogglePause | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | VolumeBy(_)
+        | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | CycleMode(_) | SetMode(_)
+        | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark | ClearMarks | NextMark | PrevMark
+        | Theme(_) => true,
     }
 }
 
@@ -120,6 +126,7 @@ pub fn screen(model: &Model) -> Value {
         "title": state::title(model),
         "artist": track.map(Track::display_artist),
         "format": format,
+        "bpm": model.bpm().map(|b| b.round()),
         "position": seconds(snapshot.position),
         "duration": status.duration.map(seconds),
         "marks": snapshot.marks.iter().copied().map(seconds).collect::<Vec<_>>(),
@@ -127,6 +134,8 @@ pub fn screen(model: &Model) -> Value {
         "speed": status.semitones,
         "speed_label": format!("{:.2}x", speed_for(status.semitones)),
         "mode": mode_name(status.mode),
+        "replaygain": model.replaygain().name(),
+        "gain_label": status.gain_db.map(message::replaygain),
         "loudness": snapshot.loudness.map(tenths),
         "peak": snapshot.peak.filter(|p| p.is_finite()).map(tenths),
         "clipping": snapshot.peak.is_some_and(meter::clipping),
@@ -165,6 +174,11 @@ fn input(input: &Input) -> Value {
         Input::Roots(roots) => json!({
             "kind": "roots",
             "rows": roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>(),
+        }),
+        Input::Info(info) => json!({
+            "kind": "info",
+            "heading": info.title,
+            "rows": info.rows,
         }),
         Input::Command(line) => json!({ "kind": "command", "text": line.text }),
     }

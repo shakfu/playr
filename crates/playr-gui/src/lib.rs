@@ -221,6 +221,16 @@ impl Gui {
                     ui.close();
                     chosen = Some(Action::Rescan);
                 }
+                if ui.button("Analyze library").clicked() {
+                    ui.close();
+                    chosen = Some(Action::Analyze(None));
+                }
+                if ui.button("Analyze folder...").clicked() {
+                    ui.close();
+                    chosen = rfd::FileDialog::new()
+                        .pick_folder()
+                        .map(|dir| Action::Analyze(Some(dir)));
+                }
                 if ui.button("Library directories...").clicked() {
                     ui.close();
                     chosen = Some(Action::ShowRoots);
@@ -462,6 +472,7 @@ impl Gui {
             }
             Input::CommandHelp => self.list(ctx, "Commands", &command::command_rows()),
             Input::Roots(roots) => self.roots_dialog(ctx, &roots),
+            Input::Info(info) => self.info_dialog(ctx, &info),
             _ => {}
         }
     }
@@ -497,6 +508,29 @@ impl Gui {
         if let Some(dir) = forget {
             self.model.set_input(Input::None);
             self.perform(Action::ForgetRoot(dir));
+        }
+    }
+
+    /// What analysis measured about one track, as label and value rows.
+    fn info_dialog(&mut self, ctx: &egui::Context, info: &playr_app::model::TrackInfo) {
+        let mut open = true;
+        egui::Window::new(&info.title)
+            .collapsible(false)
+            .open(&mut open)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::Grid::new("info").striped(true).show(ui, |ui| {
+                        for (label, value) in &info.rows {
+                            ui.weak(label);
+                            ui.label(value);
+                            ui.end_row();
+                        }
+                    });
+                });
+            });
+        if !open {
+            self.model.set_input(Input::None);
         }
     }
 

@@ -16,5 +16,12 @@ onset_sensitivity = 0.5
 samples = "~/Music/playr/samples"
 # After a scan, remove tracks whose files are gone, without asking.
 auto_prune = false
+# After a scan, analyse what it added or found changed, in the background.
+# Without it, gains and tempos wait for `playr analyze` or `:analyze`.
+analyze_on_scan = false
 # The output device, as `playr devices` lists it; "" is the default device.
 device = ""
+# Level tracks by loudness: off, track, album or auto. auto uses album gain in
+# normal and repeat modes, track gain in shuffle and repeat-one. Gains come from
+# `playr analyze`, else from the files' tags; files are never changed.
+replaygain = "off"

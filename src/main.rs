@@ -4,6 +4,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod analyze;
+
 use clap::{Parser, Subcommand};
 use playr::ui;
 use playr_core::audio::Player;
@@ -81,6 +83,25 @@ enum Command {
     Formats,
     /// List output devices, by the ID --device and the device setting take
     Devices,
+    /// Decode library tracks once, recording checks, loudness and tempo;
+    /// files are only read. Runs beside a playing playr
+    Analyze {
+        /// Files or directories in the library. With none, every track.
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        /// Analyse tracks again even when nothing changed since
+        #[arg(long)]
+        force: bool,
+        /// Print what is recorded, decoding nothing
+        #[arg(long)]
+        report: bool,
+        /// Print the findings as JSON
+        #[arg(long)]
+        json: bool,
+        /// Files to decode at once; the default leaves one processor free
+        #[arg(long, value_name = "N")]
+        jobs: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -120,9 +141,15 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
 
     // One playr at a time, terminal or window; reading the library needs no
     // claim. Held until `run` returns.
+    // `analyze` writes only its own tables, which no running playr caches.
     let reads_only = matches!(
         cli.command,
-        Some(Command::Playlists | Command::Search { json: true, .. } | Command::Roots { op: None })
+        Some(
+            Command::Playlists
+                | Command::Search { json: true, .. }
+                | Command::Roots { op: None }
+                | Command::Analyze { .. }
+        )
     );
     let _instance = if reads_only {
         None
@@ -146,6 +173,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         cli.command,
         Some(
             Command::Prune { .. }
+                | Command::Analyze { .. }
                 | Command::Roots {
                     op: None | Some(RootsOp::Rm { .. })
                 }
@@ -188,6 +216,22 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Prune { dirs }) => return cmd_prune(&conn, &dirs),
+        Some(Command::Analyze {
+            paths,
+            force,
+            report,
+            json,
+            jobs,
+        }) => {
+            let opts = analyze::Options {
+                paths,
+                force,
+                report,
+                json,
+                jobs,
+            };
+            return analyze::run(&mut conn, opts);
+        }
         Some(Command::Playlists) => {
             for p in db::query::playlists(&conn)? {
                 println!("{:<40} {:>4} tracks", p.name, p.len);
@@ -360,6 +404,12 @@ fn cmd_scan(
         );
     }
     println!("library now holds {} tracks", db::query::count(conn)?);
+    // The interface can analyse as it scans, with `analyze_on_scan`; here the
+    // settings are not read, so say what is waiting instead.
+    let waiting = playr_core::analysis::pending(conn, &db::query::all(conn)?)?.len();
+    if waiting > 0 {
+        println!("  {waiting} tracks not analysed; `playr analyze` measures them");
+    }
     Ok(ExitCode::SUCCESS)
 }
 

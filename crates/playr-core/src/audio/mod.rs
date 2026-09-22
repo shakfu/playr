@@ -14,7 +14,7 @@ pub mod order;
 pub mod output;
 pub mod resample;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -31,6 +31,7 @@ fn short(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 use crate::event::{Event, EventSink};
+use crate::gain::{Gains, ReplayGain};
 use convert::Converter;
 pub use order::Mode;
 use order::Order;
@@ -164,6 +165,11 @@ pub enum Cmd {
     /// Play source frames `start..end` of the current track once, then pause
     /// at `end`. The track is not torn down, so playing on continues past it.
     PlayOnce(u64, u64),
+    /// Choose which ReplayGain applies, from the audible position on.
+    SetReplayGain(ReplayGain),
+    /// Gains by path, from the library. A track not among them takes the
+    /// gains in its tags. Tracks already started keep theirs.
+    SetGains(Arc<HashMap<PathBuf, Gains>>),
     Quit,
 }
 
@@ -197,6 +203,8 @@ pub struct Status {
     pub mode: Mode,
     /// The source frames looping in the current track, end exclusive.
     pub looping: Option<(u64, u64)>,
+    /// The ReplayGain applied to the audible track, in dB; `None` while off.
+    pub gain_db: Option<f32>,
 }
 
 impl Status {
@@ -450,6 +458,15 @@ struct Engine {
     flush: Option<Flush>,
     /// Samples converted but not yet accepted by the ring.
     carry: Vec<f32>,
+
+    replaygain: ReplayGain,
+    gains: Arc<HashMap<PathBuf, Gains>>,
+    /// The factor each queue index plays at, once worked out, kept until the
+    /// queue or the ReplayGain setting changes. A mode change or new gains
+    /// therefore never step a playing track's level.
+    gain_of: HashMap<usize, f32>,
+    /// Decoded samples with the gain applied, reused across chunks.
+    scaled: Vec<f32>,
 }
 
 impl Engine {
@@ -487,6 +504,10 @@ impl Engine {
             staged: None,
             flush: None,
             carry: Vec::new(),
+            replaygain: ReplayGain::Off,
+            gains: Arc::default(),
+            gain_of: HashMap::new(),
+            scaled: Vec::new(),
         }
     }
 
@@ -539,6 +560,7 @@ impl Engine {
         let cmd = match msg {
             Msg::Play(queue, index) => {
                 self.queue = queue;
+                self.gain_of.clear();
                 return self.jump(index);
             }
             Msg::Enqueue(queue) => {
@@ -624,6 +646,17 @@ impl Engine {
                     self.state = State::Playing;
                 }
             }
+            Cmd::SetReplayGain(replaygain) => {
+                if replaygain != self.replaygain {
+                    self.replaygain = replaygain;
+                    self.gain_of.clear();
+                    // As a speed change: the ring holds audio at the old gain.
+                    if !self.marks.is_empty() {
+                        self.seek(self.elapsed());
+                    }
+                }
+            }
+            Cmd::SetGains(gains) => self.gains = gains,
             Cmd::Quit => {}
         }
     }
@@ -1059,10 +1092,45 @@ impl Engine {
             .store(requested, Ordering::Relaxed);
     }
 
-    /// Converts decoded source samples to the output layout and appends to `carry`.
+    /// The factor queue index `index` plays at: its ReplayGain, from the
+    /// library or else its tags, or 1 when off or unknown.
+    fn gain_at(&mut self, index: usize) -> f32 {
+        if let Some(&g) = self.gain_of.get(&index) {
+            return g;
+        }
+        let Some(album) = self.replaygain.album(self.order.mode()) else {
+            return 1.0;
+        };
+        let Some(path) = self.queue.get(index) else {
+            return 1.0;
+        };
+        let gains = match self.gains.get(path) {
+            Some(g) => *g,
+            None => Gains::from_tags(path),
+        };
+        let g = gains.pick(album).map_or(1.0, |g| g.linear());
+        self.gain_of.insert(index, g);
+        g
+    }
+
+    /// Converts decoded source samples to the output layout and appends to
+    /// `carry`, at the gain of the track being decoded.
+    ///
+    /// The gain is applied here, not in the callback: the ring spans track
+    /// boundaries, so the callback would change it up to 2 s off the boundary.
     fn convert_and_carry(&mut self, decoded: &[f32]) {
-        if let Some(conv) = self.conv.as_mut() {
+        let decoding = self.marks.back().map_or(self.index, |m| m.1);
+        let gain = self.gain_at(decoding);
+        let Some(conv) = self.conv.as_mut() else {
+            return;
+        };
+        // Exactly 1 leaves the samples untouched, bit for bit.
+        if gain == 1.0 {
             conv.push(decoded, &mut self.carry);
+        } else {
+            self.scaled.clear();
+            self.scaled.extend(decoded.iter().map(|x| x * gain));
+            conv.push(&self.scaled, &mut self.carry);
         }
     }
 
@@ -1477,6 +1545,17 @@ impl Engine {
         s.output_rate = self.out.as_ref().map(|o| o.plan.rate).unwrap_or(0);
         s.resampling = self.conv.as_ref().is_some_and(Converter::resampling);
         s.semitones = self.semitones;
+        s.gain_db = match self.replaygain {
+            ReplayGain::Off => None,
+            _ => Some(
+                20.0 * self
+                    .gain_of
+                    .get(&self.index)
+                    .copied()
+                    .unwrap_or(1.0)
+                    .log10(),
+            ),
+        };
         // `error` and `error_seq` are owned by `fail`; publish must not touch them.
     }
 }
