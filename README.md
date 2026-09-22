@@ -336,6 +336,8 @@ Marks are stored in the library by file path and source frame, so they survive a
 
 ### Samples
 
+![Spectrogram in sampler view of the gui.](https://raw.githubusercontent.com/shakfu/playr/main/docs/media/gui-spectrogram.png)
+
 `:slice` writes parts of the playing track as WAV files, for rtrack or any sampler. Marks set the regions. The region is the span between the marks either side of the playhead, from the start of the track or to its end where there is no mark on that side. In the [sampler view](#sampler-view) a range can replace it.
 
 ![Slicing a Boards of Canada record is a good use of an afternoon.](https://raw.githubusercontent.com/shakfu/playr/main/docs/media/waveform.png)
