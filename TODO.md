@@ -60,7 +60,11 @@ What is missing, grouped by priority:
 
 ### Library
 
-- [ ] **Sort and group.** Library order is fixed: album artist, album, disc, track. No way to sort by date added, year or duration, and no sorting by column in the window.
+- [ ] **Group, and a date added.** `columns` and `sort` order the library by any column, but there is no grouping, and no date added to sort by: the schema has no `added_at`, and `mtime` is the file's. A column would only be meaningful for tracks added after it.
+
+- [ ] **Columns on the page.** `[server] columns` is read but not used: the page's rows are a responsive grid, tuned for a phone's two-line rows, and making the columns dynamic means rebuilding that layout. It sorts and shows a fixed set for now.
+
+- [ ] **Advanced search in SQL.** A `:query SELECT path FROM tracks JOIN analysis ...` whose rows become the library listing, as a search's do, for questions the search syntax cannot ask. It must run on a read-only connection and be refused unless it is a `SELECT`: playlists and marks are the only things in the library that cannot be read back from the files. Saved queries would then be smart playlists.
 
 - [x] **`:analyze` in the frontends.** A session job, as `:slice` runs; it reloads the gains when it finishes.
 
@@ -80,7 +84,7 @@ What is missing, grouped by priority:
 
 - [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. A table in the library would keep it.
 
-- [ ] **Settings tables for more than one frontend.** A table no frontend names is an error, so a `[gui]` table would stop the terminal starting, and `[keys]` would stop a frontend that does not read it. A list of tables every frontend knows, ignored unless named, would fix it. `playr-server` needs it first: its flags would move to a `[server]` table, out of the systemd unit. A key both frontends read, such as `theme`, avoids it: `playr_app::config` reads it.
+- [x] **Settings tables for more than one frontend.** `settings::FRONTEND_TABLES` names the entries a frontend may own; each frontend asks for the ones it reads and the rest are passed over. A name no frontend owns is still an error.
 
 - [ ] **Platform directories.** Both interfaces keep the library in `~/.local/share/playr` and settings in `~/.config/playr` on every platform, which is unusual on macOS and Windows. Moving to each platform's directories must move existing libraries.
 
@@ -102,7 +106,7 @@ What is missing, grouped by priority:
 
 - [ ] **The terminal alongside the server.** The lock stops `playr` while `playr-server` runs. A `--tui` mode would drain the server's request channel in the terminal's loop, so both control one playback.
 
-- [ ] **A `[server]` table in `settings.toml`.** The server's settings are flags in its systemd unit. Blocked on "Settings tables for more than one frontend" under Interface.
+- [ ] **A `[server]` table in `settings.toml`.** The server's settings are flags in its systemd unit. No longer blocked: `FRONTEND_TABLES` already names `server`, so the table is passed over by the other two programs. It needs the flags given settings equivalents and a precedence rule, flag over file.
 
 ### Formats
 

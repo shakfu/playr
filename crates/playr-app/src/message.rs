@@ -14,6 +14,7 @@ use crate::action::{Action, Key};
 use crate::command;
 use crate::{Display, Theme, View};
 use playr_core::analysis::{self, tempo, Analysis, Finding, Md5};
+use playr_core::columns::{Column, SortKey};
 use playr_core::db::Track;
 use playr_core::gain::Gains;
 
@@ -27,6 +28,10 @@ pub enum Message {
     NoPlaylistUnderCursor,
     Display(Display),
     Theme(Theme),
+    /// The columns a list shows, as `:columns` set them.
+    Columns(Vec<Column>),
+    /// What lists are sorted by, as `:sort` set it.
+    Sorted(Vec<SortKey>),
     /// A nudge came before the sampler view showed a waveform.
     NoWaveform,
     Snap(bool),
@@ -124,6 +129,15 @@ pub fn text(message: &Message) -> String {
         }
         Message::Display(display) => format!("display: {}", display.name()),
         Message::Theme(theme) => format!("theme: {}", theme.name()),
+        Message::Columns(columns) => {
+            let names: Vec<&str> = columns.iter().map(|c| c.name()).collect();
+            format!("columns: {}", names.join(", "))
+        }
+        Message::Sorted(keys) if keys.is_empty() => "sorted: as the library was scanned".into(),
+        Message::Sorted(keys) => {
+            let names: Vec<String> = keys.iter().map(|k| k.text()).collect();
+            format!("sorted by {}", names.join(", then "))
+        }
         Message::NoWaveform => "no waveform to move along yet".into(),
         Message::Snap(on) => format!("snap to zero crossings: {}", if *on { "on" } else { "off" }),
         Message::Range { start, end, rate } => {

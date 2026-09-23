@@ -253,6 +253,13 @@ dialog input[type=text] { width: 100%; }
         <option value="normal">normal</option><option value="shuffle">shuffle</option>
         <option value="repeat">repeat</option><option value="repeat-one">repeat one</option>
       </select></label>
+      <label>sort <select id="sort">
+        <option value="album_artist">album artist</option><option value="title">title</option>
+        <option value="artist">artist</option><option value="album">album</option>
+        <option value="year">year</option><option value="time">time</option>
+        <option value="tempo">tempo</option><option value="loudness">loudness</option>
+      </select></label>
+      <label><input type="checkbox" id="sort-desc"> reversed</label>
       <label>replaygain <select id="replaygain">
         <option value="off">off</option><option value="track">track</option>
         <option value="album">album</option><option value="auto">auto</option>
@@ -557,6 +564,9 @@ for (const [id, send] of [["volume", v => "volume " + v], ["speed", v => "speed 
 }
 $("mode").addEventListener("change", () => run("mode " + $("mode").value));
 $("replaygain").addEventListener("change", () => run("replaygain " + $("replaygain").value));
+const sortCommand = () => run("sort " + $("sort").value + ($("sort-desc").checked ? " desc" : ""));
+$("sort").addEventListener("change", sortCommand);
+$("sort-desc").addEventListener("change", sortCommand);
 
 // The progress bar: a click or a drag seeks once released; with shift, marks.
 let dragging = null;
@@ -857,6 +867,10 @@ function draw(next) {
   showSliders();
   if (document.activeElement !== $("mode")) $("mode").value = s.mode;
   if (document.activeElement !== $("replaygain")) $("replaygain").value = s.replaygain;
+  // `sort` carries the first key, as "tempo" or "tempo desc".
+  const [sortKey, sortDir] = (s.sort || "album_artist").split(" ");
+  if (document.activeElement !== $("sort")) $("sort").value = sortKey;
+  if (document.activeElement !== $("sort-desc")) $("sort-desc").checked = sortDir === "desc";
   $("gain").hidden = s.gain_label == null;
   $("gain").textContent = s.gain_label || "";
   showMeter();

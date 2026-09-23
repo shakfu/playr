@@ -100,7 +100,7 @@ pub enum Prompt {
 }
 
 /// A change only the interface shows.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Presentation {
     Quit,
     /// The keys bound in the current view.
@@ -109,6 +109,10 @@ pub enum Presentation {
     CommandList,
     /// The directories the library covers.
     RootList,
+    /// Show these columns, in this order.
+    Columns(Vec<playr_core::columns::Column>),
+    /// Lists are now sorted by these keys.
+    Sorted(Vec<playr_core::columns::SortKey>),
     /// What analysis measured about one track.
     TrackInfo,
     Zoom(Zoom),
@@ -313,6 +317,23 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Zoom(zoom) => f.present(Presentation::Zoom(zoom)),
         Action::Display(display) => f.present(Presentation::Display(display)),
         Action::Theme(theme) => f.present(Presentation::Theme(theme)),
+        Action::SetColumns(columns) => f.present(Presentation::Columns(columns)),
+        Action::SetSort(keys) => {
+            // The cursor follows its track rather than its row number, and
+            // search results are re-ordered in place: sorting is not a
+            // reason to lose a search.
+            let under = library_track(f);
+            f.session_mut().set_sort(keys.clone());
+            if let Some(results) = f.set_results(None) {
+                let sorted = f.session().sorted(results);
+                f.set_results(Some(sorted));
+            }
+            if let Some(track) = under {
+                let row = f.listed().iter().position(|t| t.path == track.path);
+                f.set_cursor(View::Library, row.or(Some(0)));
+            }
+            f.present(Presentation::Sorted(keys));
+        }
         Action::Nudge(nudge) => match (peaks(f), f.sampler().scale) {
             (Some(peaks), Some(scale)) => {
                 let from = sampler::frame_of(f.session().player().position(), peaks.rate);
@@ -674,6 +695,11 @@ fn playlist_under_cursor(f: &impl Frontend) -> Option<Playlist> {
 }
 
 /// Plays the list in view from the cursor, or the playlist under it.
+/// The library view's track under the cursor, for keeping it there.
+fn library_track(f: &impl Frontend) -> Option<Track> {
+    f.listed().get(f.cursor(View::Library)?).cloned()
+}
+
 fn activate(f: &mut impl Frontend) {
     match f.view() {
         View::Library => {

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use eframe::egui;
-use playr_app::config::{self, Config};
+use playr_app::config::{self, Config, Program};
 use playr_app::dispatch::Frontend;
 use playr_app::instance::{self, Instance};
 use playr_app::model::Model;
@@ -104,8 +104,8 @@ fn start(cli: Cli) -> Result<Start, Vec<String>> {
     }
     .map_err(|e| fail(&e))?;
     let config = match (&cli.settings, config::default_path()) {
-        (Some(path), _) => Config::load(path, true),
-        (None, Some(path)) => Config::load(&path, false),
+        (Some(path), _) => Config::load_for(Program::Gui, path, true),
+        (None, Some(path)) => Config::load_for(Program::Gui, &path, false),
         (None, None) => Ok(Config::default()),
     }?;
     let mut tracks = Vec::new();

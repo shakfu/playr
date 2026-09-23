@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::sync::{mpsc, Arc};
 
 use clap::{Parser, Subcommand};
-use playr_app::config::{self, Config};
+use playr_app::config::{self, Config, Program};
 use playr_app::dispatch::Frontend;
 use playr_app::instance;
 use playr_app::model::Model;
@@ -114,8 +114,8 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
     }
     .map_err(|e| fail(&e))?;
     let config = match (&cli.settings, config::default_path()) {
-        (Some(path), _) => Config::load(path, true),
-        (None, Some(path)) => Config::load(&path, false),
+        (Some(path), _) => Config::load_for(Program::Server, path, true),
+        (None, Some(path)) => Config::load_for(Program::Server, &path, false),
         (None, None) => Ok(Config::default()),
     }?;
     let player = Player::new(cli.device.as_deref().or(config.settings.device.as_deref()))

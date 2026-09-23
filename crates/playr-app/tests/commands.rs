@@ -101,7 +101,7 @@ fn a_unique_prefix_names_a_command_and_an_ambiguous_one_lists_the_choices() {
     );
     assert_eq!(
         lib("s"),
-        Err("ambiguous command s: search, save, scan, stop, seek, speed, slice".into())
+        Err("ambiguous command s: search, save, scan, sort, stop, seek, speed, slice".into())
     );
     // Only the commands usable here count: `de` is `delmarks` unless `delete` works too.
     assert_eq!(lib("de"), Ok(Action::ClearMarks));
@@ -868,4 +868,34 @@ fn a_panel_request_becomes_the_action_playr_has_for_it() {
     // Opening a URI and raising a window are not playr's to do.
     assert_eq!(action(E::OpenUri("http://example.com".into()), true), None);
     assert_eq!(action(E::Raise, true), None);
+}
+
+#[test]
+fn columns_and_sort_name_columns() {
+    use playr_core::columns::{Column, SortKey};
+    assert_eq!(
+        lib("columns title tempo"),
+        Ok(Action::SetColumns(vec![Column::Title, Column::Tempo]))
+    );
+    assert_eq!(
+        lib("columns title, loudness"),
+        Ok(Action::SetColumns(vec![Column::Title, Column::Loudness]))
+    );
+    assert_eq!(
+        lib("sort tempo desc, title"),
+        Ok(Action::SetSort(vec![
+            SortKey {
+                column: Column::Tempo,
+                descending: true
+            },
+            SortKey {
+                column: Column::Title,
+                descending: false
+            },
+        ]))
+    );
+    assert_eq!(lib("sort off"), Ok(Action::SetSort(Vec::new())));
+    assert!(lib("columns").is_err());
+    assert!(lib("sort").is_err());
+    assert!(lib("columns nope").unwrap_err().contains("unknown column"));
 }

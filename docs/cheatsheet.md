@@ -38,6 +38,8 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:scan DIR`                           |                         | add a directory to the library              |
 | `:rescan`                             |                         | re-scan directories previously added; `:sync` |
 | `:roots [add\|rm DIR]`                |                         | list the directories the library covers      |
+| `:columns NAME...`                    |                         | which columns a track list shows, in order  |
+| `:sort KEY[ desc]... \| off`          |                         | sort every track list by these columns      |
 | `:info`                               |                         | what analysis measured about this track     |
 | `:analyze [DIR]`                      |                         | measure loudness, tempo and file health     |
 | `:prune [DIR]`                        |                         | remove tracks and marks of missing files    |

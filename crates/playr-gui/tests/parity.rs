@@ -86,6 +86,8 @@ fn every_action() -> Vec<Action> {
         Action::WriteSlices,
         Action::DiscardSlices,
         Action::Theme(Theme::System),
+        Action::SetColumns(vec![playr_core::columns::Column::Title]),
+        Action::SetSort(Vec::new()),
         Action::Map {
             view: None,
             key,
@@ -169,6 +171,8 @@ fn every_action() -> Vec<Action> {
             | Action::WriteSlices
             | Action::DiscardSlices
             | Action::Theme(_)
+            | Action::SetColumns(_)
+            | Action::SetSort(_)
             | Action::Map { .. }
             | Action::Unmap { .. } => {}
         }

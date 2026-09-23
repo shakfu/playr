@@ -19,6 +19,7 @@ use playr_app::message::fmt_time;
 use playr_app::sampler::{self, Display};
 use playr_app::{meter, model};
 use playr_core::audio::State;
+use playr_core::columns::{Column, Measures};
 use playr_core::db::Track;
 
 /// Draws a frame, and returns the scroll positions, cursors, help scroll and
@@ -436,21 +437,44 @@ fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
 
 /// Fixed cost of a track row: 2 for the play and selection markers, 1 space
 /// after each of the three text columns, 6 for the duration, 2 for the borders.
-const ROW_OVERHEAD: usize = 13;
+/// Cells a row spends on something other than its columns: the pane's two
+/// borders, and the playing and selected markers.
+const ROW_FIXED: usize = 4;
 
-/// Column widths, sized from the available space rather than fixed, so the
-/// title column absorbs whatever is left.
+/// The width of each column in `columns`, sized from the space available.
 ///
-/// The three widths plus [`ROW_OVERHEAD`] must not exceed the terminal width,
-/// or the duration is truncated off the right edge.
-fn columns(width: u16) -> (usize, usize, usize) {
-    let usable = (width as usize).saturating_sub(ROW_OVERHEAD);
-    let artist = (usable / 4).clamp(6, 28).min(usable);
-    let album = (usable.saturating_sub(artist) / 3)
-        .clamp(6, 28)
-        .min(usable - artist);
-    let title = usable.saturating_sub(artist + album);
-    (artist, album, title)
+/// A number takes the cells it needs and text shares the rest, each text
+/// column taking a shrinking fraction so the last absorbs what is left. The
+/// widths, the separators and [`ROW_FIXED`] must not exceed the terminal
+/// width, or the last column is cut off the right edge.
+fn layout(width: u16, columns: &[Column]) -> Vec<(Column, usize)> {
+    let numbers: usize = columns
+        .iter()
+        .filter(|c| c.numeric())
+        .map(|c| c.width())
+        .sum();
+    let separators = columns.len().saturating_sub(1);
+    let mut left = (width as usize).saturating_sub(ROW_FIXED + separators + numbers);
+    let texts = columns.iter().filter(|c| !c.numeric()).count();
+    let mut seen = 0;
+    columns
+        .iter()
+        .map(|column| {
+            if column.numeric() {
+                return (*column, column.width());
+            }
+            seen += 1;
+            // The last text column takes the remainder; before it, a quarter,
+            // then a third, and so on, which is what the four default
+            // columns were sized by.
+            let width = match seen == texts {
+                true => left,
+                false => (left / (texts - seen + 2)).clamp(6, 28).min(left),
+            };
+            left -= width;
+            (*column, width)
+        })
+        .collect()
 }
 
 /// `s` cut and padded to exactly `width` terminal cells.
@@ -477,35 +501,39 @@ fn fit(s: &str, width: usize) -> String {
 fn track_line(
     p: &Palette,
     t: &Track,
-    width: u16,
+    measures: Measures,
+    columns: &[(Column, usize)],
     playing: bool,
     marked: bool,
     cursor: bool,
 ) -> ListItem<'static> {
-    let (aw, alw, tw) = columns(width);
     let dim = if cursor { p.dim_selected } else { p.dim };
-    let dur = t
-        .duration_ms
-        .map(|ms| fmt_time(std::time::Duration::from_millis(ms.max(0) as u64)))
-        .unwrap_or_else(|| "-".into());
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             if playing { ">" } else { " " },
             Style::default().fg(p.accent),
         ),
         Span::styled(if marked { "+" } else { " " }, Style::default().fg(p.mark)),
-        Span::styled(
-            format!("{} ", fit(t.display_artist(), aw)),
-            Style::default().fg(p.name),
-        ),
-        Span::styled(
-            format!("{} ", fit(t.display_album(), alw)),
-            Style::default().fg(dim),
-        ),
-        Span::raw(format!("{} ", fit(&t.display_title(), tw))),
-        Span::styled(format!("{dur:>6}"), Style::default().fg(dim)),
-    ]);
-    ListItem::new(line)
+    ];
+    for (i, (column, width)) in columns.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let text = playr_core::columns::cell(t, measures, *column).text(*column);
+        // The title reads as the row's subject, so it keeps the plain colour
+        // and everything around it is dimmed; a number sits to the right.
+        let style = match column {
+            Column::Title => Style::default(),
+            Column::Artist | Column::AlbumArtist => Style::default().fg(p.name),
+            _ => Style::default().fg(dim),
+        };
+        let cell = match column.numeric() {
+            true => format!("{:>width$.width$}", text, width = *width),
+            false => fit(&text, *width),
+        };
+        spans.push(Span::styled(cell, style));
+    }
+    ListItem::new(Line::from(spans))
 }
 
 /// A bordered pane, titled unless `title` is empty.
@@ -565,12 +593,21 @@ fn draw_tracks(
     let offset = scroll_offset(scroll.offset, selected, rows, len);
 
     let end = (offset + rows).min(len);
+    let widths = layout(area.width, app.columns);
     let items: Vec<ListItem> = tracks[offset..end]
         .iter()
         .enumerate()
         .map(|(i, t)| {
             let i = offset + i;
-            track_line(p, t, area.width, playing(t), marked(t), selected == Some(i))
+            track_line(
+                p,
+                t,
+                app.measures.get(&t.path).copied().unwrap_or_default(),
+                &widths,
+                playing(t),
+                marked(t),
+                selected == Some(i),
+            )
         })
         .collect();
     let list = List::new(items)

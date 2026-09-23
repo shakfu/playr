@@ -180,6 +180,8 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("SetSpeed", "the speed slider"),
     ("SetMode", "the mode menu"),
     ("SetReplayGain", "the ReplayGain menu"),
+    ("SetColumns", "View, Columns"),
+    ("SetSort", "a click on a column heading"),
     ("SeekTo", "a click on the progress bar or the waveform"),
     (
         "MarkAt",

@@ -145,6 +145,10 @@ pub enum Action {
     DiscardSlices,
     /// Draw in these colours.
     Theme(crate::Theme),
+    /// Show these columns, in this order, until playr exits.
+    SetColumns(Vec<playr_core::columns::Column>),
+    /// Sort every track list by these keys, until playr exits.
+    SetSort(Vec<playr_core::columns::SortKey>),
 
     /// Bind `key` in one view, or in every view, to an action or to nothing.
     Map {

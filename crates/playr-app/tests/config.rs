@@ -214,3 +214,91 @@ fn a_missing_file_is_an_error_only_when_named() {
         )]
     );
 }
+
+#[test]
+fn a_program_reads_its_own_table_over_the_shared_keys() {
+    use playr_app::config::Program;
+    use playr_core::columns::Column;
+    let text = "columns = ['title', 'time']\n\n\
+                [gui]\ncolumns = ['title', 'tempo', 'loudness']\n\n\
+                [terminal]\nsort = ['tempo desc']\n";
+
+    // Each program sees the shared keys, then its own table on top.
+    let gui = Config::parse_for(Program::Gui, text).unwrap();
+    assert_eq!(
+        gui.settings.columns,
+        [Column::Title, Column::Tempo, Column::Loudness]
+    );
+    assert_eq!(
+        gui.settings.sort,
+        Config::default().settings.sort,
+        "the terminal's"
+    );
+
+    let terminal = Config::parse_for(Program::Terminal, text).unwrap();
+    assert_eq!(terminal.settings.columns, [Column::Title, Column::Time]);
+    assert_eq!(terminal.settings.sort.first().unwrap().text(), "tempo desc");
+
+    // The server reads neither table, and neither stops it starting.
+    let server = Config::parse_for(Program::Server, text).unwrap();
+    assert_eq!(server.settings.columns, [Column::Title, Column::Time]);
+
+    // A mistake inside a program's own table is reported with its line.
+    let bad = "[gui]\ncolumns = ['nope']\n";
+    assert_eq!(
+        Config::parse_for(Program::Gui, bad).unwrap_err()[0],
+        "line 2: unknown column nope; choices: title, artist, album_artist, album, disc, track, year, time, tempo, loudness, peak, path"
+    );
+    assert_eq!(
+        Config::parse_for(Program::Gui, "[gui]\nfrob = 1\n").unwrap_err(),
+        ["line 2: unknown setting: frob"]
+    );
+}
+
+/// The shipped defaults give each program its own columns, and a program
+/// reads its own table wherever the settings come from.
+#[test]
+fn the_defaults_differ_by_program() {
+    use playr_app::config::Program;
+    use playr_core::columns::Column;
+    let columns = |program| Config::for_program(program).settings.columns;
+
+    // The window puts the title first, as its table has always shown it.
+    assert_eq!(
+        columns(Program::Gui),
+        [Column::Title, Column::Artist, Column::Album, Column::Time]
+    );
+    // The terminal and the page take the shared list.
+    assert_eq!(
+        columns(Program::Terminal),
+        [Column::Artist, Column::Album, Column::Title, Column::Time]
+    );
+    assert_eq!(columns(Program::Server), columns(Program::Terminal));
+
+    // A missing settings file gives those same defaults, not the shared list.
+    let missing = std::path::Path::new("/nowhere/playr/settings.toml");
+    let loaded = Config::load_for(Program::Gui, missing, false).unwrap();
+    assert_eq!(loaded.settings.columns, columns(Program::Gui));
+}
+
+#[test]
+fn loading_a_file_reads_the_table_of_the_program_that_asked() {
+    use playr_app::config::Program;
+    use playr_core::columns::Column;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.toml");
+    std::fs::write(
+        &path,
+        "[terminal]\ncolumns = ['path']\n\n[gui]\ncolumns = ['tempo']\n",
+    )
+    .unwrap();
+
+    let terminal = Config::load_for(Program::Terminal, &path, true).unwrap();
+    assert_eq!(terminal.settings.columns, [Column::Path]);
+    let gui = Config::load_for(Program::Gui, &path, true).unwrap();
+    assert_eq!(
+        gui.settings.columns,
+        [Column::Tempo],
+        "read another's table"
+    );
+}

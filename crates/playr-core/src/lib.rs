@@ -6,6 +6,7 @@
 
 pub mod analysis;
 pub mod audio;
+pub mod columns;
 pub mod db;
 pub mod event;
 pub mod gain;

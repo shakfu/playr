@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::action::{Action, Key, Keymap, Nudge, Slicing, Zoom};
 use crate::{Display, Theme, View};
 use playr_core::audio::Mode;
+use playr_core::columns::{Column, SortKey};
 use playr_core::gain::ReplayGain;
 use playr_core::samples::MAX_SLICES;
 
@@ -69,6 +70,16 @@ pub const COMMANDS: &[Command] = &[
     ),
     any("prune", "[DIR]", "remove tracks and marks of missing files"),
     any("info", "", "what analysis measured about this track"),
+    any(
+        "columns",
+        "NAME...",
+        "which columns a track list shows, in order",
+    ),
+    any(
+        "sort",
+        "KEY[ desc]... | off",
+        "sort every track list by these columns",
+    ),
     any("open", "PATH", "play a file or directory, and select it"),
     any("pause", "", "play or pause"),
     any("next", "", "next track"),
@@ -387,6 +398,15 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
         Theme(t) => format!("theme {}", t.name()),
+        SetColumns(columns) => {
+            let names: Vec<&str> = columns.iter().map(|c| c.name()).collect();
+            format!("columns {}", names.join(" "))
+        }
+        SetSort(keys) if keys.is_empty() => "sort off".into(),
+        SetSort(keys) => {
+            let names: Vec<String> = keys.iter().map(|k| k.text()).collect();
+            format!("sort {}", names.join(", "))
+        }
         Slice(Slicing::Region) => "slice region".into(),
         Slice(Slicing::Marks) => "slice marks".into(),
         Slice(Slicing::Equal(n)) => format!("slice {n}"),
@@ -618,6 +638,22 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             _ => Err(usage()),
         },
         "info" => nothing(Action::ShowInfo),
+        "columns" if rest.is_empty() => Err(usage()),
+        "columns" => {
+            let names = rest.split([',', ' ']).filter(|n| !n.trim().is_empty());
+            names
+                .map(|n| Column::named(n).ok_or_else(|| unknown_column(n)))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Action::SetColumns)
+        }
+        "sort" if rest.is_empty() => Err(usage()),
+        "sort" if rest == "off" => Ok(Action::SetSort(Vec::new())),
+        "sort" => rest
+            .split(',')
+            .filter(|k| !k.trim().is_empty())
+            .map(|k| SortKey::named(k).ok_or_else(|| unknown_column(k)))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Action::SetSort),
         "prune" if rest.is_empty() => Ok(Action::Prune(None)),
         "prune" => Ok(Action::Prune(Some(path(rest)))),
         "open" => Ok(Action::Open(vec![path(rest)])),
@@ -821,6 +857,7 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
     let choices: Vec<String> = match command.name {
         "mode" => MODES.iter().map(|m| m.0.to_string()).collect(),
         "theme" => THEMES.iter().map(|t| t.0.to_string()).collect(),
+        "columns" | "sort" => Column::NAMES.iter().map(|c| c.0.to_string()).collect(),
         "replaygain" => REPLAYGAINS.iter().map(|r| r.0.to_string()).collect(),
         "snap" | "loop" => vec!["on".into(), "off".into()],
         "edge" => vec!["start".into(), "end".into()],
@@ -1013,4 +1050,14 @@ pub fn command_rows() -> Vec<(String, String)> {
         rows.push((usage.trim_end().to_string(), c.help.to_string()));
     }
     rows
+}
+
+/// The words for a column name playr does not know, with the choices.
+fn unknown_column(name: &str) -> String {
+    let names: Vec<&str> = Column::NAMES.iter().map(|c| c.0).collect();
+    format!(
+        "unknown column {}; columns: {}",
+        name.trim(),
+        names.join(", ")
+    )
 }

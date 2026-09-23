@@ -4,9 +4,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
-### Fixed
-
-- The Opus header's output gain was ignored. RFC 7845 section 5.1 requires a player to apply the signed Q7.8 dB value at offset 16 of `OpusHead`; playr read only the pre-skip beside it, so a file whose level a tool such as `rsgain` had written there played at the wrong level, and `R128_*_GAIN` tags, which count from that gain, were wrong by the same amount. Encoders write 0, so a file straight from `opusenc` or ffmpeg was unaffected.
+## [0.10.0]
 
 ### Added
 
@@ -24,9 +22,29 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
   The lossy-source and upsampling findings are heuristics, checked against ffmpeg's encoders and resampler only. They catch LAME at 192 kbit/s and AAC at 128, not LAME at 320, whose cliff at 20.3 kHz is above the 20 kHz threshold that spares CD masters. Tempo is one BPM a track; a pulse above about 170 BPM reads at half tempo, from the 120 BPM prior.
 
-- ReplayGain: `:replaygain` and the `replaygain` setting, `off` by default, `track`, `album`, or `auto`, which takes album gain in normal and repeat modes and track gain otherwise. Gains come from `playr analyze`, else from `REPLAYGAIN_*` or `R128_*` tags; analysis first, so the library is measured one way. The gain is applied where the engine decodes, not in the audio callback, because the ring spans track boundaries and the callback would change the gain up to 2 s from the boundary. It is capped at the track's peak, never boosts without one, and at exactly 0 dB leaves samples untouched. The bottom line shows it, as `rg -6.2 dB`; the level meter now reads after it. `crates/playr-core/src/audio/opus.rs` still ignores the Opus header's output gain, which `R128_*` tags are relative to.
+
+- ReplayGain: `:replaygain` and the `replaygain` setting, `off` by default, `track`, `album`, or `auto`, which takes album gain in normal and repeat modes and track gain otherwise. Gains come from `playr analyze`, else from `REPLAYGAIN_*` or `R128_*` tags; analysis first, so the library is measured one way. The gain is applied where the engine decodes, not in the audio callback, because the ring spans track boundaries and the callback would change the gain up to 2 s from the boundary. It is capped at the track's peak, never boosts without one, and at exactly 0 dB leaves samples untouched. The bottom line shows it, as `rg -6.2 dB`; the level meter now reads after it.
 
   Library API: `analysis`, `gain`, `db::analysis`; `Cmd::SetReplayGain`, `Cmd::SetGains`, `Status::gain_db`; `Session::analyze`, `Session::analysed`, `Session::bpm`, `Session::set_replaygain`, `Session::replaygain`; `Event::AnalyzeProgress`, `Event::Analysed`; `Settings::replaygain`, `Settings::analyze_on_scan`; `Action::Analyze`, `Action::SetReplayGain`; `Model::bpm`; `AudioStream::open_verifying`, `finalize`, `skipped`, `lossless`, `bits`, `header_frames`, `md5`.
+
+
+- Columns and sort order. `columns` and `sort` in `settings.toml` say which columns a track list shows and what it is ordered by, most important key first; a `[terminal]`, `[gui]` or `[server]` table sets them for one program, since a terminal row has less room than a window. `:columns` and `:sort` change them until playr exits, a click on a column heading sorts by it in the window, and the page has a sort control. The columns `tempo`, `loudness` and `peak` come from `playr analyze`, and a track it has not measured sorts last whichever way the column is sorted, so an unanalysed library never fills the top of a sort.
+
+  Sorting is in the session, not in each interface: the list shown is the list played, so ordering had to be one thing rather than three. It is done in Rust rather than in SQL because the measured columns live in `analysis`, keyed by path and counted only while they still describe the file. A search is the library filtered, so it comes back in the same order: `bpm:170..180` sorted by loudness answers "everything near 174, loudest first". The page's rows are fetched by a revision that hashes the list's address and length, and sorting leaves both alone, so the sort keys are hashed with them.
+
+  As shipped the window keeps listing the title first, through a `[gui]` table in the defaults, and the other two take the shared order; no program shows a measured column until asked.
+
+  Library API: `columns` (`Column`, `SortKey`, `Measures`, `Cell`, `cell`, `compare`); `Session::set_sort`, `Session::sort`, `Session::sorted`, `Session::measures`, `Session::measures_of`; `Settings::columns`, `Settings::sort`, `settings::columns_value`, `settings::sort_value`; `config::Program`, `Config::load_for`, `Config::parse_for`; `Action::SetColumns`, `Action::SetSort`; `Model::columns`, `Model::measures`, `Model::measures_map`.
+
+### Changed
+
+- `Status` and `Settings` gained fields, so a struct literal of either no longer compiles; `..Default::default()` does. Building the two from a literal is what a library user does, which is why this is a minor bump rather than a patch.
+
+- One `settings.toml` now serves all three programs. A table another program owns, such as `[gui]` or `[server]`, is passed over by the programs that do not read it, where before any table a program did not name stopped it starting: a `[gui]` table refused to let the terminal run. `settings::FRONTEND_TABLES` holds the names; a name no program owns is still an error, and so is a program's name used for something that is not a table. Only the owner checks a table's contents, so a mistake inside `[gui]` is reported by the window and not by the terminal.
+
+### Fixed
+
+- The Opus header's output gain was ignored. RFC 7845 section 5.1 requires a player to apply the signed Q7.8 dB value at offset 16 of `OpusHead`; playr read only the pre-skip beside it, so a file whose level a tool such as `rsgain` had written there played at the wrong level, and `R128_*_GAIN` tags, which count from that gain, were wrong by the same amount. Encoders write 0, so a file straight from `opusenc` or ffmpeg was unaffected.
 
 ## [0.9.1]
 

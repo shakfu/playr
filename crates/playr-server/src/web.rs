@@ -68,11 +68,11 @@ pub fn allowed(action: &Action) -> bool {
         Help | CommandHelp | ShowView(_) | NextView | Cursor(_) | CursorFirst | CursorLast
         | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add | Remove
         | MoveTrack(_) | ClearSelection | StartSave | SaveAs(_) | DeletePlaylist | StartRename
-        | Analyze(None) | ShowInfo | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots
-        | Prune(None) | TogglePause | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | VolumeBy(_)
-        | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | CycleMode(_) | SetMode(_)
-        | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark | ClearMarks | NextMark | PrevMark
-        | Theme(_) => true,
+        | Analyze(None) | ShowInfo | SetColumns(_) | SetSort(_) | RenameTo(_) | PlayPlaylist(_)
+        | Rescan | ShowRoots | Prune(None) | TogglePause | Next | Prev | Stop | SeekBy(_)
+        | SeekTo(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | CycleMode(_)
+        | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark | ClearMarks | NextMark
+        | PrevMark | Theme(_) => true,
     }
 }
 
@@ -134,6 +134,7 @@ pub fn screen(model: &Model) -> Value {
         "speed": status.semitones,
         "speed_label": format!("{:.2}x", speed_for(status.semitones)),
         "mode": mode_name(status.mode),
+        "sort": model.session().sort().first().map(|k| k.text()),
         "replaygain": model.replaygain().name(),
         "gain_label": status.gain_db.map(message::replaygain),
         "loudness": snapshot.loudness.map(tenths),
@@ -149,6 +150,11 @@ fn lists_revision(model: &Model) -> u64 {
     let mut hasher = DefaultHasher::new();
     let listed = model.listed();
     (listed.as_ptr() as usize, listed.len()).hash(&mut hasher);
+    // Sorting reorders a list in place, leaving its address and length alone,
+    // so without this the page would keep showing the old order.
+    for key in model.session().sort() {
+        (key.column as u8, key.descending).hash(&mut hasher);
+    }
     for t in model.session().selection() {
         t.path.hash(&mut hasher);
     }

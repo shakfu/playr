@@ -6,6 +6,8 @@ use std::process::ExitCode;
 
 mod analyze;
 
+use playr_app::config::Program;
+
 use clap::{Parser, Subcommand};
 use playr::ui;
 use playr_core::audio::Player;
@@ -272,8 +274,8 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
 
     // Before the terminal is taken over, so every error can be read.
     let config = match (&cli.settings, playr_app::config::default_path()) {
-        (Some(path), _) => playr_app::config::Config::load(path, true),
-        (None, Some(path)) => playr_app::config::Config::load(&path, false),
+        (Some(path), _) => playr_app::config::Config::load_for(Program::Terminal, path, true),
+        (None, Some(path)) => playr_app::config::Config::load_for(Program::Terminal, &path, false),
         (None, None) => Ok(playr_app::config::Config::default()),
     };
     let config = match config {

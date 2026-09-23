@@ -7,6 +7,7 @@ pub mod palette;
 pub mod render;
 pub mod sampler;
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 pub use playr_app::dispatch::Confirm;
@@ -25,6 +26,7 @@ use playr_app::message::Message;
 use playr_app::model::Model;
 use playr_app::sampler::Sampler;
 use playr_core::audio::{Player, State};
+use playr_core::columns::{Column, Measures};
 use playr_core::db::query::Playlist;
 use playr_core::db::Track;
 
@@ -82,6 +84,13 @@ static NO_INPUT: Input = Input::None;
 /// Rendering takes this rather than the whole `App` so it can be exercised
 /// against a `TestBackend` without an audio device. What drawing settles comes
 /// back as a [`Drawn`].
+/// The columns a `Screen` built without any shows, which are the shipped
+/// defaults.
+const DEFAULT_COLUMNS: &[Column] = &[Column::Artist, Column::Album, Column::Title, Column::Time];
+
+static NO_MEASURES: std::sync::LazyLock<HashMap<String, Measures>> =
+    std::sync::LazyLock::new(HashMap::new);
+
 pub struct Screen<'a> {
     pub view: View,
     pub snapshot: &'a Snapshot,
@@ -100,6 +109,10 @@ pub struct Screen<'a> {
     /// The playing track's tempo, as it sounds. `None` until `playr analyze`
     /// has measured it.
     pub bpm: Option<f32>,
+    /// The columns every track list shows, in order.
+    pub columns: &'a [Column],
+    /// What `playr analyze` measured, by path, for the columns that show it.
+    pub measures: &'a HashMap<String, Measures>,
     pub lists: Lists,
     /// Whether to draw in colour. Without it the cursor row is reversed.
     pub colour: bool,
@@ -125,6 +138,8 @@ impl<'a> Screen<'a> {
             playlists: &[],
             input: &NO_INPUT,
             bpm: None,
+            columns: DEFAULT_COLUMNS,
+            measures: &NO_MEASURES,
             keys,
             sampler,
             help_scroll: 0,
@@ -210,6 +225,8 @@ impl App {
             theme: m.theme(),
             message: m.message_text(),
             bpm: m.bpm(),
+            columns: m.columns(),
+            measures: m.measures_map(),
             lists: Lists {
                 library: scroll(c.library, o.library),
                 selection: scroll(c.selection, o.selection),

@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use super::{Result, Track};
 use crate::analysis::loudness::Histogram;
 use crate::analysis::{album_key, cutoff, is_current, tempo, Analysis, Md5};
+use crate::columns::Measures;
 use crate::gain::{Gain, Gains};
 
 /// What a stored row was measured against.
@@ -143,6 +144,44 @@ pub fn loudness_of(conn: &Connection, path: &str) -> Result<Option<(Histogram, f
         )
         .optional()?;
     Ok(row.and_then(|(h, p)| Some((Histogram::from_bytes(&h?)?, p?))))
+}
+
+/// What the columns show, for every track with a current row: loudness,
+/// peak and the tempo to show, which is the tag when there is one.
+pub fn measures(conn: &Connection, library: &[Track]) -> Result<HashMap<String, Measures>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.path, a.mtime, a.size, a.version, a.loudness, a.peak,
+                COALESCE(a.bpm_tag, CASE WHEN a.bpm_conf >= ?1 THEN a.bpm END)
+           FROM analysis a WHERE a.error IS NULL",
+    )?;
+    let rows = stmt.query_map([tempo::MIN_CONFIDENCE], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            Stat {
+                mtime: r.get(1)?,
+                size: r.get(2)?,
+                version: r.get(3)?,
+            },
+            Measures {
+                loudness: r.get(4)?,
+                peak: r.get(5)?,
+                bpm: r.get(6)?,
+            },
+        ))
+    })?;
+    let mut stored: HashMap<String, (Stat, Measures)> = HashMap::new();
+    for row in rows {
+        let (path, stat, measures) = row?;
+        stored.insert(path, (stat, measures));
+    }
+    // Only rows that still describe the file the library knows.
+    Ok(library
+        .iter()
+        .filter_map(|t| {
+            let (stat, measures) = stored.get(&t.path)?;
+            is_current(t, Some(stat)).then(|| (t.path.clone(), *measures))
+        })
+        .collect())
 }
 
 /// The tempo to show for `path`: its BPM tag, else a confident estimate.

@@ -499,8 +499,9 @@ fn a_bpm_search_matches_the_alternate_level_too() {
 
 #[test]
 fn an_older_analysis_table_gains_the_alternate_column() {
-    // A library from playr 0.9.1 has an `analysis` table without `bpm_alt`;
-    // `CREATE TABLE IF NOT EXISTS` leaves it alone, so opening must add it.
+    // An `analysis` table written before `bpm_alt` existed, as a build of
+    // this work left behind: `CREATE TABLE IF NOT EXISTS` leaves an existing
+    // table alone, so opening the library has to add the column.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db");
     let old = rusqlite::Connection::open(&path).unwrap();

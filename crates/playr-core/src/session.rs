@@ -7,7 +7,7 @@
 //! design. Work that takes seconds runs on its own thread and reports through
 //! the session's [`EventSink`], as the engine does.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,6 +17,7 @@ use rusqlite::Connection;
 
 use crate::analysis;
 use crate::audio::{Cmd, Mode, Player, State};
+use crate::columns::{self, Measures, SortKey};
 use crate::db;
 use crate::db::query::{self, Mark, Playlist};
 use crate::db::{Pruned, Track};
@@ -60,6 +61,12 @@ pub struct Session {
     /// writes only its own tables, so the two may run together.
     analysing: Arc<AtomicBool>,
     replaygain: ReplayGain,
+    /// What every track list is sorted by. It orders the library and every
+    /// search, so the list a frontend shows is the list it plays.
+    sort: Vec<SortKey>,
+    /// What `playr analyze` measured, for the columns that show it and the
+    /// keys that sort by it. Read with the library.
+    measures: HashMap<String, Measures>,
 }
 
 impl Session {
@@ -84,6 +91,8 @@ impl Session {
             scanning: Arc::default(),
             analysing: Arc::default(),
             replaygain: ReplayGain::Off,
+            sort: Vec::new(),
+            measures: HashMap::new(),
         };
         session.reload();
         session
@@ -105,7 +114,49 @@ impl Session {
     pub fn reload(&mut self) {
         self.tracks = query::all(&self.conn).unwrap_or_default();
         self.playlists = query::playlists(&self.conn).unwrap_or_default();
+        self.measures = db::analysis::measures(&self.conn, &self.tracks).unwrap_or_default();
+        let mut tracks = std::mem::take(&mut self.tracks);
+        self.order(&mut tracks);
+        self.tracks = tracks;
         self.send_gains();
+    }
+
+    /// Sorts `tracks` by the current keys. Every list a frontend shows goes
+    /// through here, so ordering never depends on where the list came from.
+    fn order(&self, tracks: &mut [Track]) {
+        if self.sort.is_empty() {
+            return;
+        }
+        let measures = |t: &Track| self.measures.get(&t.path).copied().unwrap_or_default();
+        tracks.sort_by(|a, b| columns::compare((a, measures(a)), (b, measures(b)), &self.sort));
+    }
+
+    /// `tracks` in the order every list is shown in.
+    pub fn sorted(&self, mut tracks: Vec<Track>) -> Vec<Track> {
+        self.order(&mut tracks);
+        tracks
+    }
+
+    /// What `playr analyze` measured, by path, for the columns that show it.
+    pub fn measures(&self) -> &HashMap<String, Measures> {
+        &self.measures
+    }
+
+    /// What `playr analyze` measured about `track`, for its columns.
+    pub fn measures_of(&self, path: &str) -> Measures {
+        self.measures.get(path).copied().unwrap_or_default()
+    }
+
+    /// Sorts every track list by `sort`, from now on.
+    pub fn set_sort(&mut self, sort: Vec<SortKey>) {
+        self.sort = sort;
+        let mut tracks = std::mem::take(&mut self.tracks);
+        self.order(&mut tracks);
+        self.tracks = tracks;
+    }
+
+    pub fn sort(&self) -> &[SortKey] {
+        &self.sort
     }
 
     /// Hands the player the library's gains; read only while ReplayGain is
@@ -134,9 +185,12 @@ impl Session {
         &self.selection
     }
 
-    /// Tracks matching `input`, in library order; none if the query fails.
+    /// Tracks matching `input`, in the order the library is sorted in; none
+    /// if the query fails.
     pub fn search(&self, input: &str) -> Vec<Track> {
-        query::search(&self.conn, input).unwrap_or_default()
+        let mut hits = query::search(&self.conn, input).unwrap_or_default();
+        self.order(&mut hits);
+        hits
     }
 
     /// The tracks of playlist `id`, in order; none if it cannot be read.

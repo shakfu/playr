@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use playr_core::audio::{Cmd, Player, State, Status};
+use playr_core::columns::{Column, Measures};
 use playr_core::db::query::{Mark, Playlist};
 use playr_core::db::Track;
 use playr_core::event::{Event, EventSink, JobId};
@@ -120,6 +121,8 @@ pub struct Model {
     /// After a scan, remove missing tracks without asking.
     auto_prune: bool,
     analyze_on_scan: bool,
+    /// The columns a track list shows, from the settings or `:columns`.
+    columns: Vec<Column>,
     /// Events from the session's engine and background work, drained each frame.
     events: Receiver<Event>,
     /// Called from a sending thread when something arrives, so a frontend that
@@ -183,6 +186,7 @@ impl Model {
             onset_sensitivity: config.settings.onset_sensitivity,
             auto_prune: config.settings.auto_prune,
             analyze_on_scan: config.settings.analyze_on_scan,
+            columns: config.settings.columns.clone(),
             events,
             wake,
             media: Media::none(),
@@ -198,6 +202,8 @@ impl Model {
         model.session.send(Cmd::SetVolume(config.settings.volume));
         model.session.send(Cmd::SetMode(config.settings.mode));
         model.session.send(Cmd::SetSpeed(config.settings.speed));
+        // `set_sort` re-orders the library the session already read.
+        model.session.set_sort(config.settings.sort.clone());
         // Silent, as the other settings are: nothing was asked for.
         let _ = model.session.set_replaygain(config.settings.replaygain);
         if !tracks.is_empty() {
@@ -474,6 +480,21 @@ impl Model {
     /// The colours to draw in, from the settings or `:theme`.
     pub fn theme(&self) -> crate::Theme {
         self.theme
+    }
+
+    /// The columns a track list shows, in order.
+    pub fn columns(&self) -> &[Column] {
+        &self.columns
+    }
+
+    /// What `playr analyze` measured about `track`, for its columns.
+    pub fn measures(&self, track: &Track) -> Measures {
+        self.session.measures_of(&track.path)
+    }
+
+    /// The same, by path, for a frontend drawing many rows at once.
+    pub fn measures_map(&self) -> &std::collections::HashMap<String, Measures> {
+        self.session.measures()
     }
 
     /// Which ReplayGain applies, from the settings or `:replaygain`.
@@ -943,6 +964,11 @@ impl Frontend for Model {
                 self.sampler.display = display.unwrap_or(self.sampler.display.next());
                 Model::notify(self, Message::Display(self.sampler.display));
             }
+            Presentation::Columns(columns) => {
+                self.columns = columns.clone();
+                Model::notify(self, Message::Columns(columns));
+            }
+            Presentation::Sorted(keys) => Model::notify(self, Message::Sorted(keys)),
             Presentation::Theme(theme) => {
                 self.theme = theme;
                 Model::notify(self, Message::Theme(theme));

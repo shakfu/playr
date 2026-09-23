@@ -69,6 +69,8 @@ None of the three contact external services or download any metadata and images.
 
 - Full-text search over title, artist, album, album artist and file name, or within one of them with `artist:evans`, and over analysed tempos with `bpm:120..130`
 
+- Columns and sort order set per program in `settings.toml`, changed for the session with `:columns` and `:sort`; sorting by loudness or tempo needs `playr analyze`
+
 - Search results play directly, in library order
 
 - Playlists saved to and loaded from the database
@@ -290,6 +292,14 @@ The two "possible" findings are heuristics, tested against ffmpeg's encoders and
 
 The tempo is one BPM for the whole track, from the autocorrelation of its onsets. A BPM tag, when present, is used instead, and the report compares the two where a track has both. A pulse faster than about 170 BPM reads at half tempo, and music without a clear pulse gets none: on an ambient-leaning library expect a tempo for under half the tracks. Of those, about 60% match a second estimator exactly and another 28% at a simple ratio, such as half or three quarters; see `docs/dev/analyze.md`.
 
+### Columns and order
+
+`columns` in `settings.toml` says which columns a track list shows and in which order, and `sort` says what it is ordered by, most important key first: `sort = ["tempo desc", "title"]`. The names are `title`, `artist`, `album_artist`, `album`, `disc`, `track`, `year`, `time`, `tempo`, `loudness`, `peak` and `path`; the last three and `tempo` come from `playr analyze`, and a track it has not measured sorts last whichever way the column is sorted.
+
+A `[terminal]`, `[gui]` or `[server]` table sets them for one program, over the shared keys, since a terminal row has less room than a window. As shipped, the window lists the title first and the other two take the shared order; nothing shows `tempo` or `loudness` until you ask for it. `:columns artist title tempo` and `:sort loudness desc` change them until playr exits. In the window, a click on a column heading sorts by it and a second click turns it around, and View, Columns ticks the columns to show. The page has a sort control; its columns are fixed for now.
+
+One order serves the library, its search results and playback: the list you see is the list that plays, so sorting by tempo and pressing play walks the library in that order. Searching filters and sorting orders, so `bpm:170..180` sorted by loudness answers "everything near 174, loudest first".
+
 `:info` shows what was measured about one track: its format, loudness and peak, the gain ReplayGain would apply, its tempo with how sure playr is of it, where its content stops, how many of its bits it uses, its FLAC checksum, and any findings. It describes the row under the cursor in the library and selection views, and the playing track elsewhere; the window has Track info in a row's menu and on the sampler's button bar, where it describes the playing track. A track that has not been analysed says so.
 
 An analysed track shows its tempo beside the now-playing line, as it sounds: varispeed moves it, so a track at 120 BPM reads 143 BPM at +3 semitones. `bpm:` searches the recorded tempos: `bpm:128` matches within 1 BPM, `bpm:120..130` a range, and `bpm:140..` or `bpm:..90` one end of one. It combines with text, as in `evans bpm:120..130`, and matches nothing for a track playr has not analysed or is unsure of. A track whose tempo was halved, which happens above about 170 BPM, also matches at the tempo it is heard at: one recorded at 87 answers to `bpm:174`.
@@ -484,9 +494,14 @@ onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 samples = "~/Music/playr/samples"  # where :slice writes
 auto_prune = true                  # after a scan, prune missing tracks without asking
 analyze_on_scan = true             # after a scan, analyse what it added or changed
+columns = ["artist", "album", "title", "time"]   # what a track list shows
+sort = ["album_artist", "album", "disc", "track"] # and the order it comes in
 device = "alsa:hw:CARD=DAC,DEV=0"  # output device from `playr devices`; "" is the default
 replaygain = "auto"                # off, track, album or auto
 theme = "light"                    # system, light or dark
+
+[terminal]                         # or [gui] or [server]: that program only
+columns = ["artist", "title", "tempo"]
 
 [keys]                             # every view
 right = "seek +10"
@@ -498,6 +513,10 @@ q = "nop"
 [keys.selection]                   # one view: library, selection, playlists or sampler
 x = "remove"
 ```
+
+- One file serves all three programs. A table another program owns, such as `[gui]` or `[server]`, is passed over by the ones that do not read it, so the terminal starts on a file written for the window. Only the program that owns a table checks what is inside it. A name no program owns, such as `[colours]`, is still an error.
+
+- Top-level settings come before any table. TOML reads a bare key after a `[table]` header as belonging to that table, so `volume = 60` below `[keys]` sets a key binding named `volume`, not the volume.
 
 - Each key's value is a `:` command, as listed in [docs/cheatsheet.md](docs/cheatsheet.md). `"nop"` makes a key do nothing, and `"command"` opens the `:` prompt.
 

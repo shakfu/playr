@@ -42,7 +42,7 @@ fn a_mode_is_named_in_full() {
 
 #[test]
 fn tables_a_frontend_names_come_back_and_others_are_errors() {
-    let text = "[keys]\nq = 'quit'\n\n[gui]\ntheme = 'dark'\n\n[colours]\nred = 1\n";
+    let text = "[keys]\nq = 'quit'\n\n[gui]\ncolumns = ['title']\n\n[colours]\nred = 1\n";
     let mut settings = Settings::default();
     let (tables, errors) = settings.apply(text, &["gui", "keys"]);
     let names: Vec<&str> = tables.iter().map(|(n, _)| n.get_ref().as_ref()).collect();
@@ -63,6 +63,36 @@ fn tables_a_frontend_names_come_back_and_others_are_errors() {
             "line 1: q must be a command string",
             "line 2: volume is a number from 0 to 100",
         ]
+    );
+}
+
+/// One settings file serves all three programs, so each passes over the
+/// tables it does not read. Without this a `[gui]` table stopped the terminal.
+#[test]
+fn another_frontends_table_is_passed_over_not_refused() {
+    // Core keys come first: after a table header, TOML reads bare keys as
+    // that table's.
+    let text = "volume = 40\n\n[gui]\ncolumns = ['title']\n\n[server]\nlisten = '0.0.0.0:8080'\n";
+    let mut settings = Settings::default();
+    let (tables, errors) = settings.apply(text, &["keys"]);
+    assert!(tables.is_empty(), "a table this frontend never asked for");
+    assert_eq!(errors.finish(), Ok(()));
+    assert_eq!(settings.volume, 0.4, "core keys still apply");
+
+    // A typo is still caught: only the names frontends own are passed over.
+    let mut settings = Settings::default();
+    let (_, errors) = settings.apply("[guii]\ncolumns = []\n", &["keys"]);
+    assert_eq!(
+        errors.finish().unwrap_err(),
+        ["line 1: unknown setting: guii"]
+    );
+
+    // And a frontend's name used for something that is not a table.
+    let mut settings = Settings::default();
+    let (_, errors) = settings.apply("gui = 3\n", &["keys"]);
+    assert_eq!(
+        errors.finish().unwrap_err(),
+        ["line 1: gui is another program's settings, and must be a table, not an integer"]
     );
 }
 
@@ -175,5 +205,44 @@ fn the_device_defaults_to_none_and_takes_an_id() {
     assert_eq!(
         parse("device = 2").unwrap_err(),
         ["line 1: device cannot be an integer"]
+    );
+}
+
+#[test]
+fn columns_and_sort_are_lists_of_column_names() {
+    use playr_core::columns::{Column, SortKey};
+    let settings = Settings::default();
+    assert_eq!(
+        settings.columns,
+        [Column::Artist, Column::Album, Column::Title, Column::Time]
+    );
+    assert_eq!(
+        settings.sort.first().map(|k| k.column),
+        Some(Column::AlbumArtist)
+    );
+
+    let settings = parse("columns = ['title', 'tempo']\nsort = ['loudness desc']").unwrap();
+    assert_eq!(settings.columns, [Column::Title, Column::Tempo]);
+    assert_eq!(
+        settings.sort,
+        [SortKey {
+            column: Column::Loudness,
+            descending: true
+        }]
+    );
+    // An empty sort leaves the library as it was read.
+    assert_eq!(parse("sort = []").unwrap().sort, []);
+
+    assert_eq!(
+        parse("columns = ['loudest']").unwrap_err()[0],
+        "line 1: unknown column loudest; choices: title, artist, album_artist, album, disc, track, year, time, tempo, loudness, peak, path"
+    );
+    assert_eq!(
+        parse("columns = []").unwrap_err(),
+        ["line 1: columns needs at least one column"]
+    );
+    assert_eq!(
+        parse("columns = 'title'").unwrap_err(),
+        ["line 1: columns is a list of names, not a string"]
     );
 }

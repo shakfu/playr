@@ -260,6 +260,25 @@ impl Gui {
                         }
                     }
                 });
+                // Ticking a column adds it at the end, which is where a list
+                // grows; untick to take it away. `[gui] columns` in
+                // `settings.toml` sets what the window opens with.
+                let shown = self.model.columns().to_vec();
+                ui.menu_button("Columns", |ui| {
+                    for (_, column) in playr_core::columns::Column::NAMES {
+                        let mut on = shown.contains(&column);
+                        if ui.checkbox(&mut on, column.heading()).changed() {
+                            let mut columns = shown.clone();
+                            match on {
+                                true => columns.push(column),
+                                false => columns.retain(|c| *c != column),
+                            }
+                            if !columns.is_empty() {
+                                chosen = Some(Action::SetColumns(columns));
+                            }
+                        }
+                    }
+                });
             });
             ui.menu_button("Playback", |ui| {
                 items(ui, controls::PLAYBACK_MENU, &mut chosen);

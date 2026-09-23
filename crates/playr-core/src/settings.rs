@@ -13,10 +13,22 @@ use toml::de::{DeTable, DeValue};
 use toml::Spanned;
 
 use crate::audio::Mode;
+use crate::columns::{Column, SortKey};
 use crate::gain::ReplayGain;
 
 /// The core's default settings, as shipped.
 pub const DEFAULT_SETTINGS: &str = include_str!("settings.toml");
+
+/// Entries a frontend may own, in the order they are documented.
+///
+/// A frontend asks [`Settings::apply`] for the ones it reads; the rest are
+/// passed over rather than reported, so one settings file serves all three
+/// programs. Without this a `[gui]` table stopped the terminal starting.
+///
+/// Nothing here is checked by the core: a frontend validates its own table
+/// when it runs, so a mistake inside `[gui]` is reported by the window and
+/// not by the terminal.
+pub const FRONTEND_TABLES: &[&str] = &["keys", "theme", "terminal", "gui", "server"];
 
 /// What the settings file sets for the core.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +49,10 @@ pub struct Settings {
     /// The output device's ID, or `None` for the default.
     pub device: Option<String>,
     pub replaygain: ReplayGain,
+    /// The columns a track list shows, in order.
+    pub columns: Vec<Column>,
+    /// The keys the library is sorted by, most important first.
+    pub sort: Vec<SortKey>,
 }
 
 impl Default for Settings {
@@ -51,6 +67,8 @@ impl Default for Settings {
             analyze_on_scan: false,
             device: None,
             replaygain: ReplayGain::Off,
+            columns: Vec::new(),
+            sort: Vec::new(),
         };
         let (_, errors) = settings.apply(DEFAULT_SETTINGS, &[]);
         if let Err(errors) = errors.finish() {
@@ -120,6 +138,10 @@ impl Settings {
     /// Applies the top-level keys of `text` on top of `self`. Returns the
     /// entries named in `tables`, in file order, for the frontend to read,
     /// and the problems found so far, to which it adds its own.
+    ///
+    /// An entry in [`FRONTEND_TABLES`] that `tables` does not name belongs to
+    /// another frontend and is passed over. Every other unknown name is an
+    /// error, so a typo is still caught.
     pub fn apply<'a>(&mut self, text: &'a str, tables: &[&str]) -> (Vec<Table<'a>>, Errors<'a>) {
         let mut errors = Errors {
             text,
@@ -138,6 +160,16 @@ impl Settings {
             let at = value.span().start;
             match (name.get_ref().as_ref(), value.get_ref()) {
                 (other, _) if tables.contains(&other) => named.push((name, value)),
+                // Another frontend's. It must still be a table, so a stray
+                // `gui = 3` is reported rather than passed over.
+                (other, DeValue::Table(_)) if FRONTEND_TABLES.contains(&other) => {}
+                (other, v) if FRONTEND_TABLES.contains(&other) => errors.add(
+                    at,
+                    format!(
+                        "{other} is another program's settings, and must be a table, not {}",
+                        kind(v)
+                    ),
+                ),
                 ("volume", v) => match number(v) {
                     Some(n) if (0.0..=100.0).contains(&n) => self.volume = (n / 100.0) as f32,
                     _ => errors.add(at, "volume is a number from 0 to 100"),
@@ -172,6 +204,14 @@ impl Settings {
                 ("device", DeValue::String(s)) => {
                     self.device = (!s.is_empty()).then(|| s.to_string())
                 }
+                ("columns", v) => match columns_value(v) {
+                    Ok(columns) => self.columns = columns,
+                    Err(e) => errors.add(at, e),
+                },
+                ("sort", v) => match sort_value(v) {
+                    Ok(sort) => self.sort = sort,
+                    Err(e) => errors.add(at, e),
+                },
                 ("replaygain", DeValue::String(s)) => {
                     match ReplayGain::NAMES
                         .iter()
@@ -214,4 +254,58 @@ pub fn default_path() -> Option<PathBuf> {
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::home_dir().map(|h| h.join(".config")))?;
     Some(base.join("playr/settings.toml"))
+}
+
+/// The columns a `columns = [...]` value names, or why it is not one.
+///
+/// A frontend reads the same key from its own table, so the wording of a
+/// mistake is the same wherever it is made.
+pub fn columns_value(value: &DeValue) -> Result<Vec<Column>, String> {
+    let DeValue::Array(items) = value else {
+        return Err(format!("columns is a list of names, not {}", kind(value)));
+    };
+    match named_list(items, Column::named)? {
+        columns if columns.is_empty() => Err("columns needs at least one column".into()),
+        columns => Ok(columns),
+    }
+}
+
+/// The keys a `sort = [...]` value names, or why it is not one. An empty
+/// list leaves the library in the order it was read.
+pub fn sort_value(value: &DeValue) -> Result<Vec<SortKey>, String> {
+    let DeValue::Array(items) = value else {
+        return Err(format!("sort is a list of names, not {}", kind(value)));
+    };
+    named_list(items, SortKey::named)
+}
+
+/// Every column name, for an error that lists the choices.
+fn column_names() -> String {
+    Column::NAMES
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn unknown(what: &str, bad: &str, choices: String) -> String {
+    format!("unknown {what} {bad}; choices: {choices}")
+}
+
+/// Reads an array of names with `parse`, reporting the first it does not know.
+fn named_list<T>(
+    items: &[Spanned<DeValue>],
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Vec<T>, String> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let DeValue::String(text) = item.get_ref() else {
+            return Err(format!("a name, not {}", kind(item.get_ref())));
+        };
+        match parse(text) {
+            Some(value) => out.push(value),
+            None => return Err(unknown("column", text, column_names())),
+        }
+    }
+    Ok(out)
 }

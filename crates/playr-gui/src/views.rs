@@ -6,15 +6,14 @@
 //! with the cursor on it. Selection rows can be dragged to a new place.
 
 use std::collections::HashSet;
-use std::time::Duration;
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder, TableRow};
 use playr_app::action::Action;
 use playr_app::dispatch::Frontend;
-use playr_app::message::fmt_time;
 use playr_app::model::Model;
 use playr_app::View;
+use playr_core::columns::{self, SortKey};
 
 use crate::controls::{self, Control};
 
@@ -51,6 +50,7 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
         });
         return result;
     }
+    let mut sorted: Option<SortKey> = None;
     let cursor = model.cursor(view);
     let playing = model.snapshot().status.current().cloned();
     let selected: HashSet<&str> = match view {
@@ -69,6 +69,9 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
 
     // Text in a row does not take the click, so it reaches the row.
     ui.style_mut().interaction.selectable_labels = false;
+    let shown = model.columns().to_vec();
+    let sort = model.session().sort().to_vec();
+    let measures = model.measures_map().clone();
     let mut table = TableBuilder::new(ui)
         .id_salt(view.title())
         .striped(true)
@@ -80,18 +83,40 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     if let Some(row) = scroll {
         table = table.scroll_to_row(row, None);
     }
+    // A number needs only its own width; text shares what is left.
+    for (i, column) in shown.iter().enumerate() {
+        table = match (column.numeric(), i + 1 == shown.len()) {
+            (true, _) => table.column(Column::exact(64.0)),
+            (false, true) => table.column(Column::remainder().at_least(120.0).clip(true)),
+            (false, false) => table.column(Column::initial(200.0).clip(true).resizable(true)),
+        };
+    }
     table
-        .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::initial(200.0).clip(true).resizable(true))
-        .column(Column::initial(200.0).clip(true).resizable(true))
-        .column(Column::exact(56.0))
         .header(ROW, |mut header| {
             if view == View::Library {
                 header.col(|_| {});
             }
-            for name in ["Title", "Artist", "Album", "Time"] {
+            for column in &shown {
                 header.col(|ui| {
-                    ui.strong(name);
+                    // The heading sorts by its column, and clicking the one
+                    // already sorted by turns it around.
+                    let key = sort.first().filter(|k| k.column == *column);
+                    let arrow = match key {
+                        Some(k) if k.descending => " v",
+                        Some(_) => " ^",
+                        None => "",
+                    };
+                    let label = format!("{}{arrow}", column.heading());
+                    if ui
+                        .add(egui::Button::new(label).frame(false).wrap())
+                        .clicked()
+                    {
+                        let descending = key.is_some_and(|k| !k.descending);
+                        sorted = Some(SortKey {
+                            column: *column,
+                            descending,
+                        });
+                    }
                 });
             }
         })
@@ -111,22 +136,24 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                 let is_playing = playing
                     .as_ref()
                     .is_some_and(|p| p.as_os_str() == t.path.as_str());
-                row.col(|ui| {
-                    let title = egui::RichText::new(t.display_title());
-                    ui.label(if is_playing { title.strong() } else { title });
-                });
-                row.col(|ui| {
-                    ui.label(t.display_artist());
-                });
-                row.col(|ui| {
-                    ui.label(t.display_album());
-                });
-                row.col(|ui| {
-                    let time = t
-                        .duration_ms
-                        .map(|ms| fmt_time(Duration::from_millis(ms.max(0) as u64)));
-                    ui.weak(time.unwrap_or_else(|| "-".into()));
-                });
+                let measured = measures.get(&t.path).copied().unwrap_or_default();
+                for column in &shown {
+                    row.col(|ui| {
+                        let text = columns::cell(t, measured, *column).text(*column);
+                        match column {
+                            playr_core::columns::Column::Title => {
+                                let title = egui::RichText::new(text);
+                                ui.label(if is_playing { title.strong() } else { title });
+                            }
+                            c if c.numeric() => {
+                                ui.weak(text);
+                            }
+                            _ => {
+                                ui.label(text);
+                            }
+                        }
+                    });
+                }
                 if let Some(picked) = respond(&row, menu) {
                     result = Some(picked);
                 }
@@ -142,6 +169,15 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                 }
             });
         });
+    // A heading click replaces the sort, keeping the keys under it as
+    // tie-breakers, so clicking Album inside an artist's records still
+    // groups them.
+    if let Some(key) = sorted {
+        let mut keys = vec![key];
+        keys.extend(sort.iter().filter(|k| k.column != key.column).copied());
+        keys.truncate(4);
+        result = Some((None, Some(Action::SetSort(keys))));
+    }
     result
 }
 
