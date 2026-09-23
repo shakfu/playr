@@ -2,9 +2,9 @@
 # .deb, .rpm, Arch .pkg.tar.zst, a Flatpak bundle and a snap. The packages are
 # kept as the run's artifacts; nothing is published.
 #
-# The deb, rpm and Arch packages hold all three programs, the desktop entry,
-# the icon and playr-server as a systemd user unit. The Flatpak holds the
-# desktop window only. The snap holds all three.
+# Each program is its own deb, rpm and Arch package: playr, playr-gui (with
+# the desktop entry and icon) and playr-server (with a systemd user unit). The
+# Flatpak holds the desktop window only. The snap holds all three.
 name: linux-packages
 
 on:
@@ -73,8 +73,8 @@ jobs:
           mkdir -p staged out
           # The packaged unit runs the packaged binary, not ~/.local/bin's.
           sed 's|^ExecStart=%h/.local/bin/|ExecStart=/usr/bin/|' packaging/linux/playr-server.service > staged/playr-server.service
-          cat > nfpm.yaml <<'EOF'
-          name: playr
+          # Fields every package shares; each package's file adds the rest.
+          cat > common.yaml <<'EOF'
           arch: ${ARCH}
           platform: linux
           version: ${VERSION}
@@ -85,50 +85,75 @@ jobs:
           license: MIT
           archlinux:
             packager: ${MAINTAINER}
-          description: A minimal music player that plays local files and contacts nothing
+          EOF
+          cat > playr.yaml <<'EOF'
+          name: playr
+          description: playr's terminal music player, which plays local files and contacts nothing
           contents:
             - src: staged/bin/playr
               dst: /usr/bin/playr
               file_info: { mode: 0755 }
+            - src: README.md
+              dst: /usr/share/doc/playr/README.md
+            - src: CHANGELOG.md
+              dst: /usr/share/doc/playr/CHANGELOG.md
+            - src: LICENSE
+              dst: /usr/share/licenses/playr/LICENSE
+          overrides:
+            deb: { depends: [libasound2] }
+            rpm: { depends: [alsa-lib] }
+            archlinux: { depends: [alsa-lib] }
+          EOF
+          # playr-gui loads its window libraries at run time, so ldd does not
+          # list them; the packages name them.
+          cat > playr-gui.yaml <<'EOF'
+          name: playr-gui
+          description: playr's desktop window, which plays local files and contacts nothing
+          contents:
             - src: staged/bin/playr-gui
               dst: /usr/bin/playr-gui
-              file_info: { mode: 0755 }
-            - src: staged/bin/playr-server
-              dst: /usr/bin/playr-server
               file_info: { mode: 0755 }
             - src: packaging/linux/playr.desktop
               dst: /usr/share/applications/playr.desktop
             - src: crates/playr-gui/assets/playr.png
               dst: /usr/share/icons/hicolor/256x256/apps/playr.png
+            - src: LICENSE
+              dst: /usr/share/licenses/playr-gui/LICENSE
+          overrides:
+            deb: { depends: [libasound2, libxkbcommon0, libwayland-client0, libegl1] }
+            rpm: { depends: [alsa-lib, libxkbcommon, libwayland-client, mesa-libEGL] }
+            archlinux: { depends: [alsa-lib, libxkbcommon, wayland, libglvnd] }
+          EOF
+          cat > playr-server.yaml <<'EOF'
+          name: playr-server
+          description: playr's server, controlled from a web page and OSC
+          contents:
+            - src: staged/bin/playr-server
+              dst: /usr/bin/playr-server
+              file_info: { mode: 0755 }
             - src: staged/playr-server.service
               dst: /usr/lib/systemd/user/playr-server.service
-            - src: README.md
-              dst: /usr/share/doc/playr/README.md
-            - src: CHANGELOG.md
-              dst: /usr/share/doc/playr/CHANGELOG.md
             - src: docs/server-guide.md
-              dst: /usr/share/doc/playr/server-guide.md
+              dst: /usr/share/doc/playr-server/server-guide.md
             - src: LICENSE
-              dst: /usr/share/licenses/playr/LICENSE
-          # playr-gui loads its window libraries at run time, so ldd does not
-          # list them; they are recommended, not required.
+              dst: /usr/share/licenses/playr-server/LICENSE
           overrides:
-            deb:
-              depends: [libasound2]
-              recommends: [libxkbcommon0, libwayland-client0, libegl1]
-            rpm:
-              depends: [alsa-lib]
-              recommends: [libxkbcommon, libwayland-client, mesa-libEGL]
-            archlinux:
-              depends: [alsa-lib, libxkbcommon, wayland, libglvnd]
+            deb: { depends: [libasound2] }
+            rpm: { depends: [alsa-lib] }
+            archlinux: { depends: [alsa-lib] }
           EOF
-          # nfpm does not expand archlinux.packager.
-          sed -i "s|\${MAINTAINER}|$MAINTAINER|" nfpm.yaml
+          for pkg in playr playr-gui playr-server; do
+            cat common.yaml $pkg.yaml > nfpm-$pkg.yaml
+            # nfpm does not expand archlinux.packager.
+            sed -i "s|\${MAINTAINER}|$MAINTAINER|" nfpm-$pkg.yaml
+          done
           for arch in amd64 arm64; do
             # nfpm expands variables in fields such as arch, not in paths.
             rm -rf staged/bin && cp -r bin/bin-$arch staged/bin
-            for fmt in deb rpm archlinux; do
-              ARCH=$arch nfpm package -f nfpm.yaml -p $fmt -t out/
+            for pkg in playr playr-gui playr-server; do
+              for fmt in deb rpm archlinux; do
+                ARCH=$arch nfpm package -f nfpm-$pkg.yaml -p $fmt -t out/
+              done
             done
           done
           ls -l out
@@ -277,3 +302,28 @@ jobs:
         with:
           name: snap
           path: ${{ steps.snapcraft.outputs.snap }}
+
+  # Every package in one download, with checksums. The per-job artifacts stay.
+  collect:
+    needs: [native, flatpak, snap]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.deb *.rpm *.pkg.tar.zst *.flatpak *.snap > SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: playr-linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/*.flatpak
+            dist/*.snap
+            dist/SHA256SUMS
