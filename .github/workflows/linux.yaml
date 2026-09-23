@@ -1,0 +1,279 @@
+# Builds playr, playr-gui and playr-server for Linux and packages them as
+# .deb, .rpm, Arch .pkg.tar.zst, a Flatpak bundle and a snap. The packages are
+# kept as the run's artifacts; nothing is published.
+#
+# The deb, rpm and Arch packages hold all three programs, the desktop entry,
+# the icon and playr-server as a systemd user unit. The Flatpak holds the
+# desktop window only. The snap holds all three.
+name: linux-packages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_ID: io.github.shakfu.playr
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04, so the binaries run on glibc 2.35 and later.
+          - { target: x86_64-unknown-linux-gnu, arch: amd64, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, arch: arm64, os: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install ALSA headers and window libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --locked -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bin-${{ matrix.arch }}
+          path: |
+            target/release/playr
+            target/release/playr-gui
+            target/release/playr-server
+
+  # One job packages both architectures: nfpm writes the archive formats
+  # itself and runs no target code.
+  native:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bin-*
+          path: bin
+
+      - name: Install nfpm
+        run: |
+          curl -sSfLo nfpm.deb https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_amd64.deb
+          sudo dpkg -i nfpm.deb
+
+      - name: Package
+        run: |
+          # Artifacts do not keep the executable bit.
+          chmod 755 bin/*/*
+          export VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          export MAINTAINER="$(git log -1 --format='%an <%ae>')"
+          mkdir -p staged out
+          # The packaged unit runs the packaged binary, not ~/.local/bin's.
+          sed 's|^ExecStart=%h/.local/bin/|ExecStart=/usr/bin/|' packaging/linux/playr-server.service > staged/playr-server.service
+          cat > nfpm.yaml <<'EOF'
+          name: playr
+          arch: ${ARCH}
+          platform: linux
+          version: ${VERSION}
+          release: 1
+          section: sound
+          maintainer: ${MAINTAINER}
+          homepage: https://github.com/shakfu/playr
+          license: MIT
+          archlinux:
+            packager: ${MAINTAINER}
+          description: A minimal music player that plays local files and contacts nothing
+          contents:
+            - src: staged/bin/playr
+              dst: /usr/bin/playr
+              file_info: { mode: 0755 }
+            - src: staged/bin/playr-gui
+              dst: /usr/bin/playr-gui
+              file_info: { mode: 0755 }
+            - src: staged/bin/playr-server
+              dst: /usr/bin/playr-server
+              file_info: { mode: 0755 }
+            - src: packaging/linux/playr.desktop
+              dst: /usr/share/applications/playr.desktop
+            - src: crates/playr-gui/assets/playr.png
+              dst: /usr/share/icons/hicolor/256x256/apps/playr.png
+            - src: staged/playr-server.service
+              dst: /usr/lib/systemd/user/playr-server.service
+            - src: README.md
+              dst: /usr/share/doc/playr/README.md
+            - src: CHANGELOG.md
+              dst: /usr/share/doc/playr/CHANGELOG.md
+            - src: docs/server-guide.md
+              dst: /usr/share/doc/playr/server-guide.md
+            - src: LICENSE
+              dst: /usr/share/licenses/playr/LICENSE
+          # playr-gui loads its window libraries at run time, so ldd does not
+          # list them; they are recommended, not required.
+          overrides:
+            deb:
+              depends: [libasound2]
+              recommends: [libxkbcommon0, libwayland-client0, libegl1]
+            rpm:
+              depends: [alsa-lib]
+              recommends: [libxkbcommon, libwayland-client, mesa-libEGL]
+            archlinux:
+              depends: [alsa-lib, libxkbcommon, wayland, libglvnd]
+          EOF
+          # nfpm does not expand archlinux.packager.
+          sed -i "s|\${MAINTAINER}|$MAINTAINER|" nfpm.yaml
+          for arch in amd64 arm64; do
+            # nfpm expands variables in fields such as arch, not in paths.
+            rm -rf staged/bin && cp -r bin/bin-$arch staged/bin
+            for fmt in deb rpm archlinux; do
+              ARCH=$arch nfpm package -f nfpm.yaml -p $fmt -t out/
+            done
+          done
+          ls -l out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-packages
+          path: out/*
+
+  # A bundle of the prebuilt playr-gui, for `flatpak install --user`. Flathub
+  # would need a manifest that builds from source offline instead.
+  flatpak:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: bin-amd64
+          path: flatpak
+
+      - name: Manifest
+        run: |
+          cp packaging/linux/playr.desktop crates/playr-gui/assets/playr.png flatpak/
+          # Flatpak exports only files named by the app ID.
+          sed -i "s/^Icon=playr$/Icon=$APP_ID/" flatpak/playr.desktop
+          cat > flatpak/$APP_ID.yaml <<EOF
+          app-id: $APP_ID
+          runtime: org.freedesktop.Platform
+          runtime-version: '25.08'
+          sdk: org.freedesktop.Sdk
+          command: playr-gui
+          finish-args:
+            - --share=ipc
+            - --socket=wayland
+            - --socket=fallback-x11
+            - --device=dri
+            # cpal's ALSA output reaches the host through the runtime's Pulse plugin.
+            - --socket=pulseaudio
+            # Music outside ~/Music needs: flatpak override --user --filesystem=PATH $APP_ID
+            - --filesystem=xdg-music
+            - --own-name=org.mpris.MediaPlayer2.playr
+          modules:
+            - name: playr
+              buildsystem: simple
+              build-commands:
+                - install -Dm755 playr-gui /app/bin/playr-gui
+                - install -Dm644 playr.desktop /app/share/applications/$APP_ID.desktop
+                - install -Dm644 playr.png /app/share/icons/hicolor/256x256/apps/$APP_ID.png
+              sources:
+                - { type: file, path: playr-gui }
+                - { type: file, path: playr.desktop }
+                - { type: file, path: playr.png }
+          EOF
+          cat flatpak/$APP_ID.yaml
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: flatpak/${{ env.APP_ID }}.yaml
+          bundle: playr.flatpak
+          cache: false
+
+  snap:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: bin-amd64
+          path: snap-build/payload/bin
+
+      - name: snapcraft.yaml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          mkdir -p snap-build/snap
+          chmod 755 snap-build/payload/bin/*
+          cp crates/playr-gui/assets/playr.png snap-build/payload/
+          # snapcraft rewrites Exec= to the snap's own command; the icon needs
+          # a path inside the snap.
+          sed 's|^Icon=playr$|Icon=${SNAP}/playr.png|' packaging/linux/playr.desktop > snap-build/payload/playr.desktop
+          # ALSA's default device, sent to the host's sound server.
+          printf 'pcm.!default pulse\nctl.!default pulse\n' > snap-build/payload/asound.conf
+          cat > snap-build/snap/snapcraft.yaml <<EOF
+          name: playr
+          base: core22
+          version: '$version'
+          summary: A minimal music player that plays local files
+          description: |
+            playr plays and samples a local music library, and contacts nothing.
+            It has a terminal program, a desktop window and a server
+            controlled from a web page and OSC.
+          license: MIT
+          grade: devel
+          confinement: strict
+
+          layout:
+            /etc/asound.conf:
+              bind-file: \$SNAP/asound.conf
+            /usr/lib/x86_64-linux-gnu/alsa-lib:
+              bind: \$SNAP/usr/lib/x86_64-linux-gnu/alsa-lib
+            /usr/share/alsa:
+              bind: \$SNAP/usr/share/alsa
+
+          slots:
+            mpris:
+              interface: mpris
+              name: playr
+
+          parts:
+            playr:
+              plugin: dump
+              source: payload
+              stage-packages:
+                - libasound2
+                - libasound2-plugins
+
+          apps:
+            playr:
+              command: bin/playr
+              plugs: [audio-playback, home, removable-media]
+              slots: [mpris]
+            playr-gui:
+              command: bin/playr-gui
+              desktop: playr.desktop
+              extensions: [gnome]
+              plugs: [audio-playback, home, removable-media]
+              slots: [mpris]
+            playr-server:
+              command: bin/playr-server
+              plugs: [audio-playback, home, removable-media, network, network-bind]
+          EOF
+          cat snap-build/snap/snapcraft.yaml
+
+      - uses: snapcore/action-build@v1
+        id: snapcraft
+        with:
+          path: snap-build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: snap
+          path: ${{ steps.snapcraft.outputs.snap }}
