@@ -67,14 +67,14 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
         ui.monospace(fmt_time(total));
     });
 
-    ui.horizontal(|ui| {
+    // Wraps: the row is wider than the default window since ReplayGain.
+    ui.horizontal_wrapped(|ui| {
         for control in controls::MARKS {
             if ui.button(control.label).clicked() {
                 actions.push(control.action.clone());
             }
         }
         ui.separator();
-        // Narrow enough that the row fits a window 1000 points wide.
         ui.spacing_mut().slider_width = 90.0;
 
         let mut volume = (snapshot.volume * 100.0).round();

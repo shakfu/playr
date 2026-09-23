@@ -83,11 +83,16 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     if let Some(row) = scroll {
         table = table.scroll_to_row(row, None);
     }
-    // A number needs only its own width; text shares what is left.
+    // A number needs only its own width. One text column takes what is
+    // left, the title if shown, so the table fills the window.
+    let fill = shown
+        .iter()
+        .position(|c| *c == columns::Column::Title)
+        .or_else(|| shown.iter().rposition(|c| !c.numeric()));
     for (i, column) in shown.iter().enumerate() {
-        table = match (column.numeric(), i + 1 == shown.len()) {
+        table = match (column.numeric(), Some(i) == fill) {
             (true, _) => table.column(Column::exact(64.0)),
-            (false, true) => table.column(Column::remainder().at_least(120.0).clip(true)),
+            (false, true) => table.column(Column::remainder().at_least(160.0).clip(true)),
             (false, false) => table.column(Column::initial(200.0).clip(true).resizable(true)),
         };
     }
