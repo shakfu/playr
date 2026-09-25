@@ -34,7 +34,7 @@ What is missing, grouped by priority:
 
 ### Sampler
 
-- [ ] **Moving start and end via mouse** This is likely possibly only in the gui. Of the mouse hovers over the either limit of the range, it should be to shift that boundary via a mouse-click and drag
+- [x] **Moving start and end via mouse.** The window drags either end; the pointer shows where one can be grabbed.
 
 - [x] **Live onset slicing.** In the window, moving the Sensitivity slider plans onsets again at once, from the region's audio as first read.
 

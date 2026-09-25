@@ -11,6 +11,7 @@ use playr_app::config::Config;
 use playr_app::dispatch::Frontend;
 use playr_app::message::Message;
 use playr_app::model::{Input, Model};
+use playr_app::sampler::Edge;
 use playr_app::View;
 use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal};
@@ -570,9 +571,24 @@ fn a_drag_sets_the_range_and_the_bar_slices_it() {
         m.snapshot().status.looping == Some((a, b))
     });
     let end_x = rect.left() + (b as f32 / per_column).round();
-    harness.hover_at(egui::pos2(end_x, rect.center().y));
+    let cursor = |h: &Harness<'_, Gui>| h.output().platform_output.cursor_icon;
+    harness.hover_at(along(0.3));
     harness.run_steps(1);
-    harness.drag_at(egui::pos2(end_x, rect.center().y));
+    assert_eq!(
+        cursor(&harness),
+        egui::CursorIcon::Default,
+        "away from the ends"
+    );
+    // Within reach of the end, not on it, the cursor offers to move it.
+    harness.hover_at(egui::pos2(end_x - 6.0, rect.center().y));
+    harness.run_steps(1);
+    assert_eq!(cursor(&harness), egui::CursorIcon::ResizeHorizontal);
+    assert_eq!(
+        model(&harness).sampler().edge,
+        Edge::Start,
+        "not picked by hovering"
+    );
+    harness.drag_at(egui::pos2(end_x - 6.0, rect.center().y));
     harness.run_steps(1);
     for x in [0.45, 0.4, 0.375] {
         harness.hover_at(along(x));
@@ -585,6 +601,11 @@ fn a_drag_sets_the_range_and_the_bar_slices_it() {
         .range(current.as_ref())
         .expect("no range");
     assert_eq!(start, a, "the start held");
+    assert_eq!(
+        model(&harness).sampler().edge,
+        Edge::End,
+        "the drag picked the end"
+    );
     assert!(
         end.abs_diff(frame(0.375)) <= 96,
         "{end}, not {}",
@@ -679,4 +700,57 @@ fn the_spectrogram_button_paints_one_texture_the_size_of_the_waveform() {
     assert_eq!(sizes.len(), 1, "{sizes:?}");
     assert_eq!(sizes[0][1], rect.height() as usize);
     assert!(sizes[0][0] > 0 && sizes[0][0] <= rect.width() as usize);
+}
+
+#[test]
+fn with_fit_on_dragging_one_end_then_the_other_moves_only_that_end() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    let rect = harness.get_by_label("Track waveform").rect();
+    let along = |x: f32| egui::pos2(rect.left() + rect.width() * x, rect.center().y);
+    let drag = |harness: &mut Harness<'_, Gui>, from: egui::Pos2, to: egui::Pos2| {
+        harness.hover_at(from);
+        harness.run_steps(1);
+        harness.drag_at(from);
+        harness.run_steps(1);
+        for k in 1..=4 {
+            harness.hover_at(from + (to - from) * (k as f32 / 4.0));
+            harness.run_steps(1);
+        }
+        harness.drop_at(to);
+        harness.run_steps(2);
+    };
+    let range = |harness: &Harness<'_, Gui>| {
+        let m = model(harness);
+        let current = m.snapshot().status.current().cloned();
+        m.sampler().range(current.as_ref()).expect("no range")
+    };
+    // Where frame `f` is drawn now.
+    let x_of = |harness: &Harness<'_, Gui>, f: u64| {
+        let scale = model(harness).sampler().scale.unwrap();
+        let x = (f - scale.start) as f32 * scale.per_frame as f32 / scale.per_column as f32;
+        egui::pos2(rect.left() + x, rect.center().y)
+    };
+
+    drag(&mut harness, along(0.25), along(0.5));
+    harness.get_by_label("Fit range").click();
+    harness.run_steps(3);
+    let (a, b) = range(&harness);
+
+    let end = x_of(&harness, b);
+    drag(&mut harness, end, end - egui::vec2(30.0, 0.0));
+    let (a1, b1) = range(&harness);
+    assert!(a1 == a && a < b1 && b1 < b, "{a}..{b} became {a1}..{b1}");
+
+    // Centred on the end now, at the zoom that fits the range: zoomed out,
+    // the start is in view to grab.
+    harness.get_by_label("Zoom out").click();
+    harness.run_steps(3);
+    let start = x_of(&harness, a1);
+    drag(&mut harness, start, start + egui::vec2(30.0, 0.0));
+    let (a2, b2) = range(&harness);
+    assert!(
+        b2 == b1 && a1 < a2 && a2 < b1,
+        "{a1}..{b1} became {a2}..{b2}"
+    );
 }

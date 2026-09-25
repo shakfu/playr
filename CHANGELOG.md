@@ -8,6 +8,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - Saved loops: up to 8 a track, kept in the library beside its marks. `:loop N`, on F1 to F8 in the sampler and numbered buttons in the window, saves the range to an empty slot and recalls a full one, making it the range and looping it; `:loop N save`, on shift-F1 to F8 or shift-click, saves over one, `:loop N clear` empties it, and `:loops clear`, or Clear loops in the window, empties them all after asking. One command both saving and recalling, by whether the slot is full, over separate save and load commands: a loop is set up once and recalled many times, so the common case takes one key. Pruning and forgetting a root remove a track's loops with its marks. The table needs no schema version, as `roots` did not. Library API: `db::query::loops`, `save_loop`, `clear_loop`, `clear_loops`; `Session::loops_for`, `save_loop`, `clear_loop`, `loops_to_clear`, `clear_loops`, `LOOP_SLOTS`, `Loops`; `Outcome::LoopSaved`, `LoopCleared`, `LoopsCleared`; `Refusal::NoLoops`; `Task::Loop`; `Confirm::ClearLoops`; `Action::ClearLoops`; `Snapshot::loops`; `Action::LoopSlot`, `SlotOp`; `Message::LoopRecalled`, `NoRangeToSave`.
 
+### Changed
+
+- In the window, a range's edge shows it can be dragged: the pointer turns to a left-right arrow over it. The reach grows from 5 to 8 points, for marks too, and a drag on an edge picks that edge, so `{` and `}` go on with it. Dragging an edge was already possible, but nothing showed it.
+
+### Fixed
+
+- A drag on the window's waveform moved what it dragged by as much as the view moved under it. The view moves while a drag is under way when it follows the playhead, and, with Fit range on, when the drag picks the other end to centre on: dragging the start after the end put the start a range's length outside the old range. The view now holds still until the drag ends.
+
 ## [0.11.0]
 
 ### Added

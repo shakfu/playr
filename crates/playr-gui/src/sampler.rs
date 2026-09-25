@@ -24,9 +24,9 @@ use crate::palette::Palette;
 /// Mouse wheel movement, in points, that makes one zoom step.
 const WHEEL_STEP: f32 = 40.0;
 
-/// How near a range's edge, in points, a drag moves that edge instead of
+/// How near a range's edge or a mark, in points, a drag moves it instead of
 /// starting a new range.
-const EDGE_REACH: f32 = 5.0;
+const EDGE_REACH: f32 = 8.0;
 
 /// The most points a frame takes at the deepest zoom: 1,000 points show
 /// about 60 frames, far enough apart to pick one out.
@@ -38,6 +38,12 @@ pub struct State {
     wheel: f32,
     /// Where a drag across the waveform started, and where it is now.
     drag: Option<(Duration, Duration)>,
+    /// The end of the range a drag moves, when it started on one.
+    edge_drag: Option<Edge>,
+    /// The first frame shown when a drag began, held until it ends: a view
+    /// moving under the pointer, as fitting a picked end or following the
+    /// playhead moves it, would move what is dragged by as much.
+    held_start: Option<u64>,
     /// The mark a drag picked up, as the time it sat at when the drag began.
     mark_drag: Option<Duration>,
     /// The count and sensitivity the equal and onset buttons slice with; the
@@ -53,6 +59,8 @@ impl Default for State {
         State {
             wheel: 0.0,
             drag: None,
+            edge_drag: None,
+            held_start: None,
             mark_drag: None,
             slices: 8,
             sensitivity: None,
@@ -84,7 +92,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     // Room below the waveform for the detail line and five rows of controls.
     let height = (ui.available_height() - 186.0).max(80.0);
     let width = ui.available_width();
-    let layout = Layout::new(
+    let mut layout = Layout::new(
         peaks,
         width as u64,
         model.sampler().zoom,
@@ -95,6 +103,12 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     .with_centre(model.sampler().centre(current.as_ref()))
     .with_range(model.sampler().range_ends(current.as_ref()))
     .with_detail(model.sampler().detail(current.as_ref()));
+    if state.drag.is_none() && state.mark_drag.is_none() {
+        state.held_start = None;
+    }
+    if let Some(start) = state.held_start {
+        layout.start = start;
+    }
     model.set_zoom(layout.zoom);
     model.set_scale(layout.columns());
 
@@ -115,21 +129,37 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Track waveform"));
     let pointer = response.interact_pointer_pos().or(response.hover_pos());
     let at = |pos: egui::Pos2| layout.time_at(pos.x - rect.left());
+    // The end of a set range within reach of `p`, the nearer if both are.
+    let edge_at = |p: egui::Pos2| {
+        let (Some(a), Some(b)) = layout.range else {
+            return None;
+        };
+        let reach = |frame: u64| {
+            layout
+                .column_of(frame)
+                .map(|c| ((rect.left() + c as f32) - p.x).abs())
+                .filter(|&d| d <= EDGE_REACH)
+        };
+        match (reach(a), reach(b)) {
+            (Some(da), Some(db)) if db < da => Some(Edge::End),
+            (Some(_), _) => Some(Edge::Start),
+            (None, Some(_)) => Some(Edge::End),
+            (None, None) => None,
+        }
+    };
     if response.drag_started() {
+        state.held_start = Some(layout.start);
         // A drag starts once the pointer has moved a little; it runs from the press.
         let origin = ui.input(|i| i.pointer.press_origin()).or(pointer);
         // A mark under the press is dragged rather than a range drawn. Checked
         // after the range's edges, so an edge sitting on a mark still wins and
         // the drag that was there before this behaves as it did.
-        let on_edge = |p: egui::Pos2| {
-            let (a, b) = layout.range;
-            [a, b].into_iter().flatten().any(|f| {
-                layout
-                    .column_of(f)
-                    .is_some_and(|c| ((rect.left() + c as f32) - p.x).abs() <= EDGE_REACH)
-            })
-        };
-        state.mark_drag = origin.filter(|p| !on_edge(*p)).and_then(|p| {
+        state.edge_drag = origin.and_then(edge_at);
+        if let Some(edge) = state.edge_drag {
+            // As `[` or `]`: the keys that move an end go on with this one.
+            actions.push(Action::PickEdge(edge));
+        }
+        state.mark_drag = origin.filter(|_| state.edge_drag.is_none()).and_then(|p| {
             layout
                 .marks
                 .iter()
@@ -146,15 +176,11 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                 .map(|m| sampler::time_of(m, layout.rate))
         });
         state.drag = origin.filter(|_| state.mark_drag.is_none()).map(|p| {
-            // From near an edge it moves that edge, holding the other one.
-            let x = |frame: u64| layout.column_of(frame).map(|c| rect.left() + c as f32);
-            let near = |frame: Option<u64>| {
-                frame.filter(|&f| x(f).is_some_and(|x| (x - p.x).abs() <= EDGE_REACH))
-            };
+            // From an edge it moves that edge, holding the other one.
             let time = |frame: u64| sampler::time_of(frame, layout.rate);
-            match layout.range {
-                (Some(a), Some(b)) if near(Some(a)).is_some() => (time(b), at(p)),
-                (Some(a), Some(b)) if near(Some(b)).is_some() => (time(a), at(p)),
+            match (state.edge_drag, layout.range) {
+                (Some(Edge::Start), (_, Some(b))) => (time(b), at(p)),
+                (Some(Edge::End), (Some(a), _)) => (time(a), at(p)),
                 _ => (at(p), at(p)),
             }
         });
@@ -164,9 +190,18 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     if let (Some(drag), Some(p)) = (state.drag.as_mut(), pointer) {
         drag.1 = at(p);
     }
+    // An edge that can be dragged shows it, before and while it is.
+    let over_edge = response
+        .hover_pos()
+        .filter(|_| state.drag.is_none())
+        .and_then(edge_at);
+    if state.edge_drag.is_some() || over_edge.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
     let dragged = state.drag;
     let dragging_mark = state.mark_drag.zip(pointer.map(at));
     if response.drag_stopped() {
+        state.edge_drag = None;
         if let Some((from, to)) = state.drag.take().filter(|(from, to)| from != to) {
             actions.push(Action::SetRange(Some((from.min(to), from.max(to)))));
         }
