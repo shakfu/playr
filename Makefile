@@ -3,16 +3,21 @@ VERSION := $(shell sed -n 's/^version = "\(.*\)"$$/\1/p' Cargo.toml | head -1)
 UNAME := $(shell uname -s)
 DIAGRAMS := $(patsubst %.d2,%.svg,$(wildcard docs/media/*.d2))
 
-.PHONY: all build release test fmt clippy run gui app clean install diagrams icons touchosc touchosc-test page-test install-service
+.PHONY: all build release debug test fmt clippy run gui app clean install install-dev diagrams icons touchosc touchosc-test page-test install-service
 
 all: build
 
 build:
 	@cargo build
 
-# The terminal, the desktop window and the server.
+# The terminal, the desktop window and the server, as they ship, with Opus;
+# building libopus needs cmake.
 release:
-	@cargo build --release -p playr -p playr-gui -p playr-server
+	@cargo build --profile dist -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
+
+# The same three, unoptimized, for install-dev.
+debug:
+	@cargo build -p playr -p playr-gui -p playr-server
 
 test:
 	@cargo fmt --check
@@ -49,23 +54,30 @@ page-test:
 gui:
 	@cargo run --release -p playr-gui
 
-# The desktop window as target/release/playr.app; macOS only.
+# The desktop window as target/dist/playr.app; macOS only.
 app: release
-	@packaging/macos/bundle.sh target/release target/release $(VERSION)
-	@echo "built target/release/playr.app"
+	@packaging/macos/bundle.sh target/dist target/dist $(VERSION)
+	@echo "built target/dist/playr.app"
 
-# Both programs into $(INSTALL_DIR). The desktop window also goes where the
-# system lists applications: ~/Applications on macOS, and a desktop entry and
-# icon under ~/.local/share on Linux.
+# The three programs into $(INSTALL_DIR): what ships for install, a debug
+# build for install-dev, stripped of its debug info, about 870 MB of it. The desktop window also goes where the system lists
+# applications: ~/Applications on macOS, and a desktop entry and icon under
+# ~/.local/share on Linux.
+install: FROM := target/dist
 install: release
+install-dev: FROM := target/debug
+install-dev: STRIP := -s
+install-dev: debug
+install install-dev:
 	@install -d $(INSTALL_DIR)
-	@install -m 755 target/release/playr $(INSTALL_DIR)/playr
-	@install -m 755 target/release/playr-gui $(INSTALL_DIR)/playr-gui
-	@install -m 755 target/release/playr-server $(INSTALL_DIR)/playr-server
-	@echo "installed playr, playr-gui and playr-server to $(INSTALL_DIR)"
+	@install $(STRIP) -m 755 $(FROM)/playr $(INSTALL_DIR)/playr
+	@install $(STRIP) -m 755 $(FROM)/playr-gui $(INSTALL_DIR)/playr-gui
+	@install $(STRIP) -m 755 $(FROM)/playr-server $(INSTALL_DIR)/playr-server
+	@echo "installed playr, playr-gui and playr-server from $(FROM) to $(INSTALL_DIR)"
 ifeq ($(UNAME),Darwin)
 	@install -d $(HOME)/Applications
-	@packaging/macos/bundle.sh target/release $(HOME)/Applications $(VERSION)
+	@packaging/macos/bundle.sh $(FROM) $(HOME)/Applications $(VERSION)
+	@$(if $(STRIP),strip $(HOME)/Applications/playr.app/Contents/MacOS/playr-gui)
 	@echo "installed playr.app to $(HOME)/Applications"
 else ifeq ($(UNAME),Linux)
 	@install -Dm 644 packaging/linux/playr.desktop $(HOME)/.local/share/applications/playr.desktop

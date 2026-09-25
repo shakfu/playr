@@ -140,6 +140,8 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
     assert_eq!(s("nudge -10%"), Ok(Action::Nudge(Nudge::Percent(-10))));
     assert_eq!(s("snap"), Ok(Action::Snap(None)));
     assert_eq!(s("snap off"), Ok(Action::Snap(Some(false))));
+    assert_eq!(s("fit"), Ok(Action::Fit(None)));
+    assert_eq!(s("fit on"), Ok(Action::Fit(Some(true))));
     assert_eq!(s("in"), Ok(Action::RangeIn));
     assert_eq!(s("out"), Ok(Action::RangeOut));
     assert_eq!(s("range"), Ok(Action::SetRange(None)));
@@ -155,6 +157,7 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         "nudge +",
         "nudge x%",
         "snap maybe",
+        "fit range",
         "range 1",
         "in 2",
         "loop 3",
@@ -167,6 +170,7 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         "nudge +4",
         "nudge -10%",
         "snap on",
+        "fit off",
         "range 1.5 2.25",
         "in",
         "out",
@@ -182,6 +186,10 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
     assert_eq!(
         completions("snap o", View::Sampler, &[]),
         ["snap on", "snap off"]
+    );
+    assert_eq!(
+        completions("fit o", View::Sampler, &[]),
+        ["fit on", "fit off"]
     );
 }
 

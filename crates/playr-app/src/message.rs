@@ -35,6 +35,7 @@ pub enum Message {
     /// A nudge came before the sampler view showed a waveform.
     NoWaveform,
     Snap(bool),
+    Fit(bool),
     /// The sampler's range, as set, in frames at `rate`.
     Range {
         start: Option<u64>,
@@ -140,6 +141,7 @@ pub fn text(message: &Message) -> String {
         }
         Message::NoWaveform => "no waveform to move along yet".into(),
         Message::Snap(on) => format!("snap to zero crossings: {}", if *on { "on" } else { "off" }),
+        Message::Fit(on) => format!("fit the range: {}", if *on { "on" } else { "off" }),
         Message::Range { start, end, rate } => {
             let at = |f: &u64| crate::sampler::fmt_frames(*f, *rate);
             match (start, end) {

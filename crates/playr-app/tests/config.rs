@@ -65,7 +65,7 @@ fn an_empty_file_gives_the_defaults() {
     assert_eq!(config, Config::default());
     assert_eq!(config.keys, Keymap::default());
     assert_eq!(config.settings, Settings::default());
-    assert_eq!(Keymap::default().bindings().len(), 85);
+    assert_eq!(Keymap::default().bindings().len(), 86);
 }
 
 #[test]

@@ -169,6 +169,12 @@ pub const COMMANDS: &[Command] = &[
         "[on|off]",
         "snap moves and marks to zero crossings",
     ),
+    only(
+        Sampler,
+        "fit",
+        "[on|off]",
+        "zoom to the range and keep it centred",
+    ),
     only(Sampler, "in", "", "start the range at the playhead"),
     only(Sampler, "out", "", "end the range at the playhead"),
     only(
@@ -373,6 +379,9 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Snap(None) => "snap".into(),
         Snap(Some(true)) => "snap on".into(),
         Snap(Some(false)) => "snap off".into(),
+        Fit(None) => "fit".into(),
+        Fit(Some(true)) => "fit on".into(),
+        Fit(Some(false)) => "fit off".into(),
         RangeIn => "in".into(),
         RangeOut => "out".into(),
         SetRange(None) => "range".into(),
@@ -750,6 +759,12 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             "off" => Ok(Action::Snap(Some(false))),
             _ => Err(usage()),
         },
+        "fit" => match rest {
+            "" => Ok(Action::Fit(None)),
+            "on" => Ok(Action::Fit(Some(true))),
+            "off" => Ok(Action::Fit(Some(false))),
+            _ => Err(usage()),
+        },
         "loop" => match rest {
             "" => Ok(Action::Loop(None)),
             "on" => Ok(Action::Loop(Some(true))),
@@ -841,7 +856,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
 /// What Tab can complete `text` to in `view`, as whole command lines.
 ///
 /// The first word completes to the names of commands that work in `view`.
-/// After `edge`, `loop`, `mode`, `snap`, `theme` or `view` the argument completes to its choices, and after
+/// After `edge`, `fit`, `loop`, `mode`, `snap`, `theme` or `view` the argument completes to its choices, and after
 /// `playlist` or `rename` to the names in `playlists`.
 pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> {
     let Some((word, rest)) = text.split_once(' ') else {
@@ -859,7 +874,7 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
         "theme" => THEMES.iter().map(|t| t.0.to_string()).collect(),
         "columns" | "sort" => Column::NAMES.iter().map(|c| c.0.to_string()).collect(),
         "replaygain" => REPLAYGAINS.iter().map(|r| r.0.to_string()).collect(),
-        "snap" | "loop" => vec!["on".into(), "off".into()],
+        "snap" | "fit" | "loop" => vec!["on".into(), "off".into()],
         "edge" => vec!["start".into(), "end".into()],
         "pick" => vec!["next".into(), "prev".into()],
         "view" => VIEWS.iter().map(|v| v.0.to_string()).collect(),

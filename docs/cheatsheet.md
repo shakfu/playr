@@ -94,6 +94,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:display [DISPLAY]`               | `w`                     | envelope, db, braille or spectrogram   |
 | `:nudge +N \| -N \| +N% \| -N%`     | left, right, with shift | move N columns, or N% of the view      |
 | `:snap [on\|off]`                  | `S`                     | snap moves and marks to zero crossings |
+| `:fit [on\|off]`                   | `f`                     | zoom to the range and keep it centred  |
 | `:in`                              | `<`                     | start the range at the playhead        |
 | `:out`                             | `>`                     | end the range at the playhead          |
 | `:range [START END]`               | `backspace`             | set the range to slice, or clear it    |
@@ -109,13 +110,13 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:write`                           | `enter`                 | write the slices :slice planned        |
 | `:discard`                         | `esc`                   | discard planned slices, else the range |
 
-In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; `[` or `]` picks an end, shown reversed, for `{` and `}` to move while it loops. `esc` clears the range once no slices are planned.
+In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; `[` or `]` picks an end, shown reversed, for `{` and `}` to move while it loops. `esc` clears the range once no slices are planned.
 
 ## Typing commands
 
 - A command, mode or view can be shortened to a prefix that names only one of those usable in the current view: `:vol 60`, `:mode shuf`.
 
-- Tab completes command names usable in the current view, then the argument of `:edge`, `:loop`, `:mode`, `:replaygain`, `:snap`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
+- Tab completes command names usable in the current view, then the argument of `:edge`, `:fit`, `:loop`, `:mode`, `:replaygain`, `:snap`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
 
 - Up recalls earlier lines that start with the typed text; down returns towards it. The history holds 100 lines and lasts until playr exits.
 

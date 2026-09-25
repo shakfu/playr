@@ -86,6 +86,7 @@ left = "nudge -1"
 shift-right = "nudge +10%"
 shift-left = "nudge -10%"
 S = "snap"
+f = "fit"
 # Shift-comma and shift-period on a US layout, beside the mark keys.
 "<" = "in"
 ">" = "out"

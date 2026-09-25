@@ -69,6 +69,7 @@ fn every_action() -> Vec<Action> {
         Action::Display(None),
         Action::Nudge(playr_app::action::Nudge::Columns(1)),
         Action::Snap(None),
+        Action::Fit(None),
         Action::RangeIn,
         Action::RangeOut,
         Action::SetRange(None),
@@ -154,6 +155,7 @@ fn every_action() -> Vec<Action> {
             | Action::Display(_)
             | Action::Nudge(_)
             | Action::Snap(_)
+            | Action::Fit(_)
             | Action::RangeIn
             | Action::RangeOut
             | Action::SetRange(_)

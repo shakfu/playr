@@ -2,7 +2,8 @@
 //! wide, with its region, marks, playhead and planned slice edges.
 //!
 //! A click seeks, a shift-click marks, a drag sets the range to slice, and
-//! the mouse wheel zooms around the playhead. The arrow keys nudge the
+//! the mouse wheel zooms around the playhead, or the range with Fit range
+//! ticked. The arrow keys nudge the
 //! playhead, as in the terminal. The displays match the terminal's: RMS inside peak on a linear
 //! scale, the same on a dB scale, and the waveform's extremes around a centre
 //! line, which the terminal draws in Braille and `:display braille` names.
@@ -90,6 +91,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         &snapshot.marks,
         POINTS_PER_FRAME,
     )
+    .with_centre(model.sampler().centre(current.as_ref()))
     .with_range(model.sampler().range_ends(current.as_ref()))
     .with_detail(model.sampler().detail(current.as_ref()));
     model.set_zoom(layout.zoom);
@@ -297,6 +299,10 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         ui.separator();
         let looping = snapshot.status.looping.is_some();
         let mut on = looping;
+        let mut fit = sampler.fit;
+        if ui.checkbox(&mut fit, "Fit range").changed() {
+            actions.push(Action::Fit(Some(fit)));
+        }
         let loop_box = egui::Checkbox::new(&mut on, "Loop range");
         if ui.add_enabled(ranged || looping, loop_box).changed() {
             actions.push(Action::Loop(Some(on)));
@@ -450,6 +456,23 @@ fn paint(
     }
     if let Some(c) = playhead {
         line(c, visuals.strong_text_color(), 2.0);
+    }
+    // A playhead out of view, as while fitting a range, points the way to it.
+    if let Some(side) = layout.playhead_off() {
+        let (x, dx) = match side {
+            std::cmp::Ordering::Less => (rect.left() + 2.0, 10.0),
+            _ => (rect.right() - 2.0, -10.0),
+        };
+        let y = rect.center().y;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(x, y),
+                egui::pos2(x + dx, y - 8.0),
+                egui::pos2(x + dx, y + 8.0),
+            ],
+            visuals.strong_text_color(),
+            egui::Stroke::NONE,
+        ));
     }
 }
 

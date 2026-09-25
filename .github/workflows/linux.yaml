@@ -36,15 +36,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cargo build --release --locked -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
+        run: cargo build --profile dist --locked -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
 
       - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.arch }}
           path: |
-            target/release/playr
-            target/release/playr-gui
-            target/release/playr-server
+            target/dist/playr
+            target/dist/playr-gui
+            target/dist/playr-server
 
   # One job packages both architectures: nfpm writes the archive formats
   # itself and runs no target code.

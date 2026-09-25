@@ -209,6 +209,7 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
         // A cell is the finest a terminal can place a frame.
         1,
     )
+    .with_centre(app.sampler.centre(current))
     .with_range(app.sampler.range_ends(current))
     .with_detail(app.sampler.detail(current));
     let zoom = layout.zoom;
@@ -216,11 +217,16 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
     // The file name last: it is the longest part, and the bar below names the
     // track too, so a narrow terminal cuts it rather than the view's scale.
     let title = format!(
-        "{}  {}  1 col = {}{}{}  {}",
+        "{}  {}  1 col = {}{}{}{}  {}",
         app.sampler.display.name(),
         layout.shown(),
         layout.scale(),
         if app.sampler.snap { "  snap" } else { "" },
+        if app.sampler.centre(current).is_some() {
+            "  fit"
+        } else {
+            ""
+        },
         if app.snapshot.status.looping.is_some() {
             "  loop"
         } else {
@@ -352,11 +358,18 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
     for c in layout.marks.iter().filter_map(|&m| layout.column_of(m)) {
         axis[c] = ('|', Style::default().fg(p.mark));
     }
+    let bold = Style::default().fg(p.mark).add_modifier(Modifier::BOLD);
     if let Some(c) = playhead {
-        axis[c] = (
-            '^',
-            Style::default().fg(p.mark).add_modifier(Modifier::BOLD),
-        );
+        axis[c] = ('^', bold);
+    }
+    // A playhead out of view, as while fitting a range, points the way to it.
+    let arrow = match layout.playhead_off() {
+        Some(std::cmp::Ordering::Less) => axis.first_mut().map(|a| (a, '<')),
+        Some(_) => axis.last_mut().map(|a| (a, '>')),
+        None => None,
+    };
+    if let Some((cell, glyph)) = arrow {
+        *cell = (glyph, bold);
     }
     // Last, so the cursor is always visible: it is what the mark keys act on,
     // and it may sit on the playhead, a mark or a range end.

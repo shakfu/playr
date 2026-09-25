@@ -99,7 +99,7 @@ jobs:
       # The terminal, the desktop window and the server. Opus needs cmake,
       # which every runner image has.
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
+        run: cargo build --profile dist --locked --target ${{ matrix.target }} -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
 
       - name: Package
         shell: bash
@@ -122,7 +122,7 @@ jobs:
       - name: TouchOSC layout
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
-          target/${{ matrix.target }}/release/playr-server osc-schema > osc-schema.json
+          target/${{ matrix.target }}/dist/playr-server osc-schema > osc-schema.json
           uv run packaging/touchosc/layout.py osc-schema.json "playr-${TAG:-$(git rev-parse --short HEAD)}-touchosc.tosc"
 
       - uses: actions/upload-artifact@v7

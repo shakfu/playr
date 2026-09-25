@@ -201,6 +201,88 @@ fn the_sampler_snaps_ranges_marks_and_nudges_and_slices_the_range() {
 }
 
 #[test]
+fn snap_on_snaps_the_range_and_fit_zooms_to_it() {
+    use playr_app::sampler::{Scale, Wave};
+
+    // Crossings at frames 4,000, 8,000 ... 28,000, as above.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("steps.wav");
+    let parts: Vec<(f32, f32)> = (0..8)
+        .map(|i| (0.5, if i % 2 == 0 { 0.25 } else { -0.25 }))
+        .collect();
+    common::levels(&file, 8000, &parts);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ms = Duration::from_millis;
+    let current = Some(file.clone());
+
+    model.perform(Action::SetRange(Some((ms(1_005), ms(1_495)))));
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((8_040, 11_960))
+    );
+    model.perform(Action::Snap(Some(true)));
+    assert_eq!(model.message(), Some(&Message::Snap(true)));
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((8_000, 12_000))
+    );
+
+    // Only a start: it snaps alone.
+    model.perform(Action::Snap(Some(false)));
+    model.sampler_mut().range = None;
+    model.sampler_mut().set_range_start(&file, 16_050);
+    model.perform(Action::Snap(Some(true)));
+    assert_eq!(
+        model.sampler().range_ends(current.as_ref()),
+        (Some(16_000), None)
+    );
+
+    // Fitting with no columns drawn yet keeps the zoom.
+    model.perform(Action::SetRange(Some((ms(1_000), ms(1_500)))));
+    model.perform(Action::Fit(None));
+    assert_eq!(model.message(), Some(&Message::Fit(true)));
+    assert_eq!(model.sampler().zoom, 0);
+    assert_eq!(model.sampler().centre(current.as_ref()), Some(10_000));
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 320,
+        per_frame: 1,
+        columns: 100,
+    });
+    model.perform(Action::Fit(Some(true)));
+    assert_eq!(model.sampler().zoom, 2);
+    // An end picked centres on it, at the zoom set; fitting again returns
+    // to the whole range.
+    use playr_app::sampler::Edge;
+    model.perform(Action::PickEdge(Edge::End));
+    assert_eq!(model.sampler().centre(current.as_ref()), Some(12_000));
+    model.perform(Action::Zoom(playr_app::action::Zoom::In));
+    model.perform(Action::PickEdge(Edge::Start));
+    assert_eq!(model.sampler().centre(current.as_ref()), Some(8_000));
+    assert_eq!(model.sampler().zoom, 3);
+    model.perform(Action::Fit(Some(true)));
+    assert_eq!(model.sampler().centre(current.as_ref()), Some(10_000));
+    assert_eq!(model.sampler().zoom, 2);
+
+    model.perform(Action::Fit(None));
+    assert_eq!(model.message(), Some(&Message::Fit(false)));
+    assert_eq!(model.sampler().centre(current.as_ref()), None);
+    assert_eq!(model.sampler().zoom, 2, "turning it off keeps the zoom");
+}
+
+#[test]
 fn the_range_loops_follows_its_changes_and_escape_clears_it() {
     use playr_app::sampler::Wave;
     use playr_core::audio::State;

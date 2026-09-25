@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Packages the release builds for one target into an archive in the current
+# Packages the dist builds for one target into an archive in the current
 # directory: playr-TAG-TARGET.tar.gz, or .zip for Windows.
 #
 #   packaging/package.sh TARGET TAG
@@ -12,7 +12,7 @@ set -euo pipefail
 target=$1
 tag=$2
 root=$(cd "$(dirname "$0")/.." && pwd)
-release="$root/target/$target/release"
+release="$root/target/$target/dist"
 name="playr-$tag-$target"
 
 rm -rf "$name"

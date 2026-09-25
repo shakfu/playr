@@ -190,6 +190,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("Zoom", "the mouse wheel over the waveform"),
     ("SetRange", "a drag across the waveform"),
     ("Snap", "the sampler's Snap to zero tick box"),
+    ("Fit", "the sampler's Fit range tick box"),
     ("Loop", "the sampler's Loop range tick box"),
     ("MoveTrack", "a selection row dragged to another place"),
     ("Add", "a library row's tick box"),

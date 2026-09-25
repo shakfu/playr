@@ -68,4 +68,9 @@ rtrb.workspace = true
 
 [profile.release]
 opt-level = 3
+
+# The shipped binaries. Fat LTO costs about 3 minutes a rebuild against 10 s
+# without it, so it is kept out of `release`.
+[profile.dist]
+inherits = "release"
 lto = true

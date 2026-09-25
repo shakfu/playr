@@ -28,6 +28,10 @@ What is missing, grouped by priority:
 
 ### Sampler
 
+- [x] **Zoom-to-range.** `:fit` zooms to the range and centres the view on it, so zooming keeps the range in view.
+
+- [x] **Snap range ends.** Ends set with snap on already snapped; turning snap on now moves the ends of a range set before it.
+
 - [x] **Mark editing.** `Sampler::cursor` is the selection: `:pick` puts it on a mark, and `:nudge-mark`, `:move-mark`, `:snap-mark` and `:del-mark` act on the mark under it. The window drags one along the waveform.
 
 - [x] **Audition.** `Cmd::PlayOnce` sets the same `Loop` with `once`, and `Engine::halt` mirrors `wrap` forward to the end rather than back to the start.
@@ -59,6 +63,8 @@ What is missing, grouped by priority:
 - [ ] **Slice edges.** Slices start and end on whatever sample falls there. rtrack snaps loop points to zero crossings; the same for slice edges, or a short fade, would remove clicks at the cost of a slice that is no longer an exact copy.
 
 ### Library
+
+- [ ] **Deduplicate entries** - Sometimes successive scans lead to duplicates in the library when the same album has been scanned twice from two different paths. There should be mechanism to address this. Currently if two songs are seen, we check info and have a look at their paths and the remove the the duplicate folder and refresh, this removes the duplicates entries.
 
 - [ ] **Group, and a date added.** `columns` and `sort` order the library by any column, but there is no grouping, and no date added to sort by: the schema has no `added_at`, and `mtime` is the file's. A column would only be meaningful for tracks added after it.
 

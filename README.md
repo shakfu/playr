@@ -157,11 +157,12 @@ Each archive holds the three programs, with `SHA256SUMS` in the release for chec
 
 ```sh
 make install    # the three programs, and the window as an application
+make install-dev  # the same, as a debug build
 make gui        # run the window without installing
-make app        # macOS: build target/release/playr.app
+make app        # macOS: build target/dist/playr.app
 ```
 
-`make install` copies `playr`, `playr-gui` and `playr-server` to `~/.local/bin`. On macOS it also puts `playr.app` in `~/Applications`; on Linux it adds `playr.desktop` and its icon under `~/.local/share`.
+`make install` builds `playr`, `playr-gui` and `playr-server` as they ship, with the `dist` profile, and copies them to `~/.local/bin`. On macOS it also puts `playr.app` in `~/Applications`; on Linux it adds `playr.desktop` and its icon under `~/.local/share`. `make install-dev` does the same with a debug build, stripped, quicker to build and slower to run.
 
 ### With cargo
 
@@ -192,7 +193,7 @@ cargo build --release --features opus                                        # t
 cargo build --release -p playr -p playr-gui --features playr/opus,playr-gui/opus   # both
 ```
 
-Without it, Opus files are reported as undecodable and skipped, the same as WMA or DSD. `playr formats` says which build you have. `make install` builds without Opus; to install with it, copy the binaries after the build above, or use `cargo install` with `--features opus`.
+Without it, Opus files are reported as undecodable and skipped, the same as WMA or DSD. `playr formats` says which build you have. `make install` and `make app` build with Opus, so they need cmake; `make install-dev` builds without it.
 
 ## Use
 
@@ -410,12 +411,13 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 | key     | command                 | does                                              |
 |---------|-------------------------|---------------------------------------------------|
-| `z` `Z` | `:zoom +`, `:zoom -`    | zoom in or out, centred on the playhead           |
+| `z` `Z` | `:zoom +`, `:zoom -`    | zoom in or out, centred on the playhead or range  |
 | `0`     | `:zoom all`             | show the whole track                              |
 | `w`     | `:display`              | switch display: Braille, envelope, dB, spectrogram |
 | left, right | `:nudge -1`, `:nudge +1` | move the playhead a column                   |
 | shift-left, shift-right | `:nudge -10%`, `:nudge +10%` | move it a tenth of the view      |
 | `S`     | `:snap`                 | snap to zero crossings, on or off                 |
+| `f`     | `:fit`                  | zoom to the range and centre on it, on or off     |
 | `<` `>` | `:in`, `:out`           | start or end the range at the playhead            |
 | backspace | `:range`              | clear the range; `:range 1:02 1:04.5` sets one    |
 | `l`     | `:loop`                 | play the range over and over, or stop             |
@@ -449,9 +451,11 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Nudging.** The arrows move the playhead a column, and with shift a tenth of the view, so zooming in makes each step finer, down to one frame. Outside this view they seek 5 and 30 s. Pause first to place a point without hearing each step.
 
-- **Snap.** With `:snap on`, shown as `snap` in the title, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms: a frame where the channels' mean changes sign. A nudge snaps only past where it started, so repeated nudges walk from crossing to crossing. Where no crossing is within reach, as in silence, the point stays.
+- **Snap.** With `:snap on`, shown as `snap` in the title, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms: a frame where the channels' mean changes sign. A nudge snaps only past where it started, so repeated nudges walk from crossing to crossing. Where no crossing is within reach, as in silence, the point stays. Turning snap on moves the ends of a range already set, so a loop drawn first can be snapped after.
 
 - **Range.** `<` and `>` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge moves that edge.
+
+- **Fit.** `f`, or the window's Fit range tick box, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `{` and `}` move the end while it stays still on screen; `z` then zooms in on it. `f` off and on again returns to the whole range.
 
 - **Loop.** `l` plays the range over and over, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `<` or `>`, with `{` or `}` after `[` or `]` picks it, with `:range` or a drag, moves the loop at once; clearing the range, a new track or `l` again ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
 

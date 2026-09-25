@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use playr_app::action::Nudge;
 use playr_app::sampler::{
-    db_height, fmt_frames, nudge, peaks_of, plan_text, snap, window, DetailRead, Layout, Sampler,
-    Scale, Wave, DB_FLOOR, DETAIL_BELOW,
+    db_height, fmt_frames, nudge, peaks_of, plan_text, snap, window, zoom_to_fit, DetailRead,
+    Layout, Sampler, Scale, Wave, DB_FLOOR, DETAIL_BELOW,
 };
 use playr_app::Display;
 use playr_core::wave::{Detail, Peaks, BUCKET};
@@ -402,4 +402,54 @@ fn the_spectrum_maps_bands_to_rows_from_the_quiet_end_to_the_loudest() {
     let short = Arc::new(Peaks::from_interleaved(&data[..1000], 1, rate));
     let l = Layout::new(short, 10, 0, Duration::ZERO, &[], 1);
     assert!(l.spectrum(9, 16).is_empty());
+}
+
+#[test]
+fn zoom_to_fit_is_the_deepest_step_showing_the_range_with_a_column_spare() {
+    // 100 columns of 32,000 frames: 320, 160 and 96 frames a column show a
+    // 4,000-frame range; 40 frames a column show 4,000, with no column spare.
+    assert_eq!(zoom_to_fit(32_000, 100, 4_000), 2);
+    // Past a frame a column: 8 columns a frame show 13 frames, 16 show 7.
+    assert_eq!(zoom_to_fit(32_000, 100, 10), 11);
+    assert_eq!(zoom_to_fit(32_000, 100, 32_000), 0, "the whole track");
+}
+
+#[test]
+fn a_layout_centres_on_the_range_while_fitting_it() {
+    let path = std::path::PathBuf::from("/a.wav");
+    let mut sampler = Sampler::default();
+    sampler.set_range_start(&path, 8_000);
+    sampler.set_range_end(&path, 12_000);
+    assert_eq!(sampler.centre(Some(&path)), None, "fit is off");
+    sampler.fit = true;
+    assert_eq!(sampler.centre(Some(&path)), Some(10_000));
+    assert_eq!(sampler.centre(None), None, "another track");
+    sampler.fit_edge = true;
+    assert_eq!(sampler.centre(Some(&path)), Some(8_000), "the start");
+    sampler.edge = playr_app::sampler::Edge::End;
+    assert_eq!(sampler.centre(Some(&path)), Some(12_000), "the end");
+    sampler.fit = false;
+    assert_eq!(sampler.centre(Some(&path)), None, "fit is off");
+    sampler.fit = true;
+    sampler.fit_edge = false;
+
+    // 96 frames a column show 9,600 frames around 10,000, from a bucket.
+    let l = layout(2, Duration::ZERO, &[]);
+    assert_eq!((l.start, l.per_column), (0, 96), "on the playhead");
+    let l = l.with_centre(sampler.centre(Some(&path)));
+    assert_eq!(l.start, 5_184);
+    assert_eq!(l.at, 0, "the playhead stays where it is");
+    let l = l.with_centre(None);
+    assert_eq!(l.start, 5_184, "no centre leaves the layout as it was");
+}
+
+#[test]
+fn a_playhead_out_of_view_says_which_side_it_is_on() {
+    use std::cmp::Ordering;
+    // 96 frames a column show 5,184..14,784 around 10,000.
+    let at = |ms: u64| layout(2, Duration::from_millis(ms), &[]).with_centre(Some(10_000));
+    assert_eq!(at(1_250).playhead_off(), None, "frame 10,000");
+    assert_eq!(at(500).playhead_off(), Some(Ordering::Less));
+    assert_eq!(at(2_000).playhead_off(), Some(Ordering::Greater));
+    assert_eq!(layout(2, Duration::ZERO, &[]).playhead_off(), None);
 }

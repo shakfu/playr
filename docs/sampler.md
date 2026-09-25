@@ -49,11 +49,11 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 - **Displays.** `w` switches between four: an envelope (RMS inside peak, in eighth blocks), the same bars on a dB scale from -48 dBFS, a spectrogram, and a Braille waveform around a centre line. The README describes when each helps.
 
-- **Zoom.** `z` and `Z` zoom around the playhead, down to a frame a cell, or 16 points a frame in the window; `0` shows the whole track. Down to 64 frames a column, columns start on 32-frame boundaries, so a hit never shows in the column before it. Closer, the view decodes the frames it shows in the background.
+- **Zoom.** `z` and `Z` zoom around the playhead, or around the range with `:fit on`, down to a frame a cell, or 16 points a frame in the window; `0` shows the whole track. Down to 64 frames a column, columns start on 32-frame boundaries, so a hit never shows in the column before it. Closer, the view decodes the frames it shows in the background.
 
-- **Placing a point.** The arrows nudge the playhead a column. With `:snap on`, nudges, marks and range ends move to the nearest zero crossing within 10 ms, so a slice can start where the waveform crosses zero. Marks made in this view may be a frame apart.
+- **Placing a point.** The arrows nudge the playhead a column. With `:snap on`, nudges, marks and range ends move to the nearest zero crossing within 10 ms, so a slice can start where the waveform crosses zero. Turning snap on moves the ends of a range already set. Marks made in this view may be a frame apart.
 
-- **Looping.** `l` plays the range over and over, returning to its start sample-exactly. `[` or `]` picks an end and `{` `}` move it a column, so the ends can be tuned by ear while it loops.
+- **Looping.** `l` plays the range over and over, returning to its start sample-exactly. `[` or `]` picks an end and `{` `}` move it a column, so the ends can be tuned by ear while it loops. With `:fit on`, the view centres on the picked end.
 
 - **Planning.** In this view `:slice` plans instead of writing. The planned edges draw as `+` under the waveform; enter writes exactly those slices and esc discards them; with none planned, esc clears the range. A change of track discards them too. Outside the view, `:slice` plans and writes in one step.
 

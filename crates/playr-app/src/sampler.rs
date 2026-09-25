@@ -93,6 +93,11 @@ pub struct Sampler {
     pub pending: Option<Plan>,
     /// Whether moves and marks in the view snap to zero crossings.
     pub snap: bool,
+    /// Whether the view centres on the range, once both ends are set, rather
+    /// than on the playhead.
+    pub fit: bool,
+    /// Whether a fitted view centres on the picked end rather than the range.
+    pub fit_edge: bool,
     /// The columns last drawn, which a nudge counts in.
     pub scale: Option<Scale>,
     /// Frames to slice instead of the region, while the track plays.
@@ -181,6 +186,20 @@ impl Sampler {
         match self.range_ends(playing) {
             (Some(a), Some(b)) => Some((a, b)),
             _ => None,
+        }
+    }
+
+    /// The frame the view centres on while fitting: the picked end, or the
+    /// range's middle. `None` for the playhead.
+    pub fn centre(&self, playing: Option<&PathBuf>) -> Option<u64> {
+        if !self.fit {
+            return None;
+        }
+        let (start, end) = self.range_ends(playing);
+        match (self.fit_edge, self.edge) {
+            (true, Edge::Start) => start,
+            (true, Edge::End) => end,
+            (false, _) => start.zip(end).map(|(a, b)| a + (b - a) / 2),
         }
     }
 
@@ -351,17 +370,42 @@ pub fn window(
         },
     };
     let shown = frames_shown(width, per_column, per_frame);
-    let start = if shown >= frames {
-        0
+    (
+        start_at(frames, shown, per_column, at),
+        per_column,
+        per_frame,
+        zoom,
+    )
+}
+
+/// The first frame of `shown` frames of a track of `frames`, centred on `at`.
+fn start_at(frames: u64, shown: u64, per_column: u64, at: u64) -> u64 {
+    if shown >= frames {
+        return 0;
+    }
+    let start = at.saturating_sub(shown / 2).min(frames - shown);
+    if per_column >= DETAIL_BELOW {
+        let bucket = playr_core::wave::BUCKET;
+        start / bucket * bucket
     } else {
-        let start = at.saturating_sub(shown / 2).min(frames - shown);
-        if per_column >= DETAIL_BELOW {
-            start / bucket * bucket
-        } else {
-            start
+        start
+    }
+}
+
+/// The deepest zoom at which `width` columns of a track of `frames` show
+/// `len` frames centred, with a column to spare either side for bucket
+/// alignment. Drawing clamps it as it clamps any zoom.
+pub fn zoom_to_fit(frames: u64, width: u64, len: u64) -> u32 {
+    let width = width.max(1);
+    let mut zoom = 0;
+    loop {
+        let (_, per_column, per_frame, next) = window(frames, width, zoom + 1, 0, u64::MAX);
+        let shown = frames_shown(width, per_column, per_frame);
+        if next == zoom || shown < len + 2 * per_column {
+            return zoom;
         }
-    };
-    (start, per_column, per_frame, zoom)
+        zoom = next;
+    }
 }
 
 /// `frames` at `rate` as `m:ss.mmm`.
@@ -467,6 +511,15 @@ impl Layout {
         self
     }
 
+    /// The layout centred on `centre` rather than the playhead, when given.
+    pub fn with_centre(mut self, centre: Option<u64>) -> Layout {
+        if let Some(at) = centre {
+            let shown = frames_shown(self.columns, self.per_column, self.per_frame);
+            self.start = start_at(self.peaks.frames, shown, self.per_column, at);
+        }
+        self
+    }
+
     /// The layout with the range's ends; a range with both replaces the region.
     pub fn with_range(mut self, (start, end): (Option<u64>, Option<u64>)) -> Layout {
         self.range = (start, end);
@@ -507,6 +560,18 @@ impl Layout {
     /// The column under the playhead, if it is in view.
     pub fn playhead(&self) -> Option<usize> {
         self.column_of(self.at)
+    }
+
+    /// Which side of the view the playhead is past: `Less` before it,
+    /// `Greater` after it, `None` in view.
+    pub fn playhead_off(&self) -> Option<std::cmp::Ordering> {
+        if self.at < self.start {
+            Some(std::cmp::Ordering::Less)
+        } else if self.playhead().is_none() {
+            Some(std::cmp::Ordering::Greater)
+        } else {
+            None
+        }
     }
 
     /// Whether column `c` shows any of the region.

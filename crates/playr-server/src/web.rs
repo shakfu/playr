@@ -57,6 +57,7 @@ pub fn allowed(action: &Action) -> bool {
         | Display(_)
         | Nudge(_)
         | Snap(_)
+        | Fit(_)
         | RangeIn
         | RangeOut
         | SetRange(_)

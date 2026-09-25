@@ -111,6 +111,9 @@ pub enum Action {
     /// Snap the sampler view's moves and marks to zero crossings, or switch
     /// when `None`.
     Snap(Option<bool>),
+    /// Centre the sampler view on the range, zooming to fit it, or return to
+    /// the playhead; switch when `None`.
+    Fit(Option<bool>),
     /// Start the sampler's range at the playhead.
     RangeIn,
     /// End the sampler's range at the playhead.

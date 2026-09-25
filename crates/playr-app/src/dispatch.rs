@@ -462,6 +462,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         }
         Action::PickEdge(edge) => {
             f.sampler_mut().edge = edge;
+            f.sampler_mut().fit_edge = true;
             f.notify(Message::Edge(edge));
         }
         Action::MoveEdge(nudge) => {
@@ -504,7 +505,23 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Snap(on) => {
             let on = on.unwrap_or(!f.sampler().snap);
             f.sampler_mut().snap = on;
+            if on {
+                snap_range(f);
+            }
             f.notify(Message::Snap(on));
+        }
+        Action::Fit(on) => {
+            let on = on.unwrap_or(!f.sampler().fit);
+            f.sampler_mut().fit = on;
+            f.sampler_mut().fit_edge = false;
+            let playing = f.session().player().status().current().cloned();
+            let range = f.sampler().range(playing.as_ref());
+            if let (true, Some(peaks), Some(scale), Some((a, b))) =
+                (on, peaks(f), f.sampler().scale, range)
+            {
+                f.sampler_mut().zoom = sampler::zoom_to_fit(peaks.frames, scale.columns, b - a);
+            }
+            f.notify(Message::Fit(on));
         }
         Action::RangeIn | Action::RangeOut => {
             let (path, rate) = match f.session().playing_track() {
@@ -869,6 +886,24 @@ fn follow_loop(f: &impl Frontend) {
         let range = f.sampler().range(status.current());
         f.session().send(Cmd::Loop(range));
     }
+}
+
+/// Moves the range's ends set on the playing track to the nearest zero
+/// crossings, as ends set with snap on would be. A range too short to keep
+/// both ends apart stays as it is.
+fn snap_range(f: &mut impl Frontend) {
+    let Some(peaks) = peaks(f) else { return };
+    let Some(path) = f.session().player().status().current().cloned() else {
+        return;
+    };
+    let (start, end) = f.sampler().range_ends(Some(&path));
+    let snap = |e: Option<u64>| e.map(|e| sampler::snap(&peaks, e));
+    let (start, end) = (snap(start), snap(end));
+    if start.zip(end).is_some_and(|(a, b)| a >= b) || (start, end) == (None, None) {
+        return;
+    }
+    f.sampler_mut().range = Some(sampler::Range { path, start, end });
+    follow_loop(f);
 }
 
 /// Marks `at`, or the position now. In the sampler view the mark may snap,
