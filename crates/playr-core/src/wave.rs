@@ -17,12 +17,48 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use crate::audio::decode::AudioStream;
 use crate::spectrum::{self, Spectrogram};
 
 /// Frames per entry at the finest scale.
 pub const BUCKET: u64 = 32;
+
+/// How far a snap looks for a zero crossing, either side.
+pub const SNAP_WITHIN: Duration = Duration::from_millis(10);
+
+/// [`SNAP_WITHIN`] in frames at `rate`.
+pub fn snap_reach(rate: u32) -> u64 {
+    (SNAP_WITHIN.as_secs_f64() * rate as f64).round() as u64
+}
+
+/// Whether a frame's channels sum to 0 or more: the sign a crossing changes.
+pub fn non_negative(frame: &[f32]) -> bool {
+    frame.iter().map(|&s| f64::from(s)).sum::<f64>() >= 0.0
+}
+
+/// The crossing nearest `near` among frames `lo..=hi`, `lo` at least 1: a
+/// frame whose sign, by `positive`, differs from the frame before it. The
+/// later of two equally near wins.
+pub fn nearest_crossing(
+    lo: u64,
+    hi: u64,
+    near: u64,
+    positive: impl Fn(u64) -> bool,
+) -> Option<u64> {
+    let lo = lo.max(1);
+    if lo > hi {
+        return None;
+    }
+    let near = near.clamp(lo, hi);
+    let crosses = |f: u64| positive(f) != positive(f - 1);
+    (0..=(hi - lo)).find_map(|d| {
+        let after = near.checked_add(d).filter(|&f| f <= hi && crosses(f));
+        let before = near.checked_sub(d).filter(|&f| f >= lo && crosses(f));
+        after.or(before)
+    })
+}
 
 /// The extremes and RMS of some stretch of frames.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -117,17 +153,9 @@ impl Peaks {
     /// The zero crossing nearest `near` among frames `lo..=hi`: a frame whose
     /// channels' mean has the other sign from the frame before it.
     pub fn crossing(&self, lo: u64, hi: u64, near: u64) -> Option<u64> {
-        let (lo, hi) = (lo.max(1), hi.min(self.frames.saturating_sub(1)));
-        if lo > hi {
-            return None;
-        }
-        let near = near.clamp(lo, hi);
-        let positive = |f: u64| self.signs[(f / 64) as usize] >> (f % 64) & 1 == 1;
-        let crosses = |f: u64| positive(f) != positive(f - 1);
-        (0..=(hi - lo)).find_map(|d| {
-            let after = near.checked_add(d).filter(|&f| f <= hi && crosses(f));
-            let before = near.checked_sub(d).filter(|&f| f >= lo && crosses(f));
-            after.or(before)
+        let hi = hi.min(self.frames.saturating_sub(1));
+        nearest_crossing(lo, hi, near, |f| {
+            self.signs[(f / 64) as usize] >> (f % 64) & 1 == 1
         })
     }
 
@@ -304,7 +332,7 @@ impl Builder {
             if self.frames.is_multiple_of(64) {
                 self.signs.push(0);
             }
-            if sum >= 0.0 {
+            if non_negative(frame) {
                 *self.signs.last_mut().expect("pushed") |= 1 << (self.frames % 64);
             }
             self.spectrum.push((sum * per_channel) as f32);

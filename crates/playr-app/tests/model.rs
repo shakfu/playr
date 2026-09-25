@@ -283,6 +283,67 @@ fn snap_on_snaps_the_range_and_fit_zooms_to_it() {
 }
 
 #[test]
+fn a_looped_range_sliced_whole_is_planned_to_loop_and_takes_the_edge_setting() {
+    use playr_app::action::Slicing;
+    use playr_app::sampler::Wave;
+    use playr_core::samples::Edges;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let config = Config::parse("slice_edges = \"fade\"").unwrap();
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        config,
+    );
+    assert_eq!(
+        model.session().slice_edges(),
+        Edges::Fade,
+        "from the settings"
+    );
+    model.perform(Action::SetSliceEdges(Edges::Zero));
+    assert_eq!(model.session().slice_edges(), Edges::Zero);
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ms = Duration::from_millis;
+    model.perform(Action::SetRange(Some((ms(2_000), ms(3_000)))));
+
+    let planned = |model: &mut Model, slicing| {
+        model.perform(Action::Slice(slicing));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            model.refresh();
+            if let Some(plan) = model.sampler().pending.clone() {
+                model.perform(Action::DiscardSlices);
+                return plan.job;
+            }
+            assert!(Instant::now() < deadline, "nothing planned");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let job = planned(&mut model, Slicing::Region);
+    assert_eq!((job.loops, job.edges), (false, Edges::Zero), "not looping");
+    model.perform(Action::Loop(Some(true)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.session().player().status().looping.is_none() {
+        assert!(Instant::now() < deadline, "never looped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(planned(&mut model, Slicing::Region).loops);
+    assert!(
+        !planned(&mut model, Slicing::Equal(4)).loops,
+        "more than one slice"
+    );
+}
+
+#[test]
 fn restart_plays_from_the_range_start_or_the_track_start() {
     use playr_app::sampler::Wave;
     use playr_core::audio::State;
@@ -1346,4 +1407,334 @@ fn audition_hears_the_same_span_each_time_it_is_pressed() {
         std::thread::sleep(ms(5));
     }
     assert_eq!(audition(&mut model), end);
+}
+
+#[test]
+fn slice_edges_chosen_after_planning_replan_what_is_written() {
+    use playr_app::action::Slicing;
+    use playr_app::sampler::Wave;
+    use playr_core::samples::Edges;
+
+    // Crossings at frames 4,000, 8,000 ... 28,000.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("steps.wav");
+    let parts: Vec<(f32, f32)> = (0..8)
+        .map(|i| (0.5, if i % 2 == 0 { 0.25 } else { -0.25 }))
+        .collect();
+    common::levels(&file, 8000, &parts);
+    let out = dir.path().join("out");
+    let config = Config::parse(&format!("samples = \"{}\"", out.display())).unwrap();
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        config,
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ms = Duration::from_millis;
+    let planned = |model: &mut Model| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            model.refresh();
+            if let Some(plan) = &model.sampler().pending {
+                return plan.spans.clone();
+            }
+            assert!(Instant::now() < deadline, "nothing planned");
+            std::thread::sleep(ms(10));
+        }
+    };
+    model.perform(Action::SetRange(Some((ms(1_005), ms(2_995)))));
+    let exact = vec![
+        (8_040, Some(12_020)),
+        (12_020, Some(16_000)),
+        (16_000, Some(19_980)),
+        (19_980, Some(23_960)),
+    ];
+    let zero = vec![
+        (8_000, Some(12_000)),
+        (12_000, Some(16_000)),
+        (16_000, Some(20_000)),
+        (20_000, Some(24_000)),
+    ];
+
+    // Planned, then changed.
+    model.perform(Action::Slice(Slicing::Equal(4)));
+    assert_eq!(planned(&mut model), exact);
+    model.perform(Action::SetSliceEdges(Edges::Zero));
+    assert_eq!(planned(&mut model), zero);
+
+    // Changed while planning.
+    model.perform(Action::SetSliceEdges(Edges::Exact));
+    planned(&mut model);
+    model.perform(Action::DiscardSlices);
+    model.perform(Action::Slice(Slicing::Equal(4)));
+    model.perform(Action::SetSliceEdges(Edges::Zero));
+    assert_eq!(planned(&mut model), zero);
+    assert_eq!(
+        model.sampler().pending.as_ref().unwrap().job.edges,
+        Edges::Zero
+    );
+
+    // What is written is what was planned last.
+    model.perform(Action::WriteSlices);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let json = loop {
+        let written = std::fs::read_dir(&out)
+            .into_iter()
+            .flatten()
+            .map(|e| e.unwrap().path().join("samples.json"))
+            .find(|j| j.exists());
+        if let Some(json) = written.and_then(|j| std::fs::read_to_string(j).ok()) {
+            if json.ends_with("}\n") {
+                break json;
+            }
+        }
+        assert!(Instant::now() < deadline, "never written");
+        std::thread::sleep(ms(10));
+    };
+    assert!(
+        json.contains(r#""start_frame": 8000, "end_frame": 12000"#),
+        "{json}"
+    );
+}
+
+#[test]
+fn n_and_p_step_through_planned_slices_inside_the_range() {
+    use playr_app::action::Slicing;
+    use playr_app::sampler::{frame_of, Wave};
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ms = Duration::from_millis;
+    let state = |model: &Model| model.session().player().status().state;
+    let settle = |model: &Model, want: State| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state(model) != want {
+            assert!(Instant::now() < deadline, "never {want:?}");
+            std::thread::sleep(ms(5));
+        }
+    };
+    // Where each press pauses, in frames.
+    let hear = |model: &mut Model, action: Action| {
+        model.perform(action);
+        settle(model, State::Playing);
+        settle(model, State::Paused);
+        frame_of(model.session().player().position(), 8000)
+    };
+
+    model.perform(Action::SetRange(Some((ms(1_000), ms(3_000)))));
+    model.perform(Action::AuditionSlice(true));
+    assert_eq!(model.message(), Some(&Message::NoSlicesPlanned));
+    model.perform(Action::Slice(Slicing::Equal(4)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.sampler().pending.is_none() {
+        assert!(Instant::now() < deadline, "nothing planned");
+        model.refresh();
+        std::thread::sleep(ms(10));
+    }
+    model.perform(Action::TogglePause);
+    settle(&model, State::Paused);
+    model.perform(Action::SeekTo(ms(1_100)));
+    while model.session().player().position() != ms(1_100) {
+        std::thread::sleep(ms(5));
+    }
+
+    // The slice under the playhead, not the range around it.
+    assert_eq!(hear(&mut model, Action::Audition), 12_000);
+    assert_eq!(hear(&mut model, Action::AuditionSlice(true)), 16_000);
+    assert_eq!(hear(&mut model, Action::AuditionSlice(true)), 20_000);
+    assert_eq!(hear(&mut model, Action::AuditionSlice(true)), 24_000);
+    // Past the last slice, back to the first, and the other way round.
+    assert_eq!(hear(&mut model, Action::AuditionSlice(true)), 12_000);
+    assert_eq!(hear(&mut model, Action::AuditionSlice(false)), 24_000);
+    assert_eq!(hear(&mut model, Action::AuditionSlice(false)), 20_000);
+    assert_eq!(hear(&mut model, Action::Audition), 20_000, "again");
+    assert_eq!(hear(&mut model, Action::AuditionSlice(false)), 16_000);
+    assert_eq!(hear(&mut model, Action::AuditionSlice(false)), 12_000);
+}
+
+#[test]
+fn sensitivities_asked_for_while_planning_plan_only_the_last() {
+    use playr_app::action::Slicing;
+    use playr_app::sampler::Wave;
+    use playr_core::samples::Cut;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model.perform(Action::SetRange(Some((
+        Duration::from_secs(1),
+        Duration::from_secs(3),
+    ))));
+
+    // A slider dragged: three values before the first plan lands.
+    for s in [0.1, 0.9, 0.5] {
+        model.perform(Action::Slice(Slicing::Onsets(Some(s))));
+    }
+    assert_eq!(model.sampler().onsets_wanted, Some(0.5));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let cut = loop {
+        model.refresh();
+        if let Some(plan) = &model.sampler().pending {
+            break plan.job.cut;
+        }
+        assert!(Instant::now() < deadline, "nothing planned");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(cut, Cut::Onsets(0.5));
+    assert_eq!(model.sampler().onsets_wanted, None);
+    assert_eq!(model.sampler().planning, None, "0.9 was never planned");
+}
+
+#[test]
+fn loop_slots_save_the_range_recall_it_looping_and_are_kept_in_the_library() {
+    use playr_app::action::SlotOp::{Clear, Save, Use};
+    use playr_core::notice::Outcome;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let library = dir.path().join("library.db");
+    let mut model = Model::new(
+        db::open(&library).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.session().playing_track().is_err() {
+        assert!(Instant::now() < deadline, "never played");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let s = Duration::from_secs;
+    let looping = |model: &Model, want: Option<(u64, u64)>| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while model.session().player().status().looping != want {
+            assert!(Instant::now() < deadline, "never looped {want:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let slots = |model: &mut Model| {
+        model.refresh();
+        model.snapshot().loops
+    };
+
+    model.perform(Action::LoopSlot(1, Use));
+    assert_eq!(model.message(), Some(&Message::NoRangeToSave(1)));
+
+    // An empty slot takes the range.
+    model.perform(Action::SetRange(Some((s(1), s(2)))));
+    model.perform(Action::LoopSlot(1, Use));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::LoopSaved {
+            slot: 1,
+            kept: true
+        })))
+    );
+    model.perform(Action::SetRange(Some((s(3), s(4)))));
+    model.perform(Action::LoopSlot(2, Use));
+    assert_eq!(
+        slots(&mut model)[..3],
+        [Some((8_000, 16_000)), Some((24_000, 32_000)), None]
+    );
+
+    // A full one recalls it into the range, looping, and moves a loop playing.
+    model.perform(Action::SetRange(None));
+    model.perform(Action::LoopSlot(1, Use));
+    let current = Some(file.clone());
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((8_000, 16_000))
+    );
+    assert!(matches!(
+        model.message(),
+        Some(Message::LoopRecalled { slot: 1, .. })
+    ));
+    looping(&model, Some((8_000, 16_000)));
+    model.perform(Action::LoopSlot(2, Use));
+    looping(&model, Some((24_000, 32_000)));
+
+    // Saving over one, and clearing another.
+    model.perform(Action::SetRange(Some((s(5), s(6)))));
+    model.perform(Action::LoopSlot(1, Save));
+    model.perform(Action::LoopSlot(2, Clear));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::LoopCleared {
+            slot: 2
+        })))
+    );
+    assert_eq!(slots(&mut model)[..2], [Some((40_000, 48_000)), None]);
+
+    // Clearing them all asks first.
+    model.perform(Action::LoopSlot(4, Save));
+    model.perform(Action::ClearLoops);
+    assert!(matches!(
+        model.input(),
+        Input::Confirm(Confirm::ClearLoops { count: 2, .. })
+    ));
+    model.answer(false);
+    assert_eq!(slots(&mut model).iter().flatten().count(), 2);
+    model.perform(Action::ClearLoops);
+    model.answer(true);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::LoopsCleared)))
+    );
+    assert_eq!(slots(&mut model), [None; 8]);
+    model.perform(Action::ClearLoops);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NoLoops)))
+    );
+    model.perform(Action::LoopSlot(1, Save));
+    drop(model);
+
+    // Kept with the track in the library file.
+    let mut again = Model::new(
+        db::open(&library).unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        Config::default(),
+    );
+    assert_eq!(
+        again.session_mut().loops_for(Some(&file))[..2],
+        [Some((40_000, 48_000)), None]
+    );
 }

@@ -20,7 +20,7 @@ use playr_core::db::query::{Mark, Playlist};
 use playr_core::db::Track;
 use playr_core::event::{Event, EventSink, JobId};
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
-use playr_core::samples::Plan;
+use playr_core::samples::{Cut, Plan};
 use playr_core::session::Session;
 use rusqlite::Connection;
 
@@ -96,6 +96,8 @@ pub struct Snapshot {
     pub peak: Option<f32>,
     /// Marks in the playing track, as times into it, earliest first.
     pub marks: Vec<Duration>,
+    /// Loops saved in the playing track, by slot from 1, in source frames.
+    pub loops: playr_core::session::Loops,
 }
 
 /// The interface's state. See the module documentation.
@@ -173,6 +175,8 @@ impl Model {
         });
         let mut session = Session::new(conn, player, sink);
         session.set_samples_dir(config.settings.samples);
+        session.set_slice_edges(config.settings.slice_edges);
+        session.set_fades(config.settings.slice_fades);
         let mut model = Model {
             session,
             view: View::Library,
@@ -230,8 +234,10 @@ impl Model {
             loudness: player.loudness(),
             peak: self.peak_hold.map(|(p, _)| 20.0 * p.log10()),
             marks: Vec::new(),
+            loops: Default::default(),
         };
         let current = self.snapshot.status.current().cloned();
+        self.snapshot.loops = self.session.loops_for(current.as_ref());
         self.snapshot.marks = self
             .session
             .marks_for(current.as_ref())
@@ -634,7 +640,24 @@ impl Model {
                         continue;
                     }
                     match result {
+                        // Edges or a sensitivity chosen while it was planning:
+                        // plan it their way.
+                        Ok(plan)
+                            if !self.session.plans_current(&plan.job)
+                                || self
+                                    .sampler
+                                    .onsets_wanted
+                                    .is_some_and(|s| plan.job.cut != Cut::Onsets(s)) =>
+                        {
+                            let mut job = plan.job;
+                            if let Some(s) = self.sampler.onsets_wanted.take() {
+                                job.cut = Cut::Onsets(s);
+                            }
+                            let id = self.session.replan(job);
+                            self.sampler.planning = Some(id);
+                        }
                         Ok(plan) => {
+                            self.sampler.onsets_wanted = None;
                             let slices = plan.spans.len();
                             self.sampler.pending = Some(plan);
                             self.notify(Outcome::Planned { slices });

@@ -75,6 +75,17 @@ CREATE TABLE IF NOT EXISTS marks (
   PRIMARY KEY (path, frame)
 );
 
+-- Loops saved in a track, by slot. Keyed by path, as marks are, and
+-- compatible with older libraries for the same reason as `roots`.
+CREATE TABLE IF NOT EXISTS loops (
+  path  TEXT NOT NULL,
+  slot  INTEGER NOT NULL,  -- 1 to 8
+  start INTEGER NOT NULL,  -- source frames, end exclusive, as marks count them
+  end   INTEGER NOT NULL,
+  rate  INTEGER NOT NULL,
+  PRIMARY KEY (path, slot)
+);
+
 -- Directories given to a scan. A bare `playr scan`, or `:rescan`, covers them
 -- all. Compatible with older libraries: CREATE IF NOT EXISTS needs no version bump.
 CREATE TABLE IF NOT EXISTS roots (

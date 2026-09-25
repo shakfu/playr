@@ -46,6 +46,7 @@ pub fn allowed(action: &Action) -> bool {
         ShowView(View::Sampler)
         | Slice(_)
         | Audition
+        | AuditionSlice(_)
         | MoveCursor(_)
         | SetCursor(_)
         | PickMark(_)
@@ -58,10 +59,13 @@ pub fn allowed(action: &Action) -> bool {
         | Nudge(_)
         | Snap(_)
         | Fit(_)
+        | SetSliceEdges(_)
         | RangeIn
         | RangeOut
         | SetRange(_)
         | Loop(_)
+        | LoopSlot(..)
+        | ClearLoops
         | PickEdge(_)
         | MoveEdge(_)
         | WriteSlices
@@ -321,7 +325,15 @@ pub fn help(model: &Model, commands: bool) -> Value {
 /// Whether the command `usage`, listed under `heading`, is one the page may
 /// run. Its arguments are unknown here, so it is judged by name.
 fn usable_command(heading: Option<&str>, usage: &str) -> bool {
-    const REFUSED: [&str; 6] = ["quit", "scan", "open", "map", "unmap", "slice"];
+    const REFUSED: [&str; 7] = [
+        "quit",
+        "scan",
+        "open",
+        "map",
+        "unmap",
+        "slice",
+        "slice-edges",
+    ];
     let name = usage
         .trim_start_matches(':')
         .split(' ')

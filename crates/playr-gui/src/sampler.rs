@@ -16,6 +16,7 @@ use playr_app::dispatch::Frontend;
 use playr_app::model::Model;
 use playr_app::sampler::{self, Edge, Layout};
 use playr_app::Display;
+use playr_core::samples::Edges;
 
 use crate::controls;
 use crate::palette::Palette;
@@ -80,8 +81,8 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    // Room below the waveform for the detail line and three rows of controls.
-    let height = (ui.available_height() - 124.0).max(80.0);
+    // Room below the waveform for the detail line and five rows of controls.
+    let height = (ui.available_height() - 186.0).max(80.0);
     let width = ui.available_width();
     let layout = Layout::new(
         peaks,
@@ -257,7 +258,10 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     let ranged = sampler.range(current.as_ref()).is_some();
     let range_ends = sampler.range_ends(current.as_ref());
     let enabled = |action: &Action| match action {
-        Action::WriteSlices | Action::DiscardSlices => sampler.pending.is_some(),
+        Action::WriteSlices | Action::DiscardSlices | Action::AuditionSlice(_) => {
+            sampler.pending.is_some()
+        }
+        Action::ClearLoops => snapshot.loops.iter().any(Option::is_some),
         Action::Display(Some(d)) => *d != display,
         Action::SetRange(None) => range_ends != (None, None),
         Action::MoveEdge(_) => match sampler.edge {
@@ -307,8 +311,12 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         if ui.add_enabled(ranged || looping, loop_box).changed() {
             actions.push(Action::Loop(Some(on)));
         }
-        ui.separator();
+    });
+    ui.horizontal(|ui| {
         buttons(ui, controls::EDGE_BAR, &mut actions);
+        ui.separator();
+        loop_slots(ui, &snapshot, sampler.range(current.as_ref()), &mut actions);
+        buttons(ui, controls::LOOP_BAR, &mut actions);
     });
     let sensitivity = state.sensitivity.get_or_insert(model.onset_sensitivity());
     ui.horizontal(|ui| {
@@ -319,12 +327,96 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             actions.push(Action::Slice(Slicing::Equal(state.slices)));
         }
         ui.separator();
-        ui.add(egui::Slider::new(sensitivity, 0.0..=1.0).text("Sensitivity"));
-        if ui.button("Slice at onsets").clicked() {
+        // Moving the slider plans onsets at once, so the edges follow it.
+        let moved = ui
+            .add(egui::Slider::new(sensitivity, 0.0..=1.0).text("Sensitivity"))
+            .changed();
+        if ui.button("Slice at onsets").clicked() || moved {
             actions.push(Action::Slice(Slicing::Onsets(Some(*sensitivity))));
         }
     });
+    ui.horizontal(|ui| {
+        buttons(ui, controls::PLAN_BAR, &mut actions);
+        ui.separator();
+        let edges = model.session().slice_edges();
+        egui::ComboBox::from_label("Edges")
+            .selected_text(edges.name())
+            .show_ui(ui, |ui| {
+                for (_, choice) in Edges::NAMES {
+                    if ui
+                        .selectable_label(edges == choice, choice.name())
+                        .clicked()
+                        && edges != choice
+                    {
+                        actions.push(Action::SetSliceEdges(choice));
+                    }
+                }
+            });
+        if edges == Edges::Fade {
+            let fades = model.session().fades();
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+            ui.weak(format!(
+                "{} ms in, {} ms out",
+                ms(fades.fade_in),
+                ms(fades.fade_out)
+            ));
+        }
+        ui.separator();
+        buttons(ui, controls::WRITE_BAR, &mut actions);
+    });
     actions
+}
+
+/// A button for each loop slot: a click recalls a saved loop, or saves the
+/// range into an empty slot; shift-click saves over it; its menu clears it.
+fn loop_slots(
+    ui: &mut egui::Ui,
+    snapshot: &playr_app::model::Snapshot,
+    range: Option<(u64, u64)>,
+    actions: &mut Vec<Action>,
+) {
+    use playr_app::action::SlotOp;
+    ui.label("Loops");
+    let rate = snapshot.status.source.map_or(1, |s| s.rate);
+    for (i, saved) in snapshot.loops.iter().enumerate() {
+        let slot = i as u8 + 1;
+        let text = egui::RichText::new(slot.to_string());
+        let text = if saved.is_some() {
+            text.strong()
+        } else {
+            text.weak()
+        };
+        let playing = saved.is_some() && *saved == range;
+        let response = ui.add(egui::Button::new(text).selected(playing));
+        let response = match saved {
+            Some((a, b)) => response.on_hover_text(format!(
+                "Loop {slot}: {}-{}. Click to loop it; shift-click to save the range over it.",
+                sampler::fmt_frames(*a, rate),
+                sampler::fmt_frames(*b, rate)
+            )),
+            None => {
+                response.on_hover_text(format!("Loop {slot} is empty. Click to save the range."))
+            }
+        };
+        if response.clicked() {
+            let shift = ui.input(|i| i.modifiers.shift);
+            actions.push(Action::LoopSlot(
+                slot,
+                if shift { SlotOp::Save } else { SlotOp::Use },
+            ));
+        }
+        response.context_menu(|ui| {
+            if ui.button("Save the range here").clicked() {
+                actions.push(Action::LoopSlot(slot, SlotOp::Save));
+            }
+            if ui
+                .add_enabled(saved.is_some(), egui::Button::new("Clear"))
+                .clicked()
+            {
+                actions.push(Action::LoopSlot(slot, SlotOp::Clear));
+            }
+        });
+    }
 }
 
 /// Paints the waveform of `layout` into `rect`, one column a point wide.

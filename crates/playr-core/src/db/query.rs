@@ -408,6 +408,49 @@ pub fn remove_last_mark(conn: &Connection, path: &str) -> Result<Option<Mark>> {
     Ok(Some(mark))
 }
 
+/// The loops saved in the track at `path`: slot, start and end frame.
+pub fn loops(conn: &Connection, path: &str) -> Result<Vec<(u8, u64, u64)>> {
+    let mut stmt =
+        conn.prepare("SELECT slot, start, end FROM loops WHERE path = ?1 ORDER BY slot")?;
+    let rows = stmt.query_map([path], |r| {
+        Ok((
+            r.get(0)?,
+            r.get::<_, i64>(1)? as u64,
+            r.get::<_, i64>(2)? as u64,
+        ))
+    })?;
+    rows.collect()
+}
+
+/// Saves frames `start..end` at `rate` as loop `slot` of the track at `path`,
+/// replacing what the slot held.
+pub fn save_loop(
+    conn: &Connection,
+    path: &str,
+    slot: u8,
+    (start, end): (u64, u64),
+    rate: u32,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO loops (path, slot, start, end, rate) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![path, slot, start as i64, end as i64, rate],
+    )?;
+    Ok(())
+}
+
+/// Empties loop `slot` of the track at `path`. Returns whether it held one.
+pub fn clear_loop(conn: &Connection, path: &str, slot: u8) -> Result<bool> {
+    Ok(conn.execute(
+        "DELETE FROM loops WHERE path = ?1 AND slot = ?2",
+        rusqlite::params![path, slot],
+    )? > 0)
+}
+
+/// Empties every loop slot of the track at `path`, returning how many held one.
+pub fn clear_loops(conn: &Connection, path: &str) -> Result<usize> {
+    conn.execute("DELETE FROM loops WHERE path = ?1", [path])
+}
+
 /// Removes every mark in the track at `path`, returning how many there were.
 pub fn clear_marks(conn: &Connection, path: &str) -> Result<usize> {
     conn.execute("DELETE FROM marks WHERE path = ?1", [path])

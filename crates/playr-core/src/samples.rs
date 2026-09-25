@@ -16,6 +16,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::audio::decode::AudioStream;
@@ -34,6 +35,54 @@ pub enum Cut {
     Onsets(f32),
 }
 
+/// What an export does at each slice's edges, against clicks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Edges {
+    /// Cut where the edge falls: an exact copy, which may click.
+    #[default]
+    Exact,
+    /// Move each edge to the nearest zero crossing, as the sampler's snap
+    /// does, while planning. Still an exact copy between the edges.
+    Zero,
+    /// Fade each slice in and out as it is written.
+    Fade,
+}
+
+impl Edges {
+    /// Every choice, by the name the settings and `:slice-edges` use.
+    pub const NAMES: [(&'static str, Edges); 3] = [
+        ("exact", Edges::Exact),
+        ("zero", Edges::Zero),
+        ("fade", Edges::Fade),
+    ];
+
+    pub fn name(self) -> &'static str {
+        Edges::NAMES
+            .iter()
+            .find(|n| n.1 == self)
+            .map_or("exact", |n| n.0)
+    }
+}
+
+/// How long [`Edges::Fade`] fades each end of a slice. Linear, and at most
+/// half the slice at either end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fades {
+    pub fade_in: Duration,
+    pub fade_out: Duration,
+}
+
+impl Default for Fades {
+    /// A millisecond in, which leaves a hit's attack; 5 ms out, as rtrack
+    /// fades a slice's tail when it plays one.
+    fn default() -> Self {
+        Fades {
+            fade_in: Duration::from_millis(1),
+            fade_out: Duration::from_millis(5),
+        }
+    }
+}
+
 /// One export: which track, where the playhead and marks are, and how to cut.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Job {
@@ -49,6 +98,11 @@ pub struct Job {
     pub range: Option<(u64, u64)>,
     /// The directory exports are written under.
     pub samples: PathBuf,
+    pub edges: Edges,
+    pub fades: Fades,
+    /// The range is being looped and cut as one slice: `samples.json` marks
+    /// that slice to loop whole, and its edges are left as they are.
+    pub loops: bool,
 }
 
 /// What an export wrote.
@@ -230,9 +284,56 @@ pub fn export(job: &Job) -> Result<Exported, String> {
     write(job, &plan(job)?)
 }
 
+/// The audio onsets were last found in, averaged to mono, so finding them
+/// again at another sensitivity reads nothing: what makes onset slicing
+/// follow a slider.
+#[derive(Debug, Default)]
+pub struct OnsetAudio(Mutex<Option<Read>>);
+
+/// Frames `start..end` of the track at `path`, as mono.
+#[derive(Debug)]
+struct Read {
+    path: PathBuf,
+    start: u64,
+    end: Option<u64>,
+    mono: Arc<Vec<f32>>,
+}
+
+impl OnsetAudio {
+    /// Frames `start..end` of the track at `path`, as mono, read once.
+    fn mono(
+        &self,
+        path: &Path,
+        rate: u32,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<Arc<Vec<f32>>, String> {
+        // Held while reading, so a second job for the same audio waits for it.
+        let mut held = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(read) = held.as_ref() {
+            if (read.path.as_path(), read.start, read.end) == (path, start, end) {
+                return Ok(read.mono.clone());
+            }
+        }
+        let mono = Arc::new(Reader::open(path, rate, start)?.mono_to(end)?);
+        *held = Some(Read {
+            path: path.to_path_buf(),
+            start,
+            end,
+            mono: mono.clone(),
+        });
+        Ok(mono)
+    }
+}
+
 /// The slices `job` would write, without writing them. Finding onsets or the
 /// length of an open region decodes the track, so this can take seconds.
 pub fn plan(job: &Job) -> Result<Vec<Span>, String> {
+    plan_with(job, &OnsetAudio::default())
+}
+
+/// As [`plan`], finding onsets in `audio` when it holds the region already.
+pub fn plan_with(job: &Job, audio: &OnsetAudio) -> Result<Vec<Span>, String> {
     let (start, end) = match job.range {
         Some((a, b)) => (a, Some(b)),
         None => region(&job.marks, job.at),
@@ -281,7 +382,7 @@ pub fn plan(job: &Job) -> Result<Vec<Span>, String> {
                 .collect()
         }
         Cut::Onsets(sensitivity) => {
-            let mono = Reader::open(&job.path, job.rate, start)?.mono_to(end)?;
+            let mono = audio.mono(&job.path, job.rate, start, end)?;
             let points: Vec<u64> = onsets(&mono, job.rate, sensitivity)
                 .into_iter()
                 .map(|p| p as u64)
@@ -298,8 +399,58 @@ pub fn plan(job: &Job) -> Result<Vec<Span>, String> {
             spans.len()
         ));
     }
-
+    if job.edges == Edges::Zero && !job.loops {
+        return snap_edges(job, spans);
+    }
     Ok(spans)
+}
+
+/// `spans` with each edge on the nearest zero crossing within
+/// [`crate::wave::SNAP_WITHIN`], found as the sampler's snap finds it. The
+/// track's own start and end stay. An edge whose crossing would reach a
+/// neighbouring edge stays too, so every planned slice is written.
+fn snap_edges(job: &Job, spans: Vec<Span>) -> Result<Vec<Span>, String> {
+    let mut edges: Vec<u64> = spans
+        .iter()
+        .flat_map(|&(start, end)| [Some(start), end])
+        .flatten()
+        .filter(|&e| e > 0)
+        .collect();
+    edges.sort_unstable();
+    edges.dedup();
+    let reach = crate::wave::snap_reach(job.rate);
+    let mut moved = Vec::with_capacity(edges.len());
+    let mut before = 0;
+    for (i, &edge) in edges.iter().enumerate() {
+        let after = edges.get(i + 1).copied().unwrap_or(u64::MAX);
+        let to = Some(crossing_near(job, edge, reach)?)
+            .filter(|&to| to > before && to < after)
+            .unwrap_or(edge);
+        moved.push(to);
+        before = to;
+    }
+    let to = |e: u64| match edges.binary_search(&e) {
+        Ok(i) => moved[i],
+        Err(_) => e,
+    };
+    Ok(spans.into_iter().map(|(s, e)| (to(s), e.map(to))).collect())
+}
+
+/// The zero crossing nearest `edge` within `reach` frames, or `edge`.
+fn crossing_near(job: &Job, edge: u64, reach: u64) -> Result<u64, String> {
+    // From the frame before the first that can cross, which it is compared with.
+    let first = edge.saturating_sub(reach).max(1) - 1;
+    let (samples, channels) = read_frames(&job.path, job.rate, first, edge + reach + 1)?;
+    let signs: Vec<bool> = samples
+        .chunks_exact(channels.max(1))
+        .map(crate::wave::non_negative)
+        .collect();
+    let Some(last) = (signs.len() as u64).checked_sub(1).map(|n| first + n) else {
+        return Ok(edge);
+    };
+    let hi = (edge + reach).min(last);
+    let at = |f: u64| signs[(f - first) as usize];
+    Ok(crate::wave::nearest_crossing(first + 1, hi, edge, at).unwrap_or(edge))
 }
 
 /// Writes `spans` of `job`'s track, as [`plan`] returned them, to a new
@@ -314,8 +465,21 @@ pub fn write(job: &Job, spans: &[Span]) -> Result<Exported, String> {
     let stem = name_for(&job.path);
     fs::create_dir_all(&job.samples)
         .map_err(|e| format!("cannot create {}: {e}", job.samples.display()))?;
+    let fading = job.edges == Edges::Fade && !job.loops;
+    // A fade out needs to know where the slice ends.
+    let mut spans = spans.to_vec();
+    if fading {
+        if let Some(last) = spans.last_mut().filter(|s| s.1.is_none()) {
+            let frames = Reader::open(&job.path, job.rate, last.0)?.count_to(None)?;
+            last.1 = Some(last.0 + frames);
+        }
+    }
+    let fades = fading.then(|| {
+        let frames = |d: Duration| (d.as_secs_f64() * job.rate as f64).round() as u64;
+        (frames(job.fades.fade_in), frames(job.fades.fade_out))
+    });
     let dir = unused_dir(&job.samples, &stem)?;
-    let written = reader.write(spans, &dir, &stem);
+    let written = reader.write(&spans, &dir, &stem, fades);
     let slices = match written {
         Ok(slices) if slices.is_empty() => Err(EMPTY.into()),
         other => other,
@@ -328,9 +492,10 @@ pub fn write(job: &Job, spans: &[Span]) -> Result<Exported, String> {
             return Err(e);
         }
     };
+    let looped = job.loops && slices.len() == 1;
     fs::write(
         dir.join("samples.json"),
-        metadata(&job.path, job.rate, &slices),
+        metadata(&job.path, job.rate, &slices, looped),
     )
     .map_err(|e| format!("cannot write samples.json: {e}"))?;
     Ok(Exported { dir, slices })
@@ -440,9 +605,16 @@ impl Reader {
     }
 
     /// Writes each span to its own file in `dir`, in one pass. A span ending at
-    /// `None` runs to the end of the track. Returns the spans written, as far
-    /// as the track went.
-    fn write(mut self, spans: &[Span], dir: &Path, stem: &str) -> Result<Vec<(u64, u64)>, String> {
+    /// `None` runs to the end of the track. With `fades`, frames to fade in and
+    /// out, every span must have an end. Returns the spans written, as far as
+    /// the track went.
+    fn write(
+        mut self,
+        spans: &[Span],
+        dir: &Path,
+        stem: &str,
+        fades: Option<(u64, u64)>,
+    ) -> Result<Vec<(u64, u64)>, String> {
         let mut written: Vec<(u64, u64)> = Vec::new();
         let mut open: Option<hound::WavWriter<std::io::BufWriter<fs::File>>> = None;
         let mut index = 0;
@@ -474,9 +646,18 @@ impl Reader {
                     written.push((start, start));
                 }
                 let writer = open.as_mut().expect("opened above");
-                for &s in &chunk[..take as usize * channels] {
-                    let v = (s * 8_388_608.0).round().clamp(-8_388_608.0, 8_388_607.0);
-                    writer.write_sample(v as i32).map_err(fail)?;
+                let (first, len) = (at - start, end.map_or(0, |e| e - start));
+                for (k, frame) in chunk[..take as usize * channels]
+                    .chunks_exact(channels)
+                    .enumerate()
+                {
+                    let gain = fades.map_or(1.0, |f| fade_gain(first + k as u64, len, f));
+                    for &s in frame {
+                        let v = (s * gain * 8_388_608.0)
+                            .round()
+                            .clamp(-8_388_608.0, 8_388_607.0);
+                        writer.write_sample(v as i32).map_err(fail)?;
+                    }
                 }
                 at += take;
                 chunk = &chunk[take as usize * channels..];
@@ -496,6 +677,21 @@ impl Reader {
         }
         Ok(written)
     }
+}
+
+/// The gain of frame `i` of a slice `len` frames long, fading in over
+/// `fade_in` frames from 0 and out over `fade_out` frames to 0, each at most
+/// half the slice.
+pub(crate) fn fade_gain(i: u64, len: u64, (fade_in, fade_out): (u64, u64)) -> f32 {
+    let ramp = |from_edge: u64, fade: u64| {
+        let fade = fade.min(len / 2);
+        if from_edge < fade {
+            from_edge as f32 / fade as f32
+        } else {
+            1.0
+        }
+    };
+    ramp(i, fade_in).min(ramp(len.saturating_sub(1 + i), fade_out))
 }
 
 /// The track's file name without its extension, safe as part of a file name.
@@ -537,13 +733,22 @@ fn unused_dir(parent: &Path, name: &str) -> Result<PathBuf, String> {
 }
 
 /// `samples.json`: rtrack reads the `samples` keys, which must match the slot
-/// text in the file names, and ignores the provenance fields.
-fn metadata(source: &Path, rate: u32, slices: &[(u64, u64)]) -> String {
+/// text in the file names, and the loop fields, counted in the slice's own
+/// frames; it ignores the provenance fields. With `looped`, each slice loops
+/// whole.
+fn metadata(source: &Path, rate: u32, slices: &[(u64, u64)], looped: bool) -> String {
     let entries: Vec<String> = slices
         .iter()
         .enumerate()
         .map(|(slot, (start, end))| {
-            format!("    \"{slot:03}\": {{ \"start_frame\": {start}, \"end_frame\": {end} }}")
+            let lp = match looped {
+                true => format!(
+                    ", \"loop_enabled\": true, \"loop_start\": 0, \"loop_end\": {}",
+                    end - start
+                ),
+                false => String::new(),
+            };
+            format!("    \"{slot:03}\": {{ \"start_frame\": {start}, \"end_frame\": {end}{lp} }}")
         })
         .collect();
     format!(

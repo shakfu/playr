@@ -6,21 +6,37 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
-- `:fit [on|off]`, on `f`, and the window's Fit range tick box: zoom to the deepest step that shows the range, then centre the view on the range rather than the playhead, so zooming keeps the range in view. While it is on, `[` and `]` centre the view on that end at the zoom set, so the end `{` and `}` move stays still on screen while the waveform moves under it. A playhead out of view is shown as `<` or `>` at that end of the axis, or an arrow in the window. A toggle over a one-shot zoom, because the view otherwise re-centres on the playhead at the next frame. Library API: `Action::Fit`; `Sampler::fit`, `Sampler::fit_edge`, `Sampler::centre`; `sampler::zoom_to_fit`; `Layout::with_centre`, `Layout::playhead_off`; `Message::Fit`.
+- Saved loops: up to 8 a track, kept in the library beside its marks. `:loop N`, on F1 to F8 in the sampler and numbered buttons in the window, saves the range to an empty slot and recalls a full one, making it the range and looping it; `:loop N save`, on shift-F1 to F8 or shift-click, saves over one, `:loop N clear` empties it, and `:loops clear`, or Clear loops in the window, empties them all after asking. One command both saving and recalling, by whether the slot is full, over separate save and load commands: a loop is set up once and recalled many times, so the common case takes one key. Pruning and forgetting a root remove a track's loops with its marks. The table needs no schema version, as `roots` did not. Library API: `db::query::loops`, `save_loop`, `clear_loop`, `clear_loops`; `Session::loops_for`, `save_loop`, `clear_loop`, `loops_to_clear`, `clear_loops`, `LOOP_SLOTS`, `Loops`; `Outcome::LoopSaved`, `LoopCleared`, `LoopsCleared`; `Refusal::NoLoops`; `Task::Loop`; `Confirm::ClearLoops`; `Action::ClearLoops`; `Snapshot::loops`; `Action::LoopSlot`, `SlotOp`; `Message::LoopRecalled`, `NoRangeToSave`.
+
+## [0.11.0]
+
+### Added
+
+- Hearing planned slices before they are written. `:audition next|prev`, on `n` and `p` in the sampler and Previous slice and Next slice in the window, plays the next or previous planned slice once, wrapping round at either end. Library API: `Action::AuditionSlice`.
+
+- What an export does at slice edges, against clicks: `slice_edges` in `settings.toml`, `:slice-edges exact|zero|fade`, and an Edges menu beside Write slices. `exact`, the default, cuts as before. `zero` moves each edge to the nearest zero crossing within 10 ms while planning, by the same rule and code as `:snap`, so slices stay exact copies. `fade` fades each slice in over `slice_fade_in` (1 ms) and out over `slice_fade_out` (5 ms, as rtrack fades a tail), and an audition fades the same way, so the choice is heard before export. Changing it plans slices already planned again. A setting over tying edges to the snap toggle: `zero` keeps slices exact but moves edges and finds nothing in silence, and `fade` always works but changes the audio, so which suits depends on the material. `:sli` now matches both this and `:slice`. Library API: `samples::Edges`, `samples::Fades`, `Job::edges`, `Job::fades`; `Session::set_slice_edges`, `slice_edges`, `set_fades`, `fades`, `replan`, `plans_current`; `Settings::slice_edges`, `slice_fades`; `wave::SNAP_WITHIN`, `snap_reach`, `non_negative`, `nearest_crossing`; `Outcome::SliceEdges`; `Action::SetSliceEdges`; `Cmd::PlayOnce` takes the fades.
+
+- Onset slices follow the window's Sensitivity slider as it moves. The region's audio is kept once read, so each step only finds onsets again: 3 ms for 60 s of audio against 19 ms reading it (a WAV, release build, one machine). Values that come while a plan is being made wait for it, and only the last is planned. Library API: `samples::OnsetAudio`, `samples::plan_with`; `Sampler::onsets_wanted`.
+
+- Loop points in `samples.json`. A range cut whole (`:slice region`) while it loops is written with `loop_enabled`, `loop_start` 0 and `loop_end` its length, which rtrack reads, and keeps its edges as set. Library API: `Job::loops`.
+
+- `:fit [on|off]`, on `f`, and the window's Fit range tick box: zoom to the deepest step that shows the range, then centre the view on it rather than the playhead, so zooming keeps the range in view. While it is on, `[` and `]` centre the view on that end, so the end `{` and `}` move stays still while the waveform moves under it. A playhead out of view shows as `<` or `>` at that end of the axis, or an arrow in the window. A toggle over a one-shot zoom, because the view otherwise centres on the playhead again at the next frame. Library API: `Action::Fit`; `Sampler::fit`, `fit_edge`, `centre`; `sampler::zoom_to_fit`; `Layout::with_centre`, `playhead_off`; `Message::Fit`.
 
 - `:restart`, on `R`, and a From start button in the window's transport: play from the start of the sampler's range when one is set, else from the start of the track, from any view and any state. The web page has it too, where there is no range. Library API: `Action::Restart`.
 
-### Fixed
-
-- Audition played a different span, or nothing, when pressed again. Without a range it pauses on the end of the region or slice, which is where the next one starts, so the next press played that one; it now plays the same span again while the playhead is still there. A range ending at the track's end never paused: the pause needs the decoder at the range's end, which refuses the end of the track, so the track played out and stopped, and every later press found it closed. A one-shot now stops a frame short of the track's end, and audition and loop cue a stopped track, as a seek does. A press during an audition went on from the playhead; it now starts the span again.
-
-- A seek while stopped did nothing, so after `x`, or once the queue had played out, the playhead could not be placed or a mark set until the track played again. The engine had closed the track and dropped the seek. A seek now reopens the track paused at that point; the output is paused before any audio reaches it, so nothing sounds.
-
 ### Changed
 
-- Fat LTO moved from the `release` profile to a new `dist` profile, which the release and Linux package workflows build with. A release rebuild after an edit to `playr-core` took 178 s with it and 9 s without. `make release`, `make install` and `make app` build with `dist` and Opus, as the release workflow does, into `target/dist`, so they need cmake; `make install-dev` installs a debug build, stripped: unstripped, the three come to about 870 MB.
+- Audition plays the planned slice under the playhead ahead of the range; a range used to hide the slices cut from it. In the sampler, `n` and `p` step through slices rather than tracks: a track change discards the plan in any case, and `:next` and `:prev` still skip.
+
+- Fat LTO moved from the `release` profile to a new `dist` profile, which the release and Linux package workflows build with. A release rebuild after an edit to `playr-core` took 178 s with it and 9 s without. `make release`, `make install` and `make app` build with `dist` and Opus, as the release workflow does, into `target/dist`, so they need cmake. `make install-dev` installs a debug build, stripped: unstripped, the three come to about 870 MB.
 
 - Turning snap on moves the ends of a range already set to the nearest zero crossings. Ends set with snap on already snapped; a range drawn before it did not. A range shorter than the two snaps keeps its ends.
+
+### Fixed
+
+- Audition played a different span, or nothing, when pressed again. It pauses on the end of a region or slice, which is where the next one starts, so the next press played that one; it now plays the same span again while the playhead is there. A range ending at the track's end never paused: the pause needs the decoder at the range's end, which refuses the end of the track, so the track played out and stopped, and every later press found it closed. A one-shot now stops a frame short of the track's end. A press during an audition went on from the playhead; it now starts the span again.
+
+- A seek while stopped did nothing, so after `x`, or once the queue had played out, the playhead could not be placed or a mark set until the track played again. The engine had closed the track and dropped the seek. A seek, an audition or a loop now reopens the track paused at that point; the output is paused before any audio reaches it, so nothing sounds.
 
 ## [0.10.0]
 

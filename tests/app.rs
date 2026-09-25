@@ -1266,7 +1266,7 @@ fn the_sampler_reads_the_waveform_once_opened_and_follows_the_track() {
         Some(("a.wav".into(), 24_000))
     );
 
-    press(&mut app, 'n');
+    command(&mut app, "next");
     wait_for_sampler(&mut app, |s| {
         wave_of(s).is_some_and(|(name, _)| name == "b.wav")
     });
@@ -1395,7 +1395,8 @@ fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
     // A plan belongs to its track.
     command(&mut app, "slice 2");
     wait_for_sampler(&mut app, |s| s.pending.is_some());
-    press(&mut app, 'n');
+    // `n` steps through slices here, so the next track is by command.
+    command(&mut app, "next");
     wait_for_sampler(&mut app, |s| s.pending.is_none());
 
     // Outside the sampler, :slice writes at once, as before.

@@ -30,8 +30,7 @@ pub const DETAIL_BELOW: u64 = 2 * playr_core::wave::BUCKET;
 /// no new read.
 pub const DETAIL_MARGIN: Duration = Duration::from_secs(2);
 
-/// How far a snap looks for a zero crossing, either side.
-pub const SNAP_WITHIN: Duration = Duration::from_millis(10);
+pub use playr_core::wave::SNAP_WITHIN;
 
 /// The level the dB display draws as empty, in dBFS.
 pub const DB_FLOOR: f32 = -48.0;
@@ -91,6 +90,9 @@ pub struct Sampler {
     pub planning: Option<JobId>,
     /// Slices planned for the track, shown until written or discarded.
     pub pending: Option<Plan>,
+    /// An onset sensitivity asked for while a plan was being made, which
+    /// replaces that plan once it lands.
+    pub onsets_wanted: Option<f32>,
     /// Whether moves and marks in the view snap to zero crossings.
     pub snap: bool,
     /// Whether the view centres on the range, once both ends are set, rather
@@ -316,7 +318,7 @@ pub fn time_of(frame: u64, rate: u32) -> Duration {
 
 /// `frame`, moved to the nearest zero crossing within [`SNAP_WITHIN`], if any.
 pub fn snap(peaks: &Peaks, frame: u64) -> u64 {
-    let within = frame_of(SNAP_WITHIN, peaks.rate);
+    let within = playr_core::wave::snap_reach(peaks.rate);
     peaks
         .crossing(frame.saturating_sub(within), frame + within, frame)
         .unwrap_or(frame)
@@ -332,7 +334,7 @@ pub fn nudge(peaks: &Peaks, from: u64, step: i64, snap: bool) -> u64 {
     if !snap || step == 0 {
         return to;
     }
-    let within = frame_of(SNAP_WITHIN, peaks.rate);
+    let within = playr_core::wave::snap_reach(peaks.rate);
     let (lo, hi) = if step > 0 {
         ((from + 1).max(to.saturating_sub(within)), to + within)
     } else {

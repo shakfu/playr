@@ -314,7 +314,7 @@ pub(crate) fn stored_root(conn: &Connection, root: &Path) -> Result<Option<Strin
 }
 
 /// Forgets `root` and removes everything the library held under it: the
-/// tracks, with their places in playlists, and the marks and analysis of
+/// tracks, with their places in playlists, and the marks, loops and analysis of
 /// every file under it, in the library or not. `None` if no root matches.
 ///
 /// Unlike [`prune_missing`] this does not ask the filesystem anything. A
@@ -336,6 +336,10 @@ pub fn forget_root(conn: &Connection, root: &Path) -> Result<Option<Pruned>> {
     }
     tx.execute(
         "DELETE FROM analysis WHERE substr(path, 1, length(?1)) = ?1",
+        [&prefix],
+    )?;
+    tx.execute(
+        "DELETE FROM loops WHERE substr(path, 1, length(?1)) = ?1",
         [&prefix],
     )?;
     let mut marks = 0;
@@ -378,7 +382,7 @@ pub fn missing_under(conn: &Connection, root: &Path) -> Result<Vec<Track>> {
 }
 
 /// Removes the tracks [`missing_under`] finds, which also removes them from
-/// playlists, and the marks and analysis of every file under `root` that is
+/// playlists, and the marks, loops and analysis of every file under `root` that is
 /// gone, in the library or not.
 ///
 /// Files are checked before the transaction opens, so the write lock is held
@@ -392,6 +396,13 @@ pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
         .prepare("SELECT DISTINCT path FROM marks WHERE substr(path, 1, length(?1)) = ?1")?
         .query_map([&prefix], |r| r.get(0))?
         .collect::<Result<_>>()?;
+    let looped: Vec<String> = conn
+        .prepare("SELECT DISTINCT path FROM loops WHERE substr(path, 1, length(?1)) = ?1")?
+        .query_map([&prefix], |r| r.get(0))?
+        .collect::<Result<Vec<String>>>()?
+        .into_iter()
+        .filter(|p| gone(p))
+        .collect();
     let analysed: Vec<String> = conn
         .prepare("SELECT path FROM analysis WHERE substr(path, 1, length(?1)) = ?1")?
         .query_map([&prefix], |r| r.get(0))?
@@ -404,6 +415,9 @@ pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
         tx.execute("DELETE FROM tracks WHERE id = ?1", [t.id])?;
     }
     analysis::delete(&tx, &analysed)?;
+    for path in &looped {
+        tx.execute("DELETE FROM loops WHERE path = ?1", [path])?;
+    }
     let mut marks = 0;
     for path in marked.iter().filter(|p| gone(p)) {
         marks += query::clear_marks(&tx, path)?;

@@ -59,6 +59,7 @@ fn every_action() -> Vec<Action> {
         Action::CycleMode(true),
         Action::SetMode(Mode::Normal),
         Action::SetReplayGain(ReplayGain::Off),
+        Action::SetSliceEdges(playr_core::samples::Edges::Exact),
         Action::Mark,
         Action::MarkAt(Duration::ZERO),
         Action::UndoMark,
@@ -75,7 +76,10 @@ fn every_action() -> Vec<Action> {
         Action::RangeOut,
         Action::SetRange(None),
         Action::Loop(None),
+        Action::LoopSlot(1, playr_app::action::SlotOp::Use),
+        Action::ClearLoops,
         Action::Audition,
+        Action::AuditionSlice(true),
         Action::MoveCursor(playr_app::action::Nudge::Columns(1)),
         Action::SetCursor(None),
         Action::PickMark(true),
@@ -146,6 +150,7 @@ fn every_action() -> Vec<Action> {
             | Action::CycleMode(_)
             | Action::SetMode(_)
             | Action::SetReplayGain(_)
+            | Action::SetSliceEdges(_)
             | Action::Mark
             | Action::MarkAt(_)
             | Action::UndoMark
@@ -162,7 +167,10 @@ fn every_action() -> Vec<Action> {
             | Action::RangeOut
             | Action::SetRange(_)
             | Action::Loop(_)
+            | Action::LoopSlot(..)
+            | Action::ClearLoops
             | Action::Audition
+            | Action::AuditionSlice(_)
             | Action::MoveCursor(_)
             | Action::SetCursor(_)
             | Action::PickMark(_)

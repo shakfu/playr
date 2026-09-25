@@ -34,13 +34,19 @@ What is missing, grouped by priority:
 
 ### Sampler
 
+- [ ] **Moving start and end via mouse** This is likely possibly only in the gui. Of the mouse hovers over the either limit of the range, it should be to shift that boundary via a mouse-click and drag
+
+- [x] **Live onset slicing.** In the window, moving the Sensitivity slider plans onsets again at once, from the region's audio as first read.
+
+- [x] **Multiple loops.** `:loop N` and F1-F8 save the range to a slot, or recall one looping; kept in the library per track.
+
 - [ ] **Waveform cache.** The sampler decodes the whole track each time a new track is shown there. Peaks and spectrogram are about 13 MB for a 4-minute track and could be kept per file.
 
-- [ ] **Loop points.** Write loop points to `samples.json` as `loop_start`, `loop_end` and `loop_enabled`, which rtrack reads.
+- [x] **Loop points.** A range cut whole while it loops is written to `samples.json` to loop whole.
 
 - [ ] **Spectrogram at high sample rates.** The transform is 2048 frames at every rate, so a bin is 21.5 Hz at 44.1 kHz and 94 Hz at 192 kHz, and bass on hi-res files blurs further. Scaling the transform with the rate, 4096 at 96 kHz and 8192 at 192 kHz, keeps about 46 ms and 21 Hz everywhere, at more CPU per read on those files.
 
-- [ ] **Slice edges.** Slices start and end on whatever sample falls there. rtrack snaps loop points to zero crossings; the same for slice edges, or a short fade, would remove clicks at the cost of a slice that is no longer an exact copy.
+- [x] **Slice edges.** `slice_edges`: exact, zero or fade.
 
 ### Library
 

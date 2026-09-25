@@ -149,6 +149,19 @@ pub const MARK_BAR: &[Control] = &[
 pub const SLICE_BAR: &[Control] = &[
     control("Slice region", Action::Slice(Slicing::Region)),
     control("Slice at marks", Action::Slice(Slicing::Marks)),
+];
+
+/// Hearing planned slices, then writing them, under the slice buttons; the
+/// Edges menu sits between the two.
+pub const PLAN_BAR: &[Control] = &[
+    control("Previous slice", Action::AuditionSlice(false)),
+    control("Next slice", Action::AuditionSlice(true)),
+];
+
+/// After the numbered loop buttons.
+pub const LOOP_BAR: &[Control] = &[control("Clear loops", Action::ClearLoops)];
+
+pub const WRITE_BAR: &[Control] = &[
     control("Write slices", Action::WriteSlices),
     control("Discard slices", Action::DiscardSlices),
 ];
@@ -172,6 +185,9 @@ pub const TABLES: &[&[Control]] = &[
     RANGE_BAR,
     EDGE_BAR,
     SLICE_BAR,
+    PLAN_BAR,
+    LOOP_BAR,
+    WRITE_BAR,
 ];
 
 /// Actions whose value comes from how a control is used, by name: a slider's
@@ -181,6 +197,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("SetSpeed", "the speed slider"),
     ("SetMode", "the mode menu"),
     ("SetReplayGain", "the ReplayGain menu"),
+    ("SetSliceEdges", "the sampler's Edges menu"),
     ("SetColumns", "View, Columns"),
     ("SetSort", "a click on a column heading"),
     ("SeekTo", "a click on the progress bar or the waveform"),
@@ -193,6 +210,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("Snap", "the sampler's Snap to zero tick box"),
     ("Fit", "the sampler's Fit range tick box"),
     ("Loop", "the sampler's Loop range tick box"),
+    ("LoopSlot", "the sampler's numbered loop buttons"),
     ("MoveTrack", "a selection row dragged to another place"),
     ("Add", "a library row's tick box"),
     ("Activate", "a double click on a row"),

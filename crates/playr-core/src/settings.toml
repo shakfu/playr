@@ -14,6 +14,14 @@ speed = 0
 onset_sensitivity = 0.5
 # Where :slice writes, one directory per slicing. ~ is your home.
 samples = "~/Music/playr/samples"
+# What :slice does at each slice's edges, against clicks: exact cuts where the
+# edge falls; zero moves it to the nearest zero crossing within 10 ms; fade
+# fades each slice in and out, so it is no longer an exact copy.
+slice_edges = "exact"
+# The fades slice_edges = "fade" uses, in milliseconds, 0 to 100, each at most
+# half the slice. Short in, to keep a hit's attack.
+slice_fade_in = 1
+slice_fade_out = 5
 # After a scan, remove tracks whose files are gone, without asking.
 auto_prune = false
 # After a scan, analyse what it added or found changed, in the background.

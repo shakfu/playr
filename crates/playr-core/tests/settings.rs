@@ -246,3 +246,47 @@ fn columns_and_sort_are_lists_of_column_names() {
         ["line 1: columns is a list of names, not a string"]
     );
 }
+
+#[test]
+fn slice_edges_default_exact_with_short_fades_and_take_a_name_and_milliseconds() {
+    use playr_core::samples::{Edges, Fades};
+    use std::time::Duration;
+    let defaults = Settings::default();
+    assert_eq!(defaults.slice_edges, Edges::Exact);
+    assert_eq!(defaults.slice_fades, Fades::default());
+    assert_eq!(
+        defaults.slice_fades.fade_in,
+        Duration::from_millis(1),
+        "the defaults file and Fades::default agree"
+    );
+    assert_eq!(
+        parse("slice_edges = \"Zero\"").unwrap().slice_edges,
+        Edges::Zero
+    );
+    let fades = parse("slice_fade_in = 0.5\nslice_fade_out = 20")
+        .unwrap()
+        .slice_fades;
+    assert_eq!(
+        (fades.fade_in, fades.fade_out),
+        (Duration::from_micros(500), Duration::from_millis(20))
+    );
+    assert_eq!(
+        parse("slice_edges = \"soft\"").unwrap_err(),
+        ["line 1: unknown slice_edges soft; choices: exact, zero, fade"]
+    );
+    assert_eq!(
+        parse("slice_edges = 1").unwrap_err(),
+        ["line 1: slice_edges cannot be an integer"]
+    );
+    for bad in [
+        "slice_fade_out = 101",
+        "slice_fade_out = -1",
+        "slice_fade_out = \"5\"",
+    ] {
+        assert_eq!(
+            parse(bad).unwrap_err(),
+            ["line 1: slice_fade_out is milliseconds, from 0 to 100"],
+            "{bad}"
+        );
+    }
+}

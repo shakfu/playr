@@ -93,6 +93,8 @@ pub enum Action {
     SetMode(Mode),
     /// Choose which ReplayGain applies.
     SetReplayGain(playr_core::gain::ReplayGain),
+    /// Choose what exports do at slice edges.
+    SetSliceEdges(playr_core::samples::Edges),
 
     /// Mark the playing position.
     Mark,
@@ -125,6 +127,10 @@ pub enum Action {
     SetRange(Option<(Duration, Duration)>),
     /// Play the range over and over, or stop; switch when `None`.
     Loop(Option<bool>),
+    /// Act on loop slot `n`, from 1, of the playing track.
+    LoopSlot(u8, SlotOp),
+    /// Empty every loop slot of the playing track, once confirmed.
+    ClearLoops,
     /// Move the sampler's cursor, which is apart from the playhead.
     MoveCursor(Nudge),
     /// Put the sampler's cursor at a time, or return it to the playhead.
@@ -142,6 +148,8 @@ pub enum Action {
     /// Play the range, the planned slice at the playhead, or the region
     /// around it, once, and pause at its end.
     Audition,
+    /// Play the next planned slice once, or the previous one.
+    AuditionSlice(bool),
     /// Choose which end of the range edge moves shift.
     PickEdge(crate::sampler::Edge),
     /// Move the chosen end of the range, as a nudge moves the playhead.
@@ -168,6 +176,16 @@ pub enum Action {
         view: Option<View>,
         key: Key,
     },
+}
+
+/// What a loop slot is asked to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotOp {
+    /// Recall the loop the slot holds, or save the range into an empty one.
+    Use,
+    /// Save the range into the slot, over what it holds.
+    Save,
+    Clear,
 }
 
 /// A zoom step in the sampler view.

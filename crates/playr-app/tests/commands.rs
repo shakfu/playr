@@ -101,7 +101,10 @@ fn a_unique_prefix_names_a_command_and_an_ambiguous_one_lists_the_choices() {
     );
     assert_eq!(
         lib("s"),
-        Err("ambiguous command s: search, save, scan, sort, stop, seek, speed, slice".into())
+        Err(
+            "ambiguous command s: search, save, scan, sort, stop, seek, speed, slice-edges, slice"
+                .into()
+        )
     );
     // Only the commands usable here count: `de` is `delmarks` unless `delete` works too.
     assert_eq!(lib("de"), Ok(Action::ClearMarks));
@@ -160,7 +163,7 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         "fit range",
         "range 1",
         "in 2",
-        "loop 3",
+        "loop 9",
     ] {
         assert!(s(bad).is_err(), "{bad:?} parsed");
     }
@@ -191,6 +194,53 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         completions("fit o", View::Sampler, &[]),
         ["fit on", "fit off"]
     );
+}
+
+#[test]
+fn slice_edges_takes_a_choice_or_its_prefix_in_any_view() {
+    use playr_core::samples::Edges;
+    assert_eq!(
+        lib("slice-edges zero"),
+        Ok(Action::SetSliceEdges(Edges::Zero))
+    );
+    assert_eq!(
+        parse("slice-edges f", View::Sampler),
+        Ok(Action::SetSliceEdges(Edges::Fade))
+    );
+    assert!(lib("slice-edges").is_err());
+    assert!(lib("slice-edges soft").is_err());
+    assert_eq!(
+        line(&Action::SetSliceEdges(Edges::Exact), None),
+        "slice-edges exact"
+    );
+    assert_eq!(
+        completions("slice-edges ", View::Library, &[]),
+        ["slice-edges exact", "slice-edges zero", "slice-edges fade"]
+    );
+}
+
+#[test]
+fn loop_takes_a_slot_to_recall_save_or_clear() {
+    use playr_app::action::SlotOp;
+    let s = |line: &str| parse(line, View::Sampler);
+    assert_eq!(s("loop 1"), Ok(Action::LoopSlot(1, SlotOp::Use)));
+    assert_eq!(s("loop 8 save"), Ok(Action::LoopSlot(8, SlotOp::Save)));
+    assert_eq!(s("loop 3 clear"), Ok(Action::LoopSlot(3, SlotOp::Clear)));
+    assert_eq!(s("loop on"), Ok(Action::Loop(Some(true))));
+    for bad in ["loop 0", "loop 9", "loop 1 keep", "loop x"] {
+        assert!(s(bad).is_err(), "{bad:?} parsed");
+    }
+    for text in ["loop 2", "loop 2 save", "loop 2 clear"] {
+        assert_eq!(line(&s(text).unwrap(), Some(View::Sampler)), text);
+    }
+    assert!(lib("loop 1").unwrap_err().contains("sampler view"));
+    assert_eq!(s("loops clear"), Ok(Action::ClearLoops));
+    assert!(s("loops").is_err() && s("loops 1").is_err());
+    assert_eq!(
+        line(&Action::ClearLoops, Some(View::Sampler)),
+        "loops clear"
+    );
+    assert_eq!(completions("loops ", View::Sampler, &[]), ["loops clear"]);
 }
 
 #[test]

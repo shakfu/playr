@@ -72,6 +72,16 @@ pub enum Outcome {
         total: usize,
     },
     ReplayGain(crate::gain::ReplayGain),
+    SliceEdges(crate::samples::Edges),
+    /// The range saved as a loop, which is not `kept` without a library file.
+    LoopSaved {
+        slot: u8,
+        kept: bool,
+    },
+    LoopCleared {
+        slot: u8,
+    },
+    LoopsCleared,
     /// A mark added at `at`; not `kept` when there is no library file.
     Marked {
         at: Duration,
@@ -156,6 +166,7 @@ pub enum Refusal {
         at: Duration,
     },
     NoMarks,
+    NoLoops,
     NoLaterMark,
     NoEarlierMark,
     /// The session has no library file set, so a scan has nowhere to write.
@@ -184,6 +195,7 @@ pub enum Task {
     Save,
     Rename,
     Mark,
+    Loop,
     MoveMark,
     RemoveMark,
     ClearMarks,

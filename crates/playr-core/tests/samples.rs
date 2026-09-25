@@ -3,8 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use playr_core::samples::{
-    equal_spans, export, nearest_onset, onsets, region, spans_at, Cut, Exported, Job, MAX_SLICES,
+    equal_spans, export, nearest_onset, onsets, plan, plan_with, region, spans_at, Cut, Edges,
+    Exported, Fades, Job, OnsetAudio, MAX_SLICES,
 };
+use playr_core::wave::{snap_reach, Peaks};
 
 /// A distinct, non-zero value for every frame and channel, so any frame read
 /// from the wrong place shows.
@@ -44,6 +46,9 @@ fn job(path: &Path, rate: u32, marks: &[u64], at: u64, cut: Cut, samples: &Path)
         cut,
         range: None,
         samples: samples.to_path_buf(),
+        edges: Edges::Exact,
+        fades: Fades::default(),
+        loops: false,
     }
 }
 
@@ -514,4 +519,195 @@ fn nearest_onset_finds_the_rise_beside_a_mark_and_nothing_in_silence() {
         nearest_onset(&file, rate, rate as u64 * 8, 0.5).unwrap(),
         None
     );
+}
+
+/// Writes `frames` of a stereo 16-bit tone at `hz`, the right channel a
+/// quarter turn behind and quieter, so the channels' mean crosses zero
+/// where neither channel does. Returns the samples as the decoder reads them.
+fn tone(path: &Path, rate: u32, hz: f64, frames: u64) -> Vec<f32> {
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    let mut read = Vec::new();
+    for f in 0..frames {
+        let t = std::f64::consts::TAU * hz * f as f64 / rate as f64;
+        for v in [0.6 * t.sin(), 0.3 * (t - 1.2).sin()] {
+            let v = (v * 32_767.0) as i16;
+            w.write_sample(v).unwrap();
+            read.push(v as f32 / 32_768.0);
+        }
+    }
+    w.finalize().unwrap();
+    read
+}
+
+#[test]
+fn zero_edges_land_where_the_sampler_snap_puts_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    let rate = 8_000;
+    let read = tone(&file, rate, 37.0, 40_000);
+    let peaks = Peaks::from_interleaved(&read, 2, rate);
+    let reach = snap_reach(rate);
+    let marks = [1_003, 31_007];
+    let cut = |edges| Job {
+        edges,
+        ..job(&file, rate, &marks, 2_000, Cut::Equal(6), dir.path())
+    };
+
+    let exact = plan(&cut(Edges::Exact)).unwrap();
+    let zero = plan(&cut(Edges::Zero)).unwrap();
+    assert_eq!(zero.len(), exact.len());
+    let snap = |e: u64| peaks.crossing(e - reach, e + reach, e).unwrap_or(e);
+    let want: Vec<_> = exact.iter().map(|&(s, e)| (snap(s), e.map(snap))).collect();
+    assert_eq!(zero, want);
+    assert_ne!(zero, exact, "no edge moved");
+    // Neighbouring slices still meet.
+    assert!(zero.windows(2).all(|w| w[0].1 == Some(w[1].0)));
+}
+
+#[test]
+fn zero_edges_too_close_to_snap_apart_stay_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    let rate = 8_000;
+    // 5 Hz: one crossing within reach of all three edges.
+    let read = tone(&file, rate, 5.0, 16_000);
+    let peaks = Peaks::from_interleaved(&read, 2, rate);
+    let crossing = peaks.crossing(1, 15_999, 1_600).unwrap();
+    let range = Some((crossing - 30, crossing + 30));
+    let job = Job {
+        edges: Edges::Zero,
+        range,
+        ..job(&file, rate, &[], 0, Cut::Equal(3), dir.path())
+    };
+    // Edges at c-30, c-10, c+10 and c+30 all reach the crossing c. The
+    // first to reach it without emptying a slice takes it; the rest stay.
+    let c = crossing;
+    assert_eq!(
+        plan(&job).unwrap(),
+        [(c - 30, Some(c)), (c, Some(c + 10)), (c + 10, Some(c + 30))]
+    );
+}
+
+/// The samples of the first channel of each file written, as 24-bit values.
+fn first_channel(out: &Exported, channels: usize) -> Vec<Vec<i32>> {
+    files(&out.dir)
+        .iter()
+        .map(|f| {
+            let samples: Vec<i32> = hound::WavReader::open(f)
+                .unwrap()
+                .samples::<i32>()
+                .map(Result::unwrap)
+                .collect();
+            samples.chunks(channels).map(|c| c[0]).collect()
+        })
+        .collect()
+}
+
+#[test]
+fn fade_edges_ramp_each_slice_in_and_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("src.wav");
+    let rate = 8_000;
+    source(&file, rate, 2, 24, 20_000);
+    // 1 ms and 5 ms at 8 kHz: 8 frames in, 40 out.
+    let fade = |cut, marks: &[u64]| Job {
+        edges: Edges::Fade,
+        fades: Fades::default(),
+        ..job(&file, rate, marks, 5_000, cut, dir.path())
+    };
+
+    let out = export(&fade(Cut::Region, &[4_000, 6_000])).unwrap();
+    let got = &first_channel(&out, 2)[0];
+    assert_eq!(got.len(), 2_000);
+    let exact = |i: usize| value(4_000 + i as u64, 0, 24);
+    assert_eq!((got[0], got[1_999]), (0, 0));
+    assert_eq!(got[4], (exact(4) as f32 * 0.5).round() as i32);
+    assert!((8..1_960).all(|i| got[i] == exact(i)), "the middle changed");
+    assert_eq!(got[1_979], (exact(1_979) as f32 * 0.5).round() as i32);
+
+    // A slice running to the end of the track still fades out.
+    let out = export(&fade(Cut::Marks, &[15_000])).unwrap();
+    let last = first_channel(&out, 2).pop().unwrap();
+    assert_eq!(last.len(), 5_000);
+    assert_eq!(*last.last().unwrap(), 0);
+}
+
+#[test]
+fn a_looped_range_is_written_to_loop_whole_with_its_edges_as_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("src.wav");
+    source(&file, 48_000, 2, 24, 100_003);
+    for edges in [Edges::Zero, Edges::Fade] {
+        let job = Job {
+            range: Some((20_011, 60_007)),
+            loops: true,
+            edges,
+            ..job(&file, 48_000, &[], 0, Cut::Region, dir.path())
+        };
+        let out = export(&job).unwrap();
+        assert_eq!(out.slices, [(20_011, 60_007)]);
+        assert_exact(&out, 2, 24);
+        let json = std::fs::read_to_string(out.dir.join("samples.json")).unwrap();
+        assert!(
+            json.contains(r#""loop_enabled": true, "loop_start": 0, "loop_end": 39996"#),
+            "{json}"
+        );
+    }
+    let out = export(&job(&file, 48_000, &[5_000], 0, Cut::Region, dir.path())).unwrap();
+    let json = std::fs::read_to_string(out.dir.join("samples.json")).unwrap();
+    assert!(!json.contains("loop"), "a slice not looped loops: {json}");
+}
+
+#[test]
+fn onsets_found_again_at_another_sensitivity_read_the_track_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("hits.wav");
+    let rate: u32 = 44_100;
+    // Over a steady tone, so a quiet hit rises a few dB and a loud one more:
+    // which count as onsets depends on the sensitivity.
+    let hits = bursts(88_200, &[(5_000, 0.6), (30_000, 0.12), (60_000, 0.3)]);
+    let data: Vec<f32> = hits
+        .iter()
+        .enumerate()
+        .map(|(i, h)| h + 0.15 * (i as f32 * 0.031).sin())
+        .collect();
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&file, spec).unwrap();
+    for s in &data {
+        w.write_sample((s * 32_767.0) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+    let at = |sensitivity| {
+        job(
+            &file,
+            rate,
+            &[1_000],
+            2_000,
+            Cut::Onsets(sensitivity),
+            dir.path(),
+        )
+    };
+    let fresh: Vec<_> = [0.2, 0.5, 0.9].map(|s| plan(&at(s)).unwrap()).into();
+    assert_ne!(fresh[0], fresh[2], "sensitivity changed nothing");
+
+    let audio = OnsetAudio::default();
+    assert_eq!(plan_with(&at(0.2), &audio).unwrap(), fresh[0]);
+    // Gone from disk, so what follows is found in the audio already read.
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(plan_with(&at(0.9), &audio).unwrap(), fresh[2]);
+    assert_eq!(plan_with(&at(0.5), &audio).unwrap(), fresh[1]);
+    // Another region is read again, and so fails here.
+    let other = job(&file, rate, &[3_000], 4_000, Cut::Onsets(0.5), dir.path());
+    assert!(plan_with(&other, &audio).is_err());
 }

@@ -798,7 +798,7 @@ fn a_one_shot_range_plays_through_once_and_pauses_at_its_end() {
     wait_for(&player, |s| s.state == State::Playing);
 
     // The same frames a loop would take, played once.
-    player.send(Cmd::PlayOnce(8_000, 8_400));
+    player.send(Cmd::PlayOnce(8_000, 8_400, (0, 0)));
     wait_for(&player, |s| s.state == State::Paused);
     // Playback can already be past 8,400 when the command lands, and the engine
     // then seeks back, so the one-shot run is the last entry into the range.
@@ -877,10 +877,10 @@ fn a_one_shot_sent_again_inside_its_range_starts_it_again() {
     player.send(Cmd::Play(vec![file], 0));
     wait_for(&player, |s| s.state == State::Playing);
 
-    player.send(Cmd::PlayOnce(8_000, 16_000));
+    player.send(Cmd::PlayOnce(8_000, 16_000, (0, 0)));
     until_heard(&player, &control, 0, |s| s.contains(&12_000));
     let from = control.played.lock().unwrap().len();
-    player.send(Cmd::PlayOnce(8_000, 16_000));
+    player.send(Cmd::PlayOnce(8_000, 16_000, (0, 0)));
     let again = until_heard(&player, &control, from, |s| s.contains(&16_000));
     assert!(
         again.contains(&8_001),
@@ -889,4 +889,36 @@ fn a_one_shot_sent_again_inside_its_range_starts_it_again() {
     );
     wait_for(&player, |s| s.state == State::Paused);
     assert!(!heard(&control, from).iter().any(|&v| v > 16_000));
+}
+
+#[test]
+fn a_one_shot_with_fades_ramps_in_and_out_as_a_written_slice_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("level.wav");
+    levels(&file, 8000, &[(3.0, 0.5)]);
+    let (player, control) = fake_player();
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+    player.send(Cmd::TogglePause);
+    wait_for(&player, |s| s.state == State::Paused);
+    std::thread::sleep(Duration::from_millis(100));
+    let from = control.played.lock().unwrap().len();
+
+    // 8 frames in and 40 out, over 400: 1 ms and 5 ms at 8 kHz.
+    player.send(Cmd::PlayOnce(8_000, 8_400, (8, 40)));
+    wait_for(&player, |s| s.state == State::Playing);
+    wait_for(&player, |s| s.state == State::Paused);
+    std::thread::sleep(Duration::from_millis(100));
+    let played = control.played.lock().unwrap();
+    let left: Vec<f32> = played[from..].chunks(2).map(|f| f[0]).collect();
+    let run: Vec<f32> = left.into_iter().skip_while(|&v| v == 0.0).collect();
+    let run: Vec<f32> = run[..run.iter().rposition(|&v| v != 0.0).unwrap() + 1].to_vec();
+    // Its first and last frames are 0, so 398 frames sound.
+    assert_eq!(run.len(), 398, "{}", control.report());
+    let level = f32::from(16383i16) / 32768.0;
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+    assert!(near(run[0], level / 8.0), "{}", run[0]);
+    assert!(near(run[7], level), "{}", run[7]);
+    assert!(near(run[200], level));
+    assert!(near(run[397], level / 40.0), "{}", run[397]);
 }

@@ -164,7 +164,9 @@ pub enum Cmd {
     Loop(Option<(u64, u64)>),
     /// Play source frames `start..end` of the current track once, then pause
     /// at `end`. The track is not torn down, so playing on continues past it.
-    PlayOnce(u64, u64),
+    /// The last two are frames to fade in and out, as
+    /// [`crate::samples::Edges::Fade`] writes a slice; 0 for none.
+    PlayOnce(u64, u64, (u64, u64)),
     /// Choose which ReplayGain applies, from the audible position on.
     SetReplayGain(ReplayGain),
     /// Gains by path, from the library. A track not among them takes the
@@ -401,6 +403,8 @@ struct Loop {
     start: u64,
     end: u64,
     once: bool,
+    /// Frames a one-shot fades in and out over.
+    fades: (u64, u64),
 }
 
 /// A track queued behind the current one whose format needs a new stream.
@@ -635,9 +639,9 @@ impl Engine {
             Cmd::SpeedReset => self.set_semitones(0),
             Cmd::SetSpeed(semitones) => self.set_semitones(semitones),
             Cmd::SetMode(mode) => self.set_mode(mode),
-            Cmd::Loop(bounds) => self.set_loop(bounds, false),
-            Cmd::PlayOnce(start, end) => {
-                self.set_loop(Some((start, end)), true);
+            Cmd::Loop(bounds) => self.set_loop(bounds, false, (0, 0)),
+            Cmd::PlayOnce(start, end, fades) => {
+                self.set_loop(Some((start, end)), true, fades);
                 // Auditioning from a pause plays: the point is to hear it.
                 if self.looping.is_some() && self.state != State::Playing {
                     if let Some(o) = &self.out {
@@ -1332,6 +1336,26 @@ impl Engine {
             .as_ref()
             .map_or(1, |c| c.src().channels.max(1) as usize);
         let frames = (chunk.len() / channels) as u64;
+        // A one-shot with fades is heard as its slice would be written.
+        let faded: Vec<f32>;
+        let chunk = match self.loop_here() {
+            Some(l) if l.once && l.fades != (0, 0) => {
+                let len = l.end.saturating_sub(l.start);
+                faded = chunk
+                    .chunks_exact(channels)
+                    .zip(self.decoded..)
+                    .flat_map(|(frame, f)| {
+                        let gain = match f.checked_sub(l.start).filter(|&i| i < len) {
+                            Some(i) => crate::samples::fade_gain(i, len, l.fades),
+                            None => 1.0,
+                        };
+                        frame.iter().map(move |&s| s * gain)
+                    })
+                    .collect();
+                &faded[..]
+            }
+            _ => chunk,
+        };
         match self.loop_here() {
             Some(l) if self.decoded < l.end && self.decoded + frames >= l.end => {
                 let keep = (l.end - self.decoded) as usize * channels;
@@ -1410,7 +1434,7 @@ impl Engine {
     /// The decoder runs ahead of the device, so it may already have passed a
     /// new end, or returned under the old bounds. Seeking to the position then
     /// discards that audio, at the cost of a short gap.
-    fn set_loop(&mut self, bounds: Option<(u64, u64)>, once: bool) {
+    fn set_loop(&mut self, bounds: Option<(u64, u64)>, once: bool, fades: (u64, u64)) {
         // Stopped, the track is closed; cue it, as a seek does.
         if bounds.is_some() && self.state == State::Stopped && !self.queue.is_empty() {
             self.load(self.index, false, false);
@@ -1445,6 +1469,7 @@ impl Engine {
             start,
             end,
             once,
+            fades,
         });
         let now = frame(at);
         // A one-shot is heard from its start each time it is sent.

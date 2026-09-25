@@ -111,6 +111,11 @@ pub const COMMANDS: &[Command] = &[
         "SETTING",
         "level by loudness: off, track, album, auto",
     ),
+    any(
+        "slice-edges",
+        "exact|zero|fade",
+        "slice edges: exact, at zeros, or faded",
+    ),
     any("mark", "[TIME]", "mark the playing position, or a time"),
     any("unmark", "", "undo the last mark"),
     any("delmarks", "", "clear all marks in this track; asks y/n"),
@@ -184,7 +189,18 @@ pub const COMMANDS: &[Command] = &[
         "[START END]",
         "set the range to slice, or clear it",
     ),
-    only(Sampler, "loop", "[on|off]", "play the range over and over"),
+    only(
+        Sampler,
+        "loop",
+        "[on|off] | N [save|clear]",
+        "loop the range, or recall or save loop N",
+    ),
+    only(
+        Sampler,
+        "loops",
+        "clear",
+        "clear this track's loops; asks y/n",
+    ),
     only(Sampler, "cursor", "TIME|+N|-N|N%|off", "move the cursor"),
     only(Sampler, "pick", "next|prev", "move the cursor to a mark"),
     only(
@@ -199,8 +215,8 @@ pub const COMMANDS: &[Command] = &[
     only(
         Sampler,
         "audition",
-        "",
-        "play the range, slice or region once",
+        "[next|prev]",
+        "play a slice, the range or region once",
     ),
     only(
         Sampler,
@@ -222,6 +238,7 @@ const MODES: &[(&str, Mode)] = &Mode::NAMES;
 const THEMES: &[(&str, Theme)] = &Theme::NAMES;
 
 const REPLAYGAINS: &[(&str, ReplayGain)] = &ReplayGain::NAMES;
+const EDGES: &[(&str, playr_core::samples::Edges)] = &playr_core::samples::Edges::NAMES;
 
 const VIEWS: &[(&str, View)] = &[
     ("library", Library),
@@ -365,6 +382,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
             MODES.iter().find(|x| x.1 == *m).expect("every mode").0
         ),
         SetReplayGain(r) => format!("replaygain {}", r.name()),
+        SetSliceEdges(e) => format!("slice-edges {}", e.name()),
         Mark => "mark".into(),
         MarkAt(d) => format!("mark {}", time(d)),
         UndoMark => "unmark".into(),
@@ -391,6 +409,8 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         MoveEdge(crate::action::Nudge::Columns(n)) => format!("edge {n:+}"),
         MoveEdge(crate::action::Nudge::Percent(n)) => format!("edge {n:+}%"),
         Audition => "audition".into(),
+        AuditionSlice(true) => "audition next".into(),
+        AuditionSlice(false) => "audition prev".into(),
         MoveCursor(crate::action::Nudge::Columns(n)) => format!("cursor {n:+}"),
         MoveCursor(crate::action::Nudge::Percent(n)) => format!("cursor {n:+}%"),
         SetCursor(None) => "cursor off".into(),
@@ -405,6 +425,10 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Loop(None) => "loop".into(),
         Loop(Some(true)) => "loop on".into(),
         Loop(Some(false)) => "loop off".into(),
+        LoopSlot(n, crate::action::SlotOp::Use) => format!("loop {n}"),
+        LoopSlot(n, crate::action::SlotOp::Save) => format!("loop {n} save"),
+        LoopSlot(n, crate::action::SlotOp::Clear) => format!("loop {n} clear"),
+        ClearLoops => "loops clear".into(),
         SetRange(Some((a, b))) => format!("range {} {}", time(a), time(b)),
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
@@ -729,6 +753,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             }
         },
         "replaygain" => choose(rest, REPLAYGAINS, "replaygain").map(Action::SetReplayGain),
+        "slice-edges" => choose(rest, EDGES, "slice edges").map(Action::SetSliceEdges),
         "mark" if rest.is_empty() => Ok(Action::Mark),
         "mark" => Ok(Action::MarkAt(parse_time(rest)?)),
         "unmark" => nothing(Action::UndoMark),
@@ -772,9 +797,33 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             "" => Ok(Action::Loop(None)),
             "on" => Ok(Action::Loop(Some(true))),
             "off" => Ok(Action::Loop(Some(false))),
+            _ => {
+                use crate::action::SlotOp;
+                let (n, op) = rest.split_once(' ').unwrap_or((rest, ""));
+                let op = match op.trim() {
+                    "" => SlotOp::Use,
+                    "save" => SlotOp::Save,
+                    "clear" => SlotOp::Clear,
+                    _ => return Err(usage()),
+                };
+                match n.parse::<u8>() {
+                    Ok(n) if (1..=playr_core::session::LOOP_SLOTS).contains(&n) => {
+                        Ok(Action::LoopSlot(n, op))
+                    }
+                    _ => Err(usage()),
+                }
+            }
+        },
+        "loops" => match rest {
+            "clear" => Ok(Action::ClearLoops),
             _ => Err(usage()),
         },
-        "audition" => nothing(Action::Audition),
+        "audition" => match rest {
+            "" => Ok(Action::Audition),
+            "next" => Ok(Action::AuditionSlice(true)),
+            "prev" => Ok(Action::AuditionSlice(false)),
+            _ => Err(usage()),
+        },
         "cursor" if rest == "off" => Ok(Action::SetCursor(None)),
         "cursor" if rest.starts_with(['+', '-']) => {
             nudge(rest).map(Action::MoveCursor).ok_or_else(usage)
@@ -877,9 +926,11 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
         "theme" => THEMES.iter().map(|t| t.0.to_string()).collect(),
         "columns" | "sort" => Column::NAMES.iter().map(|c| c.0.to_string()).collect(),
         "replaygain" => REPLAYGAINS.iter().map(|r| r.0.to_string()).collect(),
+        "slice-edges" => EDGES.iter().map(|e| e.0.to_string()).collect(),
         "snap" | "fit" | "loop" => vec!["on".into(), "off".into()],
         "edge" => vec!["start".into(), "end".into()],
-        "pick" => vec!["next".into(), "prev".into()],
+        "pick" | "audition" => vec!["next".into(), "prev".into()],
+        "loops" => vec!["clear".into()],
         "view" => VIEWS.iter().map(|v| v.0.to_string()).collect(),
         "playlist" | "rename" => playlists.to_vec(),
         _ => Vec::new(),

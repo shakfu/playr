@@ -24,7 +24,7 @@ use crate::db::{Pruned, Track};
 use crate::event::{Event, EventSink, JobId};
 use crate::gain::ReplayGain;
 use crate::notice::{Notice, Outcome, Refusal, Task};
-use crate::samples::{self, Cut, Job, Plan};
+use crate::samples::{self, Cut, Edges, Fades, Job, OnsetAudio, Plan};
 use crate::scan;
 use crate::wave::Peaks;
 
@@ -33,6 +33,12 @@ pub const MARK_NEAR: Duration = Duration::from_millis(500);
 /// How far past a mark playback must be before seeking back returns to it
 /// rather than the one before.
 pub const MARK_BACK: Duration = Duration::from_secs(1);
+
+/// How many loops a track can keep.
+pub const LOOP_SLOTS: u8 = 8;
+
+/// A track's loops by slot, from 1 at index 0, as source frames, end exclusive.
+pub type Loops = [Option<(u64, u64)>; LOOP_SLOTS as usize];
 
 pub struct Session {
     conn: Connection,
@@ -46,8 +52,16 @@ pub struct Session {
     /// Marks in the track `marks_for`, earliest first.
     marks: Vec<Mark>,
     marks_for: Option<PathBuf>,
+    /// Loops saved in the track `loops_for`, by slot, from 1.
+    loops: Loops,
+    loops_for: Option<PathBuf>,
     /// Where exported slices are written.
     samples: PathBuf,
+    /// What an export does at slice edges, and how long a fade takes.
+    edges: Edges,
+    fades: Fades,
+    /// The region onsets were last found in, for planning them again.
+    onset_audio: Arc<OnsetAudio>,
     events: EventSink,
     /// The number given to the next piece of background work.
     next_job: JobId,
@@ -83,7 +97,12 @@ impl Session {
             selection: Vec::new(),
             marks: Vec::new(),
             marks_for: None,
+            loops: [None; LOOP_SLOTS as usize],
+            loops_for: None,
             samples: PathBuf::new(),
+            edges: Edges::Exact,
+            fades: Fades::default(),
+            onset_audio: Arc::default(),
             events,
             next_job: 1,
             reading: None,
@@ -101,6 +120,25 @@ impl Session {
     /// Sets the directory exported slices are written under.
     pub fn set_samples_dir(&mut self, dir: PathBuf) {
         self.samples = dir;
+    }
+
+    /// Chooses what later exports do at slice edges.
+    pub fn set_slice_edges(&mut self, edges: Edges) -> Notice {
+        self.edges = edges;
+        Outcome::SliceEdges(edges).into()
+    }
+
+    pub fn slice_edges(&self) -> Edges {
+        self.edges
+    }
+
+    /// Sets how long [`Edges::Fade`] fades each end of a slice.
+    pub fn set_fades(&mut self, fades: Fades) {
+        self.fades = fades;
+    }
+
+    pub fn fades(&self) -> Fades {
+        self.fades
     }
 
     /// Sets the library file a scan writes to, for a session over an
@@ -483,6 +521,79 @@ impl Session {
         &self.marks
     }
 
+    /// The loops saved in the track at `path`, by slot from 1, in source frames.
+    pub fn loops_for(&mut self, path: Option<&PathBuf>) -> Loops {
+        if self.loops_for.as_ref() != path {
+            self.loops = [None; LOOP_SLOTS as usize];
+            let rows = path.and_then(|p| query::loops(&self.conn, &p.to_string_lossy()).ok());
+            for (slot, start, end) in rows.into_iter().flatten() {
+                if let Some(held) = self.loops.get_mut(usize::from(slot).wrapping_sub(1)) {
+                    *held = Some((start, end));
+                }
+            }
+            self.loops_for = path.cloned();
+        }
+        self.loops
+    }
+
+    /// Saves `span` as loop `slot`, from 1, of the playing track.
+    pub fn save_loop(&mut self, slot: u8, span: (u64, u64)) -> Notice {
+        let (path, rate) = match self.playing_track() {
+            Ok(track) => track,
+            Err(refusal) => return refusal.into(),
+        };
+        self.loops_for = None;
+        match query::save_loop(&self.conn, &path.to_string_lossy(), slot, span, rate) {
+            Ok(()) => Outcome::LoopSaved {
+                slot,
+                kept: self.has_library_file(),
+            }
+            .into(),
+            Err(e) => Notice::Failed {
+                task: Task::Loop,
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Empties loop `slot` of the playing track.
+    pub fn clear_loop(&mut self, slot: u8) -> Notice {
+        let (path, _) = match self.playing_track() {
+            Ok(track) => track,
+            Err(refusal) => return refusal.into(),
+        };
+        self.loops_for = None;
+        match query::clear_loop(&self.conn, &path.to_string_lossy(), slot) {
+            Ok(_) => Outcome::LoopCleared { slot }.into(),
+            Err(e) => Notice::Failed {
+                task: Task::Loop,
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// The playing track and how many loops it keeps, before asking to clear
+    /// them all.
+    pub fn loops_to_clear(&mut self) -> Result<(PathBuf, usize), Refusal> {
+        let (path, _) = self.playing_track()?;
+        match self.loops_for(Some(&path)).iter().flatten().count() {
+            0 => Err(Refusal::NoLoops),
+            n => Ok((path, n)),
+        }
+    }
+
+    /// Empties every loop slot of the track at `path`, the one asked about.
+    pub fn clear_loops(&mut self, path: &Path) -> Notice {
+        self.loops_for = None;
+        match query::clear_loops(&self.conn, &path.to_string_lossy()) {
+            Ok(_) => Outcome::LoopsCleared.into(),
+            Err(e) => Notice::Failed {
+                task: Task::Loop,
+                error: e.to_string(),
+            },
+        }
+    }
+
     /// Marks `at` in the playing track, or its position now, unless a mark is
     /// already within [`MARK_NEAR`].
     pub fn add_mark(&mut self, at: Option<Duration>) -> Notice {
@@ -733,8 +844,26 @@ impl Session {
     /// [`Event::Planned`]; nothing is written.
     pub fn plan_slices(&mut self, cut: Cut, range: Option<(u64, u64)>) -> Result<JobId, Refusal> {
         let job = self.slice_job(cut, range)?;
-        Ok(self.spawn(move |id| {
-            let result = samples::plan(&job).map(|spans| Plan {
+        Ok(self.plan_job(job))
+    }
+
+    /// Plans `job` again with the slice edges and fades set now, as when they
+    /// change after it was planned. Finishes with [`Event::Planned`].
+    pub fn replan(&mut self, mut job: Job) -> JobId {
+        job.edges = self.edges;
+        job.fades = self.fades;
+        self.plan_job(job)
+    }
+
+    /// Whether `job` was planned with the slice edges and fades set now.
+    pub fn plans_current(&self, job: &Job) -> bool {
+        (job.edges, job.fades) == (self.edges, self.fades)
+    }
+
+    fn plan_job(&mut self, job: Job) -> JobId {
+        let audio = self.onset_audio.clone();
+        self.spawn(move |id| {
+            let result = samples::plan_with(&job, &audio).map(|spans| Plan {
                 job: job.clone(),
                 spans,
             });
@@ -743,7 +872,7 @@ impl Session {
                 track: job.path,
                 result,
             })
-        }))
+        })
     }
 
     /// Writes `plan`'s slices. Finishes with [`Event::Exported`].
@@ -1040,6 +1169,8 @@ impl Session {
     /// position now, or within `range`.
     pub fn slice_job(&mut self, cut: Cut, range: Option<(u64, u64)>) -> Result<Job, Refusal> {
         let (path, rate) = self.playing_track()?;
+        // The loop follows the range, so a loop on is the range's.
+        let loops = cut == Cut::Region && range.is_some() && self.player.status().looping.is_some();
         let marks = self
             .marks_for(Some(&path))
             .iter()
@@ -1053,6 +1184,9 @@ impl Session {
             cut,
             range,
             samples: self.samples.clone(),
+            edges: self.edges,
+            fades: self.fades,
+            loops,
         })
     }
 }

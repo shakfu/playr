@@ -54,6 +54,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | set varispeed in semitones, or change it    |
 | `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |
 | `:replaygain SETTING`                 |                         | level by loudness: off, track, album, auto  |
+| `:slice-edges exact\|zero\|fade`       |                         | slice edges: exact, at zeros, or faded      |
 | `:mark [TIME]`                        | `b`                     | mark the playing position, or a time        |
 | `:unmark`                             | `B`                     | undo the last mark                          |
 | `:delmarks`                           | `C`                     | clear all marks in this track; asks y/n     |
@@ -99,8 +100,9 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:in`                              | `<`                     | start the range at the playhead        |
 | `:out`                             | `>`                     | end the range at the playhead          |
 | `:range [START END]`               | `backspace`             | set the range to slice, or clear it    |
-| `:loop [on\|off]`                  | `l`                     | play the range over and over           |
-| `:audition`                       | `a`                     | play the range, slice or region once   |
+| `:loop [on\|off] \| N [save\|clear]` | `l`; F1-F8, with shift  | loop the range, or recall or save loop N |
+| `:loops clear`                    |                         | clear this track's loops; asks y/n     |
+| `:audition [next\|prev]`          | `a`, `n` `p`            | play a slice, the range or region once; step slices |
 | `:cursor TIME\|+N\|-N\|N%\|off`     | `;` `'` `h`             | move the cursor; `h` returns it to the playhead |
 | `:pick next\|prev`                 | `u` `i`                 | move the cursor to a mark              |
 | `:nudge-mark +N\|-N\|N%`           | `y` `o`                 | move the mark under the cursor         |
@@ -117,7 +119,7 @@ In this view `:slice` plans slices and draws their edges as `+` under the wavefo
 
 - A command, mode or view can be shortened to a prefix that names only one of those usable in the current view: `:vol 60`, `:mode shuf`.
 
-- Tab completes command names usable in the current view, then the argument of `:edge`, `:fit`, `:loop`, `:mode`, `:replaygain`, `:snap`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
+- Tab completes command names usable in the current view, then the argument of `:edge`, `:fit`, `:loop`, `:loops`, `:mode`, `:replaygain`, `:slice-edges`, `:snap`, `:theme`, `:view`, `:playlist` and `:rename`. Repeated Tab cycles through the matches; shift-Tab goes back.
 
 - Up recalls earlier lines that start with the typed text; down returns towards it. The history holds 100 lines and lasts until playr exits.
 

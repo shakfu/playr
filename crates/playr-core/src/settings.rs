@@ -42,6 +42,9 @@ pub struct Settings {
     pub samples: PathBuf,
     /// The onset sensitivity `:slice onsets` uses when given none, 0 to 1.
     pub onset_sensitivity: f32,
+    /// What an export does at slice edges, and how long a fade takes.
+    pub slice_edges: crate::samples::Edges,
+    pub slice_fades: crate::samples::Fades,
     /// After a scan, remove tracks whose files are gone, without asking.
     pub auto_prune: bool,
     /// After a scan, analyse the tracks it added or found changed.
@@ -63,6 +66,8 @@ impl Default for Settings {
             speed: 0,
             samples: PathBuf::new(),
             onset_sensitivity: 0.5,
+            slice_edges: crate::samples::Edges::Exact,
+            slice_fades: crate::samples::Fades::default(),
             auto_prune: false,
             analyze_on_scan: false,
             device: None,
@@ -193,6 +198,29 @@ impl Settings {
                     Some(n) if (0.0..=1.0).contains(&n) => self.onset_sensitivity = n as f32,
                     _ => errors.add(at, "onset_sensitivity is a number from 0 to 1"),
                 },
+                ("slice_edges", DeValue::String(s)) => {
+                    let names = crate::samples::Edges::NAMES;
+                    match names.iter().find(|e| e.0.eq_ignore_ascii_case(s)) {
+                        Some(&(_, edges)) => self.slice_edges = edges,
+                        None => errors.add(
+                            at,
+                            format!("unknown slice_edges {s}; choices: exact, zero, fade"),
+                        ),
+                    }
+                }
+                ("slice_fade_in" | "slice_fade_out", v) => match number(v) {
+                    Some(ms) if (0.0..=100.0).contains(&ms) => {
+                        let d = std::time::Duration::from_secs_f64(ms / 1000.0);
+                        match name.get_ref().as_ref() {
+                            "slice_fade_in" => self.slice_fades.fade_in = d,
+                            _ => self.slice_fades.fade_out = d,
+                        }
+                    }
+                    _ => errors.add(
+                        at,
+                        format!("{} is milliseconds, from 0 to 100", name.get_ref()),
+                    ),
+                },
                 ("auto_prune", DeValue::Boolean(b)) => self.auto_prune = *b,
                 ("analyze_on_scan", DeValue::Boolean(b)) => self.analyze_on_scan = *b,
                 ("samples", DeValue::String(s)) => match expand_home(s) {
@@ -228,7 +256,8 @@ impl Settings {
                     }
                 }
                 (
-                    "mode" | "samples" | "auto_prune" | "analyze_on_scan" | "device" | "replaygain",
+                    "mode" | "samples" | "slice_edges" | "auto_prune" | "analyze_on_scan"
+                    | "device" | "replaygain",
                     v,
                 ) => errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v))),
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),

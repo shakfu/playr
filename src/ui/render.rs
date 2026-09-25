@@ -216,8 +216,20 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
     let scale = Some(layout.columns());
     // The file name last: it is the longest part, and the bar below names the
     // track too, so a narrow terminal cuts it rather than the view's scale.
+    // Saved loops by slot; `*` on the one the range is.
+    let range = app.sampler.range(current);
+    let slots: Vec<String> = (1..)
+        .zip(app.snapshot.loops)
+        .filter_map(|(slot, saved)| {
+            saved.map(|s| format!("{slot}{}", if Some(s) == range { "*" } else { "" }))
+        })
+        .collect();
+    let loops = match slots.is_empty() {
+        true => String::new(),
+        false => format!("  loops {}", slots.join(" ")),
+    };
     let title = format!(
-        "{}  {}  1 col = {}{}{}{}  {}",
+        "{}  {}  1 col = {}{}{}{}{loops}  {}",
         app.sampler.display.name(),
         layout.shown(),
         layout.scale(),

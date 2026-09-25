@@ -46,6 +46,11 @@ pub enum Confirm {
         path: PathBuf,
         count: usize,
     },
+    /// Empty the `count` loop slots the track at `path` fills.
+    ClearLoops {
+        path: PathBuf,
+        count: usize,
+    },
 }
 
 impl Confirm {
@@ -81,6 +86,13 @@ impl Confirm {
                     .unwrap_or(path.as_os_str())
                     .to_string_lossy();
                 format!("clear all {count} marks from {name}?")
+            }
+            Confirm::ClearLoops { path, count } => {
+                let name = path
+                    .file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy();
+                format!("clear all {count} loops from {name}?")
             }
         }
     }
@@ -305,6 +317,16 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             let notice = f.session().set_mode(mode);
             f.notify(notice.into());
         }
+        Action::SetSliceEdges(edges) => {
+            let notice = f.session_mut().set_slice_edges(edges);
+            // Slices already planned are planned again, so what is written
+            // follows the choice made last. One still planning is when it lands.
+            if let Some(plan) = f.take_plan() {
+                let id = f.session_mut().replan(plan.job);
+                f.planning(id);
+            }
+            f.notify(notice.into());
+        }
         Action::SetReplayGain(replaygain) => {
             let notice = f.session_mut().set_replaygain(replaygain);
             f.notify(notice.into());
@@ -360,6 +382,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             _ => f.notify(Message::NoWaveform),
         },
         Action::Audition => audition(f),
+        Action::AuditionSlice(forward) => audition_slice(f, forward),
         Action::MoveCursor(nudge) => match (peaks(f), f.sampler().scale) {
             (Some(peaks), Some(scale)) => {
                 let at = cursor_frame(f, peaks.rate);
@@ -476,6 +499,11 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             }
             f.notify(Message::Loop(true));
         }
+        Action::LoopSlot(slot, op) => loop_slot(f, slot, op),
+        Action::ClearLoops => match f.session_mut().loops_to_clear() {
+            Ok((path, count)) => f.confirm(Confirm::ClearLoops { path, count }),
+            Err(refusal) => f.notify(refusal.into()),
+        },
         Action::PickEdge(edge) => {
             f.sampler_mut().edge = edge;
             f.sampler_mut().fit_edge = true;
@@ -629,6 +657,10 @@ pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
             if let Some(notice) = f.session_mut().clear_marks(&path) {
                 f.notify(notice.into());
             }
+        }
+        Confirm::ClearLoops { path, .. } => {
+            let notice = f.session_mut().clear_loops(&path);
+            f.notify(notice.into());
         }
         Confirm::Prune(dir) => match f.session_mut().prune(dir.clone()) {
             Ok(_) => f.notify(Outcome::PruneStarted { dir }.into()),
@@ -836,15 +868,10 @@ fn near(peaks: &Peaks, scale: Option<sampler::Scale>) -> u64 {
 /// which is what `:slice region` would take. The playhead is the sampler's
 /// cursor, so this is the span under the cursor in each case.
 fn audition(f: &mut impl Frontend) {
-    let status = f.session().player().status();
-    let Some(path) = status.current().cloned() else {
-        return f.notify(Refusal::NothingPlaying.into());
-    };
-    let Some(peaks) = peaks(f) else {
-        return f.notify(Message::NoWaveform);
+    let Some((path, peaks, at)) = hearing(f) else {
+        return;
     };
     let (rate, last) = (peaks.rate, peaks.frames);
-    let at = sampler::frame_of(f.session().player().position(), rate);
     // A span with no end runs to the end of the track.
     let ends = |end: Option<u64>| end.unwrap_or(last);
 
@@ -855,36 +882,94 @@ fn audition(f: &mut impl Frontend) {
         .as_ref()
         .filter(|(p, _, end)| *p == path && at.abs_diff(*end) <= u64::from(rate) / 100)
         .map(|&(_, start, end)| (start, end));
-    let span = match f.sampler().range(Some(&path)).or(again) {
-        Some(span) => Some(span),
-        None => match f.sampler().pending.as_ref().and_then(|plan| {
-            plan.spans
+    // A planned slice is cut from the range, so it is the narrower choice.
+    let slice = f.sampler().pending.as_ref().and_then(|plan| {
+        let spans: Vec<(u64, u64)> = plan.spans.iter().map(|&(s, e)| (s, ends(e))).collect();
+        again
+            .filter(|span| spans.contains(span))
+            .or_else(|| spans.into_iter().rfind(|&(start, _)| start <= at))
+    });
+    let span = slice
+        .or_else(|| f.sampler().range(Some(&path)))
+        .unwrap_or_else(|| {
+            let marks: Vec<u64> = f
+                .session_mut()
+                .marks_for(Some(&path))
                 .iter()
-                .filter(|(start, _)| *start <= at)
-                .max_by_key(|(start, _)| *start)
-                .copied()
-        }) {
-            Some((start, end)) => Some((start, ends(end))),
-            None => {
-                let marks: Vec<u64> = f
-                    .session_mut()
-                    .marks_for(Some(&path))
-                    .iter()
-                    .map(|m| m.frame)
-                    .collect();
-                let (start, end) = playr_core::samples::region(&marks, at);
-                Some((start, ends(end)))
-            }
-        },
+                .map(|m| m.frame)
+                .collect();
+            let (start, end) = playr_core::samples::region(&marks, at);
+            again.unwrap_or((start, ends(end)))
+        });
+    play_once(f, path, span, rate);
+}
+
+/// Plays the planned slice after the one last heard, or before it; from the
+/// slice under the playhead when none was. Past either end it wraps round.
+fn audition_slice(f: &mut impl Frontend, forward: bool) {
+    let Some((path, peaks, at)) = hearing(f) else {
+        return;
     };
-    match span {
-        Some((start, end)) if end > start => {
-            f.session().send(Cmd::PlayOnce(start, end));
-            f.sampler_mut().auditioned = Some((path, start, end));
-            f.notify(Message::Auditioning);
-        }
-        _ => f.notify(Message::NothingToAudition),
+    let Some(plan) = f.sampler().pending.as_ref() else {
+        return f.notify(Message::NoSlicesPlanned);
+    };
+    let spans: Vec<(u64, u64)> = plan
+        .spans
+        .iter()
+        .map(|&(start, end)| (start, end.unwrap_or(peaks.frames)))
+        .collect();
+    let near = u64::from(peaks.rate) / 100;
+    let heard = f
+        .sampler()
+        .auditioned
+        .as_ref()
+        .filter(|(p, start, end)| *p == path && at >= *start && at <= end + near)
+        .and_then(|&(_, start, end)| spans.iter().position(|&s| s == (start, end)));
+    let under = spans.iter().rposition(|&(start, _)| start <= at);
+    let n = spans.len();
+    let to = match (heard.or(under), forward) {
+        (Some(i), true) => (i + 1) % n,
+        (Some(i), false) => (i + n - 1) % n,
+        (None, true) => 0,
+        (None, false) => n - 1,
+    };
+    play_once(f, path, spans[to], peaks.rate);
+}
+
+/// The playing track, its peaks and the playhead in frames, or why not.
+fn hearing(f: &mut impl Frontend) -> Option<(std::path::PathBuf, std::sync::Arc<Peaks>, u64)> {
+    let status = f.session().player().status();
+    let Some(path) = status.current().cloned() else {
+        f.notify(Refusal::NothingPlaying.into());
+        return None;
+    };
+    let Some(peaks) = peaks(f) else {
+        f.notify(Message::NoWaveform);
+        return None;
+    };
+    let at = sampler::frame_of(f.session().player().position(), peaks.rate);
+    Some((path, peaks, at))
+}
+
+/// Plays `start..end` once, faded as an export would write it.
+fn play_once(f: &mut impl Frontend, path: std::path::PathBuf, (start, end): (u64, u64), rate: u32) {
+    if end <= start {
+        return f.notify(Message::NothingToAudition);
     }
+    // As `Session::slice_job` decides: a looping range is written unfaded.
+    let status = f.session().player().status();
+    let looped = status.looping.is_some() && f.sampler().range(Some(&path)) == Some((start, end));
+    let fades = match f.session().slice_edges() {
+        playr_core::samples::Edges::Fade if !looped => {
+            let fades = f.session().fades();
+            let frames = |d: Duration| sampler::frame_of(d, rate);
+            (frames(fades.fade_in), frames(fades.fade_out))
+        }
+        _ => (0, 0),
+    };
+    f.session().send(Cmd::PlayOnce(start, end, fades));
+    f.sampler_mut().auditioned = Some((path, start, end));
+    f.notify(Message::Auditioning);
 }
 
 /// `at`, moved to the nearest zero crossing when the sampler view shows with
@@ -909,6 +994,44 @@ fn follow_loop(f: &impl Frontend) {
     if status.looping.is_some() {
         let range = f.sampler().range(status.current());
         f.session().send(Cmd::Loop(range));
+    }
+}
+
+/// Recalls loop `slot` into the range and loops it, or saves the range to
+/// the slot, or empties it.
+fn loop_slot(f: &mut impl Frontend, slot: u8, op: crate::action::SlotOp) {
+    use crate::action::SlotOp;
+    let (path, rate) = match f.session().playing_track() {
+        Ok(track) => track,
+        Err(refusal) => return f.notify(refusal.into()),
+    };
+    let saved = f.session_mut().loops_for(Some(&path))[usize::from(slot) - 1];
+    match (op, saved) {
+        (SlotOp::Use, Some((start, end))) => {
+            f.sampler_mut().range = Some(sampler::Range {
+                path,
+                start: Some(start),
+                end: Some(end),
+            });
+            dispatch(Action::Loop(Some(true)), f);
+            f.notify(Message::LoopRecalled {
+                slot,
+                start,
+                end,
+                rate,
+            });
+        }
+        (SlotOp::Use | SlotOp::Save, _) => match f.sampler().range(Some(&path)) {
+            Some(range) => {
+                let notice = f.session_mut().save_loop(slot, range);
+                f.notify(notice.into());
+            }
+            None => f.notify(Message::NoRangeToSave(slot)),
+        },
+        (SlotOp::Clear, _) => {
+            let notice = f.session_mut().clear_loop(slot);
+            f.notify(notice.into());
+        }
     }
 }
 
@@ -955,6 +1078,13 @@ fn slice(f: &mut impl Frontend, slicing: Slicing) {
         Slicing::Onsets(s) => Cut::Onsets(s.unwrap_or(f.onset_sensitivity())),
     };
     if f.view() == View::Sampler {
+        // A slider being dragged asks every frame; a sensitivity that comes
+        // while a plan is being made waits for it, and only the last is planned.
+        if let (Cut::Onsets(s), Some(_)) = (cut, f.sampler().planning) {
+            f.sampler_mut().onsets_wanted = Some(s);
+            return;
+        }
+        f.sampler_mut().onsets_wanted = None;
         match f.session_mut().plan_slices(cut, range) {
             Ok(job) => {
                 f.planning(job);

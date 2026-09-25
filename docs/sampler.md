@@ -83,6 +83,15 @@ Each export makes a new directory under `samples` in `settings.toml`, `~/Music/p
 }
 ```
 
+A range cut whole while it loops also carries rtrack's loop fields, counted in the slice's own frames, end exclusive:
+
+```json
+"000": { "start_frame": 2734200, "end_frame": 2844450,
+         "loop_enabled": true, "loop_start": 0, "loop_end": 110250 }
+```
+
+- **Edges.** `slice_edges` chooses `exact`, `zero` or `fade`; the README's Samples section compares them. `zero` moves edges while planning, so the `+` drawn are the edges written, and `start_frame` and `end_frame` record where they landed.
+
 - **Source, not output.** Slices are read from the file, so volume and varispeed do not reach them.
 
 - **Format.** 24-bit integer WAV at the source's sample rate and channel count. 16- and 24-bit sources are copied exactly; float and 32-bit sources are reduced to 24 bits without dither.

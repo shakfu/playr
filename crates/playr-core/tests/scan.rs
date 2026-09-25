@@ -546,6 +546,13 @@ fn prune_removes_the_marks_of_missing_files_under_the_root() {
     let elsewhere = base.join("drive/a.flac");
     mark(&conn, &elsewhere, 1);
 
+    let save =
+        |path: &Path| query::save_loop(&conn, &path.to_string_lossy(), 1, (10, 20), 8000).unwrap();
+    for path in [&gone, &here, &played, &elsewhere] {
+        save(path);
+    }
+    let looped = |path: &Path| query::loops(&conn, &path.to_string_lossy()).unwrap().len();
+
     let pruned = db::prune_missing(&conn, &music).unwrap();
     assert_eq!(
         pruned,
@@ -553,6 +560,11 @@ fn prune_removes_the_marks_of_missing_files_under_the_root() {
             tracks: 1,
             marks: 3
         }
+    );
+    assert_eq!(
+        [&gone, &played, &here, &elsewhere].map(|p| looped(p)),
+        [0, 0, 1, 1],
+        "loops go with the marks of missing files under the root"
     );
     assert_eq!(query::count(&conn).unwrap(), 1);
     assert_eq!((marks(&conn, &gone), marks(&conn, &played)), (0, 0));
@@ -633,4 +645,23 @@ fn a_root_nested_in_another_does_not_become_a_second_root() {
             music2.canonicalize().unwrap()
         ]
     );
+}
+
+#[test]
+fn forgetting_a_root_removes_the_loops_under_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().canonicalize().unwrap().join("music");
+    std::fs::create_dir(&music).unwrap();
+    common::silence(&music.join("a.wav"), 8000, 0.05);
+    let library = dir.path().join("library.db");
+    scan::scan_into(&library, &music, |_| {}).unwrap();
+    let conn = db::open(&library).unwrap();
+    let inside = music.join("a.wav").to_string_lossy().into_owned();
+    let outside = "/elsewhere/b.wav";
+    query::save_loop(&conn, &inside, 2, (100, 200), 8000).unwrap();
+    query::save_loop(&conn, outside, 2, (100, 200), 8000).unwrap();
+
+    db::forget_root(&conn, &music).unwrap().expect("a root");
+    assert!(query::loops(&conn, &inside).unwrap().is_empty());
+    assert_eq!(query::loops(&conn, outside).unwrap(), [(2, 100, 200)]);
 }

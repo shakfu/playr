@@ -17,7 +17,7 @@ None of the three contact external services or download any metadata and images.
 
 - Gapless within a run of tracks that share a sample rate
 
-- Play, pause, next, previous, stop
+- Play, pause, next, previous, stop, and restart from the start of the track or the sampler's range
 
 - Four playback modes on one key: normal, shuffle, repeat, repeat one
 
@@ -25,9 +25,9 @@ None of the three contact external services or download any metadata and images.
 
 - Marks: `b` marks a moment in a track, `B` undoes the last mark, `,` and `.` seek between marks, and marks are kept in the library
 
-- Samples: `:slice` writes regions between marks, equal parts or onset slices as lossless WAV files that rtrack loads as a sample bank
+- Samples: `:slice` writes regions between marks, equal parts or onset slices as lossless WAV files that rtrack loads as a sample bank; planned slices can be heard one by one before they are written, onset slices follow the sensitivity as it changes, and edges can be cut exact, at zero crossings, or faded
 
-- Sampler view: zoom to single frames, nudge the playhead and snap it to zero crossings, and set a range to slice or loop, with its ends moved while it loops
+- Sampler view: zoom to single frames, nudge the playhead and snap it to zero crossings, and set a range to slice or loop, with its ends moved while it loops and the view held on the range or either end
 
 - Spectrogram of the playing track in the sampler view, read with its waveform, in the terminal and the window
 
@@ -398,9 +398,19 @@ Each export writes a new directory, named after the track, under `samples` in [`
 
 - `000-amen_S00.wav`, `001-amen_S01.wav`, and so on, one file per slice, in the layout rtrack loads as a sample bank.
 
-- `samples.json`, with the source file and each slice's start and end frame.
+- `samples.json`, with the source file and each slice's start and end frame. A range cut whole while it loops (`l`) is marked to loop over the whole slice, so rtrack loads it looping.
 
-Slices are read from the source file, so volume and speed do not apply. They are 24-bit WAV at the source's sample rate and channel count; 16- and 24-bit sources are copied bit for bit. Without `S`, `:slice onsets` uses `onset_sensitivity` from `settings.toml`, 0.5 by default. Onset detection is rtrack's: a hit within 50 ms of the region's start stays in the first slice, and each slice starts up to 10 ms before its hit. It reads the region into memory, up to about 23 minutes at 48 kHz. Export runs in the background, and the bottom line reports when it is done.
+Slices are read from the source file, so volume and speed do not apply. They are 24-bit WAV at the source's sample rate and channel count; 16- and 24-bit sources are copied bit for bit. Without `S`, `:slice onsets` uses `onset_sensitivity` from `settings.toml`, 0.5 by default. Onset detection is rtrack's: a hit within 50 ms of the region's start stays in the first slice, and each slice starts up to 10 ms before its hit. It reads the region into memory, up to about 23 minutes at 48 kHz, and keeps it: finding onsets again in the same region at another sensitivity reads nothing, which is what lets the window's Sensitivity slider replan the slices as it moves, a few milliseconds a step (60 s of audio, one machine). Export runs in the background, and the bottom line reports when it is done.
+
+An edge that falls where the signal is far from zero clicks when the slice plays. `slice_edges` in `settings.toml`, `:slice-edges`, or the sampler window's Edges menu chooses what an export does about it:
+
+| choice | edges | audio between them |
+|-|-|-|
+| `exact` (default) | where they fall | an exact copy |
+| `zero` | moved to the nearest zero crossing within 10 ms, as `:snap` finds it; the track's own start and end, and an edge whose crossing another edge takes first, stay | an exact copy |
+| `fade` | where they fall | faded in over `slice_fade_in` (1 ms) and out over `slice_fade_out` (5 ms), each at most half the slice |
+
+`zero` keeps slices exact and still meeting end to end, but an edge moves up to 10 ms, which can clip the start of a hit, and finds nothing in silence or slow bass. `fade` always removes the click, and softens a hit's attack for the fade's length. A looped range cut whole keeps its edges exact under either, since you set them by ear.
 
 For MP3 and AAC, frame positions follow playr's decoder. Another decoder can count the codec's encoder delay differently and place the same slice up to a few thousand frames away.
 
@@ -422,9 +432,12 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `<` `>` | `:in`, `:out`           | start or end the range at the playhead            |
 | backspace | `:range`              | clear the range; `:range 1:02 1:04.5` sets one    |
 | `l`     | `:loop`                 | play the range over and over, or stop             |
+| F1-F8   | `:loop 1` ... `:loop 8` | loop a saved loop, or save the range to an empty slot |
+| shift-F1-F8 | `:loop N save`      | save the range as loop N, over what it holds      |
 | `[` `]` | `:edge start`, `:edge end` | choose the range end to move, shown reversed   |
 | `{` `}` | `:edge -1`, `:edge +1`  | move that end a column earlier or later           |
-| `a`     | `:audition`             | play the range, slice or region once, then pause  |
+| `a`     | `:audition`             | play the slice, range or region once, then pause  |
+| `n` `p` | `:audition next`, `:audition prev` | play the next or previous planned slice once |
 | `;` `'` | `:cursor -1`, `:cursor +1` | move the cursor a column                       |
 | `h`     | `:cursor off`           | return the cursor to the playhead                 |
 | `u` `i` | `:pick prev`, `:pick next` | move the cursor to a mark                      |
@@ -446,7 +459,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Editing a mark.** `y` and `o` move the picked mark a column at a time, `:move-mark TIME` puts it at a time, and delete removes it, wherever it sits in the chain `B` undoes. `#` moves it to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
 
-- **Audition.** `a` plays the range, or the planned slice the playhead is in, or the region around it, once, and pauses at its end rather than returning to its start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. Playing on afterwards continues the track from there.
+- **Audition.** `a` plays the planned slice the playhead is in, or the range, or the region around it, once, and pauses at its end rather than returning to its start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. With slices planned, `n` and `p`, or Previous slice and Next slice in the window, play the next or previous one, wrapping round at either end, so each can be checked before `enter` writes them; in this view they no longer skip tracks, which `:next` and `:prev` still do. With `slice_edges = "fade"`, an audition fades as the written slice will. Playing on afterwards continues the track from there.
 
 - **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track. Outside the view, `:slice` writes at once.
 
@@ -459,6 +472,8 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 - **Fit.** `f`, or the window's Fit range tick box, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `{` and `}` move the end while it stays still on screen; `z` then zooms in on it. `f` off and on again returns to the whole range.
 
 - **Loop.** `l` plays the range over and over, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `<` or `>`, with `{` or `}` after `[` or `]` picks it, with `:range` or a drag, moves the loop at once; clearing the range, a new track or `l` again ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
+
+- **Saved loops.** Each track keeps up to 8 loops, in the library beside its marks. `:loop N`, on F1 to F8, saves the range to slot N when it is empty; when it holds a loop, it makes that the range and loops it, from a pause or a stop too, and moves a loop already playing at once. `:loop N save`, on shift-F1 to F8, saves over a slot, `:loop N clear` empties it, and `:loops clear` empties them all, after asking. The title lists the slots saved, with `*` on the one the range is. The window has a numbered button for each: a click does what F1 to F8 do, shift-click saves over, and its menu clears it; Clear loops beside them clears them all. Some terminals send shift-F1 as F13; `:map` binds another key if so.
 
 The waveform glyphs are the view's only characters outside ASCII. Marks are placed at the playhead, or in the window at a shift-click.
 
@@ -497,6 +512,9 @@ mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in f
 speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 samples = "~/Music/playr/samples"  # where :slice writes
+slice_edges = "zero"               # exact, zero or fade; see Samples
+slice_fade_in = 1                  # ms, for slice_edges = "fade", 0 to 100
+slice_fade_out = 5
 auto_prune = true                  # after a scan, prune missing tracks without asking
 analyze_on_scan = true             # after a scan, analyse what it added or changed
 columns = ["artist", "album", "title", "time"]   # what a track list shows

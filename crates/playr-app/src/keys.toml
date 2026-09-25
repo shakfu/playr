@@ -93,8 +93,29 @@ f = "fit"
 ">" = "out"
 backspace = "range"
 l = "loop"
+# Loops kept with the track: F1-F8 recall one, or save the range to an empty
+# one; with shift, save the range over it.
+f1 = "loop 1"
+f2 = "loop 2"
+f3 = "loop 3"
+f4 = "loop 4"
+f5 = "loop 5"
+f6 = "loop 6"
+f7 = "loop 7"
+f8 = "loop 8"
+shift-f1 = "loop 1 save"
+shift-f2 = "loop 2 save"
+shift-f3 = "loop 3 save"
+shift-f4 = "loop 4 save"
+shift-f5 = "loop 5 save"
+shift-f6 = "loop 6 save"
+shift-f7 = "loop 7 save"
+shift-f8 = "loop 8 save"
 # Hear the range, slice or region once, without leaving it playing.
 a = "audition"
+# Step through planned slices, hearing each once; tracks skip with :next.
+n = "audition next"
+p = "audition prev"
 # The cursor, which is apart from the playhead: a column at a time, or home
 # to the playhead again.
 ";" = "cursor -1"

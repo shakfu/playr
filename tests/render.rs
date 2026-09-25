@@ -643,9 +643,10 @@ fn help_lists_the_keys_that_work_in_the_view() {
         View::Playlists,
         View::Sampler,
     ] {
+        // Tall enough for the sampler's list, which scrolls in use.
         let joined = Case::new(view, &stopped())
             .input(&input)
-            .size(100, 80)
+            .size(100, 120)
             .text();
         let name = format!("{view:?}").to_lowercase();
         assert!(
@@ -1461,6 +1462,9 @@ fn planned_slices_are_drawn_before_they_are_written() {
             cut: playr_core::samples::Cut::Equal(2),
             range: None,
             samples: "/tmp".into(),
+            edges: Default::default(),
+            fades: Default::default(),
+            loops: false,
         },
         spans: vec![(1600, Some(2880)), (2880, Some(4000))],
     });

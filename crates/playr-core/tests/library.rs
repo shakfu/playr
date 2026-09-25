@@ -634,3 +634,24 @@ fn a_reindex_that_fails_partway_is_redone_on_the_next_open() {
         "the index was left without the library's rows"
     );
 }
+
+#[test]
+fn loops_are_saved_by_slot_replaced_and_cleared() {
+    let conn = db::open_memory().unwrap();
+    let path = "/m/a.flac";
+    assert!(query::loops(&conn, path).unwrap().is_empty());
+    query::save_loop(&conn, path, 3, (4_000, 9_000), 44_100).unwrap();
+    query::save_loop(&conn, path, 1, (100, 200), 44_100).unwrap();
+    query::save_loop(&conn, "/m/b.flac", 1, (5, 6), 44_100).unwrap();
+    assert_eq!(
+        query::loops(&conn, path).unwrap(),
+        [(1, 100, 200), (3, 4_000, 9_000)]
+    );
+    // Saving over a slot replaces it.
+    query::save_loop(&conn, path, 3, (5_000, 7_000), 44_100).unwrap();
+    assert_eq!(query::loops(&conn, path).unwrap()[1], (3, 5_000, 7_000));
+    assert!(query::clear_loop(&conn, path, 1).unwrap());
+    assert!(!query::clear_loop(&conn, path, 1).unwrap(), "already empty");
+    assert_eq!(query::loops(&conn, path).unwrap(), [(3, 5_000, 7_000)]);
+    assert_eq!(query::loops(&conn, "/m/b.flac").unwrap(), [(1, 5, 6)]);
+}

@@ -44,6 +44,15 @@ pub enum Message {
     },
     EmptyRange,
     Loop(bool),
+    /// Loop `slot` recalled into the range, in frames at `rate`.
+    LoopRecalled {
+        slot: u8,
+        start: u64,
+        end: u64,
+        rate: u32,
+    },
+    /// An empty loop slot, or a save, with no range to save.
+    NoRangeToSave(u8),
     /// A loop was asked for with no range set.
     NoRangeToLoop,
     /// Nothing under the playhead has both ends, so there is nothing to hear.
@@ -105,6 +114,7 @@ pub fn text(message: &Message) -> String {
                 Task::Save => "could not save",
                 Task::Rename => "could not rename",
                 Task::Mark => "could not mark",
+                Task::Loop => "could not save the loop",
                 Task::MoveMark => "could not move mark",
                 Task::RemoveMark => "could not remove mark",
                 Task::ClearMarks => "could not clear marks",
@@ -158,6 +168,19 @@ pub fn text(message: &Message) -> String {
         }
         Message::EmptyRange => "the range is empty".into(),
         Message::Loop(on) => format!("loop: {}", if *on { "on" } else { "off" }),
+        Message::LoopRecalled {
+            slot,
+            start,
+            end,
+            rate,
+        } => format!(
+            "loop {slot}: {}-{}",
+            crate::sampler::fmt_frames(*start, *rate),
+            crate::sampler::fmt_frames(*end, *rate)
+        ),
+        Message::NoRangeToSave(slot) => {
+            format!("no range to save as loop {slot}: set one with < and >, or drag")
+        }
         Message::NoRangeToLoop => "no range to loop: set one with < and >, or drag".into(),
         Message::NothingToAudition => "nothing to hear here: set a range, or mark one".into(),
         Message::Auditioning => "playing once".into(),
@@ -198,6 +221,17 @@ fn outcome_text(outcome: &Outcome) -> String {
         Outcome::PlayingPlaylist { name } => format!("playing \"{name}\""),
         Outcome::Mode(mode) => format!("mode: {}", mode.name()),
         Outcome::ReplayGain(r) => format!("replaygain: {}", r.name()),
+        Outcome::SliceEdges(e) => format!("slice edges: {}", e.name()),
+        Outcome::LoopSaved { slot, kept } => format!(
+            "loop {slot} saved{}",
+            if *kept {
+                ""
+            } else {
+                " (not kept: no library file)"
+            }
+        ),
+        Outcome::LoopCleared { slot } => format!("loop {slot} cleared"),
+        Outcome::LoopsCleared => "loops cleared".into(),
         Outcome::Marked { at, kept } => {
             // As with playlists: in memory, the mark is gone when playr exits.
             let kept = if *kept {
@@ -305,6 +339,7 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::PlaylistEmpty => "playlist is empty".into(),
         Refusal::AlreadyMarked { at } => format!("already marked at {}", fmt_time(*at)),
         Refusal::NoMarks => "no marks in this track".into(),
+        Refusal::NoLoops => "no loops saved in this track".into(),
         Refusal::NoLaterMark => "no later mark".into(),
         Refusal::NoEarlierMark => "no earlier mark".into(),
         Refusal::NoLibraryPath => "no library file to scan into".into(),
