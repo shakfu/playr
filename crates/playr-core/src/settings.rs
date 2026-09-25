@@ -156,7 +156,13 @@ impl Settings {
             Ok(table) => table.into_inner(),
             Err(e) => {
                 let at = e.span().map_or(0, |s| s.start);
-                errors.add(at, e.message().trim());
+                let message = e.message().trim();
+                // Matched on the line, not the message, which toml may reword.
+                if line_at(text, at).contains('\\') {
+                    errors.add(at, format!("{message}; {BACKSLASHES}"));
+                } else {
+                    errors.add(at, message);
+                }
                 return (Vec::new(), errors);
             }
         };
@@ -223,6 +229,12 @@ impl Settings {
                 },
                 ("auto_prune", DeValue::Boolean(b)) => self.auto_prune = *b,
                 ("analyze_on_scan", DeValue::Boolean(b)) => self.analyze_on_scan = *b,
+                // A control character is a backslash read as an escape: `\n`
+                // in "C:\new". No path means one.
+                ("samples", DeValue::String(s)) if s.chars().any(char::is_control) => errors.add(
+                    at,
+                    format!("samples holds a control character; {BACKSLASHES}"),
+                ),
                 ("samples", DeValue::String(s)) => match expand_home(s) {
                     Some(path) => self.samples = path,
                     None => errors.add(at, "samples must be an absolute path or start with ~/"),
@@ -268,6 +280,19 @@ impl Settings {
 }
 
 /// `path` with a leading `~/` replaced by the home directory, if it is then absolute.
+/// The fix for a Windows path written in a TOML basic string.
+const BACKSLASHES: &str =
+    "a backslash in \"...\" starts an escape, so write a Windows path as 'C:\\Music' or \"C:/Music\"";
+
+/// The line of `text` holding byte `at`.
+fn line_at(text: &str, at: usize) -> &str {
+    let start = text
+        .get(..at)
+        .and_then(|t| t.rfind('\n'))
+        .map_or(0, |i| i + 1);
+    text[start..].lines().next().unwrap_or("")
+}
+
 fn expand_home(path: &str) -> Option<PathBuf> {
     let path = match path.strip_prefix("~/") {
         Some(rest) => std::env::home_dir()?.join(rest),

@@ -12,7 +12,8 @@ mode = "normal"
 speed = 0
 # How readily :slice onsets finds hits, 0 to 1; higher finds more.
 onset_sensitivity = 0.5
-# Where :slice writes, one directory per slicing. ~ is your home.
+# Where :slice writes, one directory per slicing. ~ is your home. On Windows,
+# write 'C:\Music' in single quotes, or "C:/Music": in "...", \ is an escape.
 samples = "~/Music/playr/samples"
 # What :slice does at each slice's edges, against clicks: exact cuts where the
 # edge falls; zero moves it to the nearest zero crossing within 10 ms; fade

@@ -129,6 +129,30 @@ fn the_samples_directory_defaults_to_music_and_expands_home() {
 }
 
 #[test]
+fn a_windows_path_in_double_quotes_says_to_use_single_quotes() {
+    let hint = "a backslash in \"...\" starts an escape, so write a Windows path as 'C:\\Music' or \"C:/Music\"";
+    // `\U` and `\m` are not escapes TOML knows, so the file does not parse.
+    for path in [r"C:\Users\me", r"D:\music"] {
+        let errors = parse(&format!("volume = 60\nsamples = \"{path}\"")).unwrap_err();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].starts_with("line 2: "), "{errors:?}");
+        assert!(errors[0].ends_with(hint), "{errors:?}");
+    }
+    // Every backslash an escape, so it parses, to control characters. The
+    // second is absolute on Windows, with a tab in it.
+    for path in [r"C:\new", r"C:\\Music\temp"] {
+        assert_eq!(
+            parse(&format!("samples = \"{path}\"")).unwrap_err(),
+            [format!("line 1: samples holds a control character; {hint}")]
+        );
+    }
+    // A syntax error with no backslash on its line gets no hint.
+    let errors = parse("samples = 'C:\\Music'\nmode = shuffle").unwrap_err();
+    assert!(errors[0].starts_with("line 2: "), "{errors:?}");
+    assert!(!errors[0].contains("backslash"), "{errors:?}");
+}
+
+#[test]
 fn onset_sensitivity_defaults_to_the_middle_and_stays_in_range() {
     assert_eq!(Settings::default().onset_sensitivity, 0.5);
     assert_eq!(

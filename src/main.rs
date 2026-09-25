@@ -132,6 +132,31 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    // Read whatever the command, so a bad file is seen early. Only playback
+    // uses it; a command that does not warns and runs, so scripts still work.
+    let plays = matches!(
+        cli.command,
+        None | Some(Command::Search { json: false, .. } | Command::Playlist { .. })
+    );
+    let config = match (&cli.settings, playr_app::config::default_path()) {
+        (Some(path), _) => playr_app::config::Config::load_for(Program::Terminal, path, true),
+        (None, Some(path)) => playr_app::config::Config::load_for(Program::Terminal, &path, false),
+        (None, None) => Ok(playr_app::config::Config::default()),
+    };
+    let config = match config {
+        Ok(config) => config,
+        Err(errors) => {
+            let label = if plays { "playr" } else { "playr: warning" };
+            for e in errors {
+                eprintln!("{label}: {e}");
+            }
+            if plays {
+                return Ok(ExitCode::FAILURE);
+            }
+            playr_app::config::Config::default()
+        }
+    };
+
     if let Some(Command::Formats) = cli.command {
         print_formats();
         return Ok(ExitCode::SUCCESS);
@@ -270,22 +295,6 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         None if cli.paths.is_empty() => Vec::new(),
         None => collect_paths(&conn, &cli.paths)?,
-    };
-
-    // Before the terminal is taken over, so every error can be read.
-    let config = match (&cli.settings, playr_app::config::default_path()) {
-        (Some(path), _) => playr_app::config::Config::load_for(Program::Terminal, path, true),
-        (None, Some(path)) => playr_app::config::Config::load_for(Program::Terminal, &path, false),
-        (None, None) => Ok(playr_app::config::Config::default()),
-    };
-    let config = match config {
-        Ok(config) => config,
-        Err(errors) => {
-            for e in errors {
-                eprintln!("playr: {e}");
-            }
-            return Ok(ExitCode::FAILURE);
-        }
     };
 
     // crossterm opens /dev/tty when stdin is not a terminal, so only stdout

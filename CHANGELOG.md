@@ -10,9 +10,13 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Changed
 
+- Subcommands that use no settings, such as `scan` and `search --json`, now read `settings.toml` and print its errors as warnings, then run. Before, a bad file went unnoticed until playr next played. Warn over fail, so a typo in a setting a script never uses does not break the script, and `playr devices` still works to fix `device`.
+
 - In the window, a range's edge shows it can be dragged: the pointer turns to a left-right arrow over it. The reach grows from 5 to 8 points, for marks too, and a drag on an edge picks that edge, so `{` and `}` go on with it. Dragging an edge was already possible, but nothing showed it.
 
 ### Fixed
+
+- A Windows path in double quotes in `settings.toml`, as `samples = "C:\Music"`, now gets an error saying to use single quotes or forward slashes. Before, it got toml's message about escapes, or, if every backslash was a valid escape, as in `"C:\new"`, "samples must be an absolute path". A path with a control character in it is now refused, so a half-escaped `"C:\\Music\temp"` is not used with a tab in it.
 
 - A drag on the window's waveform moved what it dragged by as much as the view moved under it. The view moves while a drag is under way when it follows the playhead, and, with Fit range on, when the drag picks the other end to centre on: dragging the start after the end put the start a range's length outside the old range. The view now holds still until the drag ends.
 

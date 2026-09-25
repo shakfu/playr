@@ -274,7 +274,7 @@ Playlist entries and marks are the only things in the library that are not read 
 
 ### Analysis
 
-`playr analyze` decodes each library track once and stores what it measured in the library: loudness and peak for ReplayGain, tempo, and the checks below. It then prints the findings. `:analyze` does the same from inside playr, in the background, over the whole library or one directory; the window has File, Analyze library. With `analyze_on_scan`, a scan inside playr analyses what it added or found changed, so gains and tempos are there without asking; `playr scan` says how many tracks are waiting instead, since it reads no settings. A later run decodes only tracks added or changed since; `--force` decodes them all again. Paths limit it to the tracks under them. `--report` prints what is stored without decoding, and `--json` prints it as JSON. `--jobs N` sets how many files decode at once; the default leaves one processor free.
+`playr analyze` decodes each library track once and stores what it measured in the library: loudness and peak for ReplayGain, tempo, and the checks below. It then prints the findings. `:analyze` does the same from inside playr, in the background, over the whole library or one directory; the window has File, Analyze library. With `analyze_on_scan`, a scan inside playr analyses what it added or found changed, so gains and tempos are there without asking; `playr scan` says how many tracks are waiting instead, since it uses no settings. A later run decodes only tracks added or changed since; `--force` decodes them all again. Paths limit it to the tracks under them. `--report` prints what is stored without decoding, and `--json` prints it as JSON. `--jobs N` sets how many files decode at once; the default leaves one processor free.
 
 It only reads the files. It runs beside a playing playr, which picks up the new gains at its next start or rescan. An interrupted run keeps every batch of 500 files it finished.
 
@@ -506,12 +506,14 @@ A gain never pushes the track's peak past full scale, and with no peak known it 
 
 playr reads `$XDG_CONFIG_HOME/playr/settings.toml`, or `~/.config/playr/settings.toml`, when it starts. `--settings <path>` reads another file instead. The file is optional, and it is read on top of the defaults in [`crates/playr-core/src/settings.toml`](crates/playr-core/src/settings.toml) and the default keys in [`crates/playr-app/src/keys.toml`](crates/playr-app/src/keys.toml), so it only needs what it changes. Copying either defaults file whole, or both into one, is also valid.
 
+An error in the file stops playr before it plays. Subcommands such as `scan` and `search --json` use no settings; they print the errors as warnings and run.
+
 ```toml
 volume = 60                        # percent, 0 to 100
 mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in full
 speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
-samples = "~/Music/playr/samples"  # where :slice writes
+samples = "~/Music/playr/samples"  # where :slice writes; on Windows, 'C:\Music'
 slice_edges = "zero"               # exact, zero or fade; see Samples
 slice_fade_in = 1                  # ms, for slice_edges = "fade", 0 to 100
 slice_fade_out = 5

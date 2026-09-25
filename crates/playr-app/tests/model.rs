@@ -1423,7 +1423,7 @@ fn slice_edges_chosen_after_planning_replan_what_is_written() {
         .collect();
     common::levels(&file, 8000, &parts);
     let out = dir.path().join("out");
-    let config = Config::parse(&format!("samples = \"{}\"", out.display())).unwrap();
+    let config = Config::parse(&format!("samples = '{}'", out.display())).unwrap();
     let mut model = Model::new(
         db::open(&dir.path().join("library.db")).unwrap(),
         common::fake_player().0,

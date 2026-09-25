@@ -232,6 +232,34 @@ fn bad_settings_stop_playr_before_it_starts_and_list_every_error() {
 }
 
 #[test]
+fn a_command_that_does_not_play_warns_of_bad_settings_and_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("playr")).unwrap();
+    let default = dir.path().join("playr/settings.toml");
+    std::fs::write(&default, "frob = 1\n").unwrap();
+    let warning = format!(
+        "playr: warning: {}: line 1: unknown setting: frob",
+        default.display()
+    );
+
+    // Not `devices`, which fails on a machine with no audio.
+    for args in [&["formats"][..], &["playlists"]] {
+        let (ok, stderr) = with_config(dir.path(), args);
+        assert!(ok, "`playr {}`: {stderr}", args.join(" "));
+        assert!(
+            stderr.contains(&warning),
+            "`playr {}`: {stderr}",
+            args.join(" ")
+        );
+    }
+    // A search that would play stops at the settings, before searching.
+    let (ok, stderr) = with_config(dir.path(), &["search", "anything"]);
+    assert!(!ok);
+    assert!(!stderr.contains("warning"), "{stderr}");
+    assert!(!stderr.contains("nothing matches"), "{stderr}");
+}
+
+#[test]
 fn a_missing_home_variable_does_not_stop_playr() {
     // Windows does not set HOME; the defaults expand ~ and must still load.
     // A bad setting stops playr just after the defaults load and before it
