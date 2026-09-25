@@ -8,6 +8,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - `:fit [on|off]`, on `f`, and the window's Fit range tick box: zoom to the deepest step that shows the range, then centre the view on the range rather than the playhead, so zooming keeps the range in view. While it is on, `[` and `]` centre the view on that end at the zoom set, so the end `{` and `}` move stays still on screen while the waveform moves under it. A playhead out of view is shown as `<` or `>` at that end of the axis, or an arrow in the window. A toggle over a one-shot zoom, because the view otherwise re-centres on the playhead at the next frame. Library API: `Action::Fit`; `Sampler::fit`, `Sampler::fit_edge`, `Sampler::centre`; `sampler::zoom_to_fit`; `Layout::with_centre`, `Layout::playhead_off`; `Message::Fit`.
 
+- `:restart`, on `R`, and a From start button in the window's transport: play from the start of the sampler's range when one is set, else from the start of the track, from any view and any state. The web page has it too, where there is no range. Library API: `Action::Restart`.
+
+### Fixed
+
+- Audition played a different span, or nothing, when pressed again. Without a range it pauses on the end of the region or slice, which is where the next one starts, so the next press played that one; it now plays the same span again while the playhead is still there. A range ending at the track's end never paused: the pause needs the decoder at the range's end, which refuses the end of the track, so the track played out and stopped, and every later press found it closed. A one-shot now stops a frame short of the track's end, and audition and loop cue a stopped track, as a seek does. A press during an audition went on from the playhead; it now starts the span again.
+
+- A seek while stopped did nothing, so after `x`, or once the queue had played out, the playhead could not be placed or a mark set until the track played again. The engine had closed the track and dropped the seek. A seek now reopens the track paused at that point; the output is paused before any audio reaches it, so nothing sounds.
+
 ### Changed
 
 - Fat LTO moved from the `release` profile to a new `dist` profile, which the release and Linux package workflows build with. A release rebuild after an edit to `playr-core` took 178 s with it and 9 s without. `make release`, `make install` and `make app` build with `dist` and Opus, as the release workflow does, into `target/dist`, so they need cmake; `make install-dev` installs a debug build, stripped: unstripped, the three come to about 870 MB.

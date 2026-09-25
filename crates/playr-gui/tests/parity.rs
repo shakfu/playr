@@ -46,6 +46,7 @@ fn every_action() -> Vec<Action> {
         Action::Prune(Some("/m".into())),
         Action::Open(vec!["/m".into()]),
         Action::TogglePause,
+        Action::Restart,
         Action::Next,
         Action::Prev,
         Action::Stop,
@@ -132,6 +133,7 @@ fn every_action() -> Vec<Action> {
             | Action::Prune(_)
             | Action::Open(_)
             | Action::TogglePause
+            | Action::Restart
             | Action::Next
             | Action::Prev
             | Action::Stop

@@ -21,6 +21,7 @@ const fn control(label: &'static str, action: Action) -> Control {
 pub const TRANSPORT: &[Control] = &[
     control("Prev", Action::Prev),
     control("Play", Action::TogglePause),
+    control("From start", Action::Restart),
     control("Stop", Action::Stop),
     control("Next", Action::Next),
 ];

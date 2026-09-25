@@ -85,6 +85,7 @@ pub const COMMANDS: &[Command] = &[
     any("next", "", "next track"),
     any("prev", "", "previous track"),
     any("stop", "", "stop"),
+    any("restart", "", "play from the range's start, or the track's"),
     any(
         "seek",
         "TIME | +TIME | -TIME",
@@ -345,6 +346,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Next => "next".into(),
         Prev => "prev".into(),
         Stop => "stop".into(),
+        Restart => "restart".into(),
         SeekBy(n) => format!("seek {n:+}"),
         SeekTo(d) => format!("seek {}", time(d)),
         VolumeBy(v) => format!(
@@ -672,6 +674,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "next" => nothing(Action::Next),
         "prev" => nothing(Action::Prev),
         "stop" => nothing(Action::Stop),
+        "restart" => nothing(Action::Restart),
         "seek" => match signed(rest) {
             _ if rest.is_empty() => Err(usage()),
             Some((sign, time)) => Ok(Action::SeekBy(

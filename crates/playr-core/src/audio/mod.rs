@@ -741,6 +741,11 @@ impl Engine {
     ///
     /// Returns false if no playable track was found.
     fn start(&mut self, i: usize, back: bool) -> bool {
+        self.load(i, back, true)
+    }
+
+    /// As [`Self::start`], but left paused at its first frame when not `play`.
+    fn load(&mut self, i: usize, back: bool, play: bool) -> bool {
         let Some((i, stream, first, spec)) = self.open_from(i, back) else {
             self.state = State::Stopped;
             return false;
@@ -771,10 +776,20 @@ impl Engine {
         // A new track starts from its own beginning, not a previous seek.
         self.shared.position_offset.store(0, Ordering::Relaxed);
 
-        self.convert_and_carry(&first);
-        self.state = State::Playing;
+        // Paused before any audio reaches the ring, so a cued track is silent.
         if let Some(o) = &self.out {
-            o.play();
+            if !play {
+                o.pause();
+            }
+        }
+        self.convert_and_carry(&first);
+        if play {
+            self.state = State::Playing;
+            if let Some(o) = &self.out {
+                o.play();
+            }
+        } else {
+            self.state = State::Paused;
         }
         self.pump();
         true
@@ -941,6 +956,11 @@ impl Engine {
     /// Seeks where the listener asked. The decoder refuses a target at or past
     /// the end, so that moves on as reaching the end would.
     fn seek_to(&mut self, pos: Duration) {
+        // Stopped, the track is closed: a seek cues it, paused, so a point can
+        // be placed and marked before playing.
+        if self.state == State::Stopped && !self.queue.is_empty() {
+            self.load(self.index, false, false);
+        }
         match self.marks.front() {
             Some(&(_, audible, Some(duration), _)) if pos >= duration => self.played_out(audible),
             _ => self.seek(pos),
@@ -1391,6 +1411,10 @@ impl Engine {
     /// new end, or returned under the old bounds. Seeking to the position then
     /// discards that audio, at the cost of a short gap.
     fn set_loop(&mut self, bounds: Option<(u64, u64)>, once: bool) {
+        // Stopped, the track is closed; cue it, as a seek does.
+        if bounds.is_some() && self.state == State::Stopped && !self.queue.is_empty() {
+            self.load(self.index, false, false);
+        }
         // A range set again replaces any pause the last one scheduled.
         self.pause_at = None;
         let (Some(&(_, audible, duration, _)), Some(conv)) = (self.marks.front(), &self.conv)
@@ -1408,7 +1432,10 @@ impl Engine {
             return;
         };
         let frame = |d: Duration| (d.as_secs_f64() * rate as f64).round() as u64;
-        let end = end.min(duration.map_or(u64::MAX, frame));
+        // A one-shot stops a frame short of the track's end: it pauses by
+        // seeking the decoder to its end, which refuses the end itself.
+        let last = duration.map_or(u64::MAX, |d| frame(d).saturating_sub(u64::from(once)));
+        let end = end.min(last);
         if start >= end {
             self.looping = None;
             return;
@@ -1420,7 +1447,8 @@ impl Engine {
             once,
         });
         let now = frame(at);
-        if now < start || now >= end {
+        // A one-shot is heard from its start each time it is sent.
+        if once || now < start || now >= end {
             self.seek(Duration::from_secs_f64(start as f64 / rate as f64));
         } else if ahead || self.decoded >= end {
             self.seek(at);

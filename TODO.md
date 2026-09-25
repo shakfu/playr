@@ -20,37 +20,17 @@ What is missing, grouped by priority:
 
 ### All interfaces
 
-- [x] **refresh/resync library**. Re-scans the given the music library for additions.
-
-- [x] **Media keys and the now-playing panel.** Through souvlaki, with zbus rather than libdbus on Linux. `playr` and `playr-gui` call `Model::attach_media`; `playr-server` does not, by choice, since a machine without a screen has no panel to show and no keyboard to press. A machine with no bus or panel runs as before, and on Windows the terminal has no window to attach to.
-
-- [x] **Resume on start.** A one-row `resume` table, written on quit and at each track change, offered at the next start when nothing was handed over and the file is still there.
-
 ### Sampler
-
-- [x] **Zoom-to-range.** `:fit` zooms to the range and centres the view on it, so zooming keeps the range in view.
-
-- [x] **Snap range ends.** Ends set with snap on already snapped; turning snap on now moves the ends of a range set before it.
-
-- [x] **Mark editing.** `Sampler::cursor` is the selection: `:pick` puts it on a mark, and `:nudge-mark`, `:move-mark`, `:snap-mark` and `:del-mark` act on the mark under it. The window drags one along the waveform.
-
-- [x] **Audition.** `Cmd::PlayOnce` sets the same `Loop` with `once`, and `Engine::halt` mirrors `wrap` forward to the end rather than back to the start.
 
 ### Library
 
-- [x] **Multiple roots.** Roots are recorded on scan, so `:rescan`, `:prune`, and a bare `playr scan` / `playr prune` cover them. A scan that finds missing files asks to prune (or prunes when `auto_prune` is set).
-
 ### Output
-
-- [x] **Device selection.** `--device`, the `device` setting and `playr devices`. A control in the window waits on writing settings; see phase 2 in `docs/dev/device.md`.
 
 ## Medium
 
 ### Playback
 
 - [ ] **Loop the region.** The sampler view loops a range. One key setting the range to the region between the marks around the playhead would loop that too, for practice with varispeed, from any view.
-
-- [x] **ReplayGain.** `:replaygain` and the `replaygain` setting, from `playr analyze` or tags, applied where the engine decodes. See `docs/dev/analyze.md`.
 
 ### Sampler
 
@@ -72,8 +52,6 @@ What is missing, grouped by priority:
 
 - [ ] **Advanced search in SQL.** A `:query SELECT path FROM tracks JOIN analysis ...` whose rows become the library listing, as a search's do, for questions the search syntax cannot ask. It must run on a read-only connection and be refused unless it is a `SELECT`: playlists and marks are the only things in the library that cannot be read back from the files. Saved queries would then be smart playlists.
 
-- [x] **`:analyze` in the frontends.** A session job, as `:slice` runs; it reloads the gains when it finishes.
-
 - [ ] **Calibrate the cutoff heuristics.** The two spectral findings were set against ffmpeg's encoders, not files whose provenance is known; a library of lossless files with known sources would settle them. The tempo confidence is calibrated, against librosa; see `docs/dev/analyze.md`.
 
 - [ ] **Tempo above 170 BPM.** The prior still halves it. The reading records the level above as an alternate, which `bpm:` matches, so such a track is found by the tempo it is heard at, but the number playr shows is the halved one. Choosing between the two needs accent or metrical modelling.
@@ -86,11 +64,7 @@ What is missing, grouped by priority:
 
 - [ ] **Multi-row selection.** Select several rows at once, in the window especially. `dispatch` assumes one cursor row per view, so `Frontend` grows; see `docs/architecture.md`.
 
-- [x] **BPM in now playing, and a `bpm:` search field.** Shown as it sounds, so varispeed moves it; `bpm:` takes a number, a range, or one end of one.
-
 - [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. A table in the library would keep it.
-
-- [x] **Settings tables for more than one frontend.** `settings::FRONTEND_TABLES` names the entries a frontend may own; each frontend asks for the ones it reads and the rest are passed over. A name no frontend owns is still an error.
 
 - [ ] **Platform directories.** Both interfaces keep the library in `~/.local/share/playr` and settings in `~/.config/playr` on every platform, which is unusual on macOS and Windows. Moving to each platform's directories must move existing libraries.
 
@@ -124,7 +98,7 @@ What is missing, grouped by priority:
 
 - [ ] **Man page and shell completions.** The command line is parsed with clap, so `clap_mangen` and `clap_complete` can generate them.
 
-- [ ] **Linux packages.** Release archives carry `playr.desktop` and an icon to copy by hand; no `.deb`, Flatpak or AppImage.
+- [x] **Linux packages.** Release archives carry `playr.desktop` and an icon to copy by hand; no `.deb`, Flatpak or AppImage.
 
 - [ ] **Publishing to crates.io.** Manual, with `cargo publish --workspace`. `playr-gui` and `playr-server` have `publish = false`; decide whether they go to crates.io, and whether the release workflow publishes.
 

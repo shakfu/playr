@@ -48,6 +48,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:next`                               | `n`                     | next track                                  |
 | `:prev`                               | `p`                     | previous track                              |
 | `:stop`                               | `x`                     | stop                                        |
+| `:restart`                            | `R`                     | play from the range's start, or the track's |
 | `:seek TIME \| +TIME \| -TIME`        | left, right, with shift | seek to a time, or by one: 1:23, +10        |
 | `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the volume, or change it: 60, +10       |
 | `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | set varispeed in semitones, or change it    |

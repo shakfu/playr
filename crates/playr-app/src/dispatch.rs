@@ -272,6 +272,22 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Next => f.session().send(Cmd::Next),
         Action::Prev => f.session().send(Cmd::Prev),
         Action::Stop => f.session().send(Cmd::Stop),
+        Action::Restart => {
+            let status = f.session().player().status();
+            let Some(path) = status.current().cloned() else {
+                return f.notify(Refusal::NothingPlaying.into());
+            };
+            // Range ends are source frames, as the peaks count them.
+            let start = f.sampler().range_ends(Some(&path)).0;
+            let at = start
+                .zip(peaks(f))
+                .map_or(Duration::ZERO, |(s, p)| sampler::time_of(s, p.rate));
+            // Stopped, the seek cues the track paused; either way it then plays.
+            f.session().send(Cmd::Seek(at));
+            if status.state != playr_core::audio::State::Playing {
+                f.session().send(Cmd::TogglePause);
+            }
+        }
         Action::SeekBy(seconds) => f.session().send(Cmd::SeekBy(seconds)),
         Action::SeekTo(at) => {
             let at = snapped(f, at);
@@ -454,8 +470,8 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
                 return f.notify(Message::NoRangeToLoop);
             };
             f.session().send(Cmd::Loop(Some(range)));
-            // Looping is for hearing the range, so a paused track plays.
-            if status.state == playr_core::audio::State::Paused {
+            // Looping is for hearing the range, so a paused or stopped track plays.
+            if status.state != playr_core::audio::State::Playing {
                 f.session().send(Cmd::TogglePause);
             }
             f.notify(Message::Loop(true));
@@ -832,8 +848,15 @@ fn audition(f: &mut impl Frontend) {
     // A span with no end runs to the end of the track.
     let ends = |end: Option<u64>| end.unwrap_or(last);
 
-    let span = match f.sampler().range(Some(&path)) {
-        Some(range) => Some(range),
+    // An audition pauses on its span's end, which is the next span's start.
+    let again = f
+        .sampler()
+        .auditioned
+        .as_ref()
+        .filter(|(p, _, end)| *p == path && at.abs_diff(*end) <= u64::from(rate) / 100)
+        .map(|&(_, start, end)| (start, end));
+    let span = match f.sampler().range(Some(&path)).or(again) {
+        Some(span) => Some(span),
         None => match f.sampler().pending.as_ref().and_then(|plan| {
             plan.spans
                 .iter()
@@ -857,6 +880,7 @@ fn audition(f: &mut impl Frontend) {
     match span {
         Some((start, end)) if end > start => {
             f.session().send(Cmd::PlayOnce(start, end));
+            f.sampler_mut().auditioned = Some((path, start, end));
             f.notify(Message::Auditioning);
         }
         _ => f.notify(Message::NothingToAudition),

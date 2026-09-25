@@ -106,6 +106,9 @@ pub struct Sampler {
     pub edge: Edge,
     /// Frames decoded for a view finer than the peaks.
     pub detail: DetailRead,
+    /// The span last auditioned, on its track, which a playhead paused at its
+    /// end hears again rather than the region after it.
+    pub auditioned: Option<(PathBuf, u64, u64)>,
     /// A frame the view points at, apart from the playhead. `None` follows the
     /// playhead, which is what the view did before there was a cursor.
     pub cursor: Option<u64>,

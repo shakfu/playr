@@ -73,6 +73,9 @@ pub enum Action {
     Open(Vec<PathBuf>),
 
     TogglePause,
+    /// Play from the start of the sampler's range when one is set, else from
+    /// the start of the track.
+    Restart,
     Next,
     Prev,
     Stop,

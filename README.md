@@ -336,6 +336,7 @@ These keys are the same in the terminal, the window and the web page, and any of
 | `space`                  | play or pause                               |
 | `n` `p`                  | next or previous track                      |
 | `x`                      | stop                                        |
+| `R`                      | play from the range's start, or the track's |
 | `m` `M`                  | next or previous playback mode              |
 | left/right               | seek back or forward 5 seconds              |
 | shift left/right         | seek back or forward 30 seconds             |
@@ -445,11 +446,11 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Editing a mark.** `y` and `o` move the picked mark a column at a time, `:move-mark TIME` puts it at a time, and delete removes it, wherever it sits in the chain `B` undoes. `#` moves it to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
 
-- **Audition.** `a` plays the range, or the planned slice the playhead is in, or the region around it, once, and pauses at its end rather than returning to its start as `l` does. Playing on afterwards continues the track from there.
+- **Audition.** `a` plays the range, or the planned slice the playhead is in, or the region around it, once, and pauses at its end rather than returning to its start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. Playing on afterwards continues the track from there.
 
 - **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track. Outside the view, `:slice` writes at once.
 
-- **Nudging.** The arrows move the playhead a column, and with shift a tenth of the view, so zooming in makes each step finer, down to one frame. Outside this view they seek 5 and 30 s. Pause first to place a point without hearing each step.
+- **Nudging.** Stopped, a seek, a click or a nudge opens the track paused at that point, so it can be placed and marked before playing. The arrows move the playhead a column, and with shift a tenth of the view, so zooming in makes each step finer, down to one frame. Outside this view they seek 5 and 30 s. Pause first to place a point without hearing each step.
 
 - **Snap.** With `:snap on`, shown as `snap` in the title, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms: a frame where the channels' mean changes sign. A nudge snaps only past where it started, so repeated nudges walk from crossing to crossing. Where no crossing is within reach, as in silence, the point stays. Turning snap on moves the ends of a range already set, so a loop drawn first can be snapped after.
 

@@ -283,6 +283,65 @@ fn snap_on_snaps_the_range_and_fit_zooms_to_it() {
 }
 
 #[test]
+fn restart_plays_from_the_range_start_or_the_track_start() {
+    use playr_app::sampler::Wave;
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let playing_near = |model: &Model, from: Duration| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = model.session().player().status();
+            let at = model.session().player().position();
+            if status.state == State::Playing && at >= from && at < from + Duration::from_secs(1) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{:?} at {at:?}", status.state);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let ms = Duration::from_millis;
+
+    // Paused past a range, it plays from the range's start.
+    model.perform(Action::SetRange(Some((ms(4_000), ms(6_000)))));
+    // Each waits for the engine: `Restart` reads the state it published.
+    let settle = |model: &Model, state: State| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while model.session().player().status().state != state {
+            assert!(Instant::now() < deadline, "never {state:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    model.perform(Action::TogglePause);
+    settle(&model, State::Paused);
+    model.perform(Action::SeekTo(ms(8_000)));
+    model.perform(Action::Restart);
+    playing_near(&model, ms(4_000));
+
+    // Stopped, with no range, it plays from the track's start.
+    model.perform(Action::SetRange(None));
+    model.perform(Action::Stop);
+    settle(&model, State::Stopped);
+    model.perform(Action::Restart);
+    playing_near(&model, Duration::ZERO);
+}
+
+#[test]
 fn the_range_loops_follows_its_changes_and_escape_clears_it() {
     use playr_app::sampler::Wave;
     use playr_core::audio::State;
@@ -1214,4 +1273,77 @@ fn info_refuses_when_there_is_no_track_to_describe() {
         ))))
         .as_deref()
     );
+}
+
+#[test]
+fn audition_hears_the_same_span_each_time_it_is_pressed() {
+    use playr_app::sampler::Wave;
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ms = Duration::from_millis;
+    let state = |model: &Model| model.session().player().status().state;
+    // Each press waits to see playing, then the pause at the span's end.
+    let audition = |model: &mut Model| {
+        model.perform(Action::Audition);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state(model) != State::Playing {
+            assert!(Instant::now() < deadline, "never played");
+            std::thread::sleep(ms(5));
+        }
+        while state(model) != State::Paused {
+            assert!(Instant::now() < deadline, "never paused");
+            std::thread::sleep(ms(5));
+        }
+        model.session().player().position()
+    };
+
+    // The region between the marks, not the one after it the second time.
+    for at in [2_000, 2_500, 3_000] {
+        model.perform(Action::MarkAt(ms(at)));
+    }
+    model.perform(Action::TogglePause);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while state(&model) != State::Paused {
+        assert!(Instant::now() < deadline, "never paused");
+        std::thread::sleep(ms(5));
+    }
+    model.perform(Action::SeekTo(ms(2_100)));
+    while model.session().player().position() != ms(2_100) {
+        assert!(Instant::now() < deadline, "never sought");
+        std::thread::sleep(ms(5));
+    }
+    assert_eq!(audition(&mut model), ms(2_500));
+    assert_eq!(audition(&mut model), ms(2_500));
+
+    // A range to the track's end pauses a frame short of it, and plays again
+    // rather than ending the track.
+    model.perform(Action::SetRange(Some((ms(9_700), ms(10_000)))));
+    let end = ms(10_000) - Duration::from_nanos(125_000);
+    assert_eq!(audition(&mut model), end);
+    assert_eq!(audition(&mut model), end);
+
+    // Stopped, it cues the track and plays the range.
+    model.perform(Action::Stop);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while state(&model) != State::Stopped {
+        assert!(Instant::now() < deadline, "never stopped");
+        std::thread::sleep(ms(5));
+    }
+    assert_eq!(audition(&mut model), end);
 }

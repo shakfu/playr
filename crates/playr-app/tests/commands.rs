@@ -194,6 +194,14 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
 }
 
 #[test]
+fn restart_parses_in_any_view_and_round_trips() {
+    assert_eq!(lib("restart"), Ok(Action::Restart));
+    assert_eq!(parse("restart", View::Sampler), Ok(Action::Restart));
+    assert!(lib("restart 1").is_err());
+    assert_eq!(line(&Action::Restart, None), "restart");
+}
+
+#[test]
 fn the_cursor_moves_by_a_count_of_rows() {
     assert_eq!(lib("down"), Ok(Action::Cursor(1)));
     assert_eq!(lib("down 10"), Ok(Action::Cursor(10)));
@@ -359,15 +367,15 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     assert_eq!(completions("", Library, &playlists).len(), usable(Library));
     assert_eq!(
         completions("re", Selection, &playlists),
-        ["rescan", "replaygain", "remove"]
+        ["rescan", "restart", "replaygain", "remove"]
     );
     assert_eq!(
         completions("re", Playlists, &playlists),
-        ["rescan", "replaygain", "rename"]
+        ["rescan", "restart", "replaygain", "rename"]
     );
     assert_eq!(
         completions("re", Library, &playlists),
-        ["rescan", "replaygain"]
+        ["rescan", "restart", "replaygain"]
     );
     assert_eq!(
         completions("mode r", Library, &playlists),

@@ -830,3 +830,63 @@ fn a_one_shot_range_plays_through_once_and_pauses_at_its_end() {
         &after[..after.len().min(8)]
     );
 }
+
+#[test]
+fn a_seek_while_stopped_cues_the_track_paused_and_silent() {
+    let (player, control) = fake_player();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("loud.wav");
+    levels(&file, 8000, &[(20.0, 0.5)]);
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+    player.send(Cmd::Stop);
+    wait_for(&player, |s| s.state == State::Stopped);
+
+    control.played.lock().unwrap().clear();
+    player.send(Cmd::Seek(Duration::from_secs(10)));
+    let s = wait_for(&player, |s| s.state == State::Paused);
+    assert_eq!(s.state, State::Paused, "{}", control.report());
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(player.position(), Duration::from_secs(10));
+    assert!(
+        control.played.lock().unwrap().iter().all(|&v| v == 0.0),
+        "a cued track sounded"
+    );
+
+    // Playing on starts from the cued point.
+    player.send(Cmd::TogglePause);
+    wait_for(&player, |s| s.state == State::Playing);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while player.position() < Duration::from_millis(10_100) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pos = player.position();
+    assert!(
+        (Duration::from_millis(10_100)..Duration::from_secs(12)).contains(&pos),
+        "position {pos:?}"
+    );
+    assert!(control.played.lock().unwrap().iter().any(|&v| v != 0.0));
+}
+
+#[test]
+fn a_one_shot_sent_again_inside_its_range_starts_it_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("count.wav");
+    counting(&file, 24_000);
+    let (player, control) = fake_player();
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+
+    player.send(Cmd::PlayOnce(8_000, 16_000));
+    until_heard(&player, &control, 0, |s| s.contains(&12_000));
+    let from = control.played.lock().unwrap().len();
+    player.send(Cmd::PlayOnce(8_000, 16_000));
+    let again = until_heard(&player, &control, from, |s| s.contains(&16_000));
+    assert!(
+        again.contains(&8_001),
+        "went on from the playhead: {:?}",
+        &again[..again.len().min(8)]
+    );
+    wait_for(&player, |s| s.state == State::Paused);
+    assert!(!heard(&control, from).iter().any(|&v| v > 16_000));
+}
