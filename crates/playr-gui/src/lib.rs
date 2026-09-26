@@ -280,8 +280,19 @@ impl Gui {
                     }
                 });
             });
+            let replaygain = self.model.replaygain();
             ui.menu_button("Playback", |ui| {
                 items(ui, controls::PLAYBACK_MENU, &mut chosen);
+                ui.menu_button("ReplayGain", |ui| {
+                    for (_, choice) in playr_core::gain::ReplayGain::NAMES {
+                        if ui.radio(replaygain == choice, choice.name()).clicked() {
+                            if replaygain != choice {
+                                chosen = Some(Action::SetReplayGain(choice));
+                            }
+                            ui.close();
+                        }
+                    }
+                });
                 ui.separator();
                 items(ui, controls::MARKS, &mut chosen);
             });

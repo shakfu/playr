@@ -10,6 +10,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Changed
 
+- The window's transport buttons show media symbols (U+23EE, U+23F8, U+23F9, U+23ED); each tooltip names the action and its key, and `transport_text_buttons = true` in `[gui]` shows words as before. Play and From start, a bar beside a play triangle, are painted: U+23F5 is small beside the other glyphs, and no font egui ships has U+29D0 or U+23FD. The window can no longer be narrowed below 800 by 480 points. The ReplayGain menu moved to Playback, ReplayGain, and the gain applied shows beside the format. The marks buttons now have a row of their own.
+
+  At the default 1100 points, the ReplayGain menu was cut off: the row needed 1270 and never wrapped. egui wraps a row only before a widget wider than the space left, and a slider or combo box asks for exactly the space left.
+
+- In the window's sampler, 10-point gaps separate the row of zoom and display controls, the rows that set the range, and the rows that slice it.
+
+- The window's sampler waveform takes the height its controls leave: 36 points more at any window height. A fixed allowance for the controls, larger than they needed, left the rest empty above the transport.
+
 - Subcommands that use no settings, such as `scan` and `search --json`, now read `settings.toml` and print its errors as warnings, then run. Before, a bad file went unnoticed until playr next played. Warn over fail, so a typo in a setting a script never uses does not break the script, and `playr devices` still works to fix `device`.
 
 - In the window, a range's edge shows it can be dragged: the pointer turns to a left-right arrow over it. The reach grows from 5 to 8 points, for marks too, and a drag on an edge picks that edge, so `{` and `}` go on with it. Dragging an edge was already possible, but nothing showed it.

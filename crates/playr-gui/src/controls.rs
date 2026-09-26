@@ -196,7 +196,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("SetVolume", "the volume slider"),
     ("SetSpeed", "the speed slider"),
     ("SetMode", "the mode menu"),
-    ("SetReplayGain", "the ReplayGain menu"),
+    ("SetReplayGain", "Playback, ReplayGain"),
     ("SetSliceEdges", "the sampler's Edges menu"),
     ("SetColumns", "View, Columns"),
     ("SetSort", "a click on a column heading"),

@@ -28,6 +28,9 @@ pub struct Config {
     pub settings: Settings,
     pub keys: Keymap,
     pub theme: Theme,
+    /// `[gui] transport_text_buttons`: the window's transport buttons as
+    /// words rather than media symbols.
+    pub transport_text_buttons: bool,
 }
 
 impl Default for Config {
@@ -36,6 +39,7 @@ impl Default for Config {
             settings: Settings::default(),
             keys: Keymap::empty(),
             theme: Theme::Dark,
+            transport_text_buttons: false,
         };
         if let Err(errors) = config.apply(DEFAULT_KEYS) {
             panic!("bad default key bindings: {errors:?}");
@@ -121,8 +125,8 @@ impl Config {
         let mine = program.map(Program::table).unwrap_or("keys");
         let (tables, mut errors) = self.settings.apply(text, &["keys", "theme", mine]);
         for (name, value) in tables {
-            if program.is_some_and(|p| name.get_ref() == p.table()) {
-                self.apply_program(value.get_ref(), value.span().start, &mut errors);
+            if let Some(program) = program.filter(|p| name.get_ref() == p.table()) {
+                self.apply_program(program, value.get_ref(), value.span().start, &mut errors);
                 continue;
             }
             if name.get_ref() == "theme" {
@@ -159,7 +163,13 @@ impl Config {
     }
 
     /// Reads a program's own table: the settings it may set for itself.
-    fn apply_program(&mut self, value: &DeValue, at: usize, errors: &mut Errors<'_>) {
+    fn apply_program(
+        &mut self,
+        program: Program,
+        value: &DeValue,
+        at: usize,
+        errors: &mut Errors<'_>,
+    ) {
         let DeValue::Table(entries) = value else {
             errors.add(
                 at,
@@ -177,6 +187,10 @@ impl Config {
                 "sort" => match settings::sort_value(value.get_ref()) {
                     Ok(sort) => self.settings.sort = sort,
                     Err(e) => errors.add(at, e),
+                },
+                "transport_text_buttons" if program == Program::Gui => match value.get_ref() {
+                    DeValue::Boolean(b) => self.transport_text_buttons = *b,
+                    v => errors.add(at, format!("transport_text_buttons cannot be {}", kind(v))),
                 },
                 // The server's own flags are not settings yet; see TODO.md.
                 other => errors.add(key.span().start, format!("unknown setting: {other}")),

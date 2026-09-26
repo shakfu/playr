@@ -1,10 +1,12 @@
 //! The transport: what is playing, the buttons, the progress bar with its
-//! marks, volume, speed, mode and the level meter.
+//! marks, volume, speed, mode and the level meter. ReplayGain is in the
+//! Playback menu.
 
 use std::time::Duration;
 
 use eframe::egui;
 use playr_app::action::Action;
+use playr_app::dispatch::Frontend;
 
 use crate::controls;
 use crate::palette::Palette;
@@ -12,7 +14,6 @@ use playr_app::message::{self, fmt_time};
 use playr_app::meter::{self, Zone};
 use playr_app::model::{self, Model};
 use playr_core::audio::{speed_for, Mode, State};
-use playr_core::gain::ReplayGain;
 
 /// Draws the transport into `ui` and performs what its controls ask for.
 pub fn show(model: &mut Model, ui: &mut egui::Ui) {
@@ -20,40 +21,75 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
     let snapshot = model.snapshot().clone();
     let status = &snapshot.status;
 
-    ui.horizontal(|ui| {
-        for control in controls::TRANSPORT {
-            let label = match control.action {
-                Action::TogglePause if status.state == State::Playing => "Pause",
-                _ => control.label,
-            };
-            if ui.button(label).clicked() {
-                actions.push(control.action.clone());
+    // The meter and format go first, so the title gets what is left and truncates.
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| {
+            let text = model.transport_text_buttons();
+            let mut size = egui::Vec2::ZERO;
+            for control in controls::TRANSPORT {
+                // Play and From start are painted: U+23F5 is small beside the
+                // other glyphs, and no font egui ships has a bar beside it.
+                let (label, icon) = match control.action {
+                    Action::TogglePause if status.state == State::Playing => ("Pause", "\u{23F8}"),
+                    Action::Prev => (control.label, "\u{23EE}"),
+                    Action::Stop => (control.label, "\u{23F9}"),
+                    Action::Next => (control.label, "\u{23ED}"),
+                    _ => (control.label, ""),
+                };
+                let response = match text {
+                    true => ui.button(label),
+                    false => ui.add(egui::Button::new(icon).min_size(size)),
+                };
+                if !text && icon.is_empty() {
+                    play_icon(
+                        ui,
+                        response.rect,
+                        ui.style().interact(&response).fg_stroke.color,
+                        control.action == Action::Restart,
+                    );
+                }
+                size = response.rect.size();
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
+                });
+                let tip = match key_for(model, &control.action) {
+                    Some(key) => format!("{label} ({key})"),
+                    None => label.to_string(),
+                };
+                if response.on_hover_text(tip).clicked() {
+                    actions.push(control.action.clone());
+                }
             }
-        }
-        ui.separator();
-        let now = model::now_playing(model.playing(), status);
-        ui.strong(now.as_deref().unwrap_or("nothing playing"));
-        if let Some(src) = status.source {
-            let mut format = format!("{:.1} kHz {} ch", src.rate as f64 / 1000.0, src.channels);
-            // As in the terminal: only a real rate conversion is worth showing.
-            if status.output_rate != 0 && status.output_rate != src.rate {
-                format.push_str(&format!(
-                    " -> {:.1} kHz",
-                    status.output_rate as f64 / 1000.0
-                ));
-            }
-            ui.weak(format);
-        }
-        // As it sounds: varispeed moves it with the music.
-        if let Some(bpm) = model.bpm() {
-            ui.weak(format!("{bpm:.0} BPM"));
-        }
-        if status.state == State::Playing {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.separator();
+            let now = model::now_playing(model.playing(), status);
+            ui.strong(now.as_deref().unwrap_or("nothing playing"));
+        },
+        |ui| {
+            if status.state == State::Playing {
                 level_meter(ui, snapshot.loudness, snapshot.peak);
-            });
-        }
-    });
+            }
+            // The gain the ReplayGain choice in the Playback menu applies.
+            if let Some(db) = status.gain_db {
+                ui.weak(message::replaygain(db));
+            }
+            // As it sounds: varispeed moves it with the music.
+            if let Some(bpm) = model.bpm() {
+                ui.weak(format!("{bpm:.0} BPM"));
+            }
+            if let Some(src) = status.source {
+                let mut format = format!("{:.1} kHz {} ch", src.rate as f64 / 1000.0, src.channels);
+                // As in the terminal: only a real rate conversion is worth showing.
+                if status.output_rate != 0 && status.output_rate != src.rate {
+                    format.push_str(&format!(
+                        " -> {:.1} kHz",
+                        status.output_rate as f64 / 1000.0
+                    ));
+                }
+                ui.weak(format);
+            }
+        },
+    );
 
     ui.horizontal(|ui| {
         let total = status.duration.unwrap_or_default();
@@ -67,14 +103,16 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
         ui.monospace(fmt_time(total));
     });
 
-    // Wraps: the row is wider than the default window since ReplayGain.
-    ui.horizontal_wrapped(|ui| {
+    // Two rows, as one does not fit the window's minimum width; egui does not
+    // wrap a row before a slider or a combo box.
+    ui.horizontal(|ui| {
         for control in controls::MARKS {
             if ui.button(control.label).clicked() {
                 actions.push(control.action.clone());
             }
         }
-        ui.separator();
+    });
+    ui.horizontal(|ui| {
         ui.spacing_mut().slider_width = 90.0;
 
         let mut volume = (snapshot.volume * 100.0).round();
@@ -114,30 +152,49 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
                     }
                 }
             });
-
-        let replaygain = model.replaygain();
-        let selected = match status.gain_db {
-            Some(db) => format!("{} ({})", replaygain.name(), message::replaygain(db)),
-            None => replaygain.name().to_string(),
-        };
-        egui::ComboBox::from_label("ReplayGain")
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                for (_, choice) in ReplayGain::NAMES {
-                    if ui
-                        .selectable_label(replaygain == choice, choice.name())
-                        .clicked()
-                        && replaygain != choice
-                    {
-                        actions.push(Action::SetReplayGain(choice));
-                    }
-                }
-            });
     });
 
     for action in actions {
         model.perform(action);
     }
+}
+
+/// The key that performs `action` in the current view, if one does.
+fn key_for(model: &Model, action: &Action) -> Option<playr_app::action::Key> {
+    let keys = model.keymap();
+    keys.bindings()
+        .iter()
+        .map(|b| b.key)
+        .find(|key| keys.lookup(*key, model.view()) == Some(action))
+}
+
+/// Paints a play triangle centred in `rect`, with a bar before it for From start.
+fn play_icon(ui: &egui::Ui, rect: egui::Rect, colour: egui::Color32, bar: bool) {
+    let h = rect.height() * 0.5;
+    let (bar, gap, tri) = match bar {
+        true => (h * 0.22, h * 0.15, h * 0.85),
+        false => (0.0, 0.0, h * 0.85),
+    };
+    let left = rect.center().x - (bar + gap + tri) / 2.0;
+    let (top, bottom) = (rect.center().y - h / 2.0, rect.center().y + h / 2.0);
+    let painter = ui.painter_at(rect);
+    if bar > 0.0 {
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(left + bar, bottom)),
+            0.0,
+            colour,
+        );
+    }
+    let x = left + bar + gap;
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(x, top),
+            egui::pos2(x + tri, rect.center().y),
+            egui::pos2(x, bottom),
+        ],
+        colour,
+        egui::Stroke::NONE,
+    ));
 }
 
 /// The progress bar, `width` wide, with a tick at each mark. Returns the
@@ -205,7 +262,10 @@ fn level_meter(ui: &mut egui::Ui, loudness: Option<f32>, peak: Option<f32>) {
         peak_text
     });
     ui.monospace(format!("{} LUFS", number(loudness)));
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 12.0), egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(160.0, 12.0), egui::Sense::hover());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, "Level")
+    });
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
     let x = |db: f32| rect.left() + rect.width() * meter::fraction(db);

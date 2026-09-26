@@ -236,7 +236,7 @@ playr-gui ~/music/some/album     # play a directory, as playr does
 playr-gui --db other.db          # use a different library file
 ```
 
-It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
+It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. The transport's buttons show media symbols; `transport_text_buttons = true` in the `[gui]` table shows words instead. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
 
 File, Add folder to library scans a directory, as `playr scan` does; File, Rescan library re-scans those folders; File, Library directories lists them, each with a Forget button; File, Remove missing files prunes every recorded folder; and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
 

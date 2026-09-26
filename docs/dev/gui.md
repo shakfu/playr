@@ -60,7 +60,7 @@ Every row is a feature the terminal has today.
 | save selection | `s`, name prompt, y/n before replacing | Save button, name dialog, replace dialog | `StartSave`, `SaveAs` |
 | playlists | list; `a` `d` `r` `enter` | table with track counts; right-click menu; double-click plays | `Add`, `DeletePlaylist`, `StartRename`, `RenameTo`, `Activate` |
 | confirmations | bottom-line question; `y` | modal dialog with Yes and No; `y` still answers | `dispatch::confirmed` |
-| transport | `space` `n` `p` `x` | buttons | `TogglePause`, `Next`, `Prev`, `Stop` |
+| transport | `space` `n` `p` `x` | buttons showing media symbols, named in their tooltips with their keys | `TogglePause`, `Next`, `Prev`, `Stop` |
 | seek | arrows; `:seek` | click or drag on the progress bar; arrows | `SeekTo`, `SeekBy` |
 | progress and marks | gauge, `^` under it | progress bar with a tick per mark; hovering a tick shows its time | |
 | marks | `b` `B` `C` `,` `.` | buttons beside the progress bar; the same keys | `Mark`, `UndoMark`, `ClearMarks`, `PrevMark`, `NextMark` |

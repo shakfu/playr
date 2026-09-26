@@ -47,3 +47,5 @@ sort = ["album_artist", "album", "disc", "track", "title"]
 # for now. A program's table wins over the keys above.
 [gui]
 columns = ["title", "artist", "album", "time"]
+# The transport's buttons as words, such as Prev and Play, not symbols.
+transport_text_buttons = false

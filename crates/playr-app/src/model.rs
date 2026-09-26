@@ -135,6 +135,7 @@ pub struct Model {
     media: Media,
     sampler: Sampler,
     theme: crate::Theme,
+    transport_text_buttons: bool,
     /// The message showing, its words, and when it was shown.
     message: Option<(Message, String, Instant)>,
     quit: bool,
@@ -196,6 +197,7 @@ impl Model {
             media: Media::none(),
             sampler: Sampler::default(),
             theme: config.theme,
+            transport_text_buttons: config.transport_text_buttons,
             message: None,
             quit: false,
             peak_hold: None,
@@ -486,6 +488,11 @@ impl Model {
     /// The colours to draw in, from the settings or `:theme`.
     pub fn theme(&self) -> crate::Theme {
         self.theme
+    }
+
+    /// Whether the window's transport buttons show words rather than symbols.
+    pub fn transport_text_buttons(&self) -> bool {
+        self.transport_text_buttons
     }
 
     /// The columns a track list shows, in order.

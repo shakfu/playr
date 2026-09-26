@@ -302,3 +302,38 @@ fn loading_a_file_reads_the_table_of_the_program_that_asked() {
         "read another's table"
     );
 }
+
+/// Only the window reads `transport_text_buttons`, and only as a boolean.
+#[test]
+fn transport_text_buttons_is_the_window_s_own() {
+    use playr_app::config::Program;
+    assert!(
+        !Config::parse_for(Program::Gui, "")
+            .unwrap()
+            .transport_text_buttons
+    );
+    let text = "[gui]\ntransport_text_buttons = true\n";
+    assert!(
+        Config::parse_for(Program::Gui, text)
+            .unwrap()
+            .transport_text_buttons
+    );
+    // The terminal passes over the window's table.
+    assert!(
+        !Config::parse_for(Program::Terminal, text)
+            .unwrap()
+            .transport_text_buttons
+    );
+    assert_eq!(
+        Config::parse_for(
+            Program::Terminal,
+            "[terminal]\ntransport_text_buttons = true\n"
+        )
+        .unwrap_err(),
+        ["line 2: unknown setting: transport_text_buttons"]
+    );
+    assert_eq!(
+        Config::parse_for(Program::Gui, "[gui]\ntransport_text_buttons = 1\n").unwrap_err(),
+        ["line 2: transport_text_buttons cannot be an integer"]
+    );
+}

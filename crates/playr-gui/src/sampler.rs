@@ -28,6 +28,10 @@ const WHEEL_STEP: f32 = 40.0;
 /// starting a new range.
 const EDGE_REACH: f32 = 8.0;
 
+/// Space, in points, between groups of rows under the waveform: the view's
+/// row, the rows setting the range, and the rows slicing it.
+const GROUP_GAP: f32 = 10.0;
+
 /// The most points a frame takes at the deepest zoom: 1,000 points show
 /// about 60 frames, far enough apart to pick one out.
 const POINTS_PER_FRAME: u64 = 16;
@@ -50,6 +54,9 @@ pub struct State {
     /// sensitivity starts from the settings.
     slices: usize,
     sensitivity: Option<f32>,
+    /// The height the view took besides the waveform in the last frame: its
+    /// header, the detail line and the rows of controls.
+    around: Option<f32>,
     /// The spectrogram's pixels, replaced each frame it is drawn.
     spectrogram: Option<egui::TextureHandle>,
 }
@@ -64,6 +71,7 @@ impl Default for State {
             mark_drag: None,
             slices: 8,
             sensitivity: None,
+            around: None,
             spectrogram: None,
         }
     }
@@ -89,8 +97,11 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    // Room below the waveform for the detail line and five rows of controls.
-    let height = (ui.available_height() - 186.0).max(80.0);
+    // The waveform takes the height the rest of the view left last frame;
+    // 186 points is a first guess, which the frame measures and corrects.
+    let top = ui.cursor().top();
+    let height =
+        (ui.available_height() - state.around.unwrap_or(186.0 + 2.0 * GROUP_GAP)).max(80.0);
     let width = ui.available_width();
     let mut layout = Layout::new(
         peaks,
@@ -333,6 +344,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             actions.push(Action::Snap(Some(snap)));
         }
     });
+    ui.add_space(GROUP_GAP);
     ui.horizontal(|ui| {
         buttons(ui, controls::RANGE_BAR, &mut actions);
         ui.separator();
@@ -353,6 +365,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         loop_slots(ui, &snapshot, sampler.range(current.as_ref()), &mut actions);
         buttons(ui, controls::LOOP_BAR, &mut actions);
     });
+    ui.add_space(GROUP_GAP);
     let sensitivity = state.sensitivity.get_or_insert(model.onset_sensitivity());
     ui.horizontal(|ui| {
         buttons(ui, controls::SLICE_BAR, &mut actions);
@@ -399,6 +412,11 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         ui.separator();
         buttons(ui, controls::WRITE_BAR, &mut actions);
     });
+    let around = ui.cursor().top() - top - height;
+    if state.around.is_none_or(|a| (a - around).abs() > 0.5) {
+        state.around = Some(around);
+        ui.ctx().request_discard("sampler controls height");
+    }
     actions
 }
 

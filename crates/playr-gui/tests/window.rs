@@ -5,7 +5,7 @@
 mod common;
 
 use eframe::egui;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use playr_app::config::Config;
 use playr_app::dispatch::Frontend;
@@ -753,4 +753,138 @@ fn with_fit_on_dragging_one_end_then_the_other_moves_only_that_end() {
         b2 == b1 && a1 < a2 && a2 < b1,
         "{a1}..{b1} became {a2}..{b2}"
     );
+}
+
+/// A window at its minimum size, as `with_min_inner_size` in main.rs, playing a track with a long title, in `view`,
+/// with the transport's buttons as words when `text`.
+fn smallest(dir: &std::path::Path, view: &str, text: bool) -> Harness<'static, Gui> {
+    sized(dir, view, text, 480.0)
+}
+
+/// The same, 800 points wide and `height` high.
+fn sized(dir: &std::path::Path, view: &str, text: bool, height: f32) -> Harness<'static, Gui> {
+    let file = dir.join("Boards of Canada - Inferno - 10 The Word Becomes Flesh.wav");
+    common::levels(&file, 8000, &[(1.0, -3.0), (11.0, -40.0)]);
+    let track = Track {
+        path: file.to_string_lossy().into_owned(),
+        title: Some("The Word Becomes Flesh (Live at the Inferno, Extended Version)".into()),
+        artist: Some("Boards of Canada".into()),
+        ..Default::default()
+    };
+    let model = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        vec![track],
+        Config {
+            transport_text_buttons: text,
+            ..Config::default()
+        },
+    );
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(800.0, height))
+        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
+    harness.run_steps(2);
+    // The sampler reads the waveform only while shown.
+    typing(&mut harness, "4");
+    wait(&mut harness, |m| {
+        m.snapshot().status.duration.is_some()
+            && matches!(m.sampler().wave, playr_app::sampler::Wave::Ready { .. })
+    });
+    typing(&mut harness, view);
+    harness.run_steps(4);
+    harness
+}
+
+#[test]
+fn every_control_fits_the_smallest_window_without_overlap() {
+    for (view, text) in [("1", false), ("4", false), ("1", true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let harness = smallest(dir.path(), view, text);
+        harness.get_by_label("Level");
+        let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 480.0));
+        let leaves: Vec<(egui::Rect, String)> = harness
+            .query_all(egui_kittest::kittest::by())
+            .filter(|n| n.accesskit_node().children().next().is_none())
+            .map(|n| {
+                let a = n.accesskit_node();
+                let name = a.label().or_else(|| a.value()).unwrap_or_default();
+                (n.rect(), format!("{:?} {name:?}", a.role()))
+            })
+            .filter(|(r, _)| r.area() > 0.0)
+            .collect();
+        for (rect, name) in &leaves {
+            assert!(
+                window.contains_rect(*rect),
+                "view {view}: {name} at {rect:?}"
+            );
+        }
+        for (i, (a, an)) in leaves.iter().enumerate() {
+            for (b, bn) in &leaves[i + 1..] {
+                assert!(
+                    a.intersect(*b).area() <= 0.0,
+                    "view {view}: {an} at {a:?} overlaps {bn} at {b:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn replaygain_is_chosen_in_the_playback_menu() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    harness.get_by_label("Playback").click();
+    harness.run_steps(2);
+    harness
+        .get(egui_kittest::kittest::by().label_contains("ReplayGain"))
+        .hover();
+    harness.run_steps(2);
+    harness.get_by_label("album").click();
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().model().replaygain(),
+        playr_core::gain::ReplayGain::Album
+    );
+}
+
+#[test]
+fn transport_buttons_show_symbols_but_keep_their_names() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    for name in ["Prev", "Play", "From start", "Stop", "Next"] {
+        harness.get_by_label(name);
+    }
+    assert!(harness.query_by_label("\u{23EE}").is_none());
+}
+
+#[test]
+fn transport_text_buttons_show_words() {
+    let width = |text: bool| {
+        let dir = tempfile::tempdir().unwrap();
+        let harness = smallest(dir.path(), "1", text);
+        let rect = |label: &str| harness.get_by_label(label).rect();
+        (rect("From start").width(), rect("Stop").width())
+    };
+    // Symbols share one size; words take their own.
+    let (from_start, stop) = width(false);
+    assert!(
+        (from_start - stop).abs() < 0.5,
+        "{from_start} against {stop}"
+    );
+    let (from_start, stop) = width(true);
+    assert!(from_start > stop + 20.0, "{from_start} against {stop}");
+}
+
+#[test]
+fn the_waveform_takes_the_height_the_controls_leave() {
+    for height in [480.0, 720.0] {
+        let dir = tempfile::tempdir().unwrap();
+        let harness = sized(dir.path(), "4", false, height);
+        let rect = |label: &str| harness.get_by_label(label).rect();
+        let gap = rect("Prev").top() - rect("Discard slices").bottom();
+        assert!(
+            gap < 30.0,
+            "at {height} points, {gap} points below the controls"
+        );
+    }
 }
