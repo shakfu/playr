@@ -26,6 +26,22 @@ fn only_its_owner_can_read_the_token() {
     assert_eq!(mode & 0o777, 0o600);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_token_others_can_read_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("server.token");
+    let made = load_or_create(&path).unwrap();
+    for mode in [0o640, 0o604, 0o620] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        let err = load_or_create(&path).unwrap_err();
+        assert!(err.to_string().contains("chmod 600"), "{err}");
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+    assert_eq!(load_or_create(&path).unwrap(), made);
+}
+
 #[test]
 fn a_file_that_is_not_a_token_is_an_error() {
     let dir = tempfile::tempdir().unwrap();

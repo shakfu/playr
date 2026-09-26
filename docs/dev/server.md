@@ -117,7 +117,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 - **Listening.** HTTP binds to `127.0.0.1` unless `--listen` names an address. OSC is off unless `--osc` names one. A Pi's service file names both.
 
-- **Token.** Generated on first start, kept in `server.token` beside the library with mode 0600, printed at startup. `GET /?token=` sets a cookie; every other route requires it.
+- **Token.** Generated on first start, kept in `server.token` beside the library with mode 0600, printed at startup. On Unix, a file others can read or write is refused. `GET /?token=` sets a cookie; every other route requires it.
 
 - **`--open`.** No token: anyone who can reach the address controls playr. Chosen for a home network over a login page, since a phone cannot easily take a 64-character address, and a proxy in front can add authentication where it is needed. The token stays the default, so `--listen 0.0.0.0` alone does not expose playr.
 

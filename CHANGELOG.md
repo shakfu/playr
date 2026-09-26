@@ -4,6 +4,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.12.0]
+
 ### Added
 
 - Saved loops: up to 8 a track, kept in the library beside its marks. `:loop N`, on F1 to F8 in the sampler and numbered buttons in the window, saves the range to an empty slot and recalls a full one, making it the range and looping it; `:loop N save`, on shift-F1 to F8 or shift-click, saves over one, `:loop N clear` empties it, and `:loops clear`, or Clear loops in the window, empties them all after asking. One command both saving and recalling, by whether the slot is full, over separate save and load commands: a loop is set up once and recalled many times, so the common case takes one key. Pruning and forgetting a root remove a track's loops with its marks. The table needs no schema version, as `roots` did not. Library API: `db::query::loops`, `save_loop`, `clear_loop`, `clear_loops`; `Session::loops_for`, `save_loop`, `clear_loop`, `loops_to_clear`, `clear_loops`, `LOOP_SLOTS`, `Loops`; `Outcome::LoopSaved`, `LoopCleared`, `LoopsCleared`; `Refusal::NoLoops`; `Task::Loop`; `Confirm::ClearLoops`; `Action::ClearLoops`; `Snapshot::loops`; `Action::LoopSlot`, `SlotOp`; `Message::LoopRecalled`, `NoRangeToSave`.
@@ -27,6 +29,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 - A Windows path in double quotes in `settings.toml`, as `samples = "C:\Music"`, now gets an error saying to use single quotes or forward slashes. Before, it got toml's message about escapes, or, if every backslash was a valid escape, as in `"C:\new"`, "samples must be an absolute path". A path with a control character in it is now refused, so a half-escaped `"C:\\Music\temp"` is not used with a tab in it.
 
 - A drag on the window's waveform moved what it dragged by as much as the view moved under it. The view moves while a drag is under way when it follows the playhead, and, with Fit range on, when the drag picks the other end to centre on: dragging the start after the end put the start a range's length outside the old range. The view now holds still until the drag ends.
+
+- `playr-server` now refuses a `server.token` that other users can read or write, and says to `chmod 600` it. Only a token it created was made 0600; one copied or restored with wider permissions was used as found. Refuse over repairing the mode: a changed mode may mean others have already read the token.
+
+- The README gave Rust 1.89 for building everything; `playr-gui` needs 1.95.
 
 ## [0.11.0]
 

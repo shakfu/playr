@@ -13,9 +13,22 @@ pub fn default_path() -> PathBuf {
 }
 
 /// Reads the token at `path`, or creates one there, readable only by its owner.
+/// On Unix, an existing file others can read or write is refused.
 pub fn load_or_create(path: &Path) -> io::Result<String> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(path)?.permissions().mode();
+                if mode & 0o077 != 0 {
+                    return Err(io::Error::other(format!(
+                        "{} is open to other users (mode {:o}); run `chmod 600` on it, or delete it to make a new token",
+                        path.display(),
+                        mode & 0o777
+                    )));
+                }
+            }
             let token = text.trim();
             if token.len() == BYTES * 2 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
                 Ok(token.to_string())

@@ -176,7 +176,7 @@ cargo install --git https://github.com/shakfu/playr playr-server # the server, f
 
 ### Building
 
-Building needs Rust 1.89+ and a C compiler. SQLite is vendored and compiled from source, which is what the C compiler is for; no SQLite package has to be installed. On Linux it also needs the ALSA headers, and the window needs the X11 and Wayland development headers. On Debian and Ubuntu:
+Building needs Rust 1.89+ and a C compiler; the window, `playr-gui`, needs Rust 1.95+, as egui does. SQLite is vendored and compiled from source, which is what the C compiler is for; no SQLite package has to be installed. On Linux it also needs the ALSA headers, and the window needs the X11 and Wayland development headers. On Debian and Ubuntu:
 
 ```sh
 sudo apt install libasound2-dev                       # both programs
@@ -488,8 +488,11 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 ReplayGain plays each track at one fixed gain that brings it to -18 LUFS, as ReplayGain 2.0 does. It does not compress: the track's dynamics are unchanged. `:replaygain` or the `replaygain` setting chooses it:
 
 - `off`, the default: nothing changes, bit for bit.
+
 - `track`: each track at its own gain.
+
 - `album`: each track at its album's gain, so a quiet track stays quiet beside the others.
+
 - `auto`: album gain in normal and repeat modes, track gain in shuffle and repeat one.
 
 Gains come from `playr analyze`, else from the file's `REPLAYGAIN_*` or `R128_*` tags. The analysis is preferred, so the whole library is measured one way. An album's gain needs every track of the album analysed; until then its tracks take their own. An album is its album tag and album artist, or its album tag and directory when there is no album artist. A track with neither analysis nor tags plays at 0 dB.

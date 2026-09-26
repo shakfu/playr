@@ -154,6 +154,8 @@ What is missing, grouped by priority:
 
 ### Architecture
 
+- [ ] **Unmaintained dependencies.** `cargo audit` finds no vulnerabilities, but warns that `derivative`, `instant` and `ttf-parser`, pulled in by egui, are unmaintained. Recheck after each egui upgrade. **upstream**.
+
 - [ ] **A playback snapshot in the core.** `Model` in `playr-app` assembles position, levels, marks and the held peak; a frontend that skips `playr-app`, such as a Tauri backend, would repeat it. A `Session::playback()` would serve both. See `docs/architecture.md`.
 
 - [ ] **A `serde` feature on core types.** Step 8 of `docs/architecture.md`, deferred until a Tauri frontend, a daemon or more JSON output needs it. `playr search --json` already fixes a track's field names.

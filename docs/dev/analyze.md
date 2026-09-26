@@ -162,11 +162,7 @@ A `:analyze` command, running in the background as `:slice` does, can come later
 
 ### Tempo, against librosa
 
-No file in the library to hand carries a BPM tag, so the reference is a second
-algorithm: librosa's `feature.rhythm.tempo`, over the same 328 tracks (mostly
-ambient and electronic, decoded to mono at 22.05 kHz by ffmpeg). "Metrical" is
-an answer at a simple ratio of librosa's: half, double, 3:2, 3:4 and so on,
-within 4%.
+No file in the library to hand carries a BPM tag, so the reference is a second algorithm: librosa's `feature.rhythm.tempo`, over the same 328 tracks (mostly ambient and electronic, decoded to mono at 22.05 kHz by ffmpeg). "Metrical" is an answer at a simple ratio of librosa's: half, double, 3:2, 3:4 and so on, within 4%.
 
 | `MIN_CONFIDENCE` | Tracks kept | Same | Metrical | Unrelated |
 |-|-|-|-|-|
@@ -177,16 +173,9 @@ within 4%.
 | 0.5 | 98 (30%) | 65% | 27% | 8% |
 | 0.6 | 68 (21%) | 63% | 31% | 6% |
 
-0.3 is the knee: unrelated answers fall from 19% to 12% for 13 points of
-coverage, and each step after that costs about 8 points of coverage for 2 of
-agreement. Confidence orders the library as it should, from 18% agreement
-below 0.1 to 63% above 0.6.
+0.3 is the knee: unrelated answers fall from 19% to 12% for 13 points of coverage, and each step after that costs about 8 points of coverage for 2 of agreement. Confidence orders the library as it should, from 18% agreement below 0.1 to 63% above 0.6.
 
-Two things this does not say. librosa is not ground truth: on music with no
-pulse both estimators return a number, so "unrelated" counts a disagreement,
-not a proven error. And both weight lags towards 120 BPM, so they may share an
-octave bias; the 28% metrical share is a floor, and the 60% exact share is
-optimistic.
+Two things this does not say. librosa is not ground truth: on music with no pulse both estimators return a number, so "unrelated" counts a disagreement, not a proven error. And both weight lags towards 120 BPM, so they may share an octave bias; the 28% metrical share is a floor, and the 60% exact share is optimistic.
 
 ### Cost
 
