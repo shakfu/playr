@@ -9,6 +9,8 @@
 //! 4 down a cell, which shows its shape. The spectrogram draws two rows a cell
 //! in upper half blocks, one in the glyph's colour and one behind it, or in
 //! shades where colour is off.
+//! The scope view draws its trace and stereo image in Braille too, and its
+//! bars in eighth blocks.
 //! Only these glyphs are not ASCII; everything else in the view is. The view's
 //! state and column geometry are in `playr_app::sampler`.
 
@@ -91,6 +93,29 @@ pub fn braille_rows(extents: &[(f32, f32)], height: usize) -> Vec<String> {
         }
         for dot in row_of(hi)..=row_of(lo) {
             grid[dot / 4][i / 2] |= BITS[i % 2][dot % 4];
+        }
+    }
+    grid.iter()
+        .map(|row| {
+            row.iter()
+                .map(|&bits| char::from_u32(0x2800 + bits).expect("in the Braille block"))
+                .collect()
+        })
+        .collect()
+}
+
+/// Rows, top first, of Braille dots at `points`, each coordinate from -1 to
+/// 1 with `y` up, across `width` cells and down `height` rows.
+pub fn braille_points(points: &[(f32, f32)], width: usize, height: usize) -> Vec<String> {
+    const BITS: [[u32; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
+    let (across, down) = (2 * width, 4 * height);
+    let dot =
+        |v: f32, n: usize| ((v.clamp(-1.0, 1.0) + 1.0) / 2.0 * (n - 1) as f32).round() as usize;
+    let mut grid = vec![vec![0u32; width]; height];
+    if width > 0 && height > 0 {
+        for &(x, y) in points {
+            let (col, row) = (dot(x, across), down - 1 - dot(y, down));
+            grid[row / 4][col / 2] |= BITS[col % 2][row % 4];
         }
     }
     grid.iter()

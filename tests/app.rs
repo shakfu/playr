@@ -1404,3 +1404,19 @@ fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
     command(&mut app, "slice region");
     assert!(matches!(wait_for_export(&mut app), Ok((_, 1))));
 }
+
+#[test]
+fn tab_and_shift_tab_step_through_the_views_both_ways() {
+    use playr::ui::View;
+    let (mut app, _dir) = app();
+    command(&mut app, "view library");
+    key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(app.screen().view, View::Selection);
+    // A terminal sends shift-tab as BackTab.
+    key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert_eq!(app.screen().view, View::Library);
+    key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert_eq!(app.screen().view, View::Scope);
+    key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert_eq!(app.screen().view, View::Sampler);
+}

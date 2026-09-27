@@ -47,7 +47,8 @@ impl Default for Histogram {
 }
 
 impl Histogram {
-    fn add(&mut self, lufs: f32) {
+    /// Counts one gating block of `lufs`.
+    pub fn add(&mut self, lufs: f32) {
         let bin = ((lufs - LOWEST_LUFS).floor() as usize).min(BINS - 1);
         self.bins[bin].0 += 1;
         self.bins[bin].1 += energy(lufs);

@@ -19,6 +19,7 @@ fn every_action() -> Vec<Action> {
         Action::CommandHelp,
         Action::ShowView(View::Library),
         Action::NextView,
+        Action::PrevView,
         Action::Cursor(1),
         Action::CursorFirst,
         Action::CursorLast,
@@ -92,6 +93,8 @@ fn every_action() -> Vec<Action> {
         Action::WriteSlices,
         Action::DiscardSlices,
         Action::Theme(Theme::System),
+        Action::SetLoudnessTarget(-14.0),
+        Action::LoudnessTargetBy(1.0),
         Action::SetColumns(vec![playr_core::columns::Column::Title]),
         Action::SetSort(Vec::new()),
         Action::Map {
@@ -110,6 +113,7 @@ fn every_action() -> Vec<Action> {
             | Action::CommandHelp
             | Action::ShowView(_)
             | Action::NextView
+            | Action::PrevView
             | Action::Cursor(_)
             | Action::CursorFirst
             | Action::CursorLast
@@ -183,6 +187,8 @@ fn every_action() -> Vec<Action> {
             | Action::WriteSlices
             | Action::DiscardSlices
             | Action::Theme(_)
+            | Action::SetLoudnessTarget(_)
+            | Action::LoudnessTargetBy(_)
             | Action::SetColumns(_)
             | Action::SetSort(_)
             | Action::Map { .. }

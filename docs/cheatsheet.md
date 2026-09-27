@@ -25,8 +25,9 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:help`                               |                         | list these commands                         |
 | `:keys`                               | `?`                     | list the keys for this view                 |
 | `:quit`                               | `q`                     | quit                                        |
-| `:view VIEW`                          | `1` `2` `3` `4`         | library, selection, playlists or sampler    |
+| `:view VIEW`                          | `1` to `5`              | the view named, as on its tab               |
 | `:next-view`                          | `tab`                   | switch to the next view                     |
+| `:prev-view`                          | shift-tab               | switch to the previous view                 |
 | `:down [N]`                           | `j`, down, page down    | move the cursor down N rows, default 1      |
 | `:up [N]`                             | `k`, up, page up        | move the cursor up N rows, default 1        |
 | `:first`                              | `g`, home               | move the cursor to the first row            |
@@ -114,6 +115,14 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:discard`                         | `esc`                   | discard planned slices, else the range |
 
 In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; `[` or `]` picks an end, shown reversed, for `{` and `}` to move while it loops. `esc` clears the range once no slices are planned.
+
+## Scope
+
+| command                          | key     | does                                       |
+|----------------------------------|---------|--------------------------------------------|
+| `:loudness-target =LUFS\|+N\|-N` | `<` `>` | set the loudness drawn against, or move it |
+
+The loudness history is drawn from 20 LU below the target to 10 LU above it. A dashed line marks the target and a solid one the integrated loudness. In the terminal each is a row: the target yellow `-`, the integrated loudness `=` in the text colour. Each keeps its colour through the bars, and is reversed there without colour. A sign makes a change relative, so `=` sets the target: `:loudness-target =-16`.
 
 ## Typing commands
 

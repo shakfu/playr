@@ -31,6 +31,8 @@ None of the three contact external services or download any metadata and images.
 
 - Spectrogram of the playing track in the sampler view, read with its waveform, in the terminal and the window
 
+- Scope view: a waveform trace, a spectrum, a stereo image with the channels' correlation, and the last minute's loudness, in the terminal and the window
+
 - Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
 
 - Volume as a float gain applied before quantisation
@@ -77,7 +79,7 @@ None of the three contact external services or download any metadata and images.
 
 **Interface**
 
-- Four views: library, selection, playlists, and a sampler showing the playing track's waveform or spectrogram; the web page has the first three
+- Five views: library, selection, playlists, a sampler showing the playing track's waveform or spectrogram, and a scope showing what plays; the web page has the first three
 
 - Dark and light themes; the terminal takes its colours from its own theme, and honours `NO_COLOR`
 
@@ -121,6 +123,7 @@ Only one runs at a time: while one is running, the others, `playr scan` and `pla
 | playback modes, varispeed, volume, level meter | yes | yes | yes |
 | ReplayGain | yes | yes | yes |
 | sampler view and `:slice` | yes | yes | no |
+| scope view | yes | yes | no |
 | mouse | no | yes | yes, and touch |
 | media keys and the now-playing panel | yes* | yes | no |
 | opens, scans or prunes a path it is given | yes | yes | no |
@@ -131,7 +134,7 @@ Only one runs at a time: while one is running, the others, `playr scan` and `pla
 
 \* Not on Windows, where the panel attaches to a window and the terminal has none.
 
-The page reaches playr over a network, so it refuses the sampler, any command naming a path, `:map` and quitting. [docs/dev/server.md](docs/dev/server.md) holds the allow list.
+The page reaches playr over a network, so it refuses the sampler and scope views, any command naming a path, `:map` and quitting. [docs/dev/server.md](docs/dev/server.md) holds the allow list.
 
 ## Install
 
@@ -226,7 +229,7 @@ playr --device ID           # play to that device instead of the default
 
 `playr <command> --help` describes each command. A search that starts with `-` goes after `--`, as in `playr search -- -ology`. `--json` prints an array with one object per track, holding every library column, `null` for a missing tag, and `duration_ms` in milliseconds; no match prints `[]` and exits with status 1. Bad arguments exit with status 2.
 
-Without a command it opens the four views on the library. It draws in any terminal, needs no display server, and runs over SSH. [Keys](#keys) lists the bindings, and `?` lists them for the view you are in.
+Without a command it opens the five views on the library. It draws in any terminal, needs no display server, and runs over SSH. [Keys](#keys) lists the bindings, and `?` lists them for the view you are in.
 
 ### The desktop window
 
@@ -236,7 +239,7 @@ playr-gui ~/music/some/album     # play a directory, as playr does
 playr-gui --db other.db          # use a different library file
 ```
 
-It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. The transport's buttons show media symbols; `transport_text_buttons = true` in the `[gui]` table shows words instead. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
+It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, the scope view, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. The transport's buttons show media symbols; `transport_text_buttons = true` in the `[gui]` table shows words instead. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
 
 File, Add folder to library scans a directory, as `playr scan` does; File, Rescan library re-scans those folders; File, Library directories lists them, each with a Forget button; File, Remove missing files prunes every recorded folder; and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
 
@@ -248,7 +251,7 @@ playr-server --listen 0.0.0.0:8080   # reach it from other devices
 playr-server --db other.db           # use a different library file
 ```
 
-`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page that controls it. It takes the terminal's options and reads the same settings file, so the page's keys and `:` commands are the terminal's. The page has the library, selection and playlists views, search, row menus, dialogs, marks, themes and the level meter, without the sampler. It adapts to a phone, a tablet or a desktop browser: click or tap a row to move the cursor, again to play, right-click or `...` for its menu, and shift-click the progress bar to add a mark.
+`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page that controls it. It takes the terminal's options and reads the same settings file, so the page's keys and `:` commands are the terminal's. The page has the library, selection and playlists views, search, row menus, dialogs, marks, themes and the level meter, without the sampler or scope. It adapts to a phone, a tablet or a desktop browser: click or tap a row to move the cursor, again to play, right-click or `...` for its menu, and shift-click the progress bar to add a mark.
 
 Every request needs a token, printed in the startup address and kept in `server.token` beside the library. Opening that address sets a cookie for a year, so each browser needs it once. `--open` serves the page without a token, for a network where every device is trusted; the `Host` and `Origin` checks still refuse a website whose domain resolves to the machine.
 
@@ -321,7 +324,7 @@ These keys are the same in the terminal, the window and the web page, and any of
 
 | keys                     | action                                      |
 |--------------------------|---------------------------------------------|
-| `tab`, `1` `2` `3` `4`   | switch view; `4` is the sampler             |
+| `tab` shift-tab `1`-`5`  | next, previous view; `4` sampler, `5` scope |
 | `j` `k`, up/down         | move                                        |
 | `g` `G`, home/end        | jump to first or last                       |
 | page up/down             | move by ten                                 |
@@ -477,6 +480,20 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 The waveform glyphs are the view's only characters outside ASCII. Marks are placed at the playhead, or in the window at a shift-click.
 
+### Scope view
+
+`5` shows what plays, before the volume and after ReplayGain, as the level meter does:
+
+- **Waveform.** The last 20 ms, starting at a rising zero crossing, so a steady tone stands still.
+
+- **Spectrum.** 128 bands from 20 Hz to half the sample rate, spaced evenly in log frequency, from one 2048-point transform. A band's level falls 24 dB a second after the sound stops. A lossy file's lowpass shows as bars ending early, often near 16 kHz.
+
+- **Stereo.** Each frame is a dot. Mono lies on the vertical axis, and one channel alone on a diagonal. Content out of phase spreads sideways. Below it, the channels' correlation runs from -1 to +1; below 0, they partly cancel when summed to mono. A device with more than two channels shows its first two.
+
+- **Loudness.** Momentary loudness over the last minute, ten readings a second, from 20 LU below the loudness target to 10 LU above it. The target is a dashed line; the window also draws the playing track's integrated loudness so far, and the title gives both. The target is `loudness_target` in `settings.toml`, -14 LUFS by default, which is what most streaming services play music at. Podcasts aim near -16 and club masters near -9. In this view, `:loudness-target =-16` sets it, `<` and `>` move it by 1 LU, and the window has a field for it.
+
+The loudness history is kept in every view. The rest is read only while the scope shows. The terminal redraws 30 times a second then, and 5 otherwise.
+
 ### Varispeed
 
 `(` and `)` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
@@ -516,6 +533,7 @@ volume = 60                        # percent, 0 to 100
 mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in full
 speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
+loudness_target = -16              # LUFS the scope's loudness is drawn against, -40 to 0
 samples = "~/Music/playr/samples"  # where :slice writes; on Windows, 'C:\Music'
 slice_edges = "zero"               # exact, zero or fade; see Samples
 slice_fade_in = 1                  # ms, for slice_edges = "fade", 0 to 100
@@ -538,7 +556,7 @@ ctrl-s = "save"
 q = "nop"
 "?" = "help"
 
-[keys.selection]                   # one view: library, selection, playlists or sampler
+[keys.selection]                   # one view: library, selection, playlists, sampler or scope
 x = "remove"
 ```
 

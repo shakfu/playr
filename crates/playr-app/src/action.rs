@@ -25,6 +25,7 @@ pub enum Action {
     CommandHelp,
     ShowView(View),
     NextView,
+    PrevView,
     /// Move the cursor this many rows; negative is up.
     Cursor(i64),
     CursorFirst,
@@ -159,6 +160,10 @@ pub enum Action {
     DiscardSlices,
     /// Draw in these colours.
     Theme(crate::Theme),
+    /// Draw the scope's loudness history against this level, in LUFS.
+    SetLoudnessTarget(f32),
+    /// Raise or lower the loudness target, in LU.
+    LoudnessTargetBy(f32),
     /// Show these columns, in this order, until playr exits.
     SetColumns(Vec<playr_core::columns::Column>),
     /// Sort every track list by these keys, until playr exits.

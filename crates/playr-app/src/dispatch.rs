@@ -131,6 +131,11 @@ pub enum Presentation {
     /// Draw the waveform this way, or the next way when `None`.
     Display(Option<Display>),
     Theme(Theme),
+    /// Draw the loudness history against this target, or move it by `by`.
+    LoudnessTarget {
+        lufs: f32,
+        by: bool,
+    },
 }
 
 /// What [`dispatch`] needs from a frontend.
@@ -183,6 +188,10 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::NextView => {
             let next = f.view().next();
             f.set_view(next);
+        }
+        Action::PrevView => {
+            let prev = f.view().prev();
+            f.set_view(prev);
         }
         Action::Cursor(rows) => move_cursor(f, rows),
         Action::CursorFirst => select(f, 0),
@@ -355,6 +364,12 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Zoom(zoom) => f.present(Presentation::Zoom(zoom)),
         Action::Display(display) => f.present(Presentation::Display(display)),
         Action::Theme(theme) => f.present(Presentation::Theme(theme)),
+        Action::SetLoudnessTarget(lufs) => {
+            f.present(Presentation::LoudnessTarget { lufs, by: false })
+        }
+        Action::LoudnessTargetBy(lufs) => {
+            f.present(Presentation::LoudnessTarget { lufs, by: true })
+        }
         Action::SetColumns(columns) => f.present(Presentation::Columns(columns)),
         Action::SetSort(keys) => {
             // The cursor follows its track rather than its row number, and
@@ -722,14 +737,14 @@ fn len(f: &impl Frontend, view: View) -> usize {
         View::Library => f.listed().len(),
         View::Selection => f.session().selection().len(),
         View::Playlists => f.session().playlists().len(),
-        View::Sampler => 0,
+        View::Sampler | View::Scope => 0,
     }
 }
 
 /// Puts the current view's cursor on row `i`, or its last row.
 fn select(f: &mut impl Frontend, i: usize) {
     let view = f.view();
-    if view == View::Sampler {
+    if matches!(view, View::Sampler | View::Scope) {
         return;
     }
     let row = match len(f, view) {
@@ -788,7 +803,7 @@ fn activate(f: &mut impl Frontend) {
                 f.notify(notice.into());
             }
         }
-        View::Sampler => {}
+        View::Sampler | View::Scope => {}
     }
 }
 
@@ -815,7 +830,7 @@ fn add(f: &mut impl Frontend) {
             };
             outcome
         }
-        View::Selection | View::Sampler => return,
+        View::Selection | View::Sampler | View::Scope => return,
     };
     // Keep the selection's cursor on a track: on the first once a track is
     // added, and within the list when unselecting shortens it.

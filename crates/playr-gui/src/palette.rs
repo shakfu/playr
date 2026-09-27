@@ -2,6 +2,7 @@
 //! backgrounds and the playhead take theirs from egui's `Visuals`.
 
 use eframe::egui::{Color32, Visuals};
+use playr_app::meter;
 
 /// Colours of the waveform, marks, messages and level meter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,15 @@ impl Palette {
             &DARK
         } else {
             &LIGHT
+        }
+    }
+
+    /// The colour of the meter's zone for a level of `db`.
+    pub fn zone(&self, db: f32) -> Color32 {
+        match meter::zone(db) {
+            meter::Zone::Green => self.green,
+            meter::Zone::Yellow => self.yellow,
+            meter::Zone::Red => self.red,
         }
     }
 }

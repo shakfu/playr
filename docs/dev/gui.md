@@ -50,7 +50,7 @@ Every row is a feature the terminal has today.
 
 | feature | terminal | GUI | actions |
 |-|-|-|-|
-| views | tabs; `1` to `4`, `tab` | tab bar | `ShowView`, `NextView` |
+| views | tabs; `1` to `5`, `tab` | tab bar | `ShowView`, `NextView` |
 | cursor | highlighted row; `j` `k` `g` `G` | highlighted row; click; the same keys | `Cursor`, `CursorFirst`, `CursorLast` |
 | library | columns fitted to the width | a table with resizable columns, only visible rows laid out | |
 | play from a row | `enter` | double-click; `enter` | `Activate` |
@@ -76,6 +76,7 @@ Every row is a feature the terminal has today.
 | key bindings | `:map`, `:unmap` | the same commands | `Map`, `Unmap` |
 | theme | `:theme`; `system` and `dark` use the terminal's ANSI colours, `light` a 256-colour set | View, Theme; `system` follows the system's appearance | `Theme` |
 | sampler waveform | eighth blocks, dB, half-block spectrogram, Braille | painted: envelope, dB, a spectrogram texture, and a min/max line waveform | `Display` |
+| scope | Braille trace and stereo image; eighth-block spectrum and loudness history | painted, each pane labelled for screen readers with its readout | `ShowView` |
 | zoom | `z` `Z` `0` | mouse wheel over the waveform; the same keys | `Zoom` |
 | sampler seek and mark | arrows nudge a column or a tenth of the view; `S` snaps | click to seek; a modifier-click adds a mark at that point; the same keys; a Snap to zero tick box | `SeekTo`, `MarkAt`, `Nudge`, `Snap` |
 | range | `<` `>` `backspace` `esc`, `:range`; ends drawn as `[` `]` | a drag across the waveform, or from an edge to move it; Range in, Range out and Clear range buttons; `esc`; ends drawn as lines | `RangeIn`, `RangeOut`, `SetRange`, `DiscardSlices` |

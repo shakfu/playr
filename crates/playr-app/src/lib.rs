@@ -20,6 +20,7 @@ pub mod message;
 pub mod meter;
 pub mod model;
 pub mod sampler;
+pub mod scope;
 
 /// A part of the interface that scopes key bindings and commands. A terminal
 /// shows one at a time; a GUI maps its panels or focus onto them.
@@ -30,15 +31,18 @@ pub enum View {
     Playlists,
     /// The playing track's waveform, for marking and slicing it.
     Sampler,
+    /// What plays: loudness history, spectrum, stereo image and waveform.
+    Scope,
 }
 
 impl View {
     /// The views in tab order.
-    pub const ALL: [View; 4] = [
+    pub const ALL: [View; 5] = [
         View::Library,
         View::Selection,
         View::Playlists,
         View::Sampler,
+        View::Scope,
     ];
 
     /// The view's name on its tab.
@@ -48,6 +52,7 @@ impl View {
             View::Selection => "Selection",
             View::Playlists => "Playlists",
             View::Sampler => "Sampler",
+            View::Scope => "Scope",
         }
     }
 
@@ -57,8 +62,18 @@ impl View {
             View::Library => View::Selection,
             View::Selection => View::Playlists,
             View::Playlists => View::Sampler,
-            View::Sampler => View::Library,
+            View::Sampler => View::Scope,
+            View::Scope => View::Library,
         }
+    }
+
+    /// The view `prev-view` switches to after this one.
+    pub fn prev(self) -> Self {
+        let at = View::ALL
+            .iter()
+            .position(|v| *v == self)
+            .expect("every view");
+        View::ALL[(at + View::ALL.len() - 1) % View::ALL.len()]
     }
 }
 

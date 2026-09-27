@@ -12,6 +12,10 @@ mode = "normal"
 speed = 0
 # How readily :slice onsets finds hits, 0 to 1; higher finds more.
 onset_sensitivity = 0.5
+# The loudness the scope's history is drawn against, in LUFS, -40 to 0. -14
+# is what most streaming services play music at; podcasts aim for -16, and
+# club masters run near -9.
+loudness_target = -14
 # Where :slice writes, one directory per slicing. ~ is your home. On Windows,
 # write 'C:\Music' in single quotes, or "C:/Music": in "...", \ is an escape.
 samples = "~/Music/playr/samples"

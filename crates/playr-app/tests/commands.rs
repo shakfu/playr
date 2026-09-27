@@ -60,10 +60,7 @@ fn view_commands_work_only_in_their_view() {
         (Playlists, "rename  dawn ", Action::RenameTo("dawn".into())),
     ] {
         assert_eq!(parse(line, view), Ok(action), "{line:?}");
-        for other in [Library, Selection, Playlists, View::Sampler]
-            .into_iter()
-            .filter(|v| *v != view)
-        {
+        for other in View::ALL.into_iter().filter(|v| *v != view) {
             let name = line.split_whitespace().next().unwrap();
             let there = format!("{view:?}").to_lowercase();
             assert_eq!(
@@ -121,7 +118,7 @@ fn every_command_parses_in_its_views_and_names_only_itself() {
     for c in COMMANDS {
         let views = match c.view {
             Some(v) => vec![v],
-            None => vec![Library, Selection, Playlists, View::Sampler],
+            None => View::ALL.to_vec(),
         };
         for view in views {
             let result = parse(c.name, view);
@@ -368,9 +365,10 @@ fn mode_and_view_take_a_name_or_its_prefix() {
     );
     assert_eq!(lib("view sel"), Ok(Action::ShowView(Selection)));
     assert_eq!(lib("view p"), Ok(Action::ShowView(Playlists)));
+    assert_eq!(lib("view sc"), Ok(Action::ShowView(View::Scope)));
     assert_eq!(
         lib("view queue"),
-        Err("views: library, selection, playlists, sampler".into())
+        Err("views: library, selection, playlists, sampler, scope".into())
     );
     assert_eq!(
         lib("mode"),
@@ -412,7 +410,15 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     };
     assert_eq!(
         completions("p", Library, &playlists),
-        ["play", "playlist", "prune", "pause", "prev", "prev-mark"]
+        [
+            "play",
+            "playlist",
+            "prune",
+            "pause",
+            "prev",
+            "prev-mark",
+            "prev-view"
+        ]
     );
     assert_eq!(completions("", Library, &playlists).len(), usable(Library));
     assert_eq!(
@@ -437,7 +443,8 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
             "view library",
             "view selection",
             "view playlists",
-            "view sampler"
+            "view sampler",
+            "view scope"
         ]
     );
     // Playlist names match without regard to case.
@@ -466,12 +473,12 @@ fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     assert_eq!(line.text, "play");
     line.complete(true, Library, &[]);
     assert_eq!(line.text, "playlist");
-    for _ in 0..5 {
+    for _ in 0..6 {
         line.complete(true, Library, &[]);
     }
     assert_eq!(line.text, "play", "the cycle does not wrap");
     line.complete(false, Library, &[]);
-    assert_eq!(line.text, "prev-mark");
+    assert_eq!(line.text, "prev-view");
 
     // Typing ends the cycle, so Tab now completes the new text.
     line.text.clear();
@@ -483,7 +490,7 @@ fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     back.push('p');
     back.complete(false, Library, &[]);
     assert_eq!(
-        back.text, "prev-mark",
+        back.text, "prev-view",
         "shift-tab does not start from the last"
     );
 
@@ -622,7 +629,7 @@ fn every_default_key_runs_a_command_usable_in_its_views() {
         let action = b.action.clone().expect("no default binds a key to nothing");
         let views = match b.view {
             Some(v) => vec![v],
-            None => vec![Library, Selection, Playlists, View::Sampler],
+            None => View::ALL.to_vec(),
         };
         let text = line(&action, b.view);
         if action == Action::StartCommand {
@@ -792,6 +799,7 @@ fn the_cheatsheet_lists_every_command_under_its_view() {
             Some(Selection) => "Selection",
             Some(Playlists) => "Playlists",
             Some(View::Sampler) => "Sampler",
+            Some(View::Scope) => "Scope",
         };
         let usage = format!("`:{} {}", c.name, c.args.replace('|', "\\|"));
         let usage = format!("{}`", usage.trim_end());
@@ -964,4 +972,52 @@ fn columns_and_sort_name_columns() {
     assert!(lib("columns").is_err());
     assert!(lib("sort").is_err());
     assert!(lib("columns nope").unwrap_err().contains("unknown column"));
+}
+
+#[test]
+fn the_loudness_target_is_set_with_equals_and_moved_with_a_sign() {
+    let s = |line: &str| parse(line, View::Scope);
+    assert_eq!(
+        s("loudness-target =-16"),
+        Ok(Action::SetLoudnessTarget(-16.0))
+    );
+    assert_eq!(s("loudness-target =0"), Ok(Action::SetLoudnessTarget(0.0)));
+    // Unsigned is absolute too, though no target above 0 is allowed.
+    assert_eq!(
+        s("loudness-target 9"),
+        Err("loudness target is -40 to 0 LUFS".into())
+    );
+    assert_eq!(s("loudness-target -2"), Ok(Action::LoudnessTargetBy(-2.0)));
+    assert_eq!(s("loudness-target +1.5"), Ok(Action::LoudnessTargetBy(1.5)));
+    assert_eq!(
+        s("loudness-target =-41"),
+        Err("loudness target is -40 to 0 LUFS".into())
+    );
+    assert!(s("loudness-target =loud").is_err());
+    assert!(s("loudness-target").is_err());
+    for action in [
+        Action::SetLoudnessTarget(-9.5),
+        Action::LoudnessTargetBy(-1.0),
+        Action::LoudnessTargetBy(2.0),
+    ] {
+        let text = line(&action, Some(View::Scope));
+        assert_eq!(s(&text), Ok(action), "{text}");
+    }
+    // Only where the history is drawn.
+    assert!(parse("loudness-target =-16", Library).is_err());
+    assert_eq!(
+        default_key("<", View::Scope),
+        Some(Action::LoudnessTargetBy(-1.0))
+    );
+}
+
+#[test]
+fn views_step_forward_and_back_in_tab_order() {
+    assert_eq!(parse("prev-view", Library), Ok(Action::PrevView));
+    assert_eq!(default_key("backtab", Library), Some(Action::PrevView));
+    for view in View::ALL {
+        assert_eq!(view.next().prev(), view);
+    }
+    assert_eq!(Library.prev(), View::Scope);
+    assert_eq!(View::Scope.prev(), Sampler);
 }

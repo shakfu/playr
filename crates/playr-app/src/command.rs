@@ -10,6 +10,7 @@ use playr_core::audio::Mode;
 use playr_core::columns::{Column, SortKey};
 use playr_core::gain::ReplayGain;
 use playr_core::samples::MAX_SLICES;
+use playr_core::settings::LOUDNESS_TARGETS;
 
 /// A `:` command: its name, what may follow it, what it does, and the one
 /// view it works in, if it is not every view.
@@ -121,6 +122,7 @@ pub const COMMANDS: &[Command] = &[
     any("delmarks", "", "clear all marks in this track; asks y/n"),
     any("next-mark", "", "seek to the next mark"),
     any("prev-mark", "", "seek to the previous mark"),
+    any("prev-view", "", "switch to the previous view"),
     any(
         "slice",
         "region|marks|N|onsets [S]",
@@ -231,6 +233,12 @@ pub const COMMANDS: &[Command] = &[
         "",
         "discard planned slices, else the range",
     ),
+    only(
+        View::Scope,
+        "loudness-target",
+        "=LUFS|+N|-N",
+        "set the loudness drawn against, or move it",
+    ),
 ];
 
 const MODES: &[(&str, Mode)] = &Mode::NAMES;
@@ -245,6 +253,7 @@ const VIEWS: &[(&str, View)] = &[
     ("selection", Selection),
     ("playlists", Playlists),
     ("sampler", Sampler),
+    ("scope", View::Scope),
 ];
 
 /// The name of `view` as commands spell it.
@@ -324,6 +333,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         CommandHelp => "help".into(),
         ShowView(v) => format!("view {}", view_name(*v)),
         NextView => "next-view".into(),
+        PrevView => "prev-view".into(),
         Cursor(1) => "down".into(),
         Cursor(-1) => "up".into(),
         Cursor(n) if *n > 0 => format!("down {n}"),
@@ -433,6 +443,12 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
         Theme(t) => format!("theme {}", t.name()),
+        SetLoudnessTarget(l) => format!("loudness-target ={}", number(f64::from(*l))),
+        LoudnessTargetBy(l) => format!(
+            "loudness-target {}{}",
+            if *l < 0.0 { "-" } else { "+" },
+            number(f64::from(l.abs()))
+        ),
         SetColumns(columns) => {
             let names: Vec<&str> = columns.iter().map(|c| c.name()).collect();
             format!("columns {}", names.join(" "))
@@ -650,6 +666,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "quit" => nothing(Action::Quit),
         "view" => choose(rest, VIEWS, "view").map(Action::ShowView),
         "next-view" => nothing(Action::NextView),
+        "prev-view" => nothing(Action::PrevView),
         "down" => rows(1),
         "up" => rows(-1),
         "first" => nothing(Action::CursorFirst),
@@ -775,6 +792,26 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             _ => Err(usage()),
         },
         "theme" => choose(rest, THEMES, "theme").map(Action::Theme),
+        "loudness-target" => {
+            let lufs = |t: &str| {
+                t.parse::<f32>()
+                    .ok()
+                    .filter(|n| n.is_finite())
+                    .ok_or_else(|| format!("not a loudness: {rest}"))
+            };
+            match signed(rest) {
+                _ if rest.is_empty() => Err(usage()),
+                Some((sign, n)) => Ok(Action::LoudnessTargetBy(sign as f32 * lufs(n)?)),
+                // A sign alone means relative, so `=` sets the target: `=-14`.
+                None => {
+                    let n = rest.strip_prefix('=').unwrap_or(rest);
+                    match lufs(n)? {
+                        l if LOUDNESS_TARGETS.contains(&l) => Ok(Action::SetLoudnessTarget(l)),
+                        _ => Err("loudness target is -40 to 0 LUFS".into()),
+                    }
+                }
+            }
+        }
         "nudge" => nudge(rest).map(Action::Nudge).ok_or_else(usage),
         "edge" => match rest {
             "start" => Ok(Action::PickEdge(crate::sampler::Edge::Start)),

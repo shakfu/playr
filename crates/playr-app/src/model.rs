@@ -31,6 +31,7 @@ use crate::dispatch::{self, Confirm, Frontend, Presentation, Prompt};
 use crate::media::Media;
 use crate::message::{self, Message};
 use crate::sampler::{DetailRead, Sampler, Wave, DETAIL_MARGIN};
+use crate::scope::Scope;
 use crate::View;
 
 /// How long a message stays showing.
@@ -134,6 +135,7 @@ pub struct Model {
     /// calls [`Model::attach_media`], so tests stay off the bus.
     media: Media,
     sampler: Sampler,
+    scope: Scope,
     theme: crate::Theme,
     transport_text_buttons: bool,
     /// The message showing, its words, and when it was shown.
@@ -196,6 +198,7 @@ impl Model {
             wake,
             media: Media::none(),
             sampler: Sampler::default(),
+            scope: Scope::with_target(config.settings.loudness_target),
             theme: config.theme,
             transport_text_buttons: config.transport_text_buttons,
             message: None,
@@ -239,6 +242,15 @@ impl Model {
             loops: Default::default(),
         };
         let current = self.snapshot.status.current().cloned();
+        let sounding = current
+            .as_ref()
+            .filter(|_| self.snapshot.status.state != State::Stopped);
+        self.scope.refresh(
+            self.session.player(),
+            self.view == View::Scope,
+            sounding,
+            Instant::now(),
+        );
         self.snapshot.loops = self.session.loops_for(current.as_ref());
         self.snapshot.marks = self
             .session
@@ -434,6 +446,10 @@ impl Model {
 
     pub fn keymap(&self) -> &Keymap {
         &self.keys
+    }
+
+    pub fn scope(&self) -> &Scope {
+        &self.scope
     }
 
     pub fn sampler(&self) -> &Sampler {
@@ -922,7 +938,7 @@ impl Frontend for Model {
             View::Library => self.cursors.library,
             View::Selection => self.cursors.selection,
             View::Playlists => self.cursors.playlists,
-            View::Sampler => None,
+            View::Sampler | View::Scope => None,
         }
     }
 
@@ -931,7 +947,7 @@ impl Frontend for Model {
             View::Library => self.cursors.library = row,
             View::Selection => self.cursors.selection = row,
             View::Playlists => self.cursors.playlists = row,
-            View::Sampler => {}
+            View::Sampler | View::Scope => {}
         }
     }
 
@@ -1002,6 +1018,11 @@ impl Frontend for Model {
             Presentation::Theme(theme) => {
                 self.theme = theme;
                 Model::notify(self, Message::Theme(theme));
+            }
+            Presentation::LoudnessTarget { lufs, by } => {
+                let base = if by { self.scope.target() } else { 0.0 };
+                self.scope.set_target(base + lufs);
+                Model::notify(self, Message::LoudnessTarget(self.scope.target()));
             }
         }
     }

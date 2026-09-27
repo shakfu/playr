@@ -27,7 +27,7 @@ pub const VIEWS: [View; 3] = [View::Library, View::Selection, View::Playlists];
 
 /// Whether the page may perform `action`. Not quitting, which would stop the
 /// server; not a path from the page, which could name any file; not changing
-/// the keys, which the page reads once; and nothing of the sampler.
+/// the keys, which the page reads once; and nothing of the sampler or scope.
 /// `:rescan` is allowed: it only covers directories already recorded by a scan.
 ///
 /// Every variant is named, so a new action does not compile until it is
@@ -43,7 +43,9 @@ pub fn allowed(action: &Action) -> bool {
         | Open(_)
         | Map { .. }
         | Unmap { .. } => false,
-        ShowView(View::Sampler)
+        ShowView(View::Sampler | View::Scope)
+        | SetLoudnessTarget(_)
+        | LoudnessTargetBy(_)
         | Slice(_)
         | Audition
         | AuditionSlice(_)
@@ -70,14 +72,14 @@ pub fn allowed(action: &Action) -> bool {
         | MoveEdge(_)
         | WriteSlices
         | DiscardSlices => false,
-        Help | CommandHelp | ShowView(_) | NextView | Cursor(_) | CursorFirst | CursorLast
-        | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add | Remove
-        | MoveTrack(_) | ClearSelection | StartSave | SaveAs(_) | DeletePlaylist | StartRename
-        | Analyze(None) | ShowInfo | SetColumns(_) | SetSort(_) | RenameTo(_) | PlayPlaylist(_)
-        | Rescan | ShowRoots | Prune(None) | TogglePause | Restart | Next | Prev | Stop
-        | SeekBy(_) | SeekTo(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_)
-        | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark
-        | ClearMarks | NextMark | PrevMark | Theme(_) => true,
+        Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
+        | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
+        | Remove | MoveTrack(_) | ClearSelection | StartSave | SaveAs(_) | DeletePlaylist
+        | StartRename | Analyze(None) | ShowInfo | SetColumns(_) | SetSort(_) | RenameTo(_)
+        | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None) | TogglePause | Restart | Next
+        | Prev | Stop | SeekBy(_) | SeekTo(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_)
+        | SetSpeed(_) | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
+        | UndoMark | ClearMarks | NextMark | PrevMark | Theme(_) => true,
     }
 }
 
@@ -261,7 +263,7 @@ pub fn row_key(model: &Model, view: View, row: usize) -> Option<String> {
             .playlists()
             .get(row)
             .map(|p| p.id.to_string()),
-        View::Sampler => None,
+        View::Sampler | View::Scope => None,
     }
 }
 
@@ -339,7 +341,8 @@ fn usable_command(heading: Option<&str>, usage: &str) -> bool {
         .split(' ')
         .next()
         .unwrap_or_default();
-    heading != Some(view_name(View::Sampler)) && !REFUSED.contains(&name)
+    ![Some(view_name(View::Sampler)), Some(view_name(View::Scope))].contains(&heading)
+        && !REFUSED.contains(&name)
 }
 
 /// What Tab completes `text` to, and the command lines entered so far.

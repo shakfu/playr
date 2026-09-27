@@ -375,3 +375,28 @@ fn queued_seeks_run_once_at_the_last_position() {
     };
     assert!((10.0..11.0).contains(&at), "at {at} s");
 }
+
+#[test]
+fn stepping_through_views_skips_the_ones_the_page_does_not_have() {
+    let (send, received) = mpsc::channel();
+    for action in [
+        Action::PrevView,
+        Action::PrevView,
+        Action::NextView,
+        Action::NextView,
+    ] {
+        send.send(Request::Perform(action)).unwrap();
+    }
+    drop(send);
+    let mut views = Vec::new();
+    owner::run(model(), received, |m| views.push(m.view()));
+    assert_eq!(
+        views,
+        [
+            View::Playlists,
+            View::Selection,
+            View::Playlists,
+            View::Library
+        ]
+    );
+}

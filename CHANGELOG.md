@@ -4,6 +4,20 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Added
+
+- Scope view, the tab after the sampler, on `5` or `:view scope`. It shows a waveform trace, a spectrum, a stereo image with the channels' correlation, and the last minute's momentary loudness with the track's integrated loudness so far. The terminal draws it in Braille and eighth blocks; the window paints it; the web page refuses it. Library API: `audio::tap`, `Shared::tap`, `Shared::blocks`, `Player::set_tap`, `latest`, `loudness_since`; `spectrum::Analyser`, which the spectrogram now uses too; `Histogram::add`; `settings::LOUDNESS_TARGETS`, `DEFAULT_LOUDNESS_TARGET`, `Settings::loudness_target`; `Action::SetLoudnessTarget`, `LoudnessTargetBy`; `Presentation::LoudnessTarget`; `Message::LoudnessTarget`; `View::Scope`; `playr_app::scope`; `Model::scope`.
+
+  The loudness history is drawn from 20 LU below a target to 10 LU above it, in one colour. The target is `loudness_target` in `settings.toml`, -14 LUFS by default. It is a setting because podcasts are mastered near -16 and club music near -9. The level meter's zones would colour a -9 LUFS master yellow throughout. `:loudness-target =N` sets the target and `+N` or `-N` moves it, as `:speed =-3` does; `<` and `>` move it by 1 LU, and the window has a field.
+
+  The output callback copies what it plays into a ring of atomics, only while the scope shows. An `rtrb` ring was the alternative. Its producer would not survive a rebuilt stream, and a slow reader would block new samples instead of losing old ones. The tap is in the callback because the engine's ring runs up to 2 s ahead of what is heard.
+
+- `:prev-view`, on shift-tab, switches to the previous view, as tab switches to the next. The web page steps back from the library to the playlists, skipping the views it does not have.
+
+### Fixed
+
+- In the window, a key a binding takes no longer also moves keyboard focus. Tab switched the view and focused the first control; shift-tab focused a control of the view it left.
+
 ## [0.12.0]
 
 ### Added

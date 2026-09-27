@@ -9,6 +9,7 @@ pub mod controls;
 pub mod keys;
 pub mod palette;
 mod sampler;
+mod scope;
 mod transport;
 mod views;
 
@@ -172,6 +173,12 @@ impl Gui {
             }
             used.push(index);
         }
+        // Nor does it move focus, as Tab and shift-Tab would: egui reads them
+        // before this runs, and shift-Tab focused a widget the view it opened
+        // did not have.
+        if !used.is_empty() {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
         // A key taken here is not also seen by a widget this frame, as the `:`
         // that opens the command bar would be typed into it.
         ctx.input_mut(|i| {
@@ -320,7 +327,7 @@ impl Gui {
                         view.title(),
                         self.model.session().playlists().len()
                     ),
-                    View::Sampler => view.title().to_string(),
+                    View::Sampler | View::Scope => view.title().to_string(),
                 };
                 if ui
                     .selectable_label(self.model.view() == view, title)
@@ -459,6 +466,12 @@ impl Gui {
             View::Playlists => views::playlists(&self.model, ui, scroll),
             View::Sampler => {
                 for action in sampler::show(&mut self.model, ui, &mut self.sampler) {
+                    self.perform(action);
+                }
+                None
+            }
+            View::Scope => {
+                if let Some(action) = scope::show(&self.model, ui) {
                     self.perform(action);
                 }
                 None

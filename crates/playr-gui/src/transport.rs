@@ -11,7 +11,7 @@ use playr_app::dispatch::Frontend;
 use crate::controls;
 use crate::palette::Palette;
 use playr_app::message::{self, fmt_time};
-use playr_app::meter::{self, Zone};
+use playr_app::meter;
 use playr_app::model::{self, Model};
 use playr_core::audio::{speed_for, Mode, State};
 
@@ -284,11 +284,7 @@ fn level_meter(ui: &mut egui::Ui, loudness: Option<f32>, peak: Option<f32>) {
         }
     }
     if let Some(level) = peak {
-        let colour = match meter::zone(level) {
-            Zone::Green => green,
-            Zone::Yellow => yellow,
-            Zone::Red => red,
-        };
+        let colour = Palette::of(ui.visuals()).zone(level);
         painter.line_segment(
             [
                 egui::pos2(x(level), rect.top()),

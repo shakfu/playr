@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use playr_core::audio::meter::Meter;
 use playr_core::audio::output::{render, Shared};
+use playr_core::audio::tap::Ring;
 
 /// Renders `out.len()` samples of stereo from `consumer`.
 fn callback(
@@ -80,4 +81,87 @@ fn pushed_during_callbacks() {
     }
     pushing.join().unwrap();
     assert_eq!(frames, 20_000);
+}
+
+#[test]
+fn the_tap_keeps_nothing_until_enabled_then_what_plays_before_the_volume() {
+    let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
+    let shared = Shared::new();
+    shared.set_volume(0.5);
+    let mut meter = Meter::new(8000, 2);
+    let mut out = [0.0f32; 4];
+    let mut kept = Vec::new();
+
+    for s in [0.1, -0.1, 0.2, -0.2] {
+        producer.push(s).unwrap();
+    }
+    callback(&mut out, &mut consumer, &shared, &mut meter);
+    assert_eq!(shared.tap.latest(16, &mut kept), 0);
+    assert!(kept.is_empty());
+
+    shared.tap.set_enabled(true);
+    for s in [0.3, -0.3, 0.4, -0.4] {
+        producer.push(s).unwrap();
+    }
+    callback(&mut out, &mut consumer, &shared, &mut meter);
+    assert_eq!(out, [0.15, -0.15, 0.2, -0.2]);
+    assert_eq!(shared.tap.latest(16, &mut kept), 2);
+    assert_eq!(kept, [0.3, -0.3, 0.4, -0.4]);
+    // The latest frames only, oldest first.
+    shared.tap.latest(1, &mut kept);
+    assert_eq!(kept, [0.4, -0.4]);
+}
+
+#[test]
+fn the_tap_keeps_frames_whole_when_the_channel_count_changes() {
+    let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
+    let shared = Shared::new();
+    shared.tap.set_enabled(true);
+    let mut meter = Meter::new(8000, 2);
+    let mut kept = Vec::new();
+    for s in [1.0, 2.0] {
+        producer.push(s).unwrap();
+    }
+    render(&mut [0.0; 2], &mut consumer, &shared, &mut meter, 2, |v| v);
+    for s in [3.0, 4.0, 5.0] {
+        producer.push(s).unwrap();
+    }
+    let mut meter = Meter::new(8000, 3);
+    render(&mut [0.0; 3], &mut consumer, &shared, &mut meter, 3, |v| v);
+    assert_eq!(shared.tap.latest(1, &mut kept), 3);
+    assert_eq!(kept, [3.0, 4.0, 5.0]);
+}
+
+#[test]
+fn each_momentary_reading_is_kept_in_order() {
+    let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(4096);
+    let shared = Shared::new();
+    // 100 ms blocks at 8 kHz: 800 frames each.
+    let mut meter = Meter::new(8000, 2);
+    let mut out = [0.0f32; 400];
+    let mut readings = Vec::new();
+    for _ in 0..8 {
+        while producer.push(0.5).is_ok() {}
+        callback(&mut out, &mut consumer, &shared, &mut meter);
+    }
+    // 1600 frames: two readings.
+    let since = shared.blocks.since(0, &mut readings);
+    assert_eq!(since, 2);
+    assert_eq!(readings.len(), 2);
+    assert_eq!(shared.blocks.since(since, &mut readings), 2);
+    assert!(readings.is_empty());
+}
+
+#[test]
+fn a_ring_lapped_by_its_writer_hands_over_what_it_still_holds() {
+    let ring = Ring::new(4);
+    let mut read = Vec::new();
+    for v in 1..=6 {
+        ring.push(v as f32);
+    }
+    assert_eq!(ring.since(0, &mut read), 6);
+    assert_eq!(read, [3.0, 4.0, 5.0, 6.0]);
+    ring.push(7.0);
+    assert_eq!(ring.since(6, &mut read), 7);
+    assert_eq!(read, [7.0]);
 }

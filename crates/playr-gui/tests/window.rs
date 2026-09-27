@@ -888,3 +888,53 @@ fn the_waveform_takes_the_height_the_controls_leave() {
         );
     }
 }
+
+#[test]
+fn the_scope_tab_shows_what_plays() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    common::tone(&file, 44100, 3.0, -6.0);
+    let track = Track {
+        path: file.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let playing = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        vec![track],
+        Config::default(),
+    );
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 720.0))
+        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(playing));
+    harness.run_steps(2);
+    harness.get_by_label("Scope").click();
+    harness.run_steps(2);
+    assert_eq!(model(&harness).view(), View::Scope);
+    wait(&mut harness, |m| {
+        m.scope().correlation().is_some() && m.scope().integrated().is_some()
+    });
+    harness.run_steps(1);
+    harness.get_by_label("Waveform");
+    harness.get_by_label("Spectrum");
+    harness.get_by_label_contains("Stereo correlation +1.00");
+    harness.get_by_label_contains("target -14.0");
+    harness.get_by_label("Loudness target");
+}
+
+#[test]
+fn shift_tab_moves_to_the_previous_view() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    harness.run_steps(2);
+    assert_eq!(model(&harness).view(), View::Scope);
+    // The binding took the key, so egui did not move focus with it.
+    assert_eq!(harness.ctx.memory(|m| m.focused()), None);
+    harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    harness.run_steps(2);
+    assert_eq!(model(&harness).view(), View::Sampler);
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(2);
+    assert_eq!(model(&harness).view(), View::Scope);
+}

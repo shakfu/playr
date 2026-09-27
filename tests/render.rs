@@ -4,6 +4,7 @@ use playr::ui::render::{self, scroll_offset};
 use playr::ui::{Drawn, Input, Lists, Screen, Scroll, Snapshot, Theme, View};
 use playr_app::action::Keymap;
 use playr_app::sampler::Sampler;
+use playr_app::scope::Scope;
 use playr_core::audio::{Spec, State, Status};
 use playr_core::db::query::Playlist;
 use playr_core::db::Track;
@@ -42,6 +43,7 @@ struct Case<'a> {
     /// The key map; the defaults when unset.
     keys: Option<&'a Keymap>,
     sampler: Sampler,
+    scope: Option<&'a Scope>,
     colour: bool,
     theme: Theme,
     bpm: Option<f32>,
@@ -65,6 +67,7 @@ impl<'a> Case<'a> {
             help_scroll: 0,
             keys: None,
             sampler: Sampler::default(),
+            scope: None,
             colour: true,
             theme: Theme::Dark,
             bpm: None,
@@ -118,6 +121,11 @@ impl<'a> Case<'a> {
 
     fn sampler(mut self, sampler: Sampler) -> Self {
         self.sampler = sampler;
+        self
+    }
+
+    fn scope(mut self, scope: &'a Scope) -> Self {
+        self.scope = Some(scope);
         self
     }
 
@@ -192,6 +200,7 @@ impl<'a> Case<'a> {
             message: self.message,
             colour: self.colour,
             theme: self.theme,
+            scope: self.scope,
             lists: Lists {
                 library: at(self.all.is_empty(), cursor),
                 selection: at(self.selection.is_empty(), cursor),
@@ -792,11 +801,15 @@ fn a_long_help_list_scrolls_and_stops_at_its_end() {
             .size(80, 24)
     };
     let top = case().text();
-    assert!(top.contains(":help") && !top.contains(":rename"), "{top}");
+    // The first command and the last.
+    assert!(
+        top.contains(":help") && !top.contains(":loudness-target"),
+        "{top}"
+    );
     assert!(top.contains("j k scroll"), "no scroll hint:\n{top}");
     let bottom = case().help_scroll(1000).text();
     assert!(
-        bottom.contains(":rename") && !bottom.contains(":help"),
+        bottom.contains(":loudness-target") && !bottom.contains(":help"),
         "{bottom}"
     );
     // Drawing returns the last scroll that changes the list, and no further.
@@ -992,6 +1005,7 @@ fn panes_do_not_repeat_the_tabs() {
         name: "late".into(),
         len: 1,
     }];
+    // The scope's panes name what each draws, not the view.
     for view in [
         View::Library,
         View::Selection,
@@ -1889,4 +1903,131 @@ fn info_draws_the_measurements_as_a_list() {
     assert!(joined.contains("Peace Piece"), "no heading:\n{joined}");
     assert!(joined.contains("-13.5 LUFS"), "no loudness:\n{joined}");
     assert!(joined.contains("174 BPM"), "no tempo:\n{joined}");
+}
+
+/// A scope fed a second of a 1 kHz tone, the same in both channels, at
+/// -20 LUFS.
+fn toned_scope() -> Scope {
+    let mut scope = Scope::default();
+    let frames: Vec<f32> = (0..4096)
+        .flat_map(|i| {
+            let v = 0.5 * (std::f32::consts::TAU * 1000.0 * i as f32 / 44_100.0).sin();
+            [v, v]
+        })
+        .collect();
+    scope.take_frames(44_100, 2, &frames, 0.0);
+    scope.take_loudness(&[-20.0; 10]);
+    scope
+}
+
+#[test]
+fn the_scope_tab_follows_the_sampler() {
+    let tabs = Case::new(View::Scope, &stopped()).render()[0].clone();
+    let sampler = tabs.find("Sampler").unwrap();
+    assert!(tabs[sampler..].contains("Scope"), "{tabs:?}");
+}
+
+#[test]
+fn the_scope_draws_its_four_panes_from_what_plays() {
+    let scope = toned_scope();
+    let text = Case::new(View::Scope, &playing(Some(-20.0), None))
+        .scope(&scope)
+        .size(100, 40)
+        .text();
+    for title in ["Waveform", "Spectrum", "Stereo", "Loudness, last minute"] {
+        assert!(text.contains(title), "{title} missing:\n{text}");
+    }
+    assert!(
+        text.contains("-20.0 LUFS  integrated -20.0  target -14.0"),
+        "{text}"
+    );
+    // Identical channels correlate fully.
+    assert!(text.contains("+1.0"), "{text}");
+    assert!(text.contains("1k"), "no frequency axis:\n{text}");
+    let braille = |c: char| ('\u{2801}'..='\u{28ff}').contains(&c);
+    assert!(text.chars().filter(|&c| braille(c)).count() > 20, "{text}");
+    // The target, above readings 6 LU under it, is a dashed row; the
+    // integrated loudness, at the bars' tops, shows past them as `=`.
+    assert!(text.contains(&"-".repeat(40)), "no target row:\n{text}");
+    assert!(text.contains(&"=".repeat(40)), "no integrated row:\n{text}");
+    // A tone is one tall bar; most columns are low.
+    assert!(text.contains('\u{2588}'), "{text}");
+}
+
+#[test]
+fn the_scope_draws_empty_panes_at_any_size() {
+    let scope = toned_scope();
+    for (w, h) in [(100, 20), (40, 12), (12, 8), (4, 4), (1, 1)] {
+        let empty = Case::new(View::Scope, &stopped()).size(w, h).text();
+        let full = Case::new(View::Scope, &stopped())
+            .scope(&scope)
+            .size(w, h)
+            .text();
+        if h >= 20 {
+            assert!(empty.contains("Waveform") && full.contains("Waveform"));
+        }
+    }
+    let empty = Case::new(View::Scope, &stopped()).size(100, 30).text();
+    assert!(empty.contains("--"), "{empty}");
+}
+
+#[test]
+fn the_target_and_integrated_rows_keep_their_colour_through_the_bars() {
+    // Readings above the target, so its row runs through the bars.
+    let mut scope = Scope::with_target(-30.0);
+    scope.take_loudness(&[-12.0; 600]);
+    let snapshot = playing(Some(-12.0), None);
+    let rows_with = |buf: &ratatui::buffer::Buffer, glyph: &str| {
+        (0..buf.area.height)
+            .filter(|&y| (0..buf.area.width).any(|x| buf[(x, y)].symbol() == glyph))
+            .count()
+    };
+    let buf = Case::new(View::Scope, &snapshot)
+        .scope(&scope)
+        .size(100, 40)
+        .buffer();
+    let mark = playr::ui::palette::ANSI.mark;
+    // Full-height bars, and a row of them in the target's colour.
+    let marked = (0..buf.area.height).find(|&y| {
+        (0..buf.area.width).any(|x| buf[(x, y)].symbol() == "\u{2588}" && buf[(x, y)].fg == mark)
+    });
+    assert!(marked.is_some(), "no target row through the bars");
+    assert!(rows_with(&buf, "\u{2588}") > 3);
+
+    // Without colour, the rows are reversed inside the bars.
+    let plain = Case::new(View::Scope, &snapshot)
+        .scope(&scope)
+        .size(100, 40)
+        .no_colour()
+        .buffer();
+    let reversed = (0..plain.area.height).any(|y| {
+        (0..plain.area.width).any(|x| {
+            plain[(x, y)].symbol() == "\u{2588}"
+                && plain[(x, y)]
+                    .modifier
+                    .contains(ratatui::style::Modifier::REVERSED)
+        })
+    });
+    assert!(reversed, "no reversed row without colour");
+}
+
+#[test]
+fn a_row_the_target_and_integrated_loudness_share_shows_both() {
+    // Six rows of 5 LU: a -14 target and -16 integrated share a row.
+    let mut scope = Scope::with_target(-14.0);
+    scope.take_loudness(&[-80.0; 300]);
+    scope.take_loudness(&[-16.0; 300]);
+    let buf = Case::new(View::Scope, &playing(Some(-16.0), None))
+        .scope(&scope)
+        .size(100, 40)
+        .buffer();
+    let mark = playr::ui::palette::ANSI.mark;
+    let shared = (0..buf.area.height).find(|&y| {
+        let cells: Vec<_> = (0..buf.area.width).map(|x| &buf[(x, y)]).collect();
+        cells.iter().any(|c| c.symbol() == "-" && c.fg == mark)
+            && cells.iter().any(|c| {
+                c.symbol() != "-" && c.symbol() != " " && c.fg == ratatui::style::Color::Reset
+            })
+    });
+    assert!(shared.is_some(), "the shared row lost one of them");
 }

@@ -40,7 +40,7 @@ fn slot(view: View) -> Option<usize> {
         Library => Some(0),
         Selection => Some(1),
         Playlists => Some(2),
-        Sampler => None,
+        Sampler | View::Scope => None,
     }
 }
 
@@ -297,6 +297,8 @@ fn commands_parse_and_dispatch_in_the_frontend_s_view() {
             view: None
         })
     );
+    run(&mut f, "next-view");
+    assert_eq!(f.view, View::Scope);
     run(&mut f, "next-view");
     assert_eq!(f.view, Library);
     run(&mut f, "search");

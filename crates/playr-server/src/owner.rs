@@ -102,6 +102,7 @@ pub fn run(
     // A request taken from the queue while merging seeks, to run next.
     let mut held = None;
     loop {
+        let before = model.view();
         let wait = match model.snapshot().status.state {
             State::Playing => FRAME,
             _ => IDLE,
@@ -173,9 +174,12 @@ pub fn run(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        // The page has no sampler; a key or command that reaches it goes back.
-        if model.view() == View::Sampler {
-            model.set_view(View::Library);
+        // The page has no sampler or scope. Stepping back from the library
+        // wraps to the playlists; anything else that reaches one goes back
+        // to the library.
+        if matches!(model.view(), View::Sampler | View::Scope) {
+            let back = before == View::Library && model.view() == View::Scope;
+            model.set_view(if back { View::Playlists } else { View::Library });
         }
         model.refresh();
         model.expire_message();

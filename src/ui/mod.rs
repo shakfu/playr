@@ -25,6 +25,7 @@ use playr_app::dispatch::Frontend;
 use playr_app::message::Message;
 use playr_app::model::Model;
 use playr_app::sampler::Sampler;
+use playr_app::scope::Scope;
 use playr_core::audio::{Player, State};
 use playr_core::columns::{Column, Measures};
 use playr_core::db::query::Playlist;
@@ -103,6 +104,8 @@ pub struct Screen<'a> {
     pub input: &'a Input,
     pub keys: &'a Keymap,
     pub sampler: &'a Sampler,
+    /// What the scope view draws; `None` draws it empty.
+    pub scope: Option<&'a Scope>,
     /// Rows the key or command list is scrolled by.
     pub help_scroll: usize,
     pub message: Option<&'a str>,
@@ -142,6 +145,7 @@ impl<'a> Screen<'a> {
             measures: &NO_MEASURES,
             keys,
             sampler,
+            scope: None,
             help_scroll: 0,
             message: None,
             lists: Lists::default(),
@@ -227,6 +231,7 @@ impl App {
             bpm: m.bpm(),
             columns: m.columns(),
             measures: m.measures_map(),
+            scope: Some(m.scope()),
             lists: Lists {
                 library: scroll(c.library, o.library),
                 selection: scroll(c.selection, o.selection),
@@ -268,8 +273,13 @@ impl App {
                 self.drawn(drawn);
             }
 
-            // A short poll keeps the progress bar moving without busy-waiting.
-            if event::poll(Duration::from_millis(200))? {
+            // A short poll keeps the progress bar moving without busy-waiting;
+            // the scope moves at 30 frames a second.
+            let frame = match self.model.view() {
+                View::Scope => Duration::from_millis(33),
+                _ => Duration::from_millis(200),
+            };
+            if event::poll(frame)? {
                 if let TermEvent::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         self.on_key(key);
