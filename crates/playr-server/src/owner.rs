@@ -174,11 +174,10 @@ pub fn run(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        // The page has no sampler or scope. Stepping back from the library
-        // wraps to the playlists; anything else that reaches one goes back
-        // to the library.
-        if matches!(model.view(), View::Sampler | View::Scope) {
-            let back = before == View::Library && model.view() == View::Scope;
+        // The page has no sampler. Stepping back from the library wraps to
+        // the playlists; anything else that reaches it goes back to the library.
+        if model.view() == View::Sampler {
+            let back = before == View::Library;
             model.set_view(if back { View::Playlists } else { View::Library });
         }
         model.refresh();

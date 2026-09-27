@@ -14,6 +14,11 @@
 /// absolute gate.
 pub const SILENCE_LUFS: f32 = -70.0;
 
+/// Frames in one of the meter's 100 ms blocks at `rate`.
+pub fn block_frames(rate: u32) -> usize {
+    (rate as usize / 10).max(1)
+}
+
 /// Coefficients of one biquad, normalised so `a0` is 1.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Biquad {
@@ -87,7 +92,7 @@ impl Meter {
             state: vec![[[0.0; 2]; 2]; channels],
             channels,
             channel: 0,
-            block_frames: (rate as usize / 10).max(1),
+            block_frames: block_frames(rate),
             frames: 0,
             sum: 0.0,
             blocks: [0.0; 4],

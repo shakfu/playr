@@ -18,7 +18,6 @@ backtab = "prev-view"
 2 = "view selection"
 3 = "view playlists"
 4 = "view sampler"
-5 = "view scope"
 j = "down"
 down = "down"
 shift-down = "down"
@@ -136,8 +135,3 @@ delete = "del-mark"
 "]" = "edge end"
 "{" = "edge -1"
 "}" = "edge +1"
-
-[keys.scope]
-# Move the loudness history's target by 1 LU.
-"<" = "loudness-target -1"
-">" = "loudness-target +1"

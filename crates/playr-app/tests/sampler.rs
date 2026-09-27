@@ -307,7 +307,24 @@ fn a_layout_places_the_playhead_marks_and_region_in_columns() {
     assert_eq!(l.shown(), "0:00.000-0:04.000");
     assert_eq!(
         l.region_text(),
-        "region 0:01.000-0:02.000 (1.000 s)  marks 2"
+        "region 0:01.000-0:02.000 (1.000 s)  marks 2  peak -1.9 dBFS  1.6 LUFS  corr +1.00"
+    );
+    // Too short for LUFS, so the RMS stands in; silence says so.
+    let short = layout(
+        0,
+        Duration::from_millis(1050),
+        &[secs(1), Duration::from_millis(1100)],
+    );
+    assert!(
+        short.region_text().ends_with("rms -1.9 dBFS  corr +1.00"),
+        "{}",
+        short.region_text()
+    );
+    let quiet = layout(0, Duration::from_millis(3500), &[secs(3)]);
+    assert!(
+        quiet.region_text().ends_with("marks 1  silent"),
+        "{}",
+        quiet.region_text()
     );
 }
 

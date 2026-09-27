@@ -28,8 +28,6 @@ pub enum Message {
     NoPlaylistUnderCursor,
     Display(Display),
     Theme(Theme),
-    /// The scope's loudness target, in LUFS.
-    LoudnessTarget(f32),
     /// The columns a list shows, as `:columns` set them.
     Columns(Vec<Column>),
     /// What lists are sorted by, as `:sort` set it.
@@ -142,7 +140,6 @@ pub fn text(message: &Message) -> String {
         }
         Message::Display(display) => format!("display: {}", display.name()),
         Message::Theme(theme) => format!("theme: {}", theme.name()),
-        Message::LoudnessTarget(lufs) => format!("loudness target: {lufs:.1} LUFS"),
         Message::Columns(columns) => {
             let names: Vec<&str> = columns.iter().map(|c| c.name()).collect();
             format!("columns: {}", names.join(", "))

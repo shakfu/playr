@@ -30,13 +30,6 @@ pub const DEFAULT_SETTINGS: &str = include_str!("settings.toml");
 /// not by the terminal.
 pub const FRONTEND_TABLES: &[&str] = &["keys", "theme", "terminal", "gui", "server"];
 
-/// The loudness targets allowed, in LUFS.
-pub const LOUDNESS_TARGETS: std::ops::RangeInclusive<f32> = -40.0..=0.0;
-
-/// The loudness target when none is set: what most streaming services play
-/// music at, in LUFS.
-pub const DEFAULT_LOUDNESS_TARGET: f32 = -14.0;
-
 /// What the settings file sets for the core.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -49,8 +42,6 @@ pub struct Settings {
     pub samples: PathBuf,
     /// The onset sensitivity `:slice onsets` uses when given none, 0 to 1.
     pub onset_sensitivity: f32,
-    /// The level the scope's loudness history is drawn against, in LUFS.
-    pub loudness_target: f32,
     /// What an export does at slice edges, and how long a fade takes.
     pub slice_edges: crate::samples::Edges,
     pub slice_fades: crate::samples::Fades,
@@ -75,7 +66,6 @@ impl Default for Settings {
             speed: 0,
             samples: PathBuf::new(),
             onset_sensitivity: 0.5,
-            loudness_target: DEFAULT_LOUDNESS_TARGET,
             slice_edges: crate::samples::Edges::Exact,
             slice_fades: crate::samples::Fades::default(),
             auto_prune: false,
@@ -213,12 +203,6 @@ impl Settings {
                 ("onset_sensitivity", v) => match number(v) {
                     Some(n) if (0.0..=1.0).contains(&n) => self.onset_sensitivity = n as f32,
                     _ => errors.add(at, "onset_sensitivity is a number from 0 to 1"),
-                },
-                ("loudness_target", v) => match number(v) {
-                    Some(n) if LOUDNESS_TARGETS.contains(&(n as f32)) => {
-                        self.loudness_target = n as f32
-                    }
-                    _ => errors.add(at, "loudness_target is a number from -40 to 0"),
                 },
                 ("slice_edges", DeValue::String(s)) => {
                     let names = crate::samples::Edges::NAMES;

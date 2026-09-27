@@ -1416,7 +1416,7 @@ fn tab_and_shift_tab_step_through_the_views_both_ways() {
     key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
     assert_eq!(app.screen().view, View::Library);
     key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
-    assert_eq!(app.screen().view, View::Scope);
-    key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
     assert_eq!(app.screen().view, View::Sampler);
+    key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert_eq!(app.screen().view, View::Playlists);
 }

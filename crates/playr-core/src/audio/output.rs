@@ -17,7 +17,6 @@ use cpal::{
 
 use super::decode::Spec;
 use super::meter::Meter;
-use super::tap::{Ring, Tap};
 
 /// How much audio the ring holds. Two seconds is enough to ride out scheduler
 /// jitter and a slow disk without making seek feel laggy.
@@ -393,10 +392,6 @@ pub struct Shared {
     momentary_bits: AtomicU32,
     /// Largest sample magnitude played since it was last taken, as f32 bits.
     peak_bits: AtomicU32,
-    /// Each momentary loudness reading, in LUFS, as the meter completes it.
-    pub blocks: Ring,
-    /// What plays, for a view to draw.
-    pub tap: Tap,
 }
 
 impl Shared {
@@ -415,8 +410,6 @@ impl Shared {
             seek_target: AtomicU64::new(0),
             momentary_bits: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             peak_bits: AtomicU32::new(0),
-            blocks: Ring::new(BLOCKS),
-            tap: Tap::new(),
         }
     }
 
@@ -455,9 +448,6 @@ impl Default for Shared {
         Self::new()
     }
 }
-
-/// Momentary loudness readings kept: 102 s, at ten a second.
-const BLOCKS: usize = 1024;
 
 /// An open output stream and the producer end of its ring buffer.
 pub struct Output {
@@ -568,20 +558,15 @@ pub fn render<T>(
     // that found the ring empty and then saw a push land mid-callback would
     // start a frame on the wrong channel, and swap channels from there on.
     let filled = consumer.slots().min(out.len()) / channels as usize * channels as usize;
-    let tap = shared.tap.begin(channels as u32);
     for (i, slot) in out.iter_mut().enumerate() {
         let s = match i < filled {
             true => consumer.pop().unwrap_or(0.0),
             false => 0.0,
         };
-        if tap {
-            shared.tap.push(s);
-        }
         if let Some(lufs) = meter.sample(s) {
             shared
                 .momentary_bits
                 .store(lufs.to_bits(), Ordering::Relaxed);
-            shared.blocks.push(lufs);
         }
         *slot = conv(s * gain);
     }

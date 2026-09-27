@@ -40,7 +40,7 @@ What is missing, grouped by priority:
 
 - [x] **Multiple loops.** `:loop N` and F1-F8 save the range to a slot, or recall one looping; kept in the library per track.
 
-- [ ] **Waveform cache.** The sampler decodes the whole track each time a new track is shown there. Peaks and spectrogram are about 13 MB for a 4-minute track and could be kept per file.
+- [ ] **Waveform cache.** The sampler decodes the whole track each time a new track is shown there. Peaks, spectrogram and loudness are about 16 MB for a 4-minute track and could be kept per file.
 
 - [x] **Loop points.** A range cut whole while it loops is written to `samples.json` to loop whole.
 

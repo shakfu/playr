@@ -2,6 +2,7 @@
 
 use std::sync::atomic::AtomicBool;
 
+use playr_core::analysis::loudness::Loudness;
 use playr_core::wave::{Detail, Peaks, BUCKET};
 
 /// Deterministic noise in -1..1.
@@ -163,4 +164,74 @@ fn peaks_read_from_a_file_match_its_samples_and_can_be_cancelled() {
     assert_eq!(read, Peaks::from_interleaved(&decoded, 1, 44_100));
     assert_eq!(Peaks::read(&path, &AtomicBool::new(true)), Ok(None));
     assert!(Peaks::read(&dir.path().join("gone.wav"), &AtomicBool::new(false)).is_err());
+}
+
+/// `seconds` of a 1 kHz sine peaking at `db` dBFS, each frame mapped to its
+/// channels by `frame`.
+fn sine(seconds: f32, db: f32, frame: impl Fn(f32) -> Vec<f32>) -> Vec<f32> {
+    let amplitude = 10f32.powf(db / 20.0);
+    (0..(44_100.0 * seconds) as usize)
+        .flat_map(|i| {
+            frame(amplitude * (std::f32::consts::TAU * 1000.0 * i as f32 / 44_100.0).sin())
+        })
+        .collect()
+}
+
+#[test]
+fn stats_measure_peak_rms_loudness_and_correlation() {
+    let peaks = Peaks::from_interleaved(&sine(2.0, -6.0, |v| vec![v, v]), 2, 44_100);
+    let s = peaks.stats(0, peaks.frames).unwrap();
+    let db = |v: f32| 20.0 * v.log10();
+    assert!((db(s.peak) + 6.0).abs() < 0.01, "peak {}", db(s.peak));
+    assert!((db(s.rms) + 9.01).abs() < 0.05, "rms {}", db(s.rms));
+    // EBU Tech 3341: a stereo 1 kHz sine reads its peak level in LUFS.
+    let lufs = s.lufs.unwrap();
+    assert!((lufs + 6.0).abs() < 0.1, "{lufs} LUFS");
+    assert!((s.correlation.unwrap() - 1.0).abs() < 1e-3);
+
+    for (frame, want) in [
+        (
+            &(|v: f32| vec![v, -v]) as &dyn Fn(f32) -> Vec<f32>,
+            Some(-1.0),
+        ),
+        (&|v: f32| vec![v, 0.0], Some(0.0)),
+        (&|v: f32| vec![v], Some(1.0)),
+        (&|v: f32| vec![v, v, v], None),
+    ] {
+        let channels = frame(0.0).len();
+        let peaks = Peaks::from_interleaved(&sine(0.5, -6.0, frame), channels, 44_100);
+        let got = peaks.stats(0, peaks.frames).unwrap().correlation;
+        assert_eq!(
+            got.map(|c| (c * 1000.0).round() / 1000.0),
+            want,
+            "{channels} channels"
+        );
+    }
+
+    let silence = Peaks::from_interleaved(&[0.0; 88_200], 2, 44_100);
+    let s = silence.stats(0, silence.frames).unwrap();
+    assert_eq!((s.peak, s.lufs, s.correlation), (0.0, None, None));
+    assert_eq!(silence.stats(10, 10), None);
+}
+
+#[test]
+fn stats_loudness_is_the_analysis_s_and_reads_only_the_range() {
+    // A second at -30 dBFS, then a second at -10.
+    let mut samples = sine(1.0, -30.0, |v| vec![v, v]);
+    samples.extend(sine(1.0, -10.0, |v| vec![v, v]));
+    let peaks = Peaks::from_interleaved(&samples, 2, 44_100);
+    let mut analysis = Loudness::new(44_100, 2);
+    analysis.feed(&samples);
+    assert_eq!(
+        peaks.stats(0, peaks.frames).unwrap().lufs,
+        analysis.finish().lufs
+    );
+
+    let quiet = peaks.stats(0, 44_100).unwrap().lufs.unwrap();
+    let loud = peaks.stats(44_100, 88_200).unwrap().lufs.unwrap();
+    assert!((quiet + 30.0).abs() < 0.1, "{quiet} LUFS");
+    assert!((loud + 10.0).abs() < 0.1, "{loud} LUFS");
+    // 400 ms is the shortest a reading covers.
+    assert!(peaks.stats(44_100, 44_100 + 17_640).unwrap().lufs.is_some());
+    assert_eq!(peaks.stats(44_100, 44_100 + 17_639).unwrap().lufs, None);
 }

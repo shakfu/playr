@@ -53,7 +53,7 @@ The Rust frontends also depend on `playr-core` directly, for `Session` and the t
 
 - **playr** (the root crate): the terminal. The command line in `src/main.rs`, and `src/ui`: `App` over the shared `Model`, key handling, drawing and the sampler's glyphs.
 
-Views (library, selection, playlists, sampler, scope) are a presentation idea, so they are not in the core. `playr_app::View` names them as scopes for key bindings and view-scoped commands; a GUI maps its panels or focus onto them, or ignores them.
+Views (library, selection, playlists, sampler) are a presentation idea, so they are not in the core. `playr_app::View` names them as scopes for key bindings and view-scoped commands; a GUI maps its panels or focus onto them, or ignores them.
 
 ## playr-core
 

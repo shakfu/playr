@@ -27,7 +27,7 @@ pub const VIEWS: [View; 3] = [View::Library, View::Selection, View::Playlists];
 
 /// Whether the page may perform `action`. Not quitting, which would stop the
 /// server; not a path from the page, which could name any file; not changing
-/// the keys, which the page reads once; and nothing of the sampler or scope.
+/// the keys, which the page reads once; and nothing of the sampler.
 /// `:rescan` is allowed: it only covers directories already recorded by a scan.
 ///
 /// Every variant is named, so a new action does not compile until it is
@@ -43,9 +43,7 @@ pub fn allowed(action: &Action) -> bool {
         | Open(_)
         | Map { .. }
         | Unmap { .. } => false,
-        ShowView(View::Sampler | View::Scope)
-        | SetLoudnessTarget(_)
-        | LoudnessTargetBy(_)
+        ShowView(View::Sampler)
         | Slice(_)
         | Audition
         | AuditionSlice(_)
@@ -263,7 +261,7 @@ pub fn row_key(model: &Model, view: View, row: usize) -> Option<String> {
             .playlists()
             .get(row)
             .map(|p| p.id.to_string()),
-        View::Sampler | View::Scope => None,
+        View::Sampler => None,
     }
 }
 
@@ -341,8 +339,7 @@ fn usable_command(heading: Option<&str>, usage: &str) -> bool {
         .split(' ')
         .next()
         .unwrap_or_default();
-    ![Some(view_name(View::Sampler)), Some(view_name(View::Scope))].contains(&heading)
-        && !REFUSED.contains(&name)
+    heading != Some(view_name(View::Sampler)) && !REFUSED.contains(&name)
 }
 
 /// What Tab completes `text` to, and the command lines entered so far.

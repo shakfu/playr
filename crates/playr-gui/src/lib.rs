@@ -9,7 +9,6 @@ pub mod controls;
 pub mod keys;
 pub mod palette;
 mod sampler;
-mod scope;
 mod transport;
 mod views;
 
@@ -327,7 +326,7 @@ impl Gui {
                         view.title(),
                         self.model.session().playlists().len()
                     ),
-                    View::Sampler | View::Scope => view.title().to_string(),
+                    View::Sampler => view.title().to_string(),
                 };
                 if ui
                     .selectable_label(self.model.view() == view, title)
@@ -466,12 +465,6 @@ impl Gui {
             View::Playlists => views::playlists(&self.model, ui, scroll),
             View::Sampler => {
                 for action in sampler::show(&mut self.model, ui, &mut self.sampler) {
-                    self.perform(action);
-                }
-                None
-            }
-            View::Scope => {
-                if let Some(action) = scope::show(&self.model, ui) {
                     self.perform(action);
                 }
                 None

@@ -177,30 +177,6 @@ fn onset_sensitivity_defaults_to_the_middle_and_stays_in_range() {
 }
 
 #[test]
-fn loudness_target_defaults_to_streaming_music_and_stays_in_range() {
-    assert_eq!(Settings::default().loudness_target, -14.0);
-    assert_eq!(
-        parse("loudness_target = -16").unwrap().loudness_target,
-        -16.0
-    );
-    assert_eq!(
-        parse("loudness_target = -9.5").unwrap().loudness_target,
-        -9.5
-    );
-    for bad in [
-        "loudness_target = 1",
-        "loudness_target = -41",
-        "loudness_target = \"loud\"",
-    ] {
-        assert_eq!(
-            parse(bad).unwrap_err(),
-            ["line 1: loudness_target is a number from -40 to 0"],
-            "{bad}"
-        );
-    }
-}
-
-#[test]
 fn auto_prune_defaults_off_and_takes_a_boolean() {
     assert!(!Settings::default().auto_prune);
     assert!(parse("auto_prune = true").unwrap().auto_prune);

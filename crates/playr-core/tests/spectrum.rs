@@ -165,26 +165,3 @@ fn heights_rise_from_0_at_20_hz_to_1_at_half_the_rate() {
     let (lo, _) = s.band_hz(64);
     assert!((s.height_of(lo).unwrap() - 0.5).abs() < 1e-4);
 }
-
-#[test]
-fn the_live_analyser_reads_a_tone_as_the_spectrogram_does() {
-    use playr_core::spectrum::Analyser;
-    let mut a = Analyser::new(RATE);
-    let levels = a.levels(&sine(ON_BIN, 1.0, 0.1));
-    let band = (0..BANDS)
-        .find(|&b| {
-            let (lo, hi) = a.band_hz(b);
-            lo <= ON_BIN && ON_BIN < hi
-        })
-        .unwrap();
-    let loudest = (0..BANDS)
-        .max_by(|&x, &y| levels[x].total_cmp(&levels[y]))
-        .unwrap();
-    assert_eq!(loudest, band);
-    assert!(levels[band].abs() < 0.5, "{} dB", levels[band]);
-    assert!((a.place(ON_BIN).unwrap() * BANDS as f32) as usize == band);
-
-    // Fewer frames than a transform are read after silence.
-    let short = a.levels(&[0.0; 16]);
-    assert!(short.iter().all(|&db| db < -200.0), "{short:?}");
-}

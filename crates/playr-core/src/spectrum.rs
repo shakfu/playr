@@ -104,25 +104,19 @@ impl Spectrogram {
     /// Where `hz` sits on the bands, from 0 at [`LOWEST_HZ`] to 1 at half the
     /// sample rate, each band an equal share; `None` outside them.
     pub fn height_of(&self, hz: f32) -> Option<f32> {
-        place(&self.edges, hz)
+        let e = &self.edges;
+        if !(e[0]..=e[BANDS]).contains(&hz) {
+            return None;
+        }
+        let j = e.partition_point(|&x| x <= hz).clamp(1, BANDS) - 1;
+        let within = (hz - e[j]) / (e[j + 1] - e[j]);
+        Some((j as f32 + within) / BANDS as f32)
     }
 
     /// Band `band`'s lower and upper edge, in Hz.
     pub fn band_hz(&self, band: usize) -> (f32, f32) {
         (self.edges[band], self.edges[band + 1])
     }
-}
-
-/// Where `hz` sits on the bands `edges` bound, from 0 at the lowest edge to 1
-/// at the highest, each band an equal share; `None` outside them.
-fn place(edges: &[f32], hz: f32) -> Option<f32> {
-    let e = edges;
-    if !(e[0]..=e[BANDS]).contains(&hz) {
-        return None;
-    }
-    let j = e.partition_point(|&x| x <= hz).clamp(1, BANDS) - 1;
-    let within = (hz - e[j]) / (e[j + 1] - e[j]);
-    Some((j as f32 + within) / BANDS as f32)
 }
 
 /// A stored level in dBFS.
@@ -150,21 +144,24 @@ enum Read {
 /// Zeros before the first frame, so entry `i` is centred on hop `i`.
 const LEAD: usize = FFT / 2 - HOP as usize / 2;
 
-/// Levels by band from one [`FFT`]-point transform: the spectrogram's
-/// entries, and a live spectrum.
-pub struct Analyser {
+pub(crate) struct Builder {
+    rate: u32,
     fft: Arc<dyn RealToComplex<f32>>,
     window: Vec<f32>,
     edges: Vec<f32>,
     /// Where each band reads its level from.
     bins: Vec<Read>,
+    /// The channels' mean over the frames the next transform reads.
+    history: Vec<f32>,
     input: Vec<f32>,
     output: Vec<Complex<f32>>,
     scratch: Vec<Complex<f32>>,
+    frames: u64,
+    base: Vec<u8>,
 }
 
-impl Analyser {
-    pub fn new(rate: u32) -> Self {
+impl Builder {
+    pub(crate) fn new(rate: u32) -> Self {
         let fft = RealFftPlanner::<f32>::new().plan_fft_forward(FFT);
         let window = (0..FFT)
             .map(|i| {
@@ -189,7 +186,8 @@ impl Analyser {
                 }
             })
             .collect();
-        Analyser {
+        Builder {
+            rate,
             input: fft.make_input_vec(),
             output: fft.make_output_vec(),
             scratch: fft.make_scratch_vec(),
@@ -197,71 +195,6 @@ impl Analyser {
             window,
             edges,
             bins,
-        }
-    }
-
-    /// Each band's level over the last [`FFT`] of `mono`, in dBFS, lowest
-    /// band first. A shorter `mono` is preceded by silence.
-    pub fn levels(&mut self, mono: &[f32]) -> [f32; BANDS] {
-        let mono = &mono[mono.len().saturating_sub(FFT)..];
-        let lead = FFT - mono.len();
-        self.input[..lead].fill(0.0);
-        for ((i, &s), &w) in self.input[lead..]
-            .iter_mut()
-            .zip(mono)
-            .zip(&self.window[lead..])
-        {
-            *i = s * w;
-        }
-        self.fft
-            .process_with_scratch(&mut self.input, &mut self.output, &mut self.scratch)
-            .expect("buffers from the plan");
-        // A full-scale sine peaks at FFT / 4 through a Hann window.
-        let scale = (4.0 / FFT as f32).powi(2);
-        let db = |power: f32| 10.0 * (power * scale).max(1e-30).log10();
-        let mut out = [0.0; BANDS];
-        for (o, &read) in out.iter_mut().zip(&self.bins) {
-            *o = match read {
-                Read::Loudest(lo, hi) => db(self.output[lo..hi]
-                    .iter()
-                    .fold(0.0f32, |m, c| m.max(c.norm_sqr()))),
-                Read::Between(k, at) => {
-                    let (a, b) = (
-                        db(self.output[k].norm_sqr()),
-                        db(self.output[k + 1].norm_sqr()),
-                    );
-                    a + (b - a) * at
-                }
-            };
-        }
-        out
-    }
-
-    /// Band `band`'s lower and upper edge, in Hz.
-    pub fn band_hz(&self, band: usize) -> (f32, f32) {
-        (self.edges[band], self.edges[band + 1])
-    }
-
-    /// As [`Spectrogram::height_of`].
-    pub fn place(&self, hz: f32) -> Option<f32> {
-        place(&self.edges, hz)
-    }
-}
-
-pub(crate) struct Builder {
-    rate: u32,
-    analyser: Analyser,
-    /// The channels' mean over the frames the next transform reads.
-    history: Vec<f32>,
-    frames: u64,
-    base: Vec<u8>,
-}
-
-impl Builder {
-    pub(crate) fn new(rate: u32) -> Self {
-        Builder {
-            rate,
-            analyser: Analyser::new(rate),
             history: vec![0.0; LEAD],
             frames: 0,
             base: Vec::new(),
@@ -279,13 +212,32 @@ impl Builder {
 
     /// Transforms the history into one entry and moves on a hop.
     fn analyse(&mut self) {
-        let levels = self.analyser.levels(&self.history);
+        for ((i, &s), &w) in self.input.iter_mut().zip(&self.history).zip(&self.window) {
+            *i = s * w;
+        }
         self.history.drain(..HOP as usize);
-        self.base.extend(
-            levels
-                .iter()
-                .map(|db| ((db - FLOOR_DB) * 2.0).round().clamp(0.0, 255.0) as u8),
-        );
+        self.fft
+            .process_with_scratch(&mut self.input, &mut self.output, &mut self.scratch)
+            .expect("buffers from the plan");
+        // A full-scale sine peaks at FFT / 4 through a Hann window.
+        let scale = (4.0 / FFT as f32).powi(2);
+        let db = |power: f32| 10.0 * (power * scale).max(1e-30).log10();
+        for &read in &self.bins {
+            let db = match read {
+                Read::Loudest(lo, hi) => db(self.output[lo..hi]
+                    .iter()
+                    .fold(0.0f32, |m, c| m.max(c.norm_sqr()))),
+                Read::Between(k, at) => {
+                    let (a, b) = (
+                        db(self.output[k].norm_sqr()),
+                        db(self.output[k + 1].norm_sqr()),
+                    );
+                    a + (b - a) * at
+                }
+            };
+            self.base
+                .push(((db - FLOOR_DB) * 2.0).round().clamp(0.0, 255.0) as u8);
+        }
     }
 
     pub(crate) fn finish(mut self) -> Spectrogram {
@@ -310,7 +262,7 @@ impl Builder {
         }
         Spectrogram {
             rate: self.rate,
-            edges: self.analyser.edges,
+            edges: self.edges,
             levels,
             loudest,
         }

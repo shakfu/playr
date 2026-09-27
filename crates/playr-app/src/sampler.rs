@@ -676,21 +676,38 @@ impl Layout {
         )
     }
 
-    /// The region or range and the number of marks:
-    /// `region 0:52.310-1:04.870 (12.560 s)  marks 2`.
+    /// The region or range, the number of marks, and what the region
+    /// measures: `region 0:52.310-1:04.870 (12.560 s)  marks 2  peak -0.3 dBFS
+    /// -14.2 LUFS  corr +0.82`. Under 400 ms, the RMS stands in for LUFS.
     pub fn region_text(&self) -> String {
         let (a, b) = self.region;
         let name = match self.range {
             (Some(_), Some(_)) => "range",
             _ => "region",
         };
-        format!(
+        let mut text = format!(
             "{name} {}-{} ({:.3} s)  marks {}",
             fmt_frames(a, self.rate),
             fmt_frames(b, self.rate),
             (b - a) as f64 / self.rate as f64,
             self.marks.len(),
-        )
+        );
+        let db = |v: f32| 20.0 * v.log10();
+        match self.peaks.stats(a, b) {
+            Some(s) if s.peak > 0.0 => {
+                text += &format!("  peak {:.1} dBFS  ", db(s.peak));
+                text += &match s.lufs {
+                    Some(lufs) => format!("{lufs:.1} LUFS"),
+                    None => format!("rms {:.1} dBFS", db(s.rms)),
+                };
+                if let Some(c) = s.correlation {
+                    text += &format!("  corr {c:+.2}");
+                }
+            }
+            Some(_) => text += "  silent",
+            None => {}
+        }
+        text
     }
 }
 

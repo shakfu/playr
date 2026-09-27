@@ -365,10 +365,9 @@ fn mode_and_view_take_a_name_or_its_prefix() {
     );
     assert_eq!(lib("view sel"), Ok(Action::ShowView(Selection)));
     assert_eq!(lib("view p"), Ok(Action::ShowView(Playlists)));
-    assert_eq!(lib("view sc"), Ok(Action::ShowView(View::Scope)));
     assert_eq!(
         lib("view queue"),
-        Err("views: library, selection, playlists, sampler, scope".into())
+        Err("views: library, selection, playlists, sampler".into())
     );
     assert_eq!(
         lib("mode"),
@@ -443,8 +442,7 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
             "view library",
             "view selection",
             "view playlists",
-            "view sampler",
-            "view scope"
+            "view sampler"
         ]
     );
     // Playlist names match without regard to case.
@@ -799,7 +797,6 @@ fn the_cheatsheet_lists_every_command_under_its_view() {
             Some(Selection) => "Selection",
             Some(Playlists) => "Playlists",
             Some(View::Sampler) => "Sampler",
-            Some(View::Scope) => "Scope",
         };
         let usage = format!("`:{} {}", c.name, c.args.replace('|', "\\|"));
         let usage = format!("{}`", usage.trim_end());
@@ -975,49 +972,12 @@ fn columns_and_sort_name_columns() {
 }
 
 #[test]
-fn the_loudness_target_is_set_with_equals_and_moved_with_a_sign() {
-    let s = |line: &str| parse(line, View::Scope);
-    assert_eq!(
-        s("loudness-target =-16"),
-        Ok(Action::SetLoudnessTarget(-16.0))
-    );
-    assert_eq!(s("loudness-target =0"), Ok(Action::SetLoudnessTarget(0.0)));
-    // Unsigned is absolute too, though no target above 0 is allowed.
-    assert_eq!(
-        s("loudness-target 9"),
-        Err("loudness target is -40 to 0 LUFS".into())
-    );
-    assert_eq!(s("loudness-target -2"), Ok(Action::LoudnessTargetBy(-2.0)));
-    assert_eq!(s("loudness-target +1.5"), Ok(Action::LoudnessTargetBy(1.5)));
-    assert_eq!(
-        s("loudness-target =-41"),
-        Err("loudness target is -40 to 0 LUFS".into())
-    );
-    assert!(s("loudness-target =loud").is_err());
-    assert!(s("loudness-target").is_err());
-    for action in [
-        Action::SetLoudnessTarget(-9.5),
-        Action::LoudnessTargetBy(-1.0),
-        Action::LoudnessTargetBy(2.0),
-    ] {
-        let text = line(&action, Some(View::Scope));
-        assert_eq!(s(&text), Ok(action), "{text}");
-    }
-    // Only where the history is drawn.
-    assert!(parse("loudness-target =-16", Library).is_err());
-    assert_eq!(
-        default_key("<", View::Scope),
-        Some(Action::LoudnessTargetBy(-1.0))
-    );
-}
-
-#[test]
 fn views_step_forward_and_back_in_tab_order() {
     assert_eq!(parse("prev-view", Library), Ok(Action::PrevView));
     assert_eq!(default_key("backtab", Library), Some(Action::PrevView));
     for view in View::ALL {
         assert_eq!(view.next().prev(), view);
     }
-    assert_eq!(Library.prev(), View::Scope);
-    assert_eq!(View::Scope.prev(), Sampler);
+    assert_eq!(Library.prev(), Sampler);
+    assert_eq!(Sampler.prev(), Playlists);
 }

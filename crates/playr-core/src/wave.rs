@@ -4,22 +4,25 @@
 //! crossings.
 //!
 //! The finest scale holds one entry per [`BUCKET`] frames, across all channels;
-//! each coarser scale halves the count. An entry is 12 bytes, so a 4-minute
-//! track at 44.1 kHz keeps about 4 MB at the finest scale and as much again
+//! each coarser scale halves the count. An entry is 16 bytes, so a 4-minute
+//! track at 44.1 kHz keeps about 5 MB at the finest scale and as much again
 //! above it. Peaks show where a signal reaches; the mean square gives its RMS,
 //! which shows loudness where a mastered track's peaks are all near full scale.
 //!
 //! Signs take a bit a frame, about 1.3 MB for the same track. Kept over
 //! decoding around each snap, which would stall the interface on a slow seek.
 //!
-//! The same pass reads the track's [`Spectrogram`], so the sampler view's
-//! displays need one decode between them.
+//! The same pass reads the track's [`Spectrogram`] and momentary loudness, so
+//! the sampler view's displays and its region's [`Stats`] need one decode
+//! between them.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::analysis::loudness::Histogram;
 use crate::audio::decode::AudioStream;
+use crate::audio::meter::{block_frames, Meter, SILENCE_LUFS};
 use crate::spectrum::{self, Spectrogram};
 
 /// Frames per entry at the finest scale.
@@ -69,11 +72,29 @@ pub struct Extent {
     pub rms: f32,
 }
 
+/// What a stretch of a track measures, for the sampler's region.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stats {
+    /// The largest sample magnitude, linear.
+    pub peak: f32,
+    /// Root mean square across all channels, linear.
+    pub rms: f32,
+    /// Integrated loudness in LUFS, as `playr analyze` measures a track;
+    /// `None` for silence or under 400 ms.
+    pub lufs: Option<f32>,
+    /// sum(2LR) / sum(L^2 + R^2): 1 for identical channels, -1 for opposite
+    /// ones, 0 for one channel alone; Pearson's when both are equally loud.
+    /// `None` for silence or more than two channels.
+    pub correlation: Option<f32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Entry {
     min: f32,
     max: f32,
     mean_square: f32,
+    /// Mean square of half the channels' difference; 0 unless stereo.
+    side: f32,
 }
 
 /// The peaks of one track.
@@ -86,12 +107,15 @@ pub struct Peaks {
     /// Bit `f` is set where the channels' mean at frame `f` is 0 or more.
     signs: Vec<u64>,
     pub spectrum: Spectrogram,
+    channels: usize,
+    /// The meter's reading at the end of each 100 ms block, in LUFS.
+    momentary: Vec<f32>,
 }
 
 impl Peaks {
     /// The peaks of interleaved `samples` with `channels` channels.
     pub fn from_interleaved(samples: &[f32], channels: usize, rate: u32) -> Peaks {
-        let mut builder = Builder::new(rate);
+        let mut builder = Builder::new(rate, channels);
         builder.push(samples, channels.max(1));
         builder.finish()
     }
@@ -113,25 +137,64 @@ impl Peaks {
             }
             let spec = stream.spec();
             builder
-                .get_or_insert_with(|| Builder::new(spec.rate))
+                .get_or_insert_with(|| Builder::new(spec.rate, spec.channels.into()))
                 .push(&chunk, spec.channels.max(1) as usize);
         }
-        let rate = stream.spec().rate;
-        Ok(Some(builder.unwrap_or_else(|| Builder::new(rate)).finish()))
+        let spec = stream.spec();
+        let builder = builder.unwrap_or_else(|| Builder::new(spec.rate, spec.channels.into()));
+        Ok(Some(builder.finish()))
     }
 
     /// The extremes and RMS of frames `start..end`, or `None` if the range
     /// holds no frames. The range is widened to whole [`BUCKET`]s, by at most
     /// `BUCKET - 1` frames at either end.
     pub fn range(&self, start: u64, end: u64) -> Option<Extent> {
+        self.total(start, end).extent()
+    }
+
+    /// What frames `start..end` measure, or `None` if the range holds no
+    /// frames. All but the loudness widen the range as [`Peaks::range`] does.
+    pub fn stats(&self, start: u64, end: u64) -> Option<Stats> {
+        let total = self.total(start, end);
+        let extent = total.extent()?;
+        let squares = total.squares / total.frames as f64;
+        // About -100 dBFS.
+        let sounds = squares > 1e-10;
+        let correlation = match self.channels {
+            1 | 2 if sounds => {
+                Some((1.0 - 2.0 * total.sides / total.frames as f64 / squares) as f32)
+            }
+            _ => None,
+        };
+        // Reading `i` covers the four blocks ending with block `i`, so only
+        // those from the fourth block of the range on lie wholly inside it.
+        let block = block_frames(self.rate) as u64;
+        let first = start.div_ceil(block) as usize + 3;
+        let last = (end.min(self.frames) / block) as usize;
+        let mut blocks = Histogram::default();
+        for &lufs in self.momentary.get(first..last).unwrap_or_default() {
+            if lufs >= SILENCE_LUFS {
+                blocks.add(lufs);
+            }
+        }
+        Some(Stats {
+            peak: extent.max.max(-extent.min),
+            rms: extent.rms,
+            lufs: blocks.integrated(),
+            correlation,
+        })
+    }
+
+    /// Frames `start..end` gathered as [`Peaks::range`] describes.
+    fn total(&self, start: u64, end: u64) -> Total {
         let end = end.min(self.frames);
+        let mut total = Total::default();
         if start >= end {
-            return None;
+            return total;
         }
         // Whole buckets at the finest scale, gathered from the coarsest scales
         // that fit inside them: a few entries a range, and nothing outside it.
         let (mut lo, mut hi) = ((start / BUCKET) as usize, end.div_ceil(BUCKET) as usize);
-        let mut total = Total::default();
         for (k, level) in self.levels.iter().enumerate() {
             if lo >= hi {
                 break;
@@ -147,7 +210,7 @@ impl Peaks {
             lo /= 2;
             hi /= 2;
         }
-        total.extent()
+        total
     }
 
     /// The zero crossing nearest `near` among frames `lo..=hi`: a frame whose
@@ -259,6 +322,7 @@ struct Total {
     min: f32,
     max: f32,
     squares: f64,
+    sides: f64,
     frames: u64,
 }
 
@@ -270,6 +334,7 @@ impl Total {
             (self.min, self.max) = (self.min.min(e.min), self.max.max(e.max));
         }
         self.squares += f64::from(e.mean_square) * frames as f64;
+        self.sides += f64::from(e.side) * frames as f64;
         self.frames += frames;
     }
 
@@ -286,6 +351,7 @@ impl Total {
             min: self.min,
             max: self.max,
             mean_square: (self.squares / self.frames.max(1) as f64) as f32,
+            side: (self.sides / self.frames.max(1) as f64) as f32,
         }
     }
 }
@@ -296,24 +362,33 @@ struct Builder {
     base: Vec<Entry>,
     signs: Vec<u64>,
     spectrum: spectrum::Builder,
-    /// The bucket being filled: extremes, sum of squares, and frames in it.
+    channels: usize,
+    meter: Meter,
+    momentary: Vec<f32>,
+    /// The bucket being filled: extremes, sums of squares, and frames in it.
     min: f32,
     max: f32,
     squares: f64,
+    sides: f64,
     filled: u64,
 }
 
 impl Builder {
-    fn new(rate: u32) -> Self {
+    fn new(rate: u32, channels: usize) -> Self {
+        let channels = channels.max(1);
         Builder {
             rate,
             frames: 0,
             base: Vec::new(),
             signs: Vec::new(),
             spectrum: spectrum::Builder::new(rate),
+            channels,
+            meter: Meter::new(rate, channels as u16),
+            momentary: Vec::new(),
             min: f32::INFINITY,
             max: f32::NEG_INFINITY,
             squares: 0.0,
+            sides: 0.0,
             filled: 0,
         }
     }
@@ -328,6 +403,13 @@ impl Builder {
                 self.max = self.max.max(s);
                 square += f64::from(s) * f64::from(s);
                 sum += f64::from(s);
+                if let Some(lufs) = self.meter.sample(s) {
+                    self.momentary.push(lufs);
+                }
+            }
+            if let [l, r] = frame {
+                let side = f64::from(l - r) / 2.0;
+                self.sides += side * side;
             }
             if self.frames.is_multiple_of(64) {
                 self.signs.push(0);
@@ -350,9 +432,10 @@ impl Builder {
             min: self.min,
             max: self.max,
             mean_square: (self.squares / self.filled as f64) as f32,
+            side: (self.sides / self.filled as f64) as f32,
         });
-        (self.min, self.max, self.squares, self.filled) =
-            (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0);
+        (self.min, self.max, self.squares, self.sides, self.filled) =
+            (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0.0, 0);
     }
 
     fn finish(mut self) -> Peaks {
@@ -382,6 +465,8 @@ impl Builder {
             levels,
             signs: self.signs,
             spectrum: self.spectrum.finish(),
+            channels: self.channels,
+            momentary: self.momentary,
         }
     }
 }

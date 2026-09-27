@@ -13,7 +13,6 @@ pub mod opus;
 pub mod order;
 pub mod output;
 pub mod resample;
-pub mod tap;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -355,25 +354,6 @@ impl Player {
     /// The largest sample magnitude played since the last call, which resets it.
     pub fn take_peak(&self) -> f32 {
         self.shared.take_peak()
-    }
-
-    /// Replaces `out` with the momentary loudness readings, in LUFS, made
-    /// since the count `since`, and returns the count to pass next time.
-    pub fn loudness_since(&self, since: u64, out: &mut Vec<f32>) -> u64 {
-        self.shared.blocks.since(since, out)
-    }
-
-    /// Keeps what plays for [`Player::latest`], or stops keeping it.
-    pub fn set_tap(&self, on: bool) {
-        self.shared.tap.set_enabled(on);
-    }
-
-    /// Replaces `out` with up to the last `frames` frames played, before the
-    /// volume, interleaved. Returns their rate and channel count; 0 channels
-    /// before anything played since [`Player::set_tap`].
-    pub fn latest(&self, frames: usize, out: &mut Vec<f32>) -> (u32, u16) {
-        let channels = self.shared.tap.latest(frames, out);
-        (self.shared.position_rate.load(Ordering::Relaxed), channels)
     }
 }
 
