@@ -16,6 +16,7 @@ use cpal::{
 };
 
 use super::decode::Spec;
+use super::eq::{Eq, Gains};
 use super::meter::Meter;
 
 /// How much audio the ring holds. Two seconds is enough to ride out scheduler
@@ -392,6 +393,8 @@ pub struct Shared {
     momentary_bits: AtomicU32,
     /// Largest sample magnitude played since it was last taken, as f32 bits.
     peak_bits: AtomicU32,
+    /// The tone control's gains, which the callback applies.
+    pub eq: Gains,
 }
 
 impl Shared {
@@ -410,6 +413,7 @@ impl Shared {
             seek_target: AtomicU64::new(0),
             momentary_bits: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             peak_bits: AtomicU32::new(0),
+            eq: Gains::default(),
         }
     }
 
@@ -512,10 +516,21 @@ where
 {
     let channels = config.channels as u64;
     let mut meter = Meter::new(config.sample_rate, config.channels);
+    let mut eq = Eq::new(config.sample_rate, config.channels);
     device
         .build_output_stream::<T, _, _>(
             *config,
-            move |out: &mut [T], _| render(out, &mut consumer, &shared, &mut meter, channels, conv),
+            move |out: &mut [T], _| {
+                render(
+                    out,
+                    &mut consumer,
+                    &shared,
+                    &mut eq,
+                    &mut meter,
+                    channels,
+                    conv,
+                )
+            },
             // Printing here would draw over the interface.
             move |e| {
                 let _ = events.send(e.into());
@@ -525,16 +540,19 @@ where
         .map_err(OutputError::build)
 }
 
-/// Fills `out` from the ring, meters it, and counts the frames played.
+/// Fills `out` from the ring, applies the tone control, meters it, and counts
+/// the frames played.
 ///
 /// The body of every output callback, so it must not lock or allocate. It
 /// emits silence while paused, and on underrun rather than repeating stale
-/// samples, which would click. Metering is before the volume, so it describes
-/// what plays, ReplayGain included, rather than the volume setting.
+/// samples, which would click. Metering is after the tone control and before
+/// the volume, so it describes what plays, ReplayGain and EQ included, rather
+/// than the volume setting.
 pub fn render<T>(
     out: &mut [T],
     consumer: &mut rtrb::Consumer<f32>,
     shared: &Shared,
+    eq: &mut Eq,
     meter: &mut Meter,
     channels: u64,
     conv: fn(f32) -> T,
@@ -554,6 +572,7 @@ pub fn render<T>(
         return;
     }
     let gain = shared.volume();
+    eq.follow(shared.eq.get());
     // Whole frames, counted once: the engine pushes whole frames, but a pop
     // that found the ring empty and then saw a push land mid-callback would
     // start a frame on the wrong channel, and swap channels from there on.
@@ -563,6 +582,7 @@ pub fn render<T>(
             true => consumer.pop().unwrap_or(0.0),
             false => 0.0,
         };
+        let s = eq.process(s);
         if let Some(lufs) = meter.sample(s) {
             shared
                 .momentary_bits

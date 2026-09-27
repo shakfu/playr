@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use playr_core::audio::eq::Eq;
 use playr_core::audio::meter::Meter;
 use playr_core::audio::output::{render, Shared};
 
@@ -13,7 +14,15 @@ fn callback(
     shared: &Shared,
     meter: &mut Meter,
 ) {
-    render(out, consumer, shared, meter, 2, |v| v);
+    render(
+        out,
+        consumer,
+        shared,
+        &mut Eq::new(8000, 2),
+        meter,
+        2,
+        |v| v,
+    );
 }
 
 #[test]
@@ -80,4 +89,31 @@ fn pushed_during_callbacks() {
     }
     pushing.join().unwrap();
     assert_eq!(frames, 20_000);
+}
+
+#[test]
+fn the_callback_applies_the_tone_control_the_player_sets() {
+    use playr_core::audio::eq::Band;
+    let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
+    let shared = Shared::new();
+    shared.eq.set(Band::Treble, -12.0);
+    let (mut eq, mut meter) = (Eq::new(8000, 2), Meter::new(8000, 2));
+    // The highest frequency 8 kHz holds, in both channels.
+    for f in 0..32 {
+        let v = if f % 2 == 0 { 0.5 } else { -0.5 };
+        producer.push(v).unwrap();
+        producer.push(v).unwrap();
+    }
+    let mut out = [0.0f32; 64];
+    render(
+        &mut out,
+        &mut consumer,
+        &shared,
+        &mut eq,
+        &mut meter,
+        2,
+        |v| v,
+    );
+    let last = out[62].abs();
+    assert!(last < 0.3, "{last}");
 }

@@ -1738,3 +1738,26 @@ fn loop_slots_save_the_range_recall_it_looping_and_are_kept_in_the_library() {
         [Some((40_000, 48_000)), None]
     );
 }
+
+#[test]
+fn eq_moves_from_where_the_player_is_stays_in_range_and_says_so() {
+    use playr_core::audio::eq::Band;
+    let mut model = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        Config::default(),
+    );
+    model.perform(Action::EqBy(Band::Bass, 3.0));
+    model.run_command("eq bass +3");
+    model.run_command("eq treble =-2");
+    assert_eq!(model.message_text(), Some("eq bass +6 treble -2"));
+    model.refresh();
+    assert_eq!(model.snapshot().eq, [6.0, 0.0, -2.0]);
+    model.perform(Action::EqBy(Band::Bass, 20.0));
+    assert_eq!(model.message_text(), Some("eq bass +12 treble -2"));
+    model.perform(Action::FlatEq);
+    assert_eq!(model.message_text(), Some("eq flat"));
+    model.refresh();
+    assert_eq!(model.snapshot().eq, [0.0; 3]);
+}

@@ -1890,3 +1890,13 @@ fn info_draws_the_measurements_as_a_list() {
     assert!(joined.contains("-13.5 LUFS"), "no loudness:\n{joined}");
     assert!(joined.contains("174 BPM"), "no tempo:\n{joined}");
 }
+
+#[test]
+fn eq_shows_in_the_status_bar_only_away_from_flat() {
+    let flat = Case::new(View::Library, &stopped()).text();
+    assert!(!flat.contains("eq "), "{flat}");
+    let mut snapshot = stopped();
+    snapshot.eq = [3.0, 0.0, -2.5];
+    let joined = Case::new(View::Library, &snapshot).text();
+    assert!(joined.contains("eq bass +3 treble -2.5"), "{joined}");
+}

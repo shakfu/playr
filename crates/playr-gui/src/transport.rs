@@ -1,6 +1,6 @@
 //! The transport: what is playing, the buttons, the progress bar with its
-//! marks, volume, speed, mode and the level meter. ReplayGain is in the
-//! Playback menu.
+//! marks, volume, speed, mode, the level meter, and the EQ button and its
+//! dialog. ReplayGain is in the Playback menu.
 
 use std::time::Duration;
 
@@ -13,10 +13,11 @@ use crate::palette::Palette;
 use playr_app::message::{self, fmt_time};
 use playr_app::meter;
 use playr_app::model::{self, Model};
+use playr_core::audio::eq::{Band, RANGE_DB};
 use playr_core::audio::{speed_for, Mode, State};
 
 /// Draws the transport into `ui` and performs what its controls ask for.
-pub fn show(model: &mut Model, ui: &mut egui::Ui) {
+pub fn show(model: &mut Model, ui: &mut egui::Ui, eq_open: &mut bool) {
     let mut actions = Vec::new();
     let snapshot = model.snapshot().clone();
     let status = &snapshot.status;
@@ -152,8 +153,45 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
                     }
                 }
             });
+
+        ui.toggle_value(eq_open, "EQ");
     });
 
+    for action in actions {
+        model.perform(action);
+    }
+}
+
+/// The EQ dialog, while `open`: a slider a band, and Flat. It does not block
+/// the window, so the rest stays usable while the tone is set by ear.
+pub fn eq_dialog(model: &mut Model, ctx: &egui::Context, open: &mut bool) {
+    let gains = model.snapshot().eq;
+    let mut actions = Vec::new();
+    egui::Window::new("EQ")
+        .collapsible(false)
+        .resizable(false)
+        .open(open)
+        .show(ctx, |ui| {
+            ui.spacing_mut().slider_width = 160.0;
+            for (band, mut db) in Band::ALL.into_iter().zip(gains) {
+                let slider = egui::Slider::new(&mut db, -RANGE_DB..=RANGE_DB)
+                    .step_by(0.5)
+                    .suffix(" dB")
+                    .text(band.name());
+                if ui.add(slider).changed() {
+                    actions.push(Action::SetEq(band, db));
+                }
+            }
+            for control in controls::EQ {
+                let flat = gains == [0.0; 3];
+                if ui
+                    .add_enabled(!flat, egui::Button::new(control.label))
+                    .clicked()
+                {
+                    actions.push(control.action.clone());
+                }
+            }
+        });
     for action in actions {
         model.perform(action);
     }

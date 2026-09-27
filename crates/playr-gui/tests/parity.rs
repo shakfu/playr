@@ -1,6 +1,7 @@
 //! Every action the terminal can do, the window can do: through a control, a
 //! key binding, or, for a named few, a way that is not an `Action`.
 
+use playr_core::audio::eq::Band;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -57,6 +58,9 @@ fn every_action() -> Vec<Action> {
         Action::SetVolume(1.0),
         Action::SpeedBy(1),
         Action::SetSpeed(0),
+        Action::SetEq(Band::Bass, 1.0),
+        Action::EqBy(Band::Bass, 1.0),
+        Action::FlatEq,
         Action::CycleMode(true),
         Action::SetMode(Mode::Normal),
         Action::SetReplayGain(ReplayGain::Off),
@@ -149,6 +153,9 @@ fn every_action() -> Vec<Action> {
             | Action::SetVolume(_)
             | Action::SpeedBy(_)
             | Action::SetSpeed(_)
+            | Action::SetEq(..)
+            | Action::EqBy(..)
+            | Action::FlatEq
             | Action::CycleMode(_)
             | Action::SetMode(_)
             | Action::SetReplayGain(_)
@@ -223,6 +230,10 @@ const ELSEWHERE: &[(&str, &str)] = &[
     (
         "Unmap",
         "removes a binding for the session; typed in the command bar",
+    ),
+    (
+        "EqBy",
+        "the EQ sliders set a band directly; typed in the command bar",
     ),
 ];
 

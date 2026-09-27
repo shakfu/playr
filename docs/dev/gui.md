@@ -66,6 +66,7 @@ Every row is a feature the terminal has today.
 | marks | `b` `B` `C` `,` `.` | buttons beside the progress bar; the same keys | `Mark`, `UndoMark`, `ClearMarks`, `PrevMark`, `NextMark` |
 | volume | `+` `-` | slider | `SetVolume`, `VolumeBy` |
 | varispeed | `[` `]` `\`; `1.19x (+3 st)` | slider in semitones, with the same label; a reset button | `SetSpeed`, `SpeedBy` |
+| EQ | `:eq`; `eq bass +3` in the status bar | an EQ toggle beside Mode opens a dialog: a slider a band, and Flat; the rest of the window stays usable | `SetEq`, `EqBy`, `FlatEq` |
 | mode | `m` `M`; named when not normal | drop-down | `SetMode`, `CycleMode` |
 | now playing | title, artist, rate and channels | the same, in the status bar | |
 | level meter | loudness bar in colour zones, LUFS and peak readout | the same bar drawn as a meter, same zones and hold | |

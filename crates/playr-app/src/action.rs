@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::View;
+use playr_core::audio::eq::Band;
 use playr_core::audio::Mode;
 
 /// One thing the interface can do.
@@ -89,6 +90,12 @@ pub enum Action {
     SetVolume(f32),
     SpeedBy(i32),
     SetSpeed(i32),
+    /// Set a tone control band, in dB.
+    SetEq(Band, f32),
+    /// Cut or boost a tone control band further, in dB.
+    EqBy(Band, f32),
+    /// Return every band to 0.
+    FlatEq,
     /// Next playback mode, or the previous one when false.
     CycleMode(bool),
     SetMode(Mode),

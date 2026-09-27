@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use playr_core::audio::eq::Band;
 use playr_core::audio::Cmd;
 use playr_core::db::query::Playlist;
 use playr_core::db::Track;
@@ -313,6 +314,12 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::SetVolume(v) => f.session().send(Cmd::SetVolume(v)),
         Action::SpeedBy(semitones) => f.session().send(Cmd::SpeedBy(semitones)),
         Action::SetSpeed(semitones) => f.session().send(Cmd::SetSpeed(semitones)),
+        Action::SetEq(band, db) => set_eq(f, &[(band, db)]),
+        Action::EqBy(band, db) => {
+            let now = f.session().player().eq()[band as usize];
+            set_eq(f, &[(band, now + db)]);
+        }
+        Action::FlatEq => set_eq(f, &Band::ALL.map(|b| (b, 0.0))),
         Action::CycleMode(forward) => {
             let notice = f.session().cycle_mode(forward);
             f.notify(notice.into());
@@ -728,6 +735,15 @@ fn len(f: &impl Frontend, view: View) -> usize {
         View::Playlists => f.session().playlists().len(),
         View::Sampler => 0,
     }
+}
+
+/// Sets each band to its gain in dB, and says what the tone control is now.
+fn set_eq(f: &mut impl Frontend, bands: &[(Band, f32)]) {
+    for &(band, db) in bands {
+        f.session().send(Cmd::SetEq(band, db));
+    }
+    let gains = f.session().player().eq();
+    f.notify(Message::Eq(gains));
 }
 
 /// Puts the current view's cursor on row `i`, or its last row.

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cpal::SampleFormat;
+use playr_core::audio::eq::Eq;
 use playr_core::audio::meter::Meter;
 use playr_core::audio::output::{render, Backend, DeviceEvent, OutputError, Plan, Shared};
 use playr_core::audio::{Player, Spec};
@@ -195,6 +196,7 @@ impl Backend for Fake {
             const CATCH_UP: u32 = 10;
             let mut buf = vec![0.0f32; (plan.rate / 100) as usize * plan.channels as usize];
             let mut meter = Meter::new(plan.rate, plan.channels);
+            let mut eq = Eq::new(plan.rate, plan.channels);
             let mut due = Instant::now();
             while alive.load(Ordering::Relaxed) {
                 let now = Instant::now();
@@ -211,6 +213,7 @@ impl Backend for Fake {
                             &mut buf,
                             &mut consumer,
                             &shared,
+                            &mut eq,
                             &mut meter,
                             plan.channels as u64,
                             |v| v,

@@ -291,6 +291,34 @@ fn volume_is_a_percentage_or_a_signed_change() {
 }
 
 #[test]
+fn eq_names_a_band_and_a_sign_makes_it_relative() {
+    use playr_core::audio::eq::Band;
+    assert_eq!(lib("eq bass =3"), Ok(Action::SetEq(Band::Bass, 3.0)));
+    assert_eq!(
+        lib("eq treble =-4.5"),
+        Ok(Action::SetEq(Band::Treble, -4.5))
+    );
+    assert_eq!(lib("eq mid +2"), Ok(Action::EqBy(Band::Mid, 2.0)));
+    assert_eq!(lib("eq b -1"), Ok(Action::EqBy(Band::Bass, -1.0)));
+    assert_eq!(lib("eq flat"), Ok(Action::FlatEq));
+    assert_eq!(lib("eq bass =13"), Err("eq is -12 to 12 dB".into()));
+    // A bare number would be ambiguous: set, or move?
+    assert!(lib("eq bass 3").is_err());
+    assert!(lib("eq loud +1").is_err());
+    assert!(lib("eq bass =x").is_err());
+    assert!(lib("eq").is_err());
+    for action in [
+        Action::SetEq(Band::Mid, -2.5),
+        Action::EqBy(Band::Treble, -1.0),
+        Action::EqBy(Band::Bass, 0.5),
+        Action::FlatEq,
+    ] {
+        let text = line(&action, None);
+        assert_eq!(lib(&text), Ok(action), "{text}");
+    }
+}
+
+#[test]
 fn speed_is_whole_semitones_and_a_sign_makes_it_relative() {
     assert_eq!(lib("speed 3"), Ok(Action::SetSpeed(3)));
     assert_eq!(lib("speed 0"), Ok(Action::SetSpeed(0)));

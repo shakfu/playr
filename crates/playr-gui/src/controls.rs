@@ -63,6 +63,9 @@ pub const PLAYBACK_MENU: &[Control] = &[
     control("Normal speed", Action::SetSpeed(0)),
 ];
 
+/// In the EQ dialog, under its sliders.
+pub const EQ: &[Control] = &[control("Flat", Action::FlatEq)];
+
 /// Slicing the playing track; in the sampler view these plan instead of write.
 pub const SLICE_MENU: &[Control] = &[
     control("Slice the region", Action::Slice(Slicing::Region)),
@@ -174,6 +177,7 @@ pub const TABLES: &[&[Control]] = &[
     VIEW_MENU,
     THEME_MENU,
     PLAYBACK_MENU,
+    EQ,
     SLICE_MENU,
     HELP_MENU,
     LIBRARY_ROW,
@@ -195,6 +199,7 @@ pub const TABLES: &[&[Control]] = &[
 pub const WITH_VALUES: &[(&str, &str)] = &[
     ("SetVolume", "the volume slider"),
     ("SetSpeed", "the speed slider"),
+    ("SetEq", "the sliders in the EQ dialog"),
     ("SetMode", "the mode menu"),
     ("SetReplayGain", "Playback, ReplayGain"),
     ("SetSliceEdges", "the sampler's Edges menu"),

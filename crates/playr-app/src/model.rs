@@ -98,6 +98,8 @@ pub struct Snapshot {
     pub marks: Vec<Duration>,
     /// Loops saved in the playing track, by slot from 1, in source frames.
     pub loops: playr_core::session::Loops,
+    /// The tone control's gains in dB, by band.
+    pub eq: [f32; 3],
 }
 
 /// The interface's state. See the module documentation.
@@ -237,6 +239,7 @@ impl Model {
             peak: self.peak_hold.map(|(p, _)| 20.0 * p.log10()),
             marks: Vec::new(),
             loops: Default::default(),
+            eq: player.eq(),
         };
         let current = self.snapshot.status.current().cloned();
         self.snapshot.loops = self.session.loops_for(current.as_ref());

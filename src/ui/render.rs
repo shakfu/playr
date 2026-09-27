@@ -960,8 +960,8 @@ fn level_readout(p: &Palette, loudness: Option<f32>, peak: Option<f32>) -> Vec<S
     ]
 }
 
-/// The level readout while playing, speed when it is not normal, the volume,
-/// and the help key. The readout comes first, next to its bar.
+/// The level readout while playing, speed and the tone control when they are
+/// not normal, the volume, and the help key. The readout comes first, next to its bar.
 fn indicators(
     p: &Palette,
     semitones: i32,
@@ -974,7 +974,7 @@ fn indicators(
     if playing {
         spans.extend(level_readout(p, snapshot.loudness, snapshot.peak));
     }
-    // Mode and speed show only when not normal, so the usual case stays uncluttered.
+    // Mode, speed and EQ show only when not normal, so the usual case stays uncluttered.
     let mode = snapshot.status.mode;
     if mode != playr_core::audio::Mode::Normal {
         spans.push(Span::styled(
@@ -986,6 +986,12 @@ fn indicators(
         let speed = playr_core::audio::speed_for(semitones);
         spans.push(Span::styled(
             format!("{speed:.2}x ({semitones:+} st)  "),
+            Style::default().fg(p.notice),
+        ));
+    }
+    if snapshot.eq != [0.0; 3] {
+        spans.push(Span::styled(
+            format!("{}  ", playr_app::message::eq(snapshot.eq)),
             Style::default().fg(p.notice),
         ));
     }

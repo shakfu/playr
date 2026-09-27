@@ -53,6 +53,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:seek TIME \| +TIME \| -TIME`        | left, right, with shift | seek to a time, or by one: 1:23, +10        |
 | `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the volume, or change it: 60, +10       |
 | `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | set varispeed in semitones, or change it    |
+| `:eq BAND =N \| +N \| -N \| flat`     |                         | bass, mid or treble, -12 to 12 dB           |
 | `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |
 | `:replaygain SETTING`                 |                         | level by loudness: off, track, album, auto  |
 | `:slice-edges exact\|zero\|fade`       |                         | slice edges: exact, at zeros, or faded      |

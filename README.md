@@ -35,6 +35,8 @@ None of the three contact external services or download any metadata and images.
 
 - Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
 
+- A three-band EQ: bass, mid and treble
+
 - Volume as a float gain applied before quantisation
 
 - ReplayGain by track, by album, or by album only while tracks play in order, from `playr analyze` or the files' tags; off by default
@@ -486,6 +488,12 @@ The waveform glyphs are the view's only characters outside ASCII. Marks are plac
 `(` and `)` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
 
 This is not the pitch-preserving speed change of a podcast app. That is time-stretching, which needs a phase vocoder; this is a change of resampling ratio, which is what varispeed means.
+
+### EQ
+
+`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass =3` sets a band and `:eq treble -2` moves one; `:eq flat` returns all three to 0. In the window, the EQ button beside Mode opens a dialog with a slider for each and Flat; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
+
+A boost raises its band and leaves the rest, so at full volume a large one can clip a loud track. The volume applies after the EQ, so turning it down makes room: at 50, a 6 dB boost cannot clip. The level meter reads after the EQ and before the volume. `:slice` and the sampler's measurements read the file, so the EQ does not reach them. The EQ starts flat each time playr does, and changes last until it exits.
 
 ### ReplayGain
 

@@ -29,6 +29,22 @@ pub struct Biquad {
     pub a2: f64,
 }
 
+impl Biquad {
+    /// Filters `x` in transposed direct form II, with state `z`.
+    pub fn process(&self, x: f64, z: &mut [f64; 2]) -> f64 {
+        let out = self.b0 * x + z[0];
+        z[0] = self.b1 * x - self.a1 * out + z[1];
+        z[1] = self.b2 * x - self.a2 * out;
+        // Decaying state would reach denormals in silence, which are slow on x86.
+        for v in z.iter_mut() {
+            if v.abs() < 1e-30 {
+                *v = 0.0;
+            }
+        }
+        out
+    }
+}
+
 /// The two K-weighting stages for `rate`, pre-filter first.
 ///
 /// The formulas are libebur128's. They reproduce BS.1770-4's 48 kHz table and
@@ -108,16 +124,7 @@ impl Meter {
         self.peak = self.peak.max(x.abs());
         let mut y = x as f64;
         for (stage, z) in self.stages.iter().zip(self.state[self.channel].iter_mut()) {
-            let out = stage.b0 * y + z[0];
-            z[0] = stage.b1 * y - stage.a1 * out + z[1];
-            z[1] = stage.b2 * y - stage.a2 * out;
-            // Decaying state would reach denormals in silence, which are slow on x86.
-            for v in z.iter_mut() {
-                if v.abs() < 1e-30 {
-                    *v = 0.0;
-                }
-            }
-            y = out;
+            y = stage.process(y, z);
         }
         self.sum += y * y;
 

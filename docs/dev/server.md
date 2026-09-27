@@ -26,6 +26,7 @@ Decisions taken:
 |-|-|-|
 | pause, next, previous, stop, seek | yes | yes |
 | volume, speed, mode | yes | yes |
+| EQ | yes, as `:eq` | no |
 | now playing, position, state, level meter | yes | sent back |
 | play a playlist | yes | by index |
 | library, selection and playlists views, with cursor, search and row menus | yes | no |

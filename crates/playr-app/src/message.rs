@@ -28,6 +28,8 @@ pub enum Message {
     NoPlaylistUnderCursor,
     Display(Display),
     Theme(Theme),
+    /// The tone control's gains in dB, by band.
+    Eq([f32; 3]),
     /// The columns a list shows, as `:columns` set them.
     Columns(Vec<Column>),
     /// What lists are sorted by, as `:sort` set it.
@@ -140,6 +142,7 @@ pub fn text(message: &Message) -> String {
         }
         Message::Display(display) => format!("display: {}", display.name()),
         Message::Theme(theme) => format!("theme: {}", theme.name()),
+        Message::Eq(gains) => eq(*gains),
         Message::Columns(columns) => {
             let names: Vec<&str> = columns.iter().map(|c| c.name()).collect();
             format!("columns: {}", names.join(", "))
@@ -388,6 +391,20 @@ fn count(n: usize, thing: &str) -> String {
 }
 
 /// The ReplayGain applied, as the bottom line shows it: `rg -6.2 dB`.
+/// The tone control's bands away from 0: `eq bass +2 treble -3.5`, or `eq flat`.
+pub fn eq(gains: [f32; 3]) -> String {
+    let bands: Vec<String> = playr_core::audio::eq::Band::ALL
+        .iter()
+        .zip(gains)
+        .filter(|(_, db)| *db != 0.0)
+        .map(|(band, db)| format!("{} {:+}", band.name(), (db * 10.0).round() / 10.0))
+        .collect();
+    match bands.is_empty() {
+        true => "eq flat".into(),
+        false => format!("eq {}", bands.join(" ")),
+    }
+}
+
 pub fn replaygain(db: f32) -> String {
     // Rounding to one decimal would show a tiny cut as -0.0.
     let db = if db.abs() < 0.05 { 0.0 } else { db };

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::action::{Action, Key, Keymap, Nudge, Slicing, Zoom};
 use crate::{Display, Theme, View};
+use playr_core::audio::eq::{Band, RANGE_DB};
 use playr_core::audio::Mode;
 use playr_core::columns::{Column, SortKey};
 use playr_core::gain::ReplayGain;
@@ -100,6 +101,11 @@ pub const COMMANDS: &[Command] = &[
         "speed",
         "N | =-N | +N | -N",
         "set varispeed in semitones, or change it",
+    ),
+    any(
+        "eq",
+        "BAND =N | +N | -N | flat",
+        "bass, mid or treble, -12 to 12 dB",
     ),
     any(
         "mode",
@@ -377,6 +383,14 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         SpeedBy(n) => format!("speed {n:+}"),
         SetSpeed(n) if *n < 0 => format!("speed ={n}"),
         SetSpeed(n) => format!("speed {n}"),
+        SetEq(band, db) => format!("eq {} ={}", band.name(), number(f64::from(*db))),
+        EqBy(band, db) => format!(
+            "eq {} {}{}",
+            band.name(),
+            if *db < 0.0 { "-" } else { "+" },
+            number(f64::from(db.abs()))
+        ),
+        FlatEq => "eq flat".into(),
         CycleMode(true) => "mode +".into(),
         CycleMode(false) => "mode -".into(),
         SetMode(m) => format!(
@@ -745,6 +759,28 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
                         _ => Err("speed is -12 to 12 semitones".into()),
                     }
                 }
+            }
+        }
+        "eq" => {
+            let (band, change) = rest.split_once(' ').unwrap_or((rest, ""));
+            if band == "flat" && change.is_empty() {
+                return Ok(Action::FlatEq);
+            }
+            let band = choose(band, &Band::NAMES, "band")?;
+            let db = |t: &str| {
+                t.parse::<f32>()
+                    .ok()
+                    .filter(|n| n.is_finite())
+                    .ok_or_else(|| format!("not a number of dB: {change}"))
+            };
+            // A sign alone means relative, so `=` sets a band: `=-3`.
+            match (change.strip_prefix('='), signed(change)) {
+                (Some(n), _) => match db(n)? {
+                    n if n.abs() <= RANGE_DB => Ok(Action::SetEq(band, n)),
+                    _ => Err("eq is -12 to 12 dB".into()),
+                },
+                (None, Some((sign, n))) => Ok(Action::EqBy(band, sign as f32 * db(n)?)),
+                (None, None) => Err(usage()),
             }
         }
         "mode" => match rest {

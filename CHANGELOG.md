@@ -10,6 +10,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
   Correlation is sum(2LR) / sum(L^2 + R^2), not Pearson's. It needs one more value a bucket where Pearson's needs two, and the two agree when the channels are equally loud. Numbers on a chosen range replace a live scope view that was tried and dropped. Its waveform trace and spectrum repeated what the sampler shows, and a stereo image mattered less than a number for deciding where to cut.
 
+- A three-band EQ: `:eq bass|mid|treble =N|+N|-N`, and `:eq flat`, from -12 to 12 dB. Bass is a shelf below 100 Hz, mid a wide peak at 1 kHz, treble a shelf above 10 kHz. In the window, an EQ button beside Mode opens a dialog with a slider a band and Flat; the page takes the command. The EQ starts flat and is not saved. Library API: `audio::eq`, `Cmd::SetEq`, `Player::eq`, `Shared::eq`, `Biquad::process`; `render` takes an `Eq`; `Action::SetEq`, `EqBy`, `FlatEq`; `Message::Eq`; `Snapshot::eq`.
+
+  A boost raises its band and nothing else, so at full volume a large one can clip a loud track; the volume applies after the EQ, so turning it down makes room. Lowering the whole level by the largest boost prevents that, but a boost then turned everything else down, and raising a band made the track quieter. A limiter changes the sound when it acts. The EQ runs in the output callback, before the meter, not in the decoder, which runs up to 2 s ahead of what is heard. With every band at 0 it passes samples unchanged.
+
 - `:prev-view`, on shift-tab, switches to the previous view, as tab switches to the next. The web page steps back from the library to the playlists, skipping the views it does not have.
 
 ### Fixed

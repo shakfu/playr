@@ -905,3 +905,56 @@ fn shift_tab_moves_to_the_previous_view() {
     harness.run_steps(2);
     assert_eq!(model(&harness).view(), View::Sampler);
 }
+
+#[test]
+fn the_eq_button_opens_a_dialog_whose_sliders_set_bands() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    let slider = |harness: &Harness<'_, Gui>, band: &str| {
+        harness
+            .query_all_by_label(band)
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Slider)
+            .map(|n| n.rect())
+    };
+    assert_eq!(slider(&harness, "bass"), None, "the dialog starts closed");
+    // The button, not the dialog's title, which shares its name.
+    let button = |harness: &Harness<'_, Gui>| {
+        let lowest = harness
+            .query_all_by_label("EQ")
+            .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+            .unwrap();
+        lowest.click();
+    };
+    button(&harness);
+    harness.run_steps(2);
+    let (bass, treble) = (
+        slider(&harness, "bass").unwrap(),
+        slider(&harness, "treble").unwrap(),
+    );
+
+    // A press at a slider's right end boosts fully; Flat returns every band.
+    let press = |harness: &mut Harness<'_, Gui>, at: egui::Pos2| {
+        harness.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+        harness.run_steps(2);
+    };
+    let end = |r: egui::Rect| r.right_center() - egui::vec2(1.0, 0.0);
+    press(&mut harness, end(bass));
+    press(&mut harness, end(treble));
+    assert_eq!(model(&harness).snapshot().eq, [12.0, 0.0, 12.0]);
+    harness.get_by_label("Flat").click();
+    harness.run_steps(2);
+    assert_eq!(model(&harness).snapshot().eq, [0.0; 3]);
+
+    // The button closes it again.
+    button(&harness);
+    harness.run_steps(2);
+    assert_eq!(slider(&harness, "bass"), None);
+}

@@ -76,8 +76,9 @@ pub fn allowed(action: &Action) -> bool {
         | StartRename | Analyze(None) | ShowInfo | SetColumns(_) | SetSort(_) | RenameTo(_)
         | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None) | TogglePause | Restart | Next
         | Prev | Stop | SeekBy(_) | SeekTo(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_)
-        | SetSpeed(_) | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
-        | UndoMark | ClearMarks | NextMark | PrevMark | Theme(_) => true,
+        | SetSpeed(_) | SetEq(..) | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_)
+        | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark | ClearMarks | NextMark | PrevMark
+        | Theme(_) => true,
     }
 }
 

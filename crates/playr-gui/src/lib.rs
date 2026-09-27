@@ -49,6 +49,8 @@ pub struct Gui {
     sampler: sampler::State,
     /// The theme last handed to egui.
     theme: Option<Theme>,
+    /// Whether the EQ dialog shows.
+    eq_open: bool,
 }
 
 impl Gui {
@@ -62,6 +64,7 @@ impl Gui {
             cursor: (View::Library, None),
             sampler: sampler::State::default(),
             theme: None,
+            eq_open: false,
         }
     }
 
@@ -83,6 +86,7 @@ impl Gui {
         egui::Panel::bottom("transport").show(ui, |ui| self.bottom(ui));
         egui::CentralPanel::default().show(ui, |ui| self.view(ui));
         self.dialogs(ui.ctx());
+        transport::eq_dialog(&mut self.model, ui.ctx(), &mut self.eq_open);
 
         if self.model.quitting() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -364,7 +368,7 @@ impl Gui {
     /// The command bar when it is open, the message, and the transport.
     fn bottom(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
-        transport::show(&mut self.model, ui);
+        transport::show(&mut self.model, ui, &mut self.eq_open);
         if matches!(self.model.input(), Input::Command(_)) {
             self.command_bar(ui);
         } else {

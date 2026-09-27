@@ -7,6 +7,7 @@
 
 pub mod convert;
 pub mod decode;
+pub mod eq;
 pub mod meter;
 #[cfg(feature = "opus")]
 pub mod opus;
@@ -151,6 +152,8 @@ pub enum Cmd {
     /// Seek forward (positive) or back (negative) by seconds.
     SeekBy(i64),
     SetVolume(f32),
+    /// Cut or boost a band of the tone control, in dB. See [`eq`].
+    SetEq(eq::Band, f32),
     /// Shift playback speed by whole semitones; pitch moves with it.
     SpeedBy(i32),
     /// Return to normal speed.
@@ -299,6 +302,7 @@ impl Player {
             }
             // Set here, so the next `volume` call sees it even before the engine runs.
             Cmd::SetVolume(v) => return self.shared.set_volume(v),
+            Cmd::SetEq(band, db) => return self.shared.eq.set(band, db),
             Cmd::SetMode(mode) => {
                 status.mode = mode;
                 Msg::Cmd(Cmd::SetMode(mode))
@@ -344,6 +348,11 @@ impl Player {
 
     pub fn volume(&self) -> f32 {
         self.shared.volume()
+    }
+
+    /// The tone control's gains in dB, by [`eq::Band`].
+    pub fn eq(&self) -> [f32; 3] {
+        self.shared.eq.get()
     }
 
     /// Momentary loudness of what is playing, in LUFS; `None` for silence.
@@ -634,7 +643,7 @@ impl Engine {
                 self.seek_to(Duration::from_secs_f64(target));
             }
             // Applied by `Player::send`, which never forwards it.
-            Cmd::SetVolume(_) => {}
+            Cmd::SetVolume(_) | Cmd::SetEq(..) => {}
             Cmd::SpeedBy(delta) => self.set_semitones(self.semitones + delta),
             Cmd::SpeedReset => self.set_semitones(0),
             Cmd::SetSpeed(semitones) => self.set_semitones(semitones),
