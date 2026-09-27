@@ -82,3 +82,19 @@ fn a_path_is_matched_as_written_or_resolved() {
     assert!(found.iter().all(|t| Path::new(&t.path) == file));
     assert_eq!(missing, [gone]);
 }
+
+#[test]
+fn a_windows_canonical_path_is_written_as_other_players_read_it() {
+    for (stored, written) in [
+        (r"\\?\C:\Music\a.flac", r"C:\Music\a.flac"),
+        (r"\\?\UNC\nas\music\a.flac", r"\\nas\music\a.flac"),
+        // Other verbatim forms have no plainer spelling, so they stay.
+        (r"\\?\Volume{1234}\a.flac", r"\\?\Volume{1234}\a.flac"),
+        (r"C:\Music\a.flac", r"C:\Music\a.flac"),
+        ("/m/a.flac", "/m/a.flac"),
+    ] {
+        assert_eq!(m3u::plain(stored), written, "{stored}");
+    }
+    let (text, _) = m3u::write("x", &[track(r"\\?\C:\Music\a.flac", None, None, None)]);
+    assert!(text.ends_with("\nC:\\Music\\a.flac\n"), "{text}");
+}

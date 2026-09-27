@@ -29,9 +29,15 @@ struct Dragged(usize);
 /// The library, the selection or the queue, as `view` shows it.
 pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize>) -> Clicked {
     let mut result: Clicked = None;
-    if view == View::Selection {
+    let bar = match view {
+        View::Selection => controls::SELECTION_BAR,
+        View::Queue => controls::QUEUE_BAR,
+        View::Library if model.results().is_some() => controls::RESULTS_BAR,
+        _ => &[],
+    };
+    if !bar.is_empty() {
         ui.horizontal(|ui| {
-            for control in controls::SELECTION_BAR {
+            for control in bar {
                 if ui.button(control.label).clicked() {
                     result = Some((None, Some(control.action.clone())));
                 }
@@ -40,14 +46,14 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     }
     let tracks = match view {
         View::Library => model.listed(),
-        View::Queue => model.playing(),
+        View::Queue => model.queue(),
         _ => model.session().selection(),
     };
     if tracks.is_empty() {
         ui.weak(match (view, model.results()) {
             (View::Library, Some(_)) => "No matches. Esc in the search field clears it.",
             (View::Library, None) => "The library is empty. File, Add folder to library adds one.",
-            (View::Queue, _) => "Nothing is playing. A track's menu queues it, or plays it next.",
+            (View::Queue, _) => "Nothing is queued. A track's menu adds it to the queue.",
             _ => "The selection is empty. Tick tracks in the library to add them.",
         });
         return result;
@@ -58,7 +64,7 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     let playing = status.current().cloned();
     // A track queued twice is two rows, so the queue marks the playing row
     // by its index.
-    let playing_row = (status.state != playr_core::audio::State::Stopped).then_some(status.index);
+    let playing_row = model.queue_playing();
     let selected: HashSet<&str> = match view {
         View::Library => model
             .session()

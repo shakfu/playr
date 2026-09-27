@@ -330,7 +330,7 @@ impl Gui {
                         view.title(),
                         self.model.session().playlists().len()
                     ),
-                    View::Queue => format!("{} {}", view.title(), self.model.playing().len()),
+                    View::Queue => format!("{} {}", view.title(), self.model.queue().len()),
                     View::Sampler => view.title().to_string(),
                 };
                 if ui

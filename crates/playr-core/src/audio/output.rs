@@ -395,6 +395,9 @@ pub struct Shared {
     peak_bits: AtomicU32,
     /// The tone control's gains, which the callback applies.
     pub eq: Gains,
+    /// Commands sent to the engine, and those it has acted on and published.
+    pub sent: AtomicU64,
+    pub taken: AtomicU64,
 }
 
 impl Shared {
@@ -414,6 +417,8 @@ impl Shared {
             momentary_bits: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             peak_bits: AtomicU32::new(0),
             eq: Gains::default(),
+            sent: AtomicU64::new(0),
+            taken: AtomicU64::new(0),
         }
     }
 

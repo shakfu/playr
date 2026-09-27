@@ -42,6 +42,9 @@ columns = ["artist", "album", "title", "time"]
 # The keys the library is sorted by, most important first; add `desc` to a
 # name to reverse it. Tracks with nothing to sort on come last either way.
 sort = ["album_artist", "album", "disc", "track", "title"]
+# What plays once the queued tracks have: resume, the list that was playing,
+# from the track after the one the queue interrupted; or stop.
+after_queue = "resume"
 # Session values to remember in the library between runs: eq, volume, mode,
 # replaygain, theme, columns and sort. While a name is listed, its
 # remembered value wins over the setting above; columns and sort are

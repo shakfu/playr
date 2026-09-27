@@ -28,9 +28,31 @@ pub fn write(name: &str, tracks: &[Track]) -> (String, usize) {
             Some(artist) => format!("{artist} - {}", t.display_title()),
             None => t.display_title(),
         };
-        text.push_str(&format!("#EXTINF:{secs},{}\n{}\n", line(&title), t.path));
+        text.push_str(&format!(
+            "#EXTINF:{secs},{}\n{}\n",
+            line(&title),
+            plain(&t.path)
+        ));
     }
     (text, left_out)
+}
+
+/// `path` without the `\\?\` prefix a Windows canonical path carries, which
+/// the library stores and other players may not read: `\\?\C:\m\a.flac` as
+/// `C:\m\a.flac`, and `\\?\UNC\host\share\a.flac` as `\\host\share\a.flac`.
+/// Any other path is returned as it is. Import matches either form.
+pub fn plain(path: &str) -> std::borrow::Cow<'_, str> {
+    let Some(rest) = path.strip_prefix(r"\\?\") else {
+        return path.into();
+    };
+    if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        return format!(r"\\{unc}").into();
+    }
+    let drive = rest.as_bytes();
+    match drive {
+        [letter, b':', b'\\', ..] if letter.is_ascii_alphabetic() => rest.into(),
+        _ => path.into(),
+    }
 }
 
 /// The name a `#PLAYLIST:` line gives, if any.

@@ -26,6 +26,10 @@ pub enum Message {
     Cancelled,
     NoMatches,
     NoPlaylistUnderCursor,
+    /// `:enqueue all` with no search results or selection to queue.
+    NothingToQueue,
+    /// `:queue-clear` with nothing waiting in the queue.
+    QueueEmpty,
     Display(Display),
     Theme(Theme),
     /// The tone control's gains in dB, by band.
@@ -137,6 +141,10 @@ pub fn text(message: &Message) -> String {
         }
         Message::Cancelled => "cancelled".into(),
         Message::NoMatches => "no matches".into(),
+        Message::NothingToQueue => {
+            "nothing to queue; :enqueue all queues search results or the selection".into()
+        }
+        Message::QueueEmpty => "nothing is waiting in the queue".into(),
         Message::NoPlaylistUnderCursor => {
             "no playlist under the cursor in the playlists view".into()
         }
@@ -226,9 +234,11 @@ fn outcome_text(outcome: &Outcome) -> String {
             true => "plays next".into(),
             false => "queued".into(),
         },
-        Outcome::QueueReplaced { tracks: 1 } => "queue replaced; it had 1 track to come".into(),
+        Outcome::QueueCleared { tracks: 1 } => "took 1 track out of the queue".into(),
+        Outcome::QueueCleared { tracks } => format!("took {tracks} tracks out of the queue"),
+        Outcome::QueueReplaced { tracks: 1 } => "queue replaced; 1 track was waiting".into(),
         Outcome::QueueReplaced { tracks } => {
-            format!("queue replaced; it had {tracks} tracks to come")
+            format!("queue replaced; {tracks} tracks were waiting")
         }
         Outcome::Queued { tracks, next } => match next {
             true => format!("{tracks} tracks play next"),

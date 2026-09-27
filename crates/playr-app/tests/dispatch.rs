@@ -76,6 +76,9 @@ impl Frontend for Headless {
     fn set_results(&mut self, results: Option<Vec<Track>>) -> Option<Vec<Track>> {
         std::mem::replace(&mut self.results, results)
     }
+    fn searching(&self) -> bool {
+        self.results.is_some()
+    }
     fn onset_sensitivity(&self) -> f32 {
         0.5
     }
@@ -198,10 +201,10 @@ fn adding_moves_the_cursor_and_playing_starts_from_it() {
 #[test]
 fn enqueueing_adds_the_row_under_the_cursor_and_moves_on() {
     let (mut f, _dir) = headless();
-    // Nothing playing: a track to play next is the whole queue.
+    // Nothing playing: the track queued is the whole queue.
     f.set_cursor(Library, Some(1));
     dispatch(Action::Enqueue(true), &mut f);
-    assert_eq!(queue(&f), [PathBuf::from("/m/b.flac")]);
+    assert_eq!(queued(&f), [PathBuf::from("/m/b.flac")]);
     assert_eq!(
         last(&f),
         Some(
@@ -213,17 +216,11 @@ fn enqueueing_adds_the_row_under_the_cursor_and_moves_on() {
         )
     );
     assert_eq!(f.cursor(Library), Some(2), "the cursor did not move on");
-    dispatch(Action::Enqueue(false), &mut f);
-    assert_eq!(
-        queue(&f),
-        [PathBuf::from("/m/b.flac"), PathBuf::from("/m/c.flac")]
-    );
 
     // On a playlist, its tracks; the playlists are listed by name.
     dispatch(Action::ShowView(Playlists), &mut f);
     f.set_cursor(Playlists, Some(1));
     dispatch(Action::Enqueue(false), &mut f);
-    assert_eq!(queue(&f).len(), 4);
     assert_eq!(
         last(&f),
         Some(
@@ -241,32 +238,96 @@ fn enqueueing_adds_the_row_under_the_cursor_and_moves_on() {
         dispatch(Action::ShowView(view), &mut f);
         dispatch(Action::Enqueue(false), &mut f);
     }
-    assert_eq!(queue(&f).len(), 4);
     assert_eq!(f.messages.len(), before);
+
+    // `:enqueue all` takes search results or the selection, not the library.
+    dispatch(Action::ShowView(Library), &mut f);
+    dispatch(Action::EnqueueAll, &mut f);
+    assert_eq!(last(&f), Some(&Message::NothingToQueue));
+}
+
+/// The tracks the player holds as queued, in order.
+fn queued(f: &Headless) -> Vec<PathBuf> {
+    let status = f.session.player().status();
+    status
+        .queue
+        .iter()
+        .zip(status.queued.iter())
+        .filter(|(_, q)| **q)
+        .map(|(p, _)| p.clone())
+        .collect()
 }
 
 #[test]
-fn the_queue_view_takes_tracks_out_and_moves_them() {
-    let (mut f, _dir) = headless();
-    dispatch(Action::Add, &mut f);
-    dispatch(Action::Activate, &mut f);
-    let path = |name: &str| PathBuf::from(format!("/m/{name}.flac"));
-    dispatch(Action::ShowView(View::Queue), &mut f);
-    f.set_cursor(View::Queue, Some(2));
-    dispatch(Action::MoveTrack(-1), &mut f);
-    assert_eq!(queue(&f), [path("a"), path("c"), path("b")]);
-    assert_eq!(f.cursor(View::Queue), Some(1), "the cursor stays on c");
-    dispatch(Action::MoveTrack(-5), &mut f);
-    assert_eq!(queue(&f)[1], path("c"), "a move past the start is refused");
+fn the_queue_view_takes_tracks_out_and_keeps_the_one_playing_first() {
+    // Real files, so the queue holds still while it plays.
+    let dir = tempfile::tempdir().unwrap();
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    for name in ["a", "b", "c"] {
+        let path = dir.path().join(format!("{name}.wav"));
+        common::silence(&path, 8000, 5.0);
+        let t = Track {
+            path: path.to_string_lossy().into_owned(),
+            mtime: 1,
+            size: 1,
+            ..Default::default()
+        };
+        db::upsert(&conn, &t).unwrap();
+    }
+    let (mut f, _other) = headless();
+    f.session = Session::new(conn, common::fake_player().0, event::ignore());
+    let name = |f: &Headless, row: usize| {
+        let rows = f.session.queue_rows();
+        let path = f.session.player().queue()[rows[row]].clone();
+        path.file_stem().unwrap().to_string_lossy().into_owned()
+    };
+    let wait = |f: &Headless, done: &dyn Fn(&Headless) -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(f) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
 
+    f.set_cursor(Library, Some(0));
+    dispatch(Action::Activate, &mut f);
+    wait(&f, &|f| {
+        f.session.player().status().state == playr_core::audio::State::Playing
+    });
+    assert!(
+        f.session.queue_rows().is_empty(),
+        "the library filled the queue"
+    );
+    // b interrupts the library; c waits behind it.
+    f.set_cursor(Library, Some(1));
+    dispatch(Action::Enqueue(false), &mut f);
+    wait(&f, &|f| {
+        let status = f.session.player().status();
+        f.session.queue_rows().first() == Some(&status.index) && name(f, 0) == "b"
+    });
+    dispatch(Action::Enqueue(false), &mut f);
+    assert_eq!((name(&f, 0), name(&f, 1)), ("b".into(), "c".into()));
+
+    dispatch(Action::ShowView(View::Queue), &mut f);
+    f.set_cursor(View::Queue, Some(1));
+    dispatch(Action::MoveTrack(-1), &mut f);
+    assert_eq!(
+        name(&f, 0),
+        "b",
+        "a waiting track moved above the one playing"
+    );
     dispatch(Action::Remove, &mut f);
-    assert_eq!(queue(&f), [path("a"), path("b")]);
+    assert_eq!(f.session.queue_rows().len(), 1);
     assert!(matches!(
         last(&f),
         Some(Message::Core(Notice::Done(Outcome::RemovedTrack { .. })))
     ));
-    assert_eq!(f.cursor(View::Queue), Some(1));
-    assert_eq!(selection(&f), ["/m/a.flac"], "the selection was touched");
+    dispatch(Action::ClearQueue, &mut f);
+    assert_eq!(
+        last(&f),
+        Some(&Message::QueueEmpty),
+        "only b, playing, is left"
+    );
 }
 
 #[test]

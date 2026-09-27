@@ -1808,7 +1808,7 @@ fn the_queue_lists_what_plays_opens_on_it_and_jumps_within_it() {
 }
 
 #[test]
-fn playing_over_an_edited_queue_says_what_it_had_to_come() {
+fn replacing_the_queue_says_how_many_tracks_were_waiting() {
     let dir = tempfile::tempdir().unwrap();
     let tracks: Vec<Track> = ["one", "two", "three"]
         .iter()
@@ -1824,17 +1824,20 @@ fn playing_over_an_edited_queue_says_what_it_had_to_come() {
         tracks,
         Config::default(),
     );
-    // Opened tracks play from the first; nothing was queued, so nothing is lost.
+    let replaced = |model: &Model| match model.message() {
+        Some(Message::Core(Notice::Done(Outcome::QueueReplaced { tracks }))) => Some(*tracks),
+        _ => None,
+    };
+    // Opened files play as a list, so nothing waits and nothing is said.
+    // Enter on the selection fills the queue: one plays, two and three wait.
     model.perform(Action::Activate);
-    assert!(!matches!(
-        model.message(),
-        Some(Message::Core(Notice::Done(Outcome::QueueReplaced { .. })))
-    ));
+    assert_eq!(replaced(&model), None);
+    // Two more queued wait behind them.
+    model.set_cursor(View::Selection, Some(1));
     model.perform(Action::Enqueue(false));
+    model.perform(Action::Enqueue(false));
+    assert_eq!(model.session().queue_rows().len(), 5);
     model.set_cursor(View::Selection, Some(0));
     model.perform(Action::Activate);
-    assert_eq!(
-        model.message(),
-        Some(&Outcome::QueueReplaced { tracks: 3 }.into())
-    );
+    assert_eq!(replaced(&model), Some(4));
 }

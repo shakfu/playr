@@ -32,6 +32,8 @@ pub enum Confirm {
     ReplacePlaylist(String),
     /// Empty the selection, which holds this many tracks.
     ClearSelection(usize),
+    /// Take this many waiting tracks out of the queue.
+    ClearQueue(usize),
     /// Remove the tracks and marks under this directory whose files are gone,
     /// or under every recorded root when `None`.
     Prune(Option<PathBuf>),
@@ -63,6 +65,7 @@ impl Confirm {
                 format!("replace playlist \"{name}\" with the selection?")
             }
             Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection?"),
+            Confirm::ClearQueue(n) => format!("take all {n} waiting tracks out of the queue?"),
             Confirm::Prune(Some(dir)) => format!(
                 "remove tracks and marks under {} whose files are gone?",
                 crate::message::home_as_tilde(dir)
@@ -154,6 +157,8 @@ pub trait Frontend {
     /// Shows search results, or the whole library for `None`. Returns the
     /// results shown before.
     fn set_results(&mut self, results: Option<Vec<Track>>) -> Option<Vec<Track>>;
+    /// Whether the library view lists search results.
+    fn searching(&self) -> bool;
 
     /// The onset sensitivity `:slice onsets` uses when given none.
     fn onset_sensitivity(&self) -> f32;
@@ -212,6 +217,29 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
 
         Action::Add => add(f),
         Action::Enqueue(next) => enqueue(f, next),
+        Action::EnqueueAll => {
+            let tracks = match f.view() {
+                View::Library if f.searching() => f.listed().to_vec(),
+                View::Selection => f.session().selection().to_vec(),
+                _ => Vec::new(),
+            };
+            match tracks.is_empty() {
+                true => f.notify(Message::NothingToQueue),
+                false => {
+                    let outcome = f.session_mut().enqueue(&tracks, false);
+                    f.notify(outcome.into());
+                }
+            }
+        }
+        Action::ClearQueue => {
+            let status = f.session().player().status();
+            let playing = f.session().queue_rows().first() == Some(&status.index)
+                && status.state != playr_core::audio::State::Stopped;
+            match f.session().queue_rows().len() - usize::from(playing) {
+                0 => f.notify(Message::QueueEmpty),
+                n => f.confirm(Confirm::ClearQueue(n)),
+            }
+        }
         Action::Remove => {
             // The queue's, or else the selection's.
             let view = match f.view() {
@@ -700,6 +728,10 @@ pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
             Err(refusal) => f.notify(refusal.into()),
         },
         Confirm::Resume { path, at } => f.session_mut().resume(path, at),
+        Confirm::ClearQueue(_) => {
+            let outcome = f.session_mut().clear_queue();
+            f.notify(outcome.into());
+        }
         Confirm::ClearSelection(_) => {
             let outcome = f.session_mut().clear_selection();
             f.set_cursor(View::Selection, None);
@@ -751,7 +783,7 @@ fn len(f: &impl Frontend, view: View) -> usize {
         View::Library => f.listed().len(),
         View::Selection => f.session().selection().len(),
         View::Playlists => f.session().playlists().len(),
-        View::Queue => f.session().player().queue().len(),
+        View::Queue => f.session().queue_rows().len(),
         View::Sampler => 0,
     }
 }
@@ -811,16 +843,24 @@ fn activate(f: &mut impl Frontend) {
                 return;
             };
             let tracks = f.listed().to_vec();
-            if !tracks.is_empty() {
-                if let Some(replaced) = f.session_mut().play(&tracks, i) {
-                    f.notify(replaced.into());
+            if tracks.is_empty() {
+                return;
+            }
+            // Search results are a list chosen, so they fill the queue; the
+            // library plays on by itself.
+            match f.searching() {
+                true => {
+                    if let Some(replaced) = f.session_mut().play_queued(&tracks, i) {
+                        f.notify(replaced.into());
+                    }
                 }
+                false => f.session_mut().play(&tracks, i),
             }
         }
         View::Selection => {
             if let Some(i) = f.cursor(View::Selection) {
                 let tracks = f.session().selection().to_vec();
-                if let Some(replaced) = f.session_mut().play(&tracks, i) {
+                if let Some(replaced) = f.session_mut().play_queued(&tracks, i) {
                     f.notify(replaced.into());
                 }
             }
@@ -832,8 +872,9 @@ fn activate(f: &mut impl Frontend) {
             }
         }
         View::Queue => {
-            if let Some(i) = f.cursor(View::Queue) {
-                f.session().send(Cmd::Jump(i));
+            let rows = f.session().queue_rows();
+            if let Some(&index) = f.cursor(View::Queue).and_then(|i| rows.get(i)) {
+                f.session().send(Cmd::Jump(index));
             }
         }
         View::Sampler => {}

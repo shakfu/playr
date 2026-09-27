@@ -61,8 +61,12 @@ pub enum Outcome {
         tracks: usize,
         next: bool,
     },
-    /// A queue that had been edited was replaced with `tracks` still to come.
+    /// The queue, with `tracks` waiting in it, was replaced.
     QueueReplaced {
+        tracks: usize,
+    },
+    /// The queue's `tracks` waiting were taken out.
+    QueueCleared {
         tracks: usize,
     },
     Mode(Mode),

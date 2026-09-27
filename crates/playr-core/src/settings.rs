@@ -12,7 +12,7 @@ pub use toml;
 use toml::de::{DeTable, DeValue};
 use toml::Spanned;
 
-use crate::audio::Mode;
+use crate::audio::{AfterQueue, Mode};
 use crate::columns::{Column, SortKey};
 use crate::gain::ReplayGain;
 
@@ -36,6 +36,8 @@ pub struct Settings {
     /// From 0 to 1.
     pub volume: f32,
     pub mode: Mode,
+    /// What plays once the queued tracks have.
+    pub after_queue: AfterQueue,
     /// Semitones.
     pub speed: i32,
     /// Where exported slices are written.
@@ -99,6 +101,7 @@ impl Default for Settings {
         let mut settings = Settings {
             volume: 1.0,
             mode: Mode::Normal,
+            after_queue: AfterQueue::Resume,
             speed: 0,
             samples: PathBuf::new(),
             onset_sensitivity: 0.5,
@@ -231,6 +234,18 @@ impl Settings {
                         }
                     }
                 }
+                ("after_queue", DeValue::String(s)) => {
+                    match AfterQueue::NAMES
+                        .iter()
+                        .find(|a| a.0.eq_ignore_ascii_case(s))
+                    {
+                        Some(&(_, after)) => self.after_queue = after,
+                        None => errors.add(
+                            at,
+                            format!("unknown after_queue {s}; choices: resume, stop"),
+                        ),
+                    }
+                }
                 ("speed", v) => match number(v) {
                     Some(n) if n.fract() == 0.0 && (-12.0..=12.0).contains(&n) => {
                         self.speed = n as i32
@@ -329,7 +344,7 @@ impl Settings {
                 }
                 (
                     "mode" | "samples" | "slice_edges" | "auto_prune" | "analyze_on_scan"
-                    | "device" | "replaygain" | "persist",
+                    | "device" | "replaygain" | "persist" | "after_queue",
                     v,
                 ) => errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v))),
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),

@@ -57,7 +57,11 @@ pub const COMMANDS: &[Command] = &[
     any("first", "", "move the cursor to the first row"),
     any("last", "", "move the cursor to the last row"),
     any("play", "", "play the list in view from the cursor"),
-    any("enqueue", "[next]", "queue the row, or play it next"),
+    any(
+        "enqueue",
+        "[next | all]",
+        "queue the row, first, or every row",
+    ),
     any("search", "[QUERY]", "search the library; no query opens /"),
     any("playlist", "NAME", "play a saved playlist"),
     any("save", "[NAME]", "save the selection as a playlist"),
@@ -160,6 +164,12 @@ pub const COMMANDS: &[Command] = &[
         "take the track out of the queue",
     ),
     only(View::Queue, "reorder", "+N | -N", "move the track N places"),
+    only(
+        View::Queue,
+        "queue-clear",
+        "",
+        "empty the queue of waiting tracks; asks y/n",
+    ),
     only(
         Playlists,
         "add",
@@ -382,6 +392,8 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Add => "add".into(),
         Enqueue(false) => "enqueue".into(),
         Enqueue(true) => "enqueue next".into(),
+        EnqueueAll => "enqueue all".into(),
+        ClearQueue => "queue-clear".into(),
         Remove if view == Some(View::Queue) => "dequeue".into(),
         Remove => "remove".into(),
         MoveTrack(n) if view == Some(View::Queue) => format!("reorder {n:+}"),
@@ -731,6 +743,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "enqueue" => match rest {
             "" => Ok(Action::Enqueue(false)),
             "next" => Ok(Action::Enqueue(true)),
+            "all" => Ok(Action::EnqueueAll),
             _ => Err(usage()),
         },
         "search" if rest.is_empty() => Ok(Action::StartSearch),
@@ -994,6 +1007,7 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "search-clear" => nothing(Action::ClearSearch),
         "remove" => nothing(Action::Remove),
         "dequeue" => nothing(Action::Remove),
+        "queue-clear" => nothing(Action::ClearQueue),
         "move" | "reorder" => match signed(rest).map(|(sign, n)| (sign as i64, n.parse::<i64>())) {
             Some((sign, Ok(n))) if n > 0 => Ok(Action::MoveTrack(sign * n)),
             _ => Err(usage()),
@@ -1038,7 +1052,7 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
             .chain(["next", "prev"])
             .map(String::from)
             .collect(),
-        "enqueue" => vec!["next".into()],
+        "enqueue" => vec!["next".into(), "all".into()],
         "playlist" | "rename" => playlists.to_vec(),
         _ => Vec::new(),
     };

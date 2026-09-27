@@ -243,35 +243,107 @@ impl Session {
 
     // --- playback ---
 
-    /// Plays `tracks` from `index`. The selection is not touched. Says so
-    /// when this replaces a queue that was edited with tracks still to come.
-    pub fn play(&mut self, tracks: &[Track], index: usize) -> Option<Outcome> {
+    // The player holds one list: the list played, with the tracks the
+    // listener queued spliced in after the track playing. `Status::queued`
+    // tells them apart. A queued track leaves the list once it has played.
+
+    /// Plays `tracks` from `index`, as a list that goes on by itself, as the
+    /// library does. Tracks waiting in the queue are kept and play next.
+    pub fn play(&mut self, tracks: &[Track], index: usize) {
         let status = self.player.status();
-        let left = status.queue.len().saturating_sub(status.index + 1);
-        let replaced = (self.player.queue_edited() && left > 0)
-            .then_some(Outcome::QueueReplaced { tracks: left });
-        let paths = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
-        self.player.send(Cmd::Play(paths, index));
-        replaced
+        let waiting: Vec<PathBuf> = waiting(&status).map(|i| status.queue[i].clone()).collect();
+        let index = index.min(tracks.len().saturating_sub(1));
+        let paths = |ts: &[Track]| {
+            ts.iter()
+                .map(|t| PathBuf::from(&t.path))
+                .collect::<Vec<_>>()
+        };
+        let (head, tail) = tracks.split_at((index + 1).min(tracks.len()));
+        let mut list = paths(head);
+        let mut queued = vec![false; list.len()];
+        queued.extend(vec![true; waiting.len()]);
+        list.extend(waiting);
+        queued.extend(vec![false; tail.len()]);
+        list.extend(paths(tail));
+        self.player.send(Cmd::PlayWith(list, queued, index));
     }
 
-    /// Queues `tracks` after the rest of the list playing, or after the
-    /// track playing when `next`. Plays them if nothing is playing.
+    /// Replaces the queue with `tracks` from `index` and plays them, over the
+    /// list playing, which resumes after them. Says how many tracks were
+    /// waiting, when some were.
+    pub fn play_queued(&mut self, tracks: &[Track], index: usize) -> Option<Outcome> {
+        let status = self.player.status();
+        let dropped = waiting(&status).count();
+        let new: Vec<PathBuf> = tracks
+            .iter()
+            .skip(index)
+            .map(|t| PathBuf::from(&t.path))
+            .collect();
+        let listed = |i: &usize| !status.queued.get(*i).copied().unwrap_or(false);
+        let played = |range: std::ops::Range<usize>| -> Vec<PathBuf> {
+            range
+                .filter(listed)
+                .map(|i| status.queue[i].clone())
+                .collect()
+        };
+        let len = status.queue.len();
+        let (before, after) = match len {
+            0 => (Vec::new(), Vec::new()),
+            _ => (played(0..status.index + 1), played(status.index + 1..len)),
+        };
+        let start = before.len();
+        let mut queued = vec![false; before.len()];
+        queued.extend(vec![true; new.len()]);
+        queued.extend(vec![false; after.len()]);
+        let list: Vec<PathBuf> = before.into_iter().chain(new).chain(after).collect();
+        self.player.send(Cmd::PlayWith(list, queued, start));
+        (dropped > 0).then_some(Outcome::QueueReplaced { tracks: dropped })
+    }
+
+    /// Queues `tracks`: after the tracks waiting, or before them when `next`.
+    /// The first tracks queued over a list playing interrupt it; with
+    /// nothing playing, they play at once.
     pub fn enqueue(&mut self, tracks: &[Track], next: bool) -> Outcome {
-        let paths = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
-        self.player.send(match next {
-            true => Cmd::Insert(paths),
-            false => Cmd::Enqueue(paths),
-        });
-        Outcome::Queued {
+        let outcome = Outcome::Queued {
             tracks: tracks.len(),
             next,
+        };
+        let status = self.player.status();
+        if self.stopped(&status) || status.queue.is_empty() {
+            let _ = self.play_queued(tracks, 0);
+            return outcome;
         }
+        let last_waiting = waiting(&status).last();
+        let playing_queued = status.queued.get(status.index).copied().unwrap_or(false);
+        let at = match (next, last_waiting) {
+            (false, Some(last)) => last + 1,
+            _ => status.index + 1,
+        };
+        let paths = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
+        self.player.send(Cmd::Insert(at, paths));
+        if !next && last_waiting.is_none() && !playing_queued {
+            self.player.send(Cmd::Next);
+        }
+        outcome
     }
 
-    /// Takes track `index` out of the queue, and says which. Taking out the
+    /// The rows of the queue, as indices into the player's list: the track
+    /// playing, if it was queued, then the queued tracks waiting.
+    pub fn queue_rows(&self) -> Vec<usize> {
+        let status = self.player.status();
+        let playing =
+            !self.stopped(&status) && status.queued.get(status.index).copied().unwrap_or(false);
+        playing
+            .then_some(status.index)
+            .into_iter()
+            .chain(waiting(&status))
+            .collect()
+    }
+
+    /// Takes queue row `row` out, and says which track it was. Taking out the
     /// track playing plays the next.
-    pub fn dequeue(&mut self, index: usize) -> Option<Outcome> {
+    pub fn dequeue(&mut self, row: usize) -> Option<Outcome> {
+        let index = *self.queue_rows().get(row)?;
         let path = self.player.queue().get(index)?.clone();
         let title = match self.tracks.iter().find(|t| Path::new(&t.path) == path) {
             Some(t) => t.display_title(),
@@ -285,16 +357,50 @@ impl Session {
         Some(Outcome::RemovedTrack { title })
     }
 
-    /// Moves queued track `index` by `by` places, returning where it is now,
-    /// or nothing if either place is outside the queue.
-    pub fn move_in_queue(&mut self, index: usize, by: i64) -> Option<usize> {
-        let len = self.player.queue().len();
-        let to = usize::try_from(index as i64 + by).ok()?;
-        if index >= len || to >= len {
+    /// Moves waiting queue row `row` by `by` places, returning where it is
+    /// now, or nothing if either place is not a waiting row. The track
+    /// playing keeps its place.
+    pub fn move_in_queue(&mut self, row: usize, by: i64) -> Option<usize> {
+        let rows = self.queue_rows();
+        let status = self.player.status();
+        let stopped = self.stopped(&status);
+        let first = rows.iter().position(|&i| i > status.index || stopped)?;
+        let to = usize::try_from(row as i64 + by).ok()?;
+        if row < first || to < first || row >= rows.len() || to >= rows.len() {
             return None;
         }
-        self.player.send(Cmd::Move(index, to));
+        self.player.send(Cmd::Move(rows[row], rows[to]));
         Some(to)
+    }
+
+    /// Empties the queue of the tracks waiting; the track playing plays on.
+    pub fn clear_queue(&mut self) -> Outcome {
+        let status = self.player.status();
+        let waiting: Vec<usize> = waiting(&status).collect();
+        for &i in waiting.iter().rev() {
+            self.player.send(Cmd::Remove(i));
+        }
+        Outcome::QueueCleared {
+            tracks: waiting.len(),
+        }
+    }
+
+    /// Whether playback is stopped, and not about to start: right after a
+    /// play is sent the engine has yet to leave the stopped state.
+    fn stopped(&self, status: &crate::audio::Status) -> bool {
+        status.state == State::Stopped && self.player.caught_up()
+    }
+
+    /// Takes the queued tracks that have played out of the list, once
+    /// playback has moved past them.
+    pub fn drop_played(&mut self) {
+        let status = self.player.status();
+        let played: Vec<usize> = (0..status.index.min(status.queued.len()))
+            .filter(|&i| status.queued[i])
+            .collect();
+        for &i in played.iter().rev() {
+            self.player.send(Cmd::Remove(i));
+        }
     }
 
     /// Plays `path` alone, from `at`, without touching the selection. For
@@ -386,7 +492,7 @@ impl Session {
         if tracks.is_empty() {
             return Refusal::PlaylistEmpty.into();
         }
-        match self.play(&tracks, 0) {
+        match self.play_queued(&tracks, 0) {
             Some(replaced) => replaced.into(),
             None => Outcome::PlayingPlaylist { name }.into(),
         }
@@ -1264,4 +1370,10 @@ fn caught<T>(what: &str, work: impl FnOnce() -> Result<T, String>) -> Result<T, 
             .unwrap_or("no message");
         Err(format!("the {what} stopped: {text}"))
     })
+}
+
+/// The queued tracks waiting after the one playing, as indices into the
+/// player's list.
+fn waiting(status: &crate::audio::Status) -> impl Iterator<Item = usize> + '_ {
+    (status.index + 1..status.queued.len()).filter(|&i| status.queued[i])
 }

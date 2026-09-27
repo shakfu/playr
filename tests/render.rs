@@ -30,6 +30,8 @@ struct Case<'a> {
     all: &'a [Track],
     results: Option<&'a [Track]>,
     playing: &'a [Track],
+    queue: &'a [Track],
+    queue_playing: Option<usize>,
     selection: &'a [Track],
     playlists: &'a [Playlist],
     input: &'a Input,
@@ -55,6 +57,8 @@ impl<'a> Case<'a> {
             all: &[],
             results: None,
             playing: &[],
+            queue: &[],
+            queue_playing: None,
             selection: &[],
             playlists: &[],
             input: &Input::None,
@@ -83,6 +87,12 @@ impl<'a> Case<'a> {
 
     fn results(mut self, v: &'a [Track]) -> Self {
         self.results = Some(v);
+        self
+    }
+
+    fn queue(mut self, v: &'a [Track], playing: Option<usize>) -> Self {
+        self.queue = v;
+        self.queue_playing = playing;
         self
     }
 
@@ -184,6 +194,8 @@ impl<'a> Case<'a> {
             all: self.all,
             results: self.results,
             playing: self.playing,
+            queue: self.queue,
+            queue_playing: self.queue_playing,
             selection: self.selection,
             playlists: self.playlists,
             input: self.input,
@@ -329,6 +341,7 @@ fn now_playing_shows_title_position_and_source_format() {
         status: Status {
             state: State::Playing,
             queue: vec![std::path::PathBuf::from("/m/So What.flac")].into(),
+            queued: vec![false].into(),
             index: 0,
             duration: Some(Duration::from_secs(545)),
             source: Some(Spec {
@@ -364,26 +377,26 @@ fn the_queue_marks_the_playing_row_by_its_place_not_its_path() {
     let so_what = track("So What", "Miles Davis", "Kind of Blue", 545);
     let blue = track("Blue in Green", "Miles Davis", "Kind of Blue", 337);
     let queue = vec![so_what.clone(), blue, so_what];
-    let mut snapshot = playing(None, None);
-    snapshot.status.queue = queue
-        .iter()
-        .map(|t| std::path::PathBuf::from(&t.path))
-        .collect();
-    snapshot.status.index = 2;
-    let lines = Case::new(View::Queue, &snapshot)
-        .playing(&queue)
-        .size(80, 12)
-        .render();
-    let rows: Vec<&String> = lines
-        .iter()
-        .filter(|l| l.contains("Kind of Blue"))
-        .collect();
-    assert_eq!(rows.len(), 3, "{lines:#?}");
-    let marked: Vec<bool> = rows.iter().map(|l| l.contains('>')).collect();
-    assert_eq!(marked, [false, false, true], "{lines:#?}");
+    let snapshot = playing(None, None);
+    let marked = |playing| {
+        let lines = Case::new(View::Queue, &snapshot)
+            .queue(&queue, playing)
+            .size(80, 12)
+            .render();
+        let rows: Vec<bool> = lines
+            .iter()
+            .filter(|l| l.contains("Kind of Blue"))
+            .map(|l| l.contains('>'))
+            .collect();
+        assert_eq!(rows.len(), 3, "{lines:#?}");
+        rows
+    };
+    assert_eq!(marked(Some(0)), [true, false, false]);
+    // The library playing: every row waits.
+    assert_eq!(marked(None), [false, false, false]);
 
     let empty = Case::new(View::Queue, &stopped()).text();
-    assert!(empty.contains("Nothing is playing"), "{empty}");
+    assert!(empty.contains("Nothing is queued"), "{empty}");
 }
 
 #[test]

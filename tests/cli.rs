@@ -524,14 +524,18 @@ fn playlists_go_out_and_come_back_as_m3u() {
     assert_eq!(code, Some(1));
     assert!(err.contains("a playlist named \"late\" exists"), "{err}");
 
-    // Another player's list, with a relative path and a track not in the library.
+    // Another player's list, with relative paths and an absolute one to a
+    // track not in the library. `/elsewhere` would not do: without a drive
+    // it is relative on Windows.
     let other = music.join("mix.m3u");
-    std::fs::write(&other, "#EXTM3U\na.flac\n/elsewhere/c.flac\nb.flac\n").unwrap();
+    let gone = dir.path().join("gone.flac");
+    let text = format!("#EXTM3U\na.flac\n{}\nb.flac\n", gone.display());
+    std::fs::write(&other, text).unwrap();
     let (code, out, _) = output(&db_path, &["import", other.to_str().unwrap()]);
     assert_eq!(code, Some(0));
     assert!(out.contains("saved \"mix\", 2 tracks"), "{out}");
     assert!(
-        out.contains("1 not in the library") && out.contains("/elsewhere/c.flac"),
+        out.contains("1 not in the library") && out.contains("gone.flac"),
         "{out}"
     );
     let conn = db::open(&db_path).unwrap();

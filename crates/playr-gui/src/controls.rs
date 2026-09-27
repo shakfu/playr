@@ -110,7 +110,14 @@ pub const QUEUE_ROW: &[Control] = &[
 pub const SELECTION_BAR: &[Control] = &[
     control("Save as playlist", Action::StartSave),
     control("Clear selection", Action::ClearSelection),
+    control("Queue the selection", Action::EnqueueAll),
 ];
+
+/// Buttons above the queue.
+pub const QUEUE_BAR: &[Control] = &[control("Clear queue", Action::ClearQueue)];
+
+/// Buttons above search results.
+pub const RESULTS_BAR: &[Control] = &[control("Queue all results", Action::EnqueueAll)];
 
 pub const PLAYLIST_ROW: &[Control] = &[
     control("Play", Action::Activate),
@@ -197,6 +204,9 @@ pub const TABLES: &[&[Control]] = &[
     LIBRARY_ROW,
     SELECTION_ROW,
     SELECTION_BAR,
+    QUEUE_ROW,
+    QUEUE_BAR,
+    RESULTS_BAR,
     PLAYLIST_ROW,
     SAMPLER_BAR,
     MARK_BAR,

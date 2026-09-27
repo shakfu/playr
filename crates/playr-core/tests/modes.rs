@@ -223,12 +223,13 @@ fn an_inserted_track_plays_next_though_the_next_is_buffered() {
     assert!(wait_until(
         || player.position() >= Duration::from_millis(1400)
     ));
-    player.send(Cmd::Insert(vec![inserted.clone()]));
+    player.send(Cmd::Insert(1, vec![inserted.clone()]));
     assert_eq!(
         player.queue().to_vec(),
         [paths[0].clone(), inserted, paths[1].clone()],
         "the queue is current as soon as the insert is sent"
     );
+    assert_eq!(player.status().queued[..], [false, true, false]);
     assert!(wait_until(|| played_order(&control, &levels_).len() >= 3));
     assert_eq!(played_order(&control, &levels_), [0, 2, 1]);
 }
@@ -241,7 +242,7 @@ fn an_inserted_track_plays_next_in_shuffle() {
     let inserted = paths.pop().unwrap();
     player.send(Cmd::Play(paths, 0));
     assert!(wait_until(|| player.position() > Duration::ZERO));
-    player.send(Cmd::Insert(vec![inserted]));
+    player.send(Cmd::Insert(1, vec![inserted]));
     assert!(wait_until(|| played_order(&control, &levels_).len() >= 2));
     assert_eq!(played_order(&control, &levels_)[..2], [0, 4]);
 }
@@ -250,7 +251,7 @@ fn an_inserted_track_plays_next_in_shuffle() {
 fn inserting_while_stopped_plays_the_track() {
     let (player, control, dir) = setup(Mode::Normal);
     let levels_ = [0.2];
-    player.send(Cmd::Insert(tracks(dir.path(), 0.3, &levels_)));
+    player.send(Cmd::Insert(0, tracks(dir.path(), 0.3, &levels_)));
     assert!(wait_until(|| frames_of(&control, 0.2) > 0));
     assert_eq!(settled(&player).index, 0);
 }
@@ -265,8 +266,8 @@ fn tracks_inserted_one_after_another_play_in_the_order_sent() {
         let first = paths.pop().unwrap();
         player.send(Cmd::Play(paths, 0));
         assert!(wait_until(|| player.position() > Duration::ZERO));
-        player.send(Cmd::Insert(vec![first]));
-        player.send(Cmd::Insert(vec![second]));
+        player.send(Cmd::Insert(1, vec![first]));
+        player.send(Cmd::Insert(2, vec![second]));
         assert!(wait_until(|| played_order(&control, &levels_).len() >= 3));
         assert_eq!(played_order(&control, &levels_)[..3], [0, 2, 3], "{mode:?}");
     }
@@ -319,15 +320,41 @@ fn a_moved_track_plays_in_its_new_place() {
 }
 
 #[test]
-fn the_queue_counts_as_edited_until_it_is_replaced() {
+fn after_the_queue_the_list_resumes_or_playback_stops() {
+    use playr_core::audio::AfterQueue;
+    for (after, expected) in [
+        (AfterQueue::Resume, &[0, 2, 1][..]),
+        (AfterQueue::Stop, &[0, 2][..]),
+    ] {
+        let (player, control, dir) = setup(Mode::Normal);
+        player.send(Cmd::SetAfterQueue(after));
+        let levels_ = [0.2, -0.2, 0.4];
+        let mut paths = tracks(dir.path(), 0.5, &levels_);
+        let queued = paths.pop().unwrap();
+        player.send(Cmd::Play(paths, 0));
+        assert!(wait_until(|| player.position() > Duration::ZERO));
+        player.send(Cmd::Insert(1, vec![queued]));
+        assert!(wait_until(|| player.status().state == State::Stopped));
+        assert_eq!(played_order(&control, &levels_), expected, "{after:?}");
+    }
+}
+
+#[test]
+fn which_tracks_were_queued_follows_every_change_to_the_list() {
     let (player, _control, dir) = setup(Mode::Normal);
-    let paths = tracks(dir.path(), 0.3, &[0.2, -0.2]);
-    player.send(Cmd::Play(paths.clone(), 0));
-    assert!(!player.queue_edited());
-    player.send(Cmd::Enqueue(vec![paths[0].clone()]));
-    assert!(player.queue_edited());
-    player.send(Cmd::SetMode(Mode::Repeat));
-    assert!(player.queue_edited(), "a mode change is not a replacement");
-    player.send(Cmd::Play(paths, 1));
-    assert!(!player.queue_edited());
+    let p = tracks(dir.path(), 5.0, &[0.1, 0.2, 0.3, 0.4]);
+    player.send(Cmd::PlayWith(p[..2].to_vec(), vec![false, true], 0));
+    assert_eq!(player.status().queued[..], [false, true]);
+    player.send(Cmd::Insert(1, vec![p[2].clone()]));
+    player.send(Cmd::Enqueue(vec![p[3].clone()]));
+    assert_eq!(player.status().queued[..], [false, true, true, false]);
+    player.send(Cmd::Move(3, 1));
+    assert_eq!(player.status().queued[..], [false, false, true, true]);
+    player.send(Cmd::Remove(2));
+    assert_eq!(player.status().queued[..], [false, false, true]);
+    // A list whose marks do not match it is refused.
+    player.send(Cmd::PlayWith(p.clone(), vec![true], 0));
+    assert_eq!(player.queue().len(), 3);
+    player.send(Cmd::Play(p, 0));
+    assert!(player.status().queued.iter().all(|q| !q));
 }

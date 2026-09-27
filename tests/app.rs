@@ -277,6 +277,20 @@ fn key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
 }
 
 /// The player's list, as the app last sampled it.
+/// The tracks the player holds as queued, read without a refresh, which
+/// would drop those it has already failed to open.
+fn queued_paths(app: &App) -> Vec<String> {
+    use playr_app::dispatch::Frontend;
+    let status = app.model().session().player().status();
+    status
+        .queue
+        .iter()
+        .zip(status.queued.iter())
+        .filter(|(_, q)| **q)
+        .map(|(p, _)| p.to_string_lossy().into_owned())
+        .collect()
+}
+
 fn playing_paths(app: &mut App) -> Vec<String> {
     app.refresh();
     let queue = app.screen().snapshot.status.queue.clone();
@@ -364,8 +378,12 @@ fn enter_in_the_selection_plays_it() {
     let (mut app, _dir) = app();
     press(&mut app, '3');
     press(&mut app, 'J');
+    // The cursor followed a to the second row; the queue starts there.
     enter(&mut app);
-    assert_eq!(playing_paths(&mut app), ["/m/b.flac", "/m/a.flac"]);
+    assert_eq!(queued_paths(&app), ["/m/a.flac"]);
+    press(&mut app, 'g');
+    enter(&mut app);
+    assert_eq!(queued_paths(&app), ["/m/b.flac", "/m/a.flac"]);
 }
 
 #[test]
@@ -751,7 +769,8 @@ fn colon_commands_do_what_their_keys_do() {
             name: "dusk".into()
         })
     );
-    assert_eq!(playing_paths(&mut app), ["/m/a.flac"]);
+    // A playlist fills the queue.
+    assert_eq!(queued_paths(&app), ["/m/a.flac"]);
     command(&mut app, "playlist nope");
     assert_eq!(said(&app), msg(Refusal::NoPlaylistNamed("nope".into())));
 

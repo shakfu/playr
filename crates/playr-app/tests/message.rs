@@ -39,7 +39,11 @@ fn outcomes_are_worded() {
         ),
         (
             Outcome::QueueReplaced { tracks: 4 },
-            "queue replaced; it had 4 tracks to come",
+            "queue replaced; 4 tracks were waiting",
+        ),
+        (
+            Outcome::QueueCleared { tracks: 2 },
+            "took 2 tracks out of the queue",
         ),
         (
             Outcome::Queued {

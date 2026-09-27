@@ -17,7 +17,7 @@ pub mod resample;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -135,15 +135,33 @@ pub enum State {
     Paused,
 }
 
+/// What plays once the tracks queued by the listener have played.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AfterQueue {
+    /// The listed track after the one the queue interrupted.
+    #[default]
+    Resume,
+    Stop,
+}
+
+impl AfterQueue {
+    /// Each choice's name in settings.
+    pub const NAMES: [(&'static str, AfterQueue); 2] =
+        [("resume", AfterQueue::Resume), ("stop", AfterQueue::Stop)];
+}
+
 #[derive(Debug, Clone)]
 pub enum Cmd {
     /// Replace the queue and start at `index`.
     Play(Vec<PathBuf>, usize),
+    /// As `Play`, marking which tracks were queued by the listener rather
+    /// than listed; see [`Status::queued`].
+    PlayWith(Vec<PathBuf>, Vec<bool>, usize),
     /// Append to the queue, starting playback if stopped.
     Enqueue(Vec<PathBuf>),
-    /// Insert into the queue after the track playing, to play next in any
-    /// mode, starting playback if stopped.
-    Insert(Vec<PathBuf>),
+    /// Insert tracks queued by the listener at this index, starting playback
+    /// there if stopped. A shuffle plays them next.
+    Insert(usize, Vec<PathBuf>),
     /// Take the track at this index out of the queue. Taking out the track
     /// playing plays the one that would have followed it.
     Remove(usize),
@@ -170,6 +188,8 @@ pub enum Cmd {
     SetSpeed(i32),
     /// Change how playback moves through the list. See [`Mode`].
     SetMode(Mode),
+    /// What follows the last queued track. See [`AfterQueue`].
+    SetAfterQueue(AfterQueue),
     /// Play source frames `start..end` of the current track over and over,
     /// or play on for `None`. A playhead outside them starts at `start`.
     Loop(Option<(u64, u64)>),
@@ -196,6 +216,9 @@ pub struct Status {
     /// it is current as soon as `send` returns. `index` and `state` follow once
     /// the engine has acted.
     pub queue: Arc<[PathBuf]>,
+    /// For each track in `queue`, whether the listener queued it, as against
+    /// a track of the list played. Written with `queue`.
+    pub queued: Arc<[bool]>,
     pub index: usize,
     pub duration: Option<Duration>,
     pub source: Option<Spec>,
@@ -229,14 +252,17 @@ impl Status {
 /// What the engine receives. A queue change carries the new queue itself, so
 /// the engine plays exactly the list [`Status::queue`] shows.
 enum Msg {
-    Play(Arc<[PathBuf]>, usize),
-    Enqueue(Arc<[PathBuf]>),
+    Play(List, usize),
+    Enqueue(List),
     /// The new queue, where the inserted tracks start in it, and how many.
-    Insert(Arc<[PathBuf]>, usize, usize),
-    Remove(Arc<[PathBuf]>, usize),
-    Move(Arc<[PathBuf]>, usize, usize),
+    Insert(List, usize, usize),
+    Remove(List, usize),
+    Move(List, usize, usize),
     Cmd(Cmd),
 }
+
+/// A queue and which of its tracks the listener queued, as [`Status`] holds them.
+type List = (Arc<[PathBuf]>, Arc<[bool]>);
 
 /// Where the engine sends events, once a session gives it somewhere.
 type Events = Arc<Mutex<Option<EventSink>>>;
@@ -249,18 +275,6 @@ pub struct Player {
     pending: Arc<Pending>,
     events: Events,
     handle: Option<std::thread::JoinHandle<()>>,
-    next_at: Mutex<Option<NextAt>>,
-    /// Whether the queue was changed since `Cmd::Play` last replaced it.
-    edited: AtomicBool,
-}
-
-/// Where the next `Cmd::Insert` goes while the same track plays in the same
-/// queue: after the tracks inserted before it, so they play in the order they
-/// were sent.
-struct NextAt {
-    playing: usize,
-    at: usize,
-    queue: Arc<[PathBuf]>,
 }
 
 impl Player {
@@ -300,15 +314,13 @@ impl Player {
             pending,
             events,
             handle: Some(handle),
-            next_at: Mutex::new(None),
-            edited: AtomicBool::new(false),
         })
     }
 
-    /// Whether the queue was added to, taken from or reordered since it was
-    /// last replaced, so replacing it would lose that.
-    pub fn queue_edited(&self) -> bool {
-        self.edited.load(Ordering::Relaxed)
+    /// Whether the engine has acted on every command sent and published the
+    /// result, so [`Status::state`] is not one a command sent has yet to change.
+    pub fn caught_up(&self) -> bool {
+        self.shared.taken.load(Ordering::Acquire) >= self.shared.sent.load(Ordering::Relaxed)
     }
 
     /// Sends the engine's events, track and state changes and playback
@@ -323,67 +335,70 @@ impl Player {
         let Ok(mut status) = self.status.lock() else {
             return;
         };
-        let edits = matches!(
-            cmd,
-            Cmd::Enqueue(_) | Cmd::Insert(_) | Cmd::Remove(_) | Cmd::Move(..)
-        );
-        if edits || matches!(cmd, Cmd::Play(..)) {
-            self.edited.store(edits, Ordering::Relaxed);
-        }
+        let list = |status: &Status| (status.queue.clone(), status.queued.clone());
         let msg = match cmd {
             Cmd::Play(paths, index) => {
+                status.queued = vec![false; paths.len()].into();
                 status.queue = paths.into();
-                Msg::Play(status.queue.clone(), index)
+                // Set here, so a command right after reads the track chosen.
+                status.index = index;
+                Msg::Play(list(&status), index)
+            }
+            Cmd::PlayWith(paths, queued, index) => {
+                if queued.len() != paths.len() {
+                    return;
+                }
+                status.queue = paths.into();
+                status.queued = queued.into();
+                status.index = index;
+                Msg::Play(list(&status), index)
             }
             Cmd::Remove(i) => {
                 if i >= status.queue.len() {
                     return;
                 }
-                let mut queue = status.queue.to_vec();
+                let (mut queue, mut queued) = (status.queue.to_vec(), status.queued.to_vec());
                 queue.remove(i);
-                status.queue = queue.into();
+                queued.remove(i);
+                (status.queue, status.queued) = (queue.into(), queued.into());
                 // Set here, so the playing row is right before the engine runs.
                 if status.index > i {
                     status.index -= 1;
                 }
-                Msg::Remove(status.queue.clone(), i)
+                Msg::Remove(list(&status), i)
             }
             Cmd::Move(from, to) => {
                 let len = status.queue.len();
                 if from >= len || to >= len || from == to {
                     return;
                 }
-                let mut queue = status.queue.to_vec();
-                let path = queue.remove(from);
+                let (mut queue, mut queued) = (status.queue.to_vec(), status.queued.to_vec());
+                let (path, flag) = (queue.remove(from), queued.remove(from));
                 queue.insert(to, path);
-                status.queue = queue.into();
+                queued.insert(to, flag);
+                (status.queue, status.queued) = (queue.into(), queued.into());
                 status.index = order::moved(status.index, from, to);
-                Msg::Move(status.queue.clone(), from, to)
+                Msg::Move(list(&status), from, to)
             }
             Cmd::Enqueue(paths) => {
-                status.queue = status.queue.iter().cloned().chain(paths).collect();
-                Msg::Enqueue(status.queue.clone())
-            }
-            Cmd::Insert(paths) => {
-                let mut next_at = self.next_at.lock().unwrap_or_else(|e| e.into_inner());
-                let at = match &*next_at {
-                    Some(n)
-                        if n.playing == status.index && Arc::ptr_eq(&n.queue, &status.queue) =>
-                    {
-                        n.at
-                    }
-                    _ => (status.index + 1).min(status.queue.len()),
-                };
                 let n = paths.len();
-                let mut queue = status.queue.to_vec();
+                status.queue = status.queue.iter().cloned().chain(paths).collect();
+                status.queued = status
+                    .queued
+                    .iter()
+                    .copied()
+                    .chain(vec![false; n])
+                    .collect();
+                Msg::Enqueue(list(&status))
+            }
+            Cmd::Insert(at, paths) => {
+                let at = at.min(status.queue.len());
+                let n = paths.len();
+                let (mut queue, mut queued) = (status.queue.to_vec(), status.queued.to_vec());
                 queue.splice(at..at, paths);
-                status.queue = queue.into();
-                *next_at = Some(NextAt {
-                    playing: status.index,
-                    at: at + n,
-                    queue: status.queue.clone(),
-                });
-                Msg::Insert(status.queue.clone(), at, n)
+                queued.splice(at..at, vec![true; n]);
+                (status.queue, status.queued) = (queue.into(), queued.into());
+                Msg::Insert(list(&status), at, n)
             }
             // Set here, so the next `volume` call sees it even before the engine runs.
             Cmd::SetVolume(v) => return self.shared.set_volume(v),
@@ -400,6 +415,7 @@ impl Player {
             cmd => Msg::Cmd(cmd),
         };
         // Under the lock, so the engine receives changes in the order they were made.
+        self.shared.sent.fetch_add(1, Ordering::Relaxed);
         let _ = self.tx.send(msg);
     }
 
@@ -532,6 +548,9 @@ struct Engine {
     conv: Option<Converter>,
 
     queue: Arc<[PathBuf]>,
+    /// Which tracks of `queue` the listener queued.
+    queued: Arc<[bool]>,
+    after_queue: AfterQueue,
     /// Which track follows which, for the current mode.
     order: Order,
     index: usize,
@@ -590,6 +609,8 @@ impl Engine {
             stream: None,
             conv: None,
             queue: Arc::default(),
+            queued: Arc::default(),
+            after_queue: AfterQueue::default(),
             order: Order::new(0, Mode::Normal, 0, order::random_seed()),
             index: 0,
             state: State::Stopped,
@@ -610,6 +631,8 @@ impl Engine {
     }
 
     fn run(mut self) {
+        // Commands acted on, published once their result is.
+        let mut taken = 0;
         loop {
             // Poll often while playing so the ring never runs dry; block when
             // idle so a stopped player costs nothing.
@@ -626,6 +649,7 @@ impl Engine {
                 Ok(Msg::Cmd(Cmd::Quit)) => break,
                 Ok(msg) => {
                     self.handle(msg);
+                    taken += 1;
                     while let Some(next) = self
                         .deferred
                         .pop_front()
@@ -635,6 +659,7 @@ impl Engine {
                             return;
                         }
                         self.handle(next);
+                        taken += 1;
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -651,31 +676,32 @@ impl Engine {
             self.advance_marks();
             self.pause_when_reached();
             self.publish();
+            self.shared.taken.store(taken, Ordering::Release);
         }
     }
 
     fn handle(&mut self, msg: Msg) {
         let cmd = match msg {
-            Msg::Play(queue, index) => {
-                self.queue = queue;
+            Msg::Play((queue, queued), index) => {
+                (self.queue, self.queued) = (queue, queued);
                 self.gain_of.clear();
                 return self.jump(index);
             }
-            Msg::Enqueue(queue) => {
+            Msg::Enqueue((queue, queued)) => {
                 let first_new = self.queue.len();
-                self.queue = queue;
+                (self.queue, self.queued) = (queue, queued);
                 return self.enqueued(first_new);
             }
-            Msg::Insert(queue, at, n) => {
-                self.queue = queue;
+            Msg::Insert((queue, queued), at, n) => {
+                (self.queue, self.queued) = (queue, queued);
                 return self.inserted(at, n);
             }
-            Msg::Remove(queue, i) => {
-                self.queue = queue;
+            Msg::Remove((queue, queued), i) => {
+                (self.queue, self.queued) = (queue, queued);
                 return self.removed(i);
             }
-            Msg::Move(queue, from, to) => {
-                self.queue = queue;
+            Msg::Move((queue, queued), from, to) => {
+                (self.queue, self.queued) = (queue, queued);
                 self.renumber(|j| order::moved(j, from, to));
                 self.order.relabel(|j| order::moved(j, from, to));
                 return self.discard_chosen();
@@ -685,6 +711,7 @@ impl Engine {
         match cmd {
             // `Player::send` delivers these as their own `Msg`.
             Cmd::Play(..)
+            | Cmd::PlayWith(..)
             | Cmd::Enqueue(..)
             | Cmd::Insert(..)
             | Cmd::Remove(..)
@@ -709,7 +736,7 @@ impl Engine {
                     }
                 }
             },
-            Cmd::Next => match self.order.successor(self.index, true) {
+            Cmd::Next => match self.following(self.index, true) {
                 Some(next) => {
                     self.teardown();
                     self.index = next;
@@ -751,6 +778,10 @@ impl Engine {
             Cmd::SpeedReset => self.set_semitones(0),
             Cmd::SetSpeed(semitones) => self.set_semitones(semitones),
             Cmd::SetMode(mode) => self.set_mode(mode),
+            Cmd::SetAfterQueue(after) => {
+                self.after_queue = after;
+                self.discard_chosen();
+            }
             Cmd::Loop(bounds) => self.set_loop(bounds, false, (0, 0)),
             Cmd::PlayOnce(start, end, fades) => {
                 self.set_loop(Some((start, end)), true, fades);
@@ -820,6 +851,15 @@ impl Engine {
         }
     }
 
+    /// The track to play after `i`, as the order has it, unless `i` is the
+    /// last queued track and the queue is set to stop there.
+    fn following(&mut self, i: usize, skipping: bool) -> Option<usize> {
+        let next = self.order.successor(i, skipping)?;
+        let queued = |j: usize| self.queued.get(j).copied().unwrap_or(false);
+        let ends_queue = queued(i) && !queued(next);
+        (!(ends_queue && self.after_queue == AfterQueue::Stop)).then_some(next)
+    }
+
     /// Takes in `n` tracks inserted at `at`, to play after the audible one.
     ///
     /// Every index from `at` on moves up by `n`. A next track already chosen
@@ -842,7 +882,7 @@ impl Engine {
         let next = match self.state {
             State::Stopped => None,
             _ if audible != i => None,
-            _ => Some(self.order.successor(i, true)),
+            _ => Some(self.following(i, true)),
         };
         // Checked before renumbering, which gives the next track index `i`.
         let chosen_gone = self.marks.iter().skip(1).any(|m| m.1 == i)
@@ -1008,7 +1048,7 @@ impl Engine {
             i = if back {
                 self.order.predecessor(i)?
             } else {
-                self.order.successor(i, true)?
+                self.following(i, true)?
             };
         }
         None
@@ -1162,7 +1202,7 @@ impl Engine {
     fn played_out(&mut self, current: usize) {
         let paused = self.state == State::Paused;
         self.teardown();
-        match self.order.successor(current, false) {
+        match self.following(current, false) {
             Some(next) => {
                 if self.start(next, false) && paused && self.state == State::Playing {
                     if let Some(o) = &self.out {
@@ -1433,7 +1473,7 @@ impl Engine {
     /// Bad files are skipped in a loop; see [`Engine::open_from`].
     fn stage_next(&mut self) {
         let last = self.marks.back().map_or(self.index, |m| m.1);
-        match self.order.successor(last, false) {
+        match self.following(last, false) {
             Some(next) => self.stage_from(next),
             None => self.finish_track(),
         }

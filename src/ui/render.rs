@@ -443,7 +443,7 @@ fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
             View::Library => app.visible().len(),
             View::Selection => app.selection.len(),
             View::Playlists => app.playlists.len(),
-            View::Queue => app.playing.len(),
+            View::Queue => app.queue.len(),
             View::Sampler => return format!(" {} ", view_title(v)),
         };
         format!(" {} {} ", view_title(v), n)
@@ -722,26 +722,24 @@ fn draw_selection(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
 /// found by its index, not its path.
 fn draw_queue(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
     let p = app.palette();
-    let status = &app.snapshot.status;
-    let index = (status.state != State::Stopped).then_some(status.index);
     let scroll = draw_rows(
         app,
         f,
         area,
         "",
-        app.playing,
+        app.queue,
         app.lists.queue,
         |_| false,
-        |i, _| index == Some(i),
+        |i, _| app.queue_playing == Some(i),
     );
-    if app.playing.is_empty() {
+    if app.queue.is_empty() {
         let inner = area.inner(ratatui::layout::Margin {
             horizontal: 2,
             vertical: 1,
         });
         f.render_widget(
             Paragraph::new(
-                "Nothing is playing. Press e on a track to queue it, or E to play it next.",
+                "Nothing is queued. Press e on a track to play it now, then e to queue more.",
             )
             .style(Style::default().fg(p.dim)),
             inner,

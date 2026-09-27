@@ -32,6 +32,8 @@ fn every_action() -> Vec<Action> {
         Action::Add,
         Action::Enqueue(false),
         Action::Enqueue(true),
+        Action::EnqueueAll,
+        Action::ClearQueue,
         Action::Remove,
         Action::MoveTrack(1),
         Action::ClearSelection,
@@ -128,6 +130,8 @@ fn every_action() -> Vec<Action> {
             | Action::Activate
             | Action::Add
             | Action::Enqueue(_)
+            | Action::EnqueueAll
+            | Action::ClearQueue
             | Action::Remove
             | Action::MoveTrack(_)
             | Action::ClearSelection

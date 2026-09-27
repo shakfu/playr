@@ -211,6 +211,10 @@ dialog input[type=text] { width: 100%; }
   <div class="toolbar" id="selection-bar" hidden>
     <button data-command="save">Save as playlist</button>
     <button data-command="clear">Clear selection</button>
+    <button data-command="enqueue all">Queue the selection</button>
+  </div>
+  <div class="toolbar" id="queue-bar" hidden>
+    <button data-command="queue-clear">Clear queue</button>
   </div>
   <div class="list" id="list" role="listbox" tabindex="0" aria-label="Tracks">
     <div class="spacer" id="spacer"></div>
@@ -417,7 +421,7 @@ function drawRows() {
     empty.textContent = list.view === "library"
       ? (state.searching ? "No matches. Esc in the search field clears it." : "The library is empty.")
       : list.view === "selection" ? "The selection is empty. Tap - on a library row to add it."
-      : list.view === "queue" ? "Nothing is playing. A row's menu queues a track, or plays it next."
+      : list.view === "queue" ? "Nothing is queued. A row's menu adds a track to the queue."
       : "No playlists. Build a selection, then save it.";
   }
 }
@@ -455,7 +459,7 @@ function drawRow(i, row, cursor, h) {
     el.append(sel, span("artist", row.artist), span("album", row.album),
       span("title", row.title), span("time", row.time || "-"));
     // A track queued twice is two rows, so the queue marks one by its index.
-    if (list.view === "queue" ? i === state.index : row.key === state.path) el.classList.add("playing");
+    if (list.view === "queue" ? i === state.queue_playing : row.key === state.path) el.classList.add("playing");
   }
   const menu = document.createElement("button");
   menu.className = "menu";
@@ -844,6 +848,7 @@ function draw(next) {
     count.textContent = s.counts[count.dataset.count];
   }
   $("selection-bar").hidden = s.view !== "selection";
+  $("queue-bar").hidden = s.view !== "queue";
   $("list").setAttribute("aria-label", s.view === "playlists" ? "Playlists" : "Tracks");
 
   const viewChanged = s.view !== list.view;
@@ -855,7 +860,7 @@ function draw(next) {
   }
   followCursor();
   if (!previous || viewChanged || previous.lists !== s.lists || previous.path !== s.path
-      || previous.index !== s.index
+      || previous.queue_playing !== s.queue_playing
       || previous.cursors[s.view] !== s.cursors[s.view] || previous.searching !== s.searching) {
     drawRows();
   }

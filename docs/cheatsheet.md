@@ -33,7 +33,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:first`                              | `g`, home               | move the cursor to the first row            |
 | `:last`                               | `G`, end                | move the cursor to the last row             |
 | `:play`                               | `enter`                 | play the list in view from the cursor       |
-| `:enqueue [next]`                     | `e` `E`                 | queue the row, or play it next              |
+| `:enqueue [next \| all]`              | `e` `E` `A`             | queue the row, first, or every row          |
 | `:search [QUERY]`                     | `/`                     | search the library; no query opens /        |
 | `:playlist NAME`                      |                         | play a saved playlist                       |
 | `:save [NAME]`                        | `s`                     | save the selection as a playlist            |
@@ -89,6 +89,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 |---------------------|-------------------------|----------------------------------|
 | `:dequeue`          | `d`                     | take the track out of the queue  |
 | `:reorder +N \| -N` | `J` `K`, shift up, down | move the track N places          |
+| `:queue-clear`      | `c`                     | empty the queue of waiting tracks; asks y/n |
 
 ## Playlists
 

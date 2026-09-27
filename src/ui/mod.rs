@@ -100,6 +100,9 @@ pub struct Screen<'a> {
     pub results: Option<&'a [Track]>,
     /// Rows for the list the player is playing from.
     pub playing: &'a [Track],
+    /// The queue's rows, and which of them is playing, if one is.
+    pub queue: &'a [Track],
+    pub queue_playing: Option<usize>,
     pub selection: &'a [Track],
     pub playlists: &'a [Playlist],
     pub input: &'a Input,
@@ -136,6 +139,8 @@ impl<'a> Screen<'a> {
             all: &[],
             results: None,
             playing: &[],
+            queue: &[],
+            queue_playing: None,
             selection: &[],
             playlists: &[],
             input: &NO_INPUT,
@@ -209,6 +214,11 @@ impl App {
         self.colour = colour;
     }
 
+    /// The model behind the interface, for reading.
+    pub fn model(&self) -> &Model {
+        &self.model
+    }
+
     /// Borrows the state the renderer needs.
     pub fn screen(&self) -> Screen<'_> {
         let m = &self.model;
@@ -219,6 +229,8 @@ impl App {
             all: m.session().tracks(),
             results: m.results(),
             playing: m.playing(),
+            queue: m.queue(),
+            queue_playing: m.queue_playing(),
             selection: m.session().selection(),
             playlists: m.session().playlists(),
             input: m.input(),

@@ -89,7 +89,7 @@ None of the three contact external services or download any metadata and images.
 
 - A selection to collect tracks into, edit and save as a playlist; it does not change what plays, and its tracks are marked `+` in the library
 
-- A queue: add a track or a playlist after the rest, or to play next
+- A queue of tracks you choose, played over the library, which resumes after it
 
 - Now playing shows title, artist, source rate and channels
 
@@ -337,11 +337,12 @@ These keys are the same in the terminal, the window and the web page, and any of
 | page up/down             | move by ten                                 |
 | `enter`                  | play from here; in playlists, play it       |
 | `a`                      | select or unselect, then move down          |
-| `e` `E`                  | queue the track or playlist; play it next   |
+| `e` `E` `A`              | queue the track or playlist; first; all listed |
 | `/`                      | search; `esc` clears                        |
 | `r`                      | rename the selected playlist                |
 | `s`                      | save the selection; asks before overwriting |
 | `d`                      | remove from selection or queue; delete a playlist |
+| `c`                      | clear the selection or the queue; asks y/n  |
 | `J` `K`, shift up/down   | move a track within the selection or queue  |
 | `c`                      | clear the selection; asks y/n               |
 | `space`                  | play or pause                               |
@@ -372,7 +373,9 @@ Every other column is a field too, by the name `:columns` takes. A number column
 
 Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
 
-The queue view lists what is playing: the list enter last played, with any tracks queued into it. `e` queues the track or playlist under the cursor after the rest, and `E` puts it after the track playing. Several `E` presses play in the order pressed, in shuffle too. With nothing playing, either starts playback. Enter in the queue jumps to that track and keeps the queue. `d` takes a track out, and taking out the track playing plays the next. `J` and `K` move a track; in shuffle a move changes the list, not the shuffled order. Enter anywhere else replaces the queue; once the queue has been edited, a message says how many tracks it had to come. The queue is not kept when playr exits.
+The library plays by itself: enter in it plays on through it, and puts nothing in the queue. The queue holds the tracks you choose. `e` queues the track or playlist under the cursor; the first queued over the library plays at once, and the rest wait in the order queued. `E` puts a track first among those waiting. `A` queues every search result, or the whole selection. Enter on search results, a playlist or the selection replaces the queue with that list, from the track chosen, and says how many tracks were waiting. Once the queue has played, the library resumes at the track after the one the queue interrupted; `after_queue = "stop"` stops instead. Tracks waiting survive enter in the library, and play after the track chosen.
+
+The queue view lists the track playing, if it came from the queue, then the tracks waiting; a queued track leaves once it has played. Enter there jumps to a track, and drops those before it. `d` takes a track out; taking out the track playing plays the next. `J` and `K` move a waiting track. `c` takes out every waiting track, after asking. The queue is not kept when playr exits.
 
 ### Playback modes
 
@@ -539,6 +542,7 @@ An error in the file stops playr before it plays. Subcommands such as `scan` and
 ```toml
 volume = 60                        # percent, 0 to 100
 mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in full
+after_queue = "stop"               # after the queue: resume the library, or stop
 speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 samples = "~/Music/playr/samples"  # where :slice writes; on Windows, 'C:\Music'

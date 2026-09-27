@@ -120,6 +120,9 @@ pub struct Model {
 
     /// Rows for the list the player is playing from.
     playing: Vec<Track>,
+    /// The queue's rows, and whether the first is the track playing.
+    queue: Vec<Track>,
+    queue_playing: bool,
     /// The player list `playing` was built from, compared by identity.
     playing_source: Arc<[PathBuf]>,
 
@@ -215,6 +218,8 @@ impl Model {
             results: None,
             cursors: Cursors::default(),
             playing: Vec::new(),
+            queue: Vec::new(),
+            queue_playing: false,
             playing_source: Arc::default(),
             input: Input::None,
             history: History::default(),
@@ -242,6 +247,9 @@ impl Model {
         };
         model.session.send(Cmd::SetVolume(values.volume));
         model.session.send(Cmd::SetMode(values.mode));
+        model
+            .session
+            .send(Cmd::SetAfterQueue(config.settings.after_queue));
         model.session.send(Cmd::SetSpeed(config.settings.speed));
         for (band, db) in Band::ALL.into_iter().zip(values.eq) {
             model.session.send(Cmd::SetEq(band, db));
@@ -265,6 +273,7 @@ impl Model {
     /// background work have sent since the last one.
     pub fn refresh(&mut self) {
         self.follow_player();
+        self.follow_queue();
         self.save_values(false);
         let player = self.session.player();
         self.peak_hold = hold_peak(self.peak_hold, player.take_peak(), Instant::now());
@@ -495,6 +504,30 @@ impl Model {
         &self.playing
     }
 
+    /// The queue's rows: the track playing, if it was queued, then the
+    /// queued tracks waiting.
+    pub fn queue(&self) -> &[Track] {
+        &self.queue
+    }
+
+    /// The queue row playing, if the track playing was queued.
+    pub fn queue_playing(&self) -> Option<usize> {
+        self.queue_playing.then_some(0)
+    }
+
+    /// Rebuilds the queue's rows from the player's list, which they index.
+    fn follow_queue(&mut self) {
+        let rows = self.session.queue_rows();
+        let status = self.session.player().status();
+        self.queue_playing = status.state != State::Stopped && rows.first() == Some(&status.index);
+        self.queue = rows
+            .iter()
+            .filter_map(|&i| self.playing.get(i).cloned())
+            .collect();
+        let n = self.queue.len();
+        self.cursors.queue = self.cursors.queue.filter(|_| n > 0).map(|i| i.min(n - 1));
+    }
+
     /// Search results, when the library view shows them.
     pub fn results(&self) -> Option<&[Track]> {
         self.results.as_deref()
@@ -533,7 +566,7 @@ impl Model {
         let track = match self.view {
             View::Library => self.cursor_row(self.listed(), self.cursors.library),
             View::Selection => self.cursor_row(self.session.selection(), self.cursors.selection),
-            View::Queue => self.cursor_row(&self.playing, self.cursors.queue),
+            View::Queue => self.cursor_row(&self.queue, self.cursors.queue),
             _ => None,
         };
         let track = track.or_else(|| {
@@ -658,8 +691,6 @@ impl Model {
             })
             .collect();
         self.playing_source = current;
-        let n = self.playing.len();
-        self.cursors.queue = self.cursors.queue.filter(|_| n > 0).map(|i| i.min(n - 1));
     }
 
     fn reload(&mut self) {
@@ -686,7 +717,10 @@ impl Model {
             match event {
                 // The frame's snapshot already shows the track and state;
                 // the new track is stored so a kill still leaves it behind.
-                Event::TrackChanged { .. } => self.remember_position(),
+                Event::TrackChanged { .. } => {
+                    self.remember_position();
+                    self.session.drop_played();
+                }
                 Event::StateChanged(_) => {}
                 Event::PlaybackError(e) => {
                     let missed = error.map_or(0, |(_, n)| n + 1);
@@ -901,9 +935,8 @@ impl Model {
 
     /// Plays `tracks` from `index`. The selection is not touched.
     fn play(&mut self, tracks: Vec<Track>, index: usize) {
-        if let Some(replaced) = self.session.play(&tracks, index) {
-            self.notify(replaced);
-        }
+        // Files handed over play as a list, as the library does.
+        self.session.play(&tracks, index);
         self.playing = tracks;
         self.playing_source = self.session.player().queue();
     }
@@ -1006,10 +1039,9 @@ impl Frontend for Model {
 
     fn set_view(&mut self, view: View) {
         self.view = view;
-        // The queue opens on the track playing.
-        if view == View::Queue && self.cursors.queue.is_none() && !self.playing.is_empty() {
-            let index = self.session.player().status().index;
-            self.cursors.queue = Some(index.min(self.playing.len() - 1));
+        // The queue opens on its first row: the track playing, if queued.
+        if view == View::Queue && self.cursors.queue.is_none() && !self.queue.is_empty() {
+            self.cursors.queue = Some(0);
         }
     }
 
@@ -1039,6 +1071,10 @@ impl Frontend for Model {
 
     fn set_results(&mut self, results: Option<Vec<Track>>) -> Option<Vec<Track>> {
         std::mem::replace(&mut self.results, results)
+    }
+
+    fn searching(&self) -> bool {
+        self.results.is_some()
     }
 
     fn onset_sensitivity(&self) -> f32 {
