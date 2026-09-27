@@ -56,6 +56,42 @@ pub struct Settings {
     pub columns: Vec<Column>,
     /// The keys the library is sorted by, most important first.
     pub sort: Vec<SortKey>,
+    /// Session values to remember in the library between runs.
+    pub persist: Vec<Persist>,
+}
+
+/// A session value `persist` can name. While it is named, a remembered value
+/// wins over the setting of the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Persist {
+    Eq,
+    Volume,
+    Mode,
+    ReplayGain,
+    Theme,
+    /// Remembered for each program, as a program's table may set them.
+    Columns,
+    Sort,
+}
+
+impl Persist {
+    pub const NAMES: [(&'static str, Persist); 7] = [
+        ("eq", Persist::Eq),
+        ("volume", Persist::Volume),
+        ("mode", Persist::Mode),
+        ("replaygain", Persist::ReplayGain),
+        ("theme", Persist::Theme),
+        ("columns", Persist::Columns),
+        ("sort", Persist::Sort),
+    ];
+
+    pub fn name(self) -> &'static str {
+        Self::NAMES
+            .iter()
+            .find(|(_, p)| *p == self)
+            .expect("every value")
+            .0
+    }
 }
 
 impl Default for Settings {
@@ -74,6 +110,7 @@ impl Default for Settings {
             replaygain: ReplayGain::Off,
             columns: Vec::new(),
             sort: Vec::new(),
+            persist: Vec::new(),
         };
         let (_, errors) = settings.apply(DEFAULT_SETTINGS, &[]);
         if let Err(errors) = errors.finish() {
@@ -252,6 +289,29 @@ impl Settings {
                     Ok(sort) => self.sort = sort,
                     Err(e) => errors.add(at, e),
                 },
+                ("persist", DeValue::Array(items)) => {
+                    let named = |s: &str| {
+                        Persist::NAMES
+                            .iter()
+                            .find(|p| p.0.eq_ignore_ascii_case(s))
+                            .map(|p| p.1)
+                    };
+                    let names = || Persist::NAMES.map(|p| p.0).join(", ");
+                    let mut persist = Vec::new();
+                    for item in items {
+                        match item.get_ref() {
+                            DeValue::String(s) => match named(s) {
+                                Some(p) => persist.push(p),
+                                None => errors.add(
+                                    item.span().start,
+                                    format!("unknown persist {s}; choices: {}", names()),
+                                ),
+                            },
+                            v => errors.add(item.span().start, format!("a name, not {}", kind(v))),
+                        }
+                    }
+                    self.persist = persist;
+                }
                 ("replaygain", DeValue::String(s)) => {
                     match ReplayGain::NAMES
                         .iter()
@@ -269,7 +329,7 @@ impl Settings {
                 }
                 (
                     "mode" | "samples" | "slice_edges" | "auto_prune" | "analyze_on_scan"
-                    | "device" | "replaygain",
+                    | "device" | "replaygain" | "persist",
                     v,
                 ) => errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v))),
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),

@@ -211,3 +211,123 @@ fn next_under_repeat_one_moves_on() {
     let s = settled(&player);
     assert_eq!((s.state, s.index), (State::Playing, 1));
 }
+
+#[test]
+fn an_inserted_track_plays_next_though_the_next_is_buffered() {
+    let (player, control, dir) = setup(Mode::Normal);
+    let levels_ = [0.2, -0.2, 0.4];
+    let mut paths = tracks(dir.path(), 2.0, &levels_);
+    let inserted = paths.pop().unwrap();
+    player.send(Cmd::Play(paths.clone(), 0));
+    // By 1.4 s the second track is decoding into the ring behind the first.
+    assert!(wait_until(
+        || player.position() >= Duration::from_millis(1400)
+    ));
+    player.send(Cmd::Insert(vec![inserted.clone()]));
+    assert_eq!(
+        player.queue().to_vec(),
+        [paths[0].clone(), inserted, paths[1].clone()],
+        "the queue is current as soon as the insert is sent"
+    );
+    assert!(wait_until(|| played_order(&control, &levels_).len() >= 3));
+    assert_eq!(played_order(&control, &levels_), [0, 2, 1]);
+}
+
+#[test]
+fn an_inserted_track_plays_next_in_shuffle() {
+    let (player, control, dir) = setup(Mode::Shuffle);
+    let levels_ = [0.1, 0.2, 0.3, 0.4, 0.5];
+    let mut paths = tracks(dir.path(), 0.5, &levels_);
+    let inserted = paths.pop().unwrap();
+    player.send(Cmd::Play(paths, 0));
+    assert!(wait_until(|| player.position() > Duration::ZERO));
+    player.send(Cmd::Insert(vec![inserted]));
+    assert!(wait_until(|| played_order(&control, &levels_).len() >= 2));
+    assert_eq!(played_order(&control, &levels_)[..2], [0, 4]);
+}
+
+#[test]
+fn inserting_while_stopped_plays_the_track() {
+    let (player, control, dir) = setup(Mode::Normal);
+    let levels_ = [0.2];
+    player.send(Cmd::Insert(tracks(dir.path(), 0.3, &levels_)));
+    assert!(wait_until(|| frames_of(&control, 0.2) > 0));
+    assert_eq!(settled(&player).index, 0);
+}
+
+#[test]
+fn tracks_inserted_one_after_another_play_in_the_order_sent() {
+    for mode in [Mode::Normal, Mode::Shuffle] {
+        let (player, control, dir) = setup(mode);
+        let levels_ = [0.1, 0.2, 0.3, 0.4];
+        let mut paths = tracks(dir.path(), 0.5, &levels_);
+        let second = paths.pop().unwrap();
+        let first = paths.pop().unwrap();
+        player.send(Cmd::Play(paths, 0));
+        assert!(wait_until(|| player.position() > Duration::ZERO));
+        player.send(Cmd::Insert(vec![first]));
+        player.send(Cmd::Insert(vec![second]));
+        assert!(wait_until(|| played_order(&control, &levels_).len() >= 3));
+        assert_eq!(played_order(&control, &levels_)[..3], [0, 2, 3], "{mode:?}");
+    }
+}
+
+#[test]
+fn a_removed_track_does_not_play_though_it_was_buffered() {
+    let (player, control, dir) = setup(Mode::Normal);
+    let levels_ = [0.2, -0.2, 0.4];
+    player.send(Cmd::Play(tracks(dir.path(), 2.0, &levels_), 0));
+    // By 1.4 s the second track is decoding into the ring behind the first.
+    assert!(wait_until(
+        || player.position() >= Duration::from_millis(1400)
+    ));
+    player.send(Cmd::Remove(1));
+    assert_eq!(player.queue().len(), 2);
+    assert!(wait_until(|| player.status().state == State::Stopped));
+    assert_eq!(played_order(&control, &levels_), [0, 2]);
+}
+
+#[test]
+fn removing_the_track_playing_plays_the_next() {
+    let (player, control, dir) = setup(Mode::Normal);
+    let levels_ = [0.2, -0.2, 0.4];
+    player.send(Cmd::Play(tracks(dir.path(), 0.5, &levels_), 0));
+    assert!(wait_until(|| frames_of(&control, 0.2) > RATE as usize / 10));
+    player.send(Cmd::Remove(0));
+    assert!(wait_until(|| player.status().state == State::Stopped));
+    assert_eq!(played_order(&control, &levels_), [0, 1, 2]);
+    assert!(
+        frames_of(&control, 0.2) < (0.4 * RATE as f32) as usize,
+        "the removed track played on"
+    );
+}
+
+#[test]
+fn a_moved_track_plays_in_its_new_place() {
+    let (player, control, dir) = setup(Mode::Normal);
+    let levels_ = [0.2, -0.2, 0.4];
+    let paths = tracks(dir.path(), 0.5, &levels_);
+    player.send(Cmd::Play(paths.clone(), 0));
+    assert!(wait_until(|| player.position() > Duration::ZERO));
+    player.send(Cmd::Move(2, 1));
+    assert_eq!(
+        player.queue().to_vec(),
+        [paths[0].clone(), paths[2].clone(), paths[1].clone()]
+    );
+    assert!(wait_until(|| played_order(&control, &levels_).len() >= 3));
+    assert_eq!(played_order(&control, &levels_), [0, 2, 1]);
+}
+
+#[test]
+fn the_queue_counts_as_edited_until_it_is_replaced() {
+    let (player, _control, dir) = setup(Mode::Normal);
+    let paths = tracks(dir.path(), 0.3, &[0.2, -0.2]);
+    player.send(Cmd::Play(paths.clone(), 0));
+    assert!(!player.queue_edited());
+    player.send(Cmd::Enqueue(vec![paths[0].clone()]));
+    assert!(player.queue_edited());
+    player.send(Cmd::SetMode(Mode::Repeat));
+    assert!(player.queue_edited(), "a mode change is not a replacement");
+    player.send(Cmd::Play(paths, 1));
+    assert!(!player.queue_edited());
+}

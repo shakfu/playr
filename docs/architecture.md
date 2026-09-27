@@ -1,6 +1,6 @@
 # One core, several frontends
 
-Design note, current as of playr 0.9.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal, the desktop window, `playr-gui`, and a server controlled from a web page, `playr-server`.
+Design note, current as of playr 0.12.0. Steps 1 to 7 of the split are done; step 8 is deferred. The frontends are the terminal, the desktop window, `playr-gui`, and a server controlled from a web page, `playr-server`.
 
 The goal: the terminal interface is one frontend of a core that an egui app or a Tauri app could also drive. Everything but presentation is shared.
 
@@ -53,7 +53,7 @@ The Rust frontends also depend on `playr-core` directly, for `Session` and the t
 
 - **playr** (the root crate): the terminal. The command line in `src/main.rs`, and `src/ui`: `App` over the shared `Model`, key handling, drawing and the sampler's glyphs.
 
-Views (library, selection, playlists, sampler) are a presentation idea, so they are not in the core. `playr_app::View` names them as scopes for key bindings and view-scoped commands; a GUI maps its panels or focus onto them, or ignores them.
+Views (library, queue, selection, playlists, sampler) are a presentation idea, so they are not in the core. `playr_app::View` names them as scopes for key bindings and view-scoped commands; a GUI maps its panels or focus onto them, or ignores them.
 
 ## playr-core
 
@@ -155,7 +155,7 @@ Conventions:
 
 - **Roots are what the library covers, not a hint for rescanning.** `scan` adds one, `forget_root` removes it with every track and mark under it, and `prune` drops the rows under a root whose files are gone. Forgetting runs on the session's connection rather than a job: it asks the filesystem nothing, so it is one transaction instead of a walk, and it works on a directory that is already gone.
 
-- **The sampler's cursor is the selection.** `Sampler::cursor` is a frame apart from the playhead, `None` following it. Every mark action acts on the mark within a column of the cursor, so there is no separate "picked mark" to keep in step with the marks themselves. `:pick` moves the cursor onto a mark; the window's drag sets the cursor and then moves.
+- **The sampler's cursor is the selection.** `Sampler::cursor` is a frame apart from the playhead, `None` following it. Every mark action acts on the mark within a column of the cursor, so there is no separate "picked mark" to keep in step with the marks themselves. `:mark-pick` moves the cursor onto a mark; the window's drag sets the cursor and then moves.
 
 - **A one-shot range is not a loop.** `Cmd::PlayOnce` sets the same `Loop` with `once`, and `Engine::halt` mirrors `Engine::wrap` forward to the end rather than back to the start: the ring holds exactly the range, the decoder is left at its end, and `pause_at` names the output frame to pause on. `Status::looping` leaves `once` out, so `:loop` cannot switch off a range that was only auditioned.
 
@@ -197,11 +197,15 @@ pub enum Event {
     PlaybackError(String),
     // From session jobs
     Peaks { job: JobId, track: PathBuf, result: Result<Arc<Peaks>, String> },
+    Detail { job: JobId, track: PathBuf, result: Result<Arc<Detail>, String> },
     Planned { job: JobId, track: PathBuf, result: Result<Plan, String> },
     Exported { job: JobId, result: Result<Exported, String> },
     ScanProgress { job: JobId, seen: usize, added: usize },
-    Scanned { job: JobId, dir: PathBuf, result: Result<ScanReport, String> },
-    Pruned { job: JobId, dir: PathBuf, result: Result<Pruned, String> },
+    Scanned { job: JobId, dir: Option<PathBuf>, result: Result<ScanReport, String> },
+    AnalyzeProgress { job: JobId, done: usize, total: usize },
+    Analysed { job: JobId, result: Result<RunStats, String> },
+    Pruned { job: JobId, dir: Option<PathBuf>, result: Result<Pruned, String> },
+    Snapped { job: JobId, track: PathBuf, from: u64, result: Result<Option<u64>, String> },
     Opened { job: JobId, playable: Playable },
 }
 ```
@@ -226,6 +230,8 @@ Each frontend adapts the sink:
 Position, loudness and peak level change continuously, so they are not events. A frontend reads them from `Session::player()`; `playr_app::model::Model` samples them once per frame into a `Snapshot`. A Tauri backend would read and emit them on a timer, 20 to 30 times a second. A waveform crosses IPC as numbers per column: the backend keeps the `Arc<Peaks>` and answers the page with `Peaks::range(start, end)` for each column shown.
 
 ### Settings
+
+`settings.toml` holds settings, which the user writes; `library.db` holds state, which playr writes. playr never writes `settings.toml`. A session value worth keeping, such as the EQ, is state: the `persist` setting names which are kept, and `playr_app::persist` stores them in the library's `state` table.
 
 `settings.toml` is one file. `playr_core::settings::Settings` owns the top-level keys: `volume`, `mode`, `speed`, `samples` and `onset_sensitivity`. Each frontend owns the tables it names: `playr-app` owns `[keys]`, and the top-level `theme` that both of its frontends read; a GUI might own `[gui]`.
 
@@ -364,8 +370,6 @@ Each step left `make test` passing. Only step 7 changed behaviour: the `mode` pr
 ## Open issues
 
 - **One cursor per view.** `dispatch` assumes each view has at most one chosen row. An egui app with several panels open at once, or with several rows selected, has to map its selection onto that, or `Frontend` grows. Adding, removing and moving tracks all read the single row.
-
-- **Two frontends cannot share one settings file.** A table no frontend named is an error, so a file with both `[keys]` and a GUI's `[gui]` stops each frontend on the other's table. A list of tables every frontend knows, ignored unless named, would fix it; nothing needs it until a second frontend has a table.
 
 - **No playback snapshot in the core.** `Model` assembles a `Snapshot` from `Session::player()` and `marks_for`, and holds the peak level. A Tauri backend, which skips `playr-app`, needs the same values on a timer and would repeat that. A `Session::playback()` returning them, and a narrower `Transport` in place of `send(Cmd)`, would serve both.
 

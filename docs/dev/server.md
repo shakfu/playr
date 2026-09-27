@@ -221,7 +221,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 - **A user service, not a system one.** It runs as the user who owns the library, so `playr` over SSH as that user finds the same library and lock. A system service would need its own user and home, and SSH as that user.
 
-- **Flags in the unit.** A `[server]` table in `settings.toml` would stop `playr` and `playr-gui` starting; see `TODO.md`. `systemctl --user edit --full` changes them.
+- **Flags in the unit.** A `[server]` table in `settings.toml` stopped `playr` and `playr-gui` starting until 0.10.0. The table now holds the keys any program's table may set, such as `columns` and `sort`. The server's own options, such as the listen address, are still flags; see `TODO.md`. `systemctl --user edit --full` changes them.
 
 - **The TouchOSC layout is a release asset.** One Linux build writes it from its own `osc-schema`, so a Pi without Rust or uv has it.
 
@@ -248,4 +248,4 @@ Steps 2 and 3 built a remote control. A frontend with the window's features repl
 - **Tests.** `tests/web.rs` and `tests/owner.rs` cover the JSON and requests on a model. `make page-test` drives the page in Chromium with Playwright: keys, rows, dialogs, search, the command line, marks, and the three widths. It is not part of `make test`, which would then need uv, a browser and an audio device.
 ## Open questions
 
-- **Settings.** A `[server]` table stops `playr` and `playr-gui` from starting; see `TODO.md`. Flags only until that is fixed.
+- **Settings.** The server's own options are flags only. A `[server]` table no longer stops the other programs, but holds only the keys any program's table may set; see `TODO.md`.

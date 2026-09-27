@@ -148,6 +148,59 @@ impl Order {
         self.index_positions();
     }
 
+    /// Takes in `n` tracks inserted into the list at `at`, which move every
+    /// index from `at` up by `n`. When shuffling they play after the track
+    /// before `at`, so a run of inserts keeps its order, but never before
+    /// `current`, an index in the new list. Otherwise they play in list order.
+    pub fn insert(&mut self, at: usize, n: usize, current: usize) {
+        let was = if current >= at + n {
+            current - n
+        } else {
+            current
+        };
+        let after = match self.mode {
+            Mode::Shuffle => {
+                let before = at.checked_sub(1).and_then(|i| self.pos.get(i));
+                match (before, self.pos.get(was)) {
+                    (Some(&b), Some(&c)) => b.max(c) + 1,
+                    (None, Some(&c)) => c + 1,
+                    _ => self.seq.len(),
+                }
+            }
+            _ => at.min(self.seq.len()),
+        };
+        for i in &mut self.seq {
+            if *i >= at {
+                *i += n;
+            }
+        }
+        self.seq.splice(after..after, at..at + n);
+        self.index_positions();
+    }
+
+    /// Takes out index `i` of the list; every index after it moves down one.
+    pub fn remove(&mut self, i: usize) {
+        self.seq.retain(|&j| j != i);
+        for j in &mut self.seq {
+            if *j > i {
+                *j -= 1;
+            }
+        }
+        self.index_positions();
+    }
+
+    /// Renames every index by `map`, a reordering of the list. Shuffle keeps
+    /// its play order; the other modes follow the new list order.
+    pub fn relabel(&mut self, map: impl Fn(usize) -> usize) {
+        for j in &mut self.seq {
+            *j = map(*j);
+        }
+        if self.mode != Mode::Shuffle {
+            self.seq.sort_unstable();
+        }
+        self.index_positions();
+    }
+
     fn arrange(&mut self, len: usize, first: usize) {
         self.seq = (0..len).collect();
         if self.mode == Mode::Shuffle && len > 0 {
@@ -191,6 +244,16 @@ fn mix(seed: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     (z ^ (z >> 31)).max(1)
+}
+
+/// Where index `i` of a list is once the entry at `from` moves to `to`.
+pub fn moved(i: usize, from: usize, to: usize) -> usize {
+    match i {
+        _ if i == from => to,
+        _ if from < to && i > from && i <= to => i - 1,
+        _ if to < from && i >= to && i < from => i + 1,
+        _ => i,
+    }
 }
 
 /// A seed that differs between runs, from the standard library's hasher keys.

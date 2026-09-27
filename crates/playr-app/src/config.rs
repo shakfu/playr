@@ -31,6 +31,9 @@ pub struct Config {
     /// `[gui] transport_text_buttons`: the window's transport buttons as
     /// words rather than media symbols.
     pub transport_text_buttons: bool,
+    /// The program these settings are for, whose remembered columns and sort
+    /// apply.
+    pub program: Program,
 }
 
 impl Default for Config {
@@ -40,6 +43,7 @@ impl Default for Config {
             keys: Keymap::empty(),
             theme: Theme::Dark,
             transport_text_buttons: false,
+            program: Program::Terminal,
         };
         if let Err(errors) = config.apply(DEFAULT_KEYS) {
             panic!("bad default key bindings: {errors:?}");
@@ -87,7 +91,10 @@ impl Config {
     /// again with its table, which `Settings::default` cannot do, since it
     /// does not know which program is asking.
     pub fn for_program(program: Program) -> Config {
-        let mut config = Config::default();
+        let mut config = Config {
+            program,
+            ..Config::default()
+        };
         if let Err(errors) = config.apply_for(Some(program), settings::DEFAULT_SETTINGS) {
             panic!("bad default settings: {errors:?}");
         }
@@ -238,5 +245,6 @@ impl Config {
 
 /// The error for a table under `[keys]` that names no view.
 fn not_a_view(name: &str) -> String {
-    format!("[keys.{name}] is not a view; views: library, selection, playlists, sampler")
+    let views: Vec<&str> = crate::View::ALL.into_iter().map(view_name).collect();
+    format!("[keys.{name}] is not a view; views: {}", views.join(", "))
 }

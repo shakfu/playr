@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
 use playr::ui;
 use playr_core::audio::Player;
 use playr_core::db::{self, Track};
+use playr_core::m3u;
 use playr_core::scan;
 
 /// playr - a minimal TUI music player
@@ -81,6 +82,26 @@ enum Command {
     },
     /// List saved playlists
     Playlists,
+    /// Write a saved playlist as an M3U8 file, or to stdout with no FILE
+    Export {
+        /// The playlist's name; quote it if it has spaces
+        name: String,
+        /// Where to write it
+        file: Option<PathBuf>,
+        /// Replace FILE if it exists
+        #[arg(long)]
+        force: bool,
+    },
+    /// Save M3U or M3U8 files as playlists; tracks not in the library are
+    /// left out and listed
+    Import {
+        #[arg(required = true, value_name = "FILE")]
+        files: Vec<PathBuf>,
+        /// The playlist's name, for one file; else its #PLAYLIST line or its
+        /// file name
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Show which formats this build can decode
     Formats,
     /// List output devices, by the ID --device and the device setting take
@@ -173,6 +194,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         cli.command,
         Some(
             Command::Playlists
+                | Command::Export { .. }
                 | Command::Search { json: true, .. }
                 | Command::Roots { op: None }
                 | Command::Analyze { .. }
@@ -201,6 +223,8 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         Some(
             Command::Prune { .. }
                 | Command::Analyze { .. }
+                | Command::Export { .. }
+                | Command::Import { .. }
                 | Command::Roots {
                     op: None | Some(RootsOp::Rm { .. })
                 }
@@ -265,6 +289,10 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             return Ok(ExitCode::SUCCESS);
         }
+        Some(Command::Export { name, file, force }) => {
+            return cmd_export(&conn, &name, file.as_deref(), force)
+        }
+        Some(Command::Import { files, name }) => return cmd_import(&mut conn, &files, name),
         Some(Command::Search { json, query }) => {
             let q = query.join(" ");
             if q.trim().is_empty() {
@@ -321,6 +349,104 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     ratatui::restore();
     result?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Writes playlist `name` as M3U8 to `file`, or to stdout.
+fn cmd_export(
+    conn: &rusqlite::Connection,
+    name: &str,
+    file: Option<&std::path::Path>,
+    force: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let lists = db::query::playlists(conn)?;
+    let pl = db::query::find_playlist(&lists, name.trim())
+        .ok_or_else(|| format!("no single playlist named {name:?}"))?;
+    let tracks = db::query::playlist_tracks(conn, pl.id)?;
+    let (text, left_out) = m3u::write(&pl.name, &tracks);
+    if left_out > 0 {
+        eprintln!("playr: {left_out} tracks left out: their paths hold a line break");
+    }
+    match file {
+        None => print!("{text}"),
+        Some(file) => {
+            // Not `write`, which would replace a file the user may not mean to lose.
+            let mut out = std::fs::OpenOptions::new();
+            match force {
+                true => out.write(true).create(true).truncate(true),
+                false => out.write(true).create_new(true),
+            };
+            let mut out = out.open(file).map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => {
+                    format!("{} exists; --force replaces it", file.display())
+                }
+                _ => format!("{}: {e}", file.display()),
+            })?;
+            std::io::Write::write_all(&mut out, text.as_bytes())
+                .map_err(|e| format!("{}: {e}", file.display()))?;
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Saves each M3U file as a playlist. A name already taken is refused, so
+/// no playlist is replaced. Fails if any file is not saved.
+fn cmd_import(
+    conn: &mut rusqlite::Connection,
+    files: &[PathBuf],
+    name: Option<String>,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    if name.is_some() && files.len() > 1 {
+        return Err("--name names one playlist; import one file with it".into());
+    }
+    let mut failed = false;
+    for file in files {
+        let shown = file.display();
+        let text = match std::fs::read(file) {
+            // An `.m3u` may be in a legacy encoding; its paths read as best they can.
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) => {
+                eprintln!("playr: {shown}: {e}");
+                failed = true;
+                continue;
+            }
+        };
+        let dir = file.parent().unwrap_or(std::path::Path::new("."));
+        let (tracks, missing) = m3u::resolve(conn, &m3u::paths(&text, dir))?;
+        let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned());
+        let Some(title) = name.clone().or_else(|| m3u::name(&text)).or(stem) else {
+            eprintln!("playr: {shown}: no name; give one with --name");
+            failed = true;
+            continue;
+        };
+        let lists = db::query::playlists(conn)?;
+        if lists.iter().any(|p| p.name == title) {
+            eprintln!("playr: {shown}: a playlist named {title:?} exists; --name gives another");
+            failed = true;
+            continue;
+        }
+        if tracks.is_empty() {
+            eprintln!(
+                "playr: {shown}: none of its {} tracks is in the library",
+                missing.len()
+            );
+            failed = true;
+            continue;
+        }
+        let ids: Vec<i64> = tracks.iter().map(|t| t.id).collect();
+        db::query::save_playlist(conn, &title, &ids)?;
+        println!("saved {title:?}, {} tracks", ids.len());
+        if !missing.is_empty() {
+            println!("  {} not in the library, left out:", missing.len());
+            for path in &missing {
+                println!("  {}", path.display());
+            }
+        }
+    }
+    Ok(if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 /// `tracks` as a JSON array of objects, one field per library column, with

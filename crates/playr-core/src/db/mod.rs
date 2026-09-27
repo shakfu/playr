@@ -294,6 +294,24 @@ pub fn resume(conn: &Connection) -> Result<Option<(PathBuf, Duration)>> {
     .optional()
 }
 
+/// The value remembered under `key`, if any.
+pub fn state(conn: &Connection, key: &str) -> Result<Option<String>> {
+    conn.query_row("SELECT value FROM state WHERE key = ?1", [key], |r| {
+        r.get(0)
+    })
+    .optional()
+}
+
+/// Remembers `value` under `key`, replacing what was there.
+pub fn set_state(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO state (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )?;
+    Ok(())
+}
+
 /// Forgets what was playing, so the next start offers nothing.
 pub fn clear_resume(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM resume WHERE id = 0", [])?;

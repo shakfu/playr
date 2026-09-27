@@ -475,3 +475,93 @@ fn analyze_records_findings_and_skips_what_is_current() {
     assert_eq!(padded["findings"][0]["finding"], "padded");
     assert_eq!(report["not_analysed"], 0);
 }
+
+#[test]
+fn playlists_go_out_and_come_back_as_m3u() {
+    use playr_core::db::{self, query, Track};
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("library.db");
+    let music = std::fs::canonicalize(dir.path()).unwrap().join("music");
+    std::fs::create_dir(&music).unwrap();
+    let conn = db::open(&db_path).unwrap();
+    let ids: Vec<i64> = ["a.flac", "b.flac"]
+        .iter()
+        .map(|name| {
+            let path = music.join(name);
+            std::fs::write(&path, b"x").unwrap();
+            let t = Track {
+                path: path.to_string_lossy().into_owned(),
+                mtime: 1,
+                size: 1,
+                ..Default::default()
+            };
+            db::upsert(&conn, &t).unwrap()
+        })
+        .collect();
+    let mut conn = conn;
+    query::save_playlist(&mut conn, "late", &[ids[1], ids[0]]).unwrap();
+    drop(conn);
+    let list = dir.path().join("late.m3u8");
+    let list_arg = list.to_str().unwrap();
+
+    let (code, out, _) = output(&db_path, &["export", "late"]);
+    assert_eq!(code, Some(0));
+    let b = music.join("b.flac");
+    assert!(out.starts_with("#EXTM3U\n#PLAYLIST:late\n"), "{out}");
+    assert!(out.find(b.to_str().unwrap()) < out.find("a.flac"), "{out}");
+
+    assert_eq!(output(&db_path, &["export", "late", list_arg]).0, Some(0));
+    let (code, _, err) = output(&db_path, &["export", "late", list_arg]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("exists; --force replaces it"), "{err}");
+    assert_eq!(
+        output(&db_path, &["export", "late", list_arg, "--force"]).0,
+        Some(0)
+    );
+
+    // Its own export comes back only under another name.
+    let (code, _, err) = output(&db_path, &["import", list_arg]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("a playlist named \"late\" exists"), "{err}");
+
+    // Another player's list, with a relative path and a track not in the library.
+    let other = music.join("mix.m3u");
+    std::fs::write(&other, "#EXTM3U\na.flac\n/elsewhere/c.flac\nb.flac\n").unwrap();
+    let (code, out, _) = output(&db_path, &["import", other.to_str().unwrap()]);
+    assert_eq!(code, Some(0));
+    assert!(out.contains("saved \"mix\", 2 tracks"), "{out}");
+    assert!(
+        out.contains("1 not in the library") && out.contains("/elsewhere/c.flac"),
+        "{out}"
+    );
+    let conn = db::open(&db_path).unwrap();
+    let lists = query::playlists(&conn).unwrap();
+    let mix = query::find_playlist(&lists, "mix").unwrap();
+    let paths: Vec<String> = query::playlist_tracks(&conn, mix.id)
+        .unwrap()
+        .into_iter()
+        .map(|t| t.path)
+        .collect();
+    assert_eq!(
+        paths,
+        [music.join("a.flac"), music.join("b.flac")].map(|p| p.to_string_lossy().into_owned())
+    );
+
+    let (code, out, _) = output(&db_path, &["import", list_arg, "--name", "late again"]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(output(
+        &db_path,
+        &["import", list_arg, other.to_str().unwrap(), "--name", "x"]
+    )
+    .2
+    .contains("--name names one playlist"));
+    // Neither command makes a library.
+    let none = dir.path().join("none.db");
+    assert!(output(&none, &["export", "late"])
+        .2
+        .contains("no library at"));
+    assert!(output(&none, &["import", list_arg])
+        .2
+        .contains("no library at"));
+    assert!(!none.exists());
+}

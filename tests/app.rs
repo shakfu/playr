@@ -90,7 +90,7 @@ fn confirming(app: &mut App) -> bool {
 #[test]
 fn deleting_a_playlist_waits_for_y() {
     let (mut app, _dir) = app();
-    press(&mut app, '3');
+    press(&mut app, '4');
 
     press(&mut app, 'd');
     assert!(confirming(&mut app), "delete did not ask");
@@ -190,7 +190,7 @@ fn chords_are_not_typed_into_a_prompt() {
 #[test]
 fn a_ctrl_y_does_not_confirm() {
     let (mut app, _dir) = app();
-    press(&mut app, '3');
+    press(&mut app, '4');
     press(&mut app, 'd');
     chord(&mut app, KeyModifiers::CONTROL, 'y');
     assert_eq!(
@@ -290,7 +290,7 @@ fn playing_paths(app: &mut App) -> Vec<String> {
 fn the_selection_starts_empty_and_playing_does_not_fill_it() {
     let (mut app, _dir) = app_with(|dir| db::open(&dir.join("library.db")).unwrap());
     // `app_with` selects two tracks, as `playr <path>` does; start over empty.
-    press(&mut app, '2');
+    press(&mut app, '3');
     press(&mut app, 'c');
     press(&mut app, 'y');
     assert!(selection_paths(&mut app).is_empty());
@@ -315,7 +315,7 @@ fn the_selection_starts_empty_and_playing_does_not_fill_it() {
 #[test]
 fn adding_to_the_selection_leaves_playback_alone() {
     let (mut app, _dir) = app();
-    press(&mut app, '2');
+    press(&mut app, '3');
     press(&mut app, 'j');
     press(&mut app, 'd');
     press(&mut app, '1');
@@ -335,7 +335,7 @@ fn adding_to_the_selection_leaves_playback_alone() {
 #[test]
 fn selected_tracks_can_be_moved_removed_and_cleared() {
     let (mut app, _dir) = app();
-    press(&mut app, '2');
+    press(&mut app, '3');
 
     // The cursor starts on a; shift moves the track with it.
     press(&mut app, 'J');
@@ -362,7 +362,7 @@ fn selected_tracks_can_be_moved_removed_and_cleared() {
 #[test]
 fn enter_in_the_selection_plays_it() {
     let (mut app, _dir) = app();
-    press(&mut app, '2');
+    press(&mut app, '3');
     press(&mut app, 'J');
     enter(&mut app);
     assert_eq!(playing_paths(&mut app), ["/m/b.flac", "/m/a.flac"]);
@@ -386,7 +386,7 @@ fn a_on_a_playlist_adds_its_tracks_not_already_selected() {
     let mut app = App::with_selection(conn, common::fake_player().0, Vec::new());
 
     // Into an empty selection the playlist's own repeat survives.
-    press(&mut app, '3');
+    press(&mut app, '4');
     press(&mut app, 'a');
     assert_eq!(
         selection_paths(&mut app),
@@ -398,13 +398,13 @@ fn a_on_a_playlist_adds_its_tracks_not_already_selected() {
     assert_eq!(selection_paths(&mut app).len(), 3);
 
     // Into a selection holding b, only the tracks it lacks are added.
-    press(&mut app, '2');
+    press(&mut app, '3');
     press(&mut app, 'c');
     press(&mut app, 'y');
     press(&mut app, '1');
     press(&mut app, 'j');
     press(&mut app, 'a');
-    press(&mut app, '3');
+    press(&mut app, '4');
     press(&mut app, 'a');
     assert_eq!(
         selection_paths(&mut app),
@@ -460,7 +460,7 @@ fn quick_volume_presses_all_count() {
 #[test]
 fn a_toggles_a_track_and_moves_the_cursor_down() {
     let (mut app, _dir) = app();
-    press(&mut app, '2');
+    press(&mut app, '3');
     press(&mut app, 'c');
     press(&mut app, 'y');
 
@@ -519,7 +519,7 @@ fn erase(app: &mut App, n: usize) {
 #[test]
 fn r_renames_the_selected_playlist() {
     let (mut app, _dir) = app();
-    press(&mut app, '3');
+    press(&mut app, '4');
     press(&mut app, 'r');
     assert!(
         matches!(&app.screen().input, Input::RenamePlaylist { name, .. } if name == "late"),
@@ -544,7 +544,7 @@ fn renaming_refuses_a_taken_or_empty_name_and_follows_the_playlist() {
     press(&mut app, 's');
     typing(&mut app, "early");
     enter(&mut app);
-    press(&mut app, '3');
+    press(&mut app, '4');
     press(&mut app, 'j');
     assert_eq!(app.screen().lists.playlists.row, Some(1), "not on late");
 
@@ -918,7 +918,8 @@ fn view_commands_act_on_the_view_they_belong_to() {
     command(&mut app, "clear-search");
     assert!(app.screen().results.is_none());
 
-    // Playlists: add, rename, delete.
+    // Playlists, past the queue and the selection: add, rename, delete.
+    command(&mut app, "next-view");
     command(&mut app, "next-view");
     command(&mut app, "next-view");
     assert_eq!(app.screen().view, View::Playlists);
@@ -946,7 +947,7 @@ fn tab_completes_only_commands_that_work_in_this_view() {
     assert_eq!(command_text(&mut app).as_deref(), Some("remove"));
     key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
 
-    press(&mut app, '3');
+    press(&mut app, '4');
     press(&mut app, ':');
     typing(&mut app, "ren");
     key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
@@ -1258,7 +1259,7 @@ fn the_sampler_reads_the_waveform_once_opened_and_follows_the_track() {
         "read before the view opened"
     );
 
-    press(&mut app, '4');
+    press(&mut app, '5');
     assert_eq!(app.screen().view, View::Sampler);
     wait_for_sampler(&mut app, |s| wave_of(s).is_some());
     assert_eq!(
@@ -1283,7 +1284,7 @@ fn zoom_and_display_keys_work_only_in_the_sampler() {
     press(&mut app, 'z');
     assert_eq!(app.screen().sampler.zoom, 0, "z zoomed outside the sampler");
 
-    press(&mut app, '4');
+    press(&mut app, '5');
     press(&mut app, 'z');
     press(&mut app, 'z');
     assert_eq!(app.screen().sampler.zoom, 2);
@@ -1351,7 +1352,7 @@ fn in_the_sampler_slices_are_planned_then_written_or_discarded() {
     command(&mut app, "mark 0:10");
     command(&mut app, "seek 0:07");
     refresh_until(&mut app, |s| s.position > Duration::from_secs(6));
-    press(&mut app, '4');
+    press(&mut app, '5');
     key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(said(&app), msg(Message::NoSlicesPlanned));
 
@@ -1411,7 +1412,7 @@ fn tab_and_shift_tab_step_through_the_views_both_ways() {
     let (mut app, _dir) = app();
     command(&mut app, "view library");
     key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
-    assert_eq!(app.screen().view, View::Selection);
+    assert_eq!(app.screen().view, View::Queue);
     // A terminal sends shift-tab as BackTab.
     key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
     assert_eq!(app.screen().view, View::Library);

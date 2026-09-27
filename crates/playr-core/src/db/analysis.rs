@@ -126,6 +126,18 @@ pub fn rows(conn: &Connection) -> Result<HashMap<String, (Stat, Analysis)>> {
         .collect()
 }
 
+/// The rows that still describe `library`'s files, by path.
+pub fn current(conn: &Connection, library: &[Track]) -> Result<HashMap<String, Analysis>> {
+    let rows = rows(conn)?;
+    Ok(library
+        .iter()
+        .filter_map(|t| {
+            let (stat, a) = rows.get(&t.path)?;
+            is_current(t, Some(stat)).then(|| (t.path.clone(), a.clone()))
+        })
+        .collect())
+}
+
 /// The row stored for `path`, current or not.
 pub fn row_of(conn: &Connection, path: &str) -> Result<Option<(Stat, Analysis)>> {
     let sql = format!("SELECT {COLS} FROM analysis WHERE path = ?1");

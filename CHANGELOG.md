@@ -10,13 +10,33 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
   Correlation is sum(2LR) / sum(L^2 + R^2), not Pearson's. It needs one more value a bucket where Pearson's needs two, and the two agree when the channels are equally loud. Numbers on a chosen range replace a live scope view that was tried and dropped. Its waveform trace and spectrum repeated what the sampler shows, and a stereo image mattered less than a number for deciding where to cut.
 
-- A three-band EQ: `:eq bass|mid|treble =N|+N|-N`, and `:eq flat`, from -12 to 12 dB. Bass is a shelf below 100 Hz, mid a wide peak at 1 kHz, treble a shelf above 10 kHz. In the window, an EQ button beside Mode opens a dialog with a slider a band and Flat; the page takes the command. The EQ starts flat and is not saved. Library API: `audio::eq`, `Cmd::SetEq`, `Player::eq`, `Shared::eq`, `Biquad::process`; `render` takes an `Eq`; `Action::SetEq`, `EqBy`, `FlatEq`; `Message::Eq`; `Snapshot::eq`.
+- A three-band EQ: `:eq bass|mid|treble N|=N|+N|-N`, and `:eq flat`, from -12 to 12 dB. Bass is a shelf below 100 Hz, mid a wide peak at 1 kHz, treble a shelf above 10 kHz. In the window, an EQ button beside Mode opens a dialog with a slider a band and Flat; the page takes the command. The EQ starts flat and is not saved. Library API: `audio::eq`, `Cmd::SetEq`, `Player::eq`, `Shared::eq`, `Biquad::process`; `render` takes an `Eq`; `Action::SetEq`, `EqBy`, `FlatEq`; `Message::Eq`; `Snapshot::eq`.
 
   A boost raises its band and nothing else, so at full volume a large one can clip a loud track; the volume applies after the EQ, so turning it down makes room. Lowering the whole level by the largest boost prevents that, but a boost then turned everything else down, and raising a band made the track quieter. A limiter changes the sound when it acts. The EQ runs in the output callback, before the meter, not in the decoder, which runs up to 2 s ahead of what is heard. With every band at 0 it passes samples unchanged.
 
+- `persist = ["eq", "volume", ...]` remembers session values between runs: `eq`, `volume`, `mode`, `replaygain`, `theme`, `columns` and `sort`, none by default. They are stored in the library, in a new `state` table, and win over the setting of the same name while listed; `columns` and `sort` are kept for each program. `settings.toml` stays the file the user writes and playr never changes, so the values are state in the library rather than keys written back to it. A change is stored once it has held still for 500 ms, and when playr quits or its window closes. Library API: `settings::Persist`, `Settings::persist`, `db::state`, `db::set_state`, `Session::state`, `Session::set_state`, `persist`, `Config::program`, `model::SAVE_AFTER`.
+
+- `playr export NAME [FILE]` writes a playlist as M3U8, and `playr import FILE...` saves M3U files as playlists. Playlists lived only in `library.db`, so a lost library lost them, and no other player could read them. Import leaves out tracks not in the library and lists them, where scanning their folders first would add to the library without asking. It refuses a name already taken rather than replace that playlist. Library API: `m3u::write`, `m3u::paths`, `m3u::name`, `m3u::resolve`.
+
+- Every column is a search field, by the name `:columns` and `:sort` take: `year:1955..1965`, `loudness:..-14`, `time:5:00..`, `genre:jazz`, `path:/backup/`. `tempo:` is `bpm:`, and `albumartist:` stays beside `album_artist:`. `genre`, read at scan since 0.1.0, is now a column. Library API: `Column::Genre`, `db::analysis::current`.
+
+- `is:` searches the findings of `playr analyze`: `damaged`, `unreadable`, `padded`, `no-checksum`, `wrong-length`, `lossy`, `upsampled`, and `duplicate` and `unanalysed`. Findings were visible only in `--report` and `:info`, one track at a time. `is:duplicate` is judged across the whole library whatever else the search holds, so `is:duplicate path:/backup/` lists the copies under one folder.
+
+- A queue. `:enqueue`, on `e`, adds the track or playlist under the cursor after the rest of the list playing; `:enqueue next`, on `E`, puts it after the track playing, in any mode. A view, Queue, on `2` and after the library in tab order, lists the list playing and marks the track playing; enter there jumps within it. `:dequeue`, on `d`, takes a track out, and `:reorder +N|-N`, on `J` and `K`, moves one; the window also drags rows. Playing another list over an edited queue says how many tracks it had to come. The window and the page have the view and the row menu items. Library API: `Cmd::Insert`, `Cmd::Remove`, `Cmd::Move`, `Order::insert`, `Order::remove`, `Order::relabel`, `order::moved`, `Player::queue_edited`, `Session::enqueue`, `Session::dequeue`, `Session::move_in_queue`, `Outcome::Queued`, `Outcome::QueueReplaced`; `Session::play` returns the replaced notice; `Action::Enqueue`, `View::Queue`, `Cursors::queue`.
+
+  Successive `:enqueue next` play in the order sent: the player keeps the insert point while the same track plays, where inserting each after the playing track would reverse them. A next track already decoding for gapless playback is dropped, as a mode change drops it. The command is `enqueue`, not `queue`, so `:q` still quits.
+
 - `:prev-view`, on shift-tab, switches to the previous view, as tab switches to the next. The web page steps back from the library to the playlists, skipping the views it does not have.
 
+### Changed
+
+- Mark commands are named noun first, as `:loop N save` and `:roots rm` are: `:mark-undo`, `:mark-clear`, `:mark-next`, `:mark-prev`, `:mark-pick`, `:mark-nudge`, `:mark-move`, `:mark-snap` and `:mark-rm`, for `:unmark`, `:delmarks`, `:next-mark`, `:prev-mark`, `:pick`, `:nudge-mark`, `:move-mark`, `:snap-mark` and `:del-mark`. `:clear-search` is `:search-clear`, and `:next-view` and `:prev-view` are `:view next` and `:view prev`. `delmarks` and `del-mark` differed by a hyphen and a letter, and one cleared every mark. The old names still work, so bindings written for them keep working; help and completion list only the new.
+
 ### Fixed
+
+- `:volume`, `:speed` and `:eq` read a number by one rule: a sign changes the value, no sign sets it, and `=` sets it too, so `=-3` sets a negative one. `:volume =60` was refused.
+
+- `:sort` splits keys on spaces as well as commas, as `:columns` does, with `desc` or `asc` turning the key before it. `:sort tempo title` was read as one unknown column.
 
 - In the window, a key a binding takes no longer also moves keyboard focus. Tab switched the view and focused the first control; shift-tab focused a control of the view it left.
 

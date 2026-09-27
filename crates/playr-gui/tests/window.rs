@@ -81,7 +81,7 @@ fn keys_run_the_terminal_s_bindings() {
     assert_eq!(model(&harness).session().selection().len(), 1);
     harness.key_press(egui::Key::Tab);
     harness.run_steps(2);
-    assert_eq!(model(&harness).view(), View::Selection);
+    assert_eq!(model(&harness).view(), View::Queue);
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn a_click_moves_the_cursor_and_a_tick_selects() {
 fn a_question_waits_in_a_dialog() {
     let (mut harness, _dir) = window();
     harness.run_steps(2);
-    typing(&mut harness, "3d");
+    typing(&mut harness, "4d");
     assert!(matches!(model(&harness).input(), Input::Confirm(_)));
     harness.get_by_label("delete playlist \"early\"?");
     harness.get_by_label("No").click();
@@ -200,7 +200,7 @@ fn the_theme_menu_sets_egui_s_theme() {
 
 /// Puts tracks A, B and C in the selection and shows it.
 fn selecting_all(harness: &mut Harness<'_, Gui>) {
-    typing(harness, "aaa2");
+    typing(harness, "aaa3");
 }
 
 fn selection(harness: &Harness<'_, Gui>) -> Vec<String> {
@@ -385,7 +385,7 @@ fn sampling(samples: &std::path::Path) -> (Harness<'static, Gui>, tempfile::Temp
         .with_size(egui::vec2(1100.0, 720.0))
         .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
     harness.run_steps(2);
-    typing(&mut harness, "4");
+    typing(&mut harness, "5");
     wait(&mut harness, |m| {
         matches!(m.sampler().wave, playr_app::sampler::Wave::Ready { .. })
     });
@@ -785,7 +785,7 @@ fn sized(dir: &std::path::Path, view: &str, text: bool, height: f32) -> Harness<
         .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
     harness.run_steps(2);
     // The sampler reads the waveform only while shown.
-    typing(&mut harness, "4");
+    typing(&mut harness, "5");
     wait(&mut harness, |m| {
         m.snapshot().status.duration.is_some()
             && matches!(m.sampler().wave, playr_app::sampler::Wave::Ready { .. })
@@ -797,7 +797,7 @@ fn sized(dir: &std::path::Path, view: &str, text: bool, height: f32) -> Harness<
 
 #[test]
 fn every_control_fits_the_smallest_window_without_overlap() {
-    for (view, text) in [("1", false), ("4", false), ("1", true)] {
+    for (view, text) in [("1", false), ("5", false), ("1", true)] {
         let dir = tempfile::tempdir().unwrap();
         let harness = smallest(dir.path(), view, text);
         harness.get_by_label("Level");
@@ -879,7 +879,7 @@ fn transport_text_buttons_show_words() {
 fn the_waveform_takes_the_height_the_controls_leave() {
     for height in [480.0, 720.0] {
         let dir = tempfile::tempdir().unwrap();
-        let harness = sized(dir.path(), "4", false, height);
+        let harness = sized(dir.path(), "5", false, height);
         let rect = |label: &str| harness.get_by_label(label).rect();
         let gap = rect("Prev").top() - rect("Discard slices").bottom();
         assert!(

@@ -166,7 +166,7 @@ fn a_key_does_what_it_is_bound_to_unless_the_page_may_not() {
         reply,
     });
     let (sampler, fourth) = replied(|reply| Request::Key {
-        name: "4".into(),
+        name: "5".into(),
         reply,
     });
     let model = run(model, vec![down, quit, unbound, sampler]);

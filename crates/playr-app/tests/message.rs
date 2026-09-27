@@ -31,6 +31,38 @@ fn outcomes_are_worded() {
         ),
         (Outcome::SelectionCleared, "selection cleared"),
         (
+            Outcome::Queued {
+                tracks: 1,
+                next: false,
+            },
+            "queued",
+        ),
+        (
+            Outcome::QueueReplaced { tracks: 4 },
+            "queue replaced; it had 4 tracks to come",
+        ),
+        (
+            Outcome::Queued {
+                tracks: 1,
+                next: true,
+            },
+            "plays next",
+        ),
+        (
+            Outcome::Queued {
+                tracks: 3,
+                next: false,
+            },
+            "queued 3 tracks",
+        ),
+        (
+            Outcome::Queued {
+                tracks: 3,
+                next: true,
+            },
+            "3 tracks play next",
+        ),
+        (
             Outcome::Saved {
                 name: "late".into(),
                 tracks: 3,

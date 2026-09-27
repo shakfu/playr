@@ -114,8 +114,6 @@ A slice is exact to the frame for the marks it was given. How close a mark is to
 
 ## Not built yet
 
-- **Hearing a region once.** A range loops; playing a region or range once and stopping is not built.
-
 - **Marks away from the playhead in the terminal.** Marks are placed at the playhead, or at a typed time; the window also marks at a shift-click.
 
 - **Handing a passage to a running tool.** Slices reach a sampler as files. A live tool, such as SuperCollider or Max, would rather receive a mark as it happens. Three ways were weighed:

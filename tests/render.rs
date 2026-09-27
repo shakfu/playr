@@ -196,6 +196,7 @@ impl<'a> Case<'a> {
                 library: at(self.all.is_empty(), cursor),
                 selection: at(self.selection.is_empty(), cursor),
                 playlists: at(self.playlists.is_empty(), cursor),
+                queue: at(self.playing.is_empty(), cursor),
             },
             ..Screen::new(self.view, self.snapshot, keys, &self.sampler)
         };
@@ -247,6 +248,7 @@ fn invisible_cells(
             library: first(!all.is_empty()),
             selection: first(!selection.is_empty()),
             playlists: first(!playlists.is_empty()),
+            queue: first(false),
         },
         ..Screen::new(view, &snapshot, &keys, &sampler)
     };
@@ -355,6 +357,33 @@ fn now_playing_shows_title_position_and_source_format() {
     assert!(joined.contains("9:05"), "duration missing:\n{joined}");
     assert!(joined.contains("44.1kHz"), "source rate missing:\n{joined}");
     assert!(joined.contains("75%"), "volume missing:\n{joined}");
+}
+
+#[test]
+fn the_queue_marks_the_playing_row_by_its_place_not_its_path() {
+    let so_what = track("So What", "Miles Davis", "Kind of Blue", 545);
+    let blue = track("Blue in Green", "Miles Davis", "Kind of Blue", 337);
+    let queue = vec![so_what.clone(), blue, so_what];
+    let mut snapshot = playing(None, None);
+    snapshot.status.queue = queue
+        .iter()
+        .map(|t| std::path::PathBuf::from(&t.path))
+        .collect();
+    snapshot.status.index = 2;
+    let lines = Case::new(View::Queue, &snapshot)
+        .playing(&queue)
+        .size(80, 12)
+        .render();
+    let rows: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains("Kind of Blue"))
+        .collect();
+    assert_eq!(rows.len(), 3, "{lines:#?}");
+    let marked: Vec<bool> = rows.iter().map(|l| l.contains('>')).collect();
+    assert_eq!(marked, [false, false, true], "{lines:#?}");
+
+    let empty = Case::new(View::Queue, &stopped()).text();
+    assert!(empty.contains("Nothing is playing"), "{empty}");
 }
 
 #[test]
@@ -748,7 +777,7 @@ fn help_command_lists_every_command_with_its_arguments_by_view() {
     // Tall enough for the whole list; 80 columns, the smallest common width.
     let joined = Case::new(View::Library, &stopped())
         .input(&input)
-        .size(80, 80)
+        .size(80, 100)
         .text();
     for c in playr_app::command::COMMANDS {
         let usage = format!(":{} {}", c.name, c.args);
@@ -852,6 +881,7 @@ fn drawing_returns_each_cursor_inside_its_list_and_on_screen() {
                 library: first,
                 selection: first,
                 playlists: first,
+                queue: Scroll::default(),
             }
         );
     }

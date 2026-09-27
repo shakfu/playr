@@ -222,6 +222,18 @@ fn outcome_text(outcome: &Outcome) -> String {
         Outcome::Renamed { from, to } => format!("renamed \"{from}\" to \"{to}\""),
         Outcome::Deleted { name } => format!("deleted \"{name}\""),
         Outcome::PlayingPlaylist { name } => format!("playing \"{name}\""),
+        Outcome::Queued { tracks: 1, next } => match next {
+            true => "plays next".into(),
+            false => "queued".into(),
+        },
+        Outcome::QueueReplaced { tracks: 1 } => "queue replaced; it had 1 track to come".into(),
+        Outcome::QueueReplaced { tracks } => {
+            format!("queue replaced; it had {tracks} tracks to come")
+        }
+        Outcome::Queued { tracks, next } => match next {
+            true => format!("{tracks} tracks play next"),
+            false => format!("queued {tracks} tracks"),
+        },
         Outcome::Mode(mode) => format!("mode: {}", mode.name()),
         Outcome::ReplayGain(r) => format!("replaygain: {}", r.name()),
         Outcome::SliceEdges(e) => format!("slice edges: {}", e.name()),

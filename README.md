@@ -71,7 +71,7 @@ None of the three contact external services or download any metadata and images.
 
 - Scans commit every 500 files, so an interrupted scan keeps its progress
 
-- Full-text search over title, artist, album, album artist and file name, or within one of them with `artist:evans`, and over analysed tempos with `bpm:120..130`
+- Full-text search over title, artist, album, album artist and file name, or within one of them with `artist:evans`; any other column by name, as in `year:1955..1965` or `tempo:120..130`; and findings of `playr analyze`, as in `is:damaged`
 
 - Columns and sort order set per program in `settings.toml`, changed for the session with `:columns` and `:sort`; sorting by loudness or tempo needs `playr analyze`
 
@@ -81,13 +81,15 @@ None of the three contact external services or download any metadata and images.
 
 **Interface**
 
-- Four views: library, selection, playlists, and a sampler showing the playing track's waveform or spectrogram; the web page has the first three
+- Five views: library, queue, selection, playlists, and a sampler showing the playing track's waveform or spectrogram; the web page has all but the sampler
 
 - Dark and light themes; the terminal takes its colours from its own theme, and honours `NO_COLOR`
 
 - Search filters as you type
 
 - A selection to collect tracks into, edit and save as a playlist; it does not change what plays, and its tracks are marked `+` in the library
+
+- A queue: add a track or a playlist after the rest, or to play next
 
 - Now playing shows title, artist, source rate and channels
 
@@ -115,7 +117,7 @@ playr is three programs over one core. All read the same library and the same `s
 
 - **`playr-server`**, for a machine without a screen, such as a Raspberry Pi with a DAC. It plays on that machine, and a web page or OSC controls it. The only program with network code.
 
-Only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr search --json`, `playr roots`, `playr formats` and `playr devices` only read, and run alongside any of them. `playr analyze` runs alongside them too: it writes only its own tables, which none of them caches.
+Only one runs at a time: while one is running, the others, `playr scan` and `playr prune` refuse to start. `playr playlists`, `playr export`, `playr search --json`, `playr roots`, `playr formats` and `playr devices` only read, and run alongside any of them. `playr analyze` runs alongside them too: it writes only its own tables, which none of them caches.
 
 | | `playr` | `playr-gui` | `playr-server` |
 |-|-|-|-|
@@ -221,6 +223,8 @@ playr search album:blue     # match the album only
 playr search --json evans   # print the matches as JSON instead of playing them
 playr playlist "late night" # play a saved playlist
 playr playlists             # list saved playlists
+playr export late late.m3u8 # write a playlist as M3U8; no FILE prints it
+playr import mix.m3u        # save an M3U file as a playlist
 playr analyze               # decode new and changed tracks once; print findings
 playr analyze --report      # print what is recorded, decoding nothing
 playr formats               # show what this build can decode
@@ -230,7 +234,7 @@ playr --device ID           # play to that device instead of the default
 
 `playr <command> --help` describes each command. A search that starts with `-` goes after `--`, as in `playr search -- -ology`. `--json` prints an array with one object per track, holding every library column, `null` for a missing tag, and `duration_ms` in milliseconds; no match prints `[]` and exits with status 1. Bad arguments exit with status 2.
 
-Without a command it opens the four views on the library. It draws in any terminal, needs no display server, and runs over SSH. [Keys](#keys) lists the bindings, and `?` lists them for the view you are in.
+Without a command it opens the five views on the library. It draws in any terminal, needs no display server, and runs over SSH. [Keys](#keys) lists the bindings, and `?` lists them for the view you are in.
 
 ### The desktop window
 
@@ -240,7 +244,7 @@ playr-gui ~/music/some/album     # play a directory, as playr does
 playr-gui --db other.db          # use a different library file
 ```
 
-It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection and playlists as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. The transport's buttons show media symbols; `transport_text_buttons = true` in the `[gui]` table shows words instead. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
+It takes the terminal's options and reads the same settings file, so its keys and `:` commands are the terminal's. It has the library, selection, playlists and queue as tables with right-click menus, search, menus for every action, file dialogs, the transport, the level meter, and the sampler view, where a click on the waveform seeks, a shift-click marks, and the mouse wheel zooms. It is dark unless View, Theme or the `theme` setting chooses otherwise. The transport's buttons show media symbols; `transport_text_buttons = true` in the `[gui]` table shows words instead. [docs/dev/gui.md](docs/dev/gui.md) records its design and what is still open.
 
 File, Add folder to library scans a directory, as `playr scan` does; File, Rescan library re-scans those folders; File, Library directories lists them, each with a Forget button; File, Remove missing files prunes every recorded folder; and File, Open plays files without adding them; files dropped on the window play too. When the window cannot start, for bad settings or no audio device, it opens a window that says why.
 
@@ -252,7 +256,7 @@ playr-server --listen 0.0.0.0:8080   # reach it from other devices
 playr-server --db other.db           # use a different library file
 ```
 
-`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page that controls it. It takes the terminal's options and reads the same settings file, so the page's keys and `:` commands are the terminal's. The page has the library, selection and playlists views, search, row menus, dialogs, marks, themes and the level meter, without the sampler. It adapts to a phone, a tablet or a desktop browser: click or tap a row to move the cursor, again to play, right-click or `...` for its menu, and shift-click the progress bar to add a mark.
+`playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page that controls it. It takes the terminal's options and reads the same settings file, so the page's keys and `:` commands are the terminal's. The page has the library, selection, playlists and queue views, search, row menus, dialogs, marks, themes and the level meter, without the sampler. It adapts to a phone, a tablet or a desktop browser: click or tap a row to move the cursor, again to play, right-click or `...` for its menu, and shift-click the progress bar to add a mark.
 
 Every request needs a token, printed in the startup address and kept in `server.token` beside the library. Opening that address sets a cookie for a year, so each browser needs it once. `--open` serves the page without a token, for a network where every device is trusted; the `Host` and `Origin` checks still refuse a website whose domain resolves to the machine.
 
@@ -274,7 +278,9 @@ Rescanning only re-reads files whose size or modification time changed. Each sca
 
 A scan never removes anything itself. It counts the tracks under the scanned directory whose files are gone; inside playr it then asks whether to prune them, and `playr scan` prints the count and the command. `playr prune`, or `:prune`, covers every root; `playr prune DIR` and `:prune DIR` cover one. They remove those tracks, and with them their places in playlists, and the marks of every file under the directory that is gone, whether it was in the library or not. Nothing outside the named directories is touched, so pruning `~/music` leaves an unplugged drive mounted elsewhere alone. Prune after a file is moved or deleted for good, not while a drive under that directory is unplugged.
 
-Playlist entries and marks are the only things in the library that are not read back from the files, so pruning is the one operation that loses work. With `auto_prune = true` a scan inside playr prunes without asking, except when a directory read as empty although the library holds tracks under it: that is what an unmounted drive looks like, so playr asks instead.
+Playlist entries and marks are the only things in the library that are not read back from the files, so pruning is the one operation that loses work.
+
+`playr export NAME [FILE]` writes a playlist as extended M3U in UTF-8 with absolute paths, which other players read, and which keeps it if the library is lost. It refuses to replace a file unless given `--force`. `playr import FILE...` saves M3U or M3U8 files as playlists, named by `--name`, a `#PLAYLIST:` line or the file name. A relative path is read from the file's folder, and a `file://` URL is decoded. Tracks not in the library are left out and listed; scan their folder first to keep them. A name already taken is refused, so an import never replaces a playlist. Neither is a `:` command, and the web page cannot do either, since both name a file. With `auto_prune = true` a scan inside playr prunes without asking, except when a directory read as empty although the library holds tracks under it: that is what an unmounted drive looks like, so playr asks instead.
 
 ### Analysis
 
@@ -299,7 +305,7 @@ The tempo is one BPM for the whole track, from the autocorrelation of its onsets
 
 ### Columns and order
 
-`columns` in `settings.toml` says which columns a track list shows and in which order, and `sort` says what it is ordered by, most important key first: `sort = ["tempo desc", "title"]`. The names are `title`, `artist`, `album_artist`, `album`, `disc`, `track`, `year`, `time`, `tempo`, `loudness`, `peak` and `path`; the last three and `tempo` come from `playr analyze`, and a track it has not measured sorts last whichever way the column is sorted.
+`columns` in `settings.toml` says which columns a track list shows and in which order, and `sort` says what it is ordered by, most important key first: `sort = ["tempo desc", "title"]`. The names are `title`, `artist`, `album_artist`, `album`, `genre`, `disc`, `track`, `year`, `time`, `tempo`, `loudness`, `peak` and `path`; `tempo`, `loudness` and `peak` come from `playr analyze`, and a track it has not measured sorts last whichever way the column is sorted.
 
 A `[terminal]`, `[gui]` or `[server]` table sets them for one program, over the shared keys, since a terminal row has less room than a window. As shipped, the window lists the title first and the other two take the shared order; nothing shows `tempo` or `loudness` until you ask for it. `:columns artist title tempo` and `:sort loudness desc` change them until playr exits. In the window, a click on a column heading sorts by it and a second click turns it around, and View, Columns ticks the columns to show. The page has a sort control; its columns are fixed for now.
 
@@ -325,17 +331,18 @@ These keys are the same in the terminal, the window and the web page, and any of
 
 | keys                     | action                                      |
 |--------------------------|---------------------------------------------|
-| `tab` shift-tab `1`-`4`  | next, previous view; `4` is the sampler     |
+| `tab` shift-tab `1`-`5`  | next, previous view; `2` queue, `5` sampler |
 | `j` `k`, up/down         | move                                        |
 | `g` `G`, home/end        | jump to first or last                       |
 | page up/down             | move by ten                                 |
 | `enter`                  | play from here; in playlists, play it       |
 | `a`                      | select or unselect, then move down          |
+| `e` `E`                  | queue the track or playlist; play it next   |
 | `/`                      | search; `esc` clears                        |
 | `r`                      | rename the selected playlist                |
 | `s`                      | save the selection; asks before overwriting |
-| `d`                      | remove from selection; delete a playlist    |
-| `J` `K`, shift up/down   | move a track within the selection           |
+| `d`                      | remove from selection or queue; delete a playlist |
+| `J` `K`, shift up/down   | move a track within the selection or queue  |
 | `c`                      | clear the selection; asks y/n               |
 | `space`                  | play or pause                               |
 | `n` `p`                  | next or previous track                      |
@@ -359,7 +366,13 @@ Searching filters as you type, across title, artist, album, album artist and the
 
 Every word must match, as the start of a word. Prefix a word with a field to match it in that field alone: `title:`, `artist:`, `album:`, `albumartist:`, or `file:`. Quote words to match them together in order, as in `artist:"bill evans"`; unquoted, a field applies only to the word it is attached to. A prefix that is not one of these fields is searched as text, so `op:1` still finds a title with a colon in it.
 
+Every other column is a field too, by the name `:columns` takes. A number column takes a value or a range: `year:1959`, `year:1955..1965`, `loudness:..-14`, `time:5:00..`. A bare value matches what the list shows, so `time:5:00` matches 5:00.9 but not 4:59.9, and `loudness:-14` matches -14.0. `genre:` and `path:` match anywhere in the text, ignoring case. `tempo:` is `bpm:`; see [Columns and order](#columns-and-order). A value that names nothing, such as `year:soon`, matches nothing.
+
+`is:` finds what `playr analyze` flagged: `is:damaged`, `is:unreadable`, `is:padded`, `is:no-checksum`, `is:wrong-length`, `is:lossy` for a possible lossy source, and `is:upsampled`. `is:duplicate` finds tracks that look like copies of another in the library: the same FLAC checksum, or the same title and artist within 2 seconds, which needs no analysis. `is:unanalysed` finds tracks with no current measurement. A field alone lists every track it admits, and terms combine, so `is:duplicate path:/backup/` lists the copies under one folder.
+
 Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
+
+The queue view lists what is playing: the list enter last played, with any tracks queued into it. `e` queues the track or playlist under the cursor after the rest, and `E` puts it after the track playing. Several `E` presses play in the order pressed, in shuffle too. With nothing playing, either starts playback. Enter in the queue jumps to that track and keeps the queue. `d` takes a track out, and taking out the track playing plays the next. `J` and `K` move a track; in shuffle a move changes the list, not the shuffled order. Enter anywhere else replaces the queue; once the queue has been edited, a message says how many tracks it had to come. The queue is not kept when playr exits.
 
 ### Playback modes
 
@@ -444,10 +457,10 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `n` `p` | `:audition next`, `:audition prev` | play the next or previous planned slice once |
 | `;` `'` | `:cursor -1`, `:cursor +1` | move the cursor a column                       |
 | `h`     | `:cursor off`           | return the cursor to the playhead                 |
-| `u` `i` | `:pick prev`, `:pick next` | move the cursor to a mark                      |
-| `y` `o` | `:nudge-mark -1`, `:nudge-mark +1` | move the mark under the cursor         |
-| `#`     | `:snap-mark`            | move it to the nearest rise in the sound          |
-| delete  | `:del-mark`             | remove it                                         |
+| `u` `i` | `:mark-pick prev`, `:mark-pick next` | move the cursor to a mark           |
+| `y` `o` | `:mark-nudge -1`, `:mark-nudge +1` | move the mark under the cursor         |
+| `#`     | `:mark-snap`            | move it to the nearest rise in the sound          |
+| delete  | `:mark-rm`              | remove it                                         |
 | `enter` | `:write`                | write the slices planned                          |
 | `esc`   | `:discard`              | discard them, or with none planned, clear the range |
 
@@ -463,7 +476,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **The cursor.** The cursor is a second position, apart from the playhead, and it is what the mark keys act on. It starts on the playhead and follows it until moved; `h` returns it. `u` and `i` put it on the mark before or after it, which is how a mark is picked up: every mark key acts on the mark the cursor is on, within a column of the view, and says so when there is none. In the window, a mark is dragged along the waveform instead.
 
-- **Editing a mark.** `y` and `o` move the picked mark a column at a time, `:move-mark TIME` puts it at a time, and delete removes it, wherever it sits in the chain `B` undoes. `#` moves it to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
+- **Editing a mark.** `y` and `o` move the picked mark a column at a time, `:mark-move TIME` puts it at a time, and delete removes it, wherever it sits in the chain `B` undoes. `#` moves it to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
 
 - **Audition.** `a` plays the planned slice the playhead is in, or the range, or the region around it, once, and pauses at its end rather than returning to its start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. With slices planned, `n` and `p`, or Previous slice and Next slice in the window, play the next or previous one, wrapping round at either end, so each can be checked before `enter` writes them; in this view they no longer skip tracks, which `:next` and `:prev` still do. With `slice_edges = "fade"`, an audition fades as the written slice will. Playing on afterwards continues the track from there.
 
@@ -491,7 +504,7 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 
 ### EQ
 
-`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass =3` sets a band and `:eq treble -2` moves one; `:eq flat` returns all three to 0. In the window, the EQ button beside Mode opens a dialog with a slider for each and Flat; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
+`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass 3` sets a band, `:eq bass =-3` sets it below 0, and `:eq treble -2` moves one; `:eq flat` returns all three to 0. In the window, the EQ button beside Mode opens a dialog with a slider for each and Flat; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
 
 A boost raises its band and leaves the rest, so at full volume a large one can clip a loud track. The volume applies after the EQ, so turning it down makes room: at 50, a 6 dB boost cannot clip. The level meter reads after the EQ and before the volume. `:slice` and the sampler's measurements read the file, so the EQ does not reach them. The EQ starts flat each time playr does, and changes last until it exits.
 
@@ -539,6 +552,7 @@ sort = ["album_artist", "album", "disc", "track"] # and the order it comes in
 device = "alsa:hw:CARD=DAC,DEV=0"  # output device from `playr devices`; "" is the default
 replaygain = "auto"                # off, track, album or auto
 theme = "light"                    # system, light or dark
+persist = ["eq", "volume"]         # session values to remember; see below
 
 [terminal]                         # or [gui] or [server]: that program only
 columns = ["artist", "title", "tempo"]
@@ -550,7 +564,7 @@ ctrl-s = "save"
 q = "nop"
 "?" = "help"
 
-[keys.selection]                   # one view: library, selection, playlists or sampler
+[keys.selection]                   # one view: library, queue, selection, playlists or sampler
 x = "remove"
 ```
 
@@ -569,6 +583,8 @@ x = "remove"
 - `ctrl-c` always quits, and the keys inside prompts and help lists cannot be changed.
 
 Any error stops playr before it starts, and every bad setting is listed with its line number. `?` lists the keys as bound in the view you are in. `:map` and `:unmap` change keys until playr exits.
+
+`persist` names session values playr remembers between runs: `eq`, `volume`, `mode`, `replaygain`, `theme`, `columns` and `sort`. None are remembered unless named. playr stores them in the library, not in this file: `settings.toml` holds only what you write, and playr never changes it. While a name is listed, its remembered value wins over the setting of the same name, which then applies only until something is remembered. Remove the name to go back to the setting. `columns` and `sort` are remembered for each program, as a program's table sets them; the rest are shared. A change is stored once it has held still for half a second, so dragging a slider is one write. Without a library, nothing is remembered.
 
 `theme` sets the colours, `dark` unless set, and `:theme` changes them until playr exits. In the window, `system` follows the system's light or dark appearance. A terminal cannot report its background reliably, so there `system` and `dark` use the terminal's own ANSI colours, which its theme shades, and `light` uses fixed colours for a light background. With `NO_COLOR` set to any value, the terminal draws without colour and reverses the cursor row.
 

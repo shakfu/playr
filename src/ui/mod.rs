@@ -47,6 +47,7 @@ struct Offsets {
     library: usize,
     selection: usize,
     playlists: usize,
+    queue: usize,
 }
 
 /// A list's cursor row, if one is chosen, and the first row it shows.
@@ -62,6 +63,7 @@ pub struct Lists {
     pub library: Scroll,
     pub selection: Scroll,
     pub playlists: Scroll,
+    pub queue: Scroll,
 }
 
 /// What drawing a frame settled, for the next frame to start from: where each
@@ -231,6 +233,7 @@ impl App {
                 library: scroll(c.library, o.library),
                 selection: scroll(c.selection, o.selection),
                 playlists: scroll(c.playlists, o.playlists),
+                queue: scroll(c.queue, o.queue),
             },
             ..Screen::new(m.view(), m.snapshot(), m.keymap(), m.sampler())
         }
@@ -243,15 +246,18 @@ impl App {
             library,
             selection,
             playlists,
+            queue,
         } = drawn.lists;
         self.offsets = Offsets {
             library: library.offset,
             selection: selection.offset,
             playlists: playlists.offset,
+            queue: queue.offset,
         };
         self.model.set_cursor(View::Library, library.row);
         self.model.set_cursor(View::Selection, selection.row);
         self.model.set_cursor(View::Playlists, playlists.row);
+        self.model.set_cursor(View::Queue, queue.row);
         self.model.set_zoom(drawn.zoom);
         if let Some(scale) = drawn.scale {
             self.model.set_scale(scale);

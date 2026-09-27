@@ -1761,3 +1761,80 @@ fn eq_moves_from_where_the_player_is_stays_in_range_and_says_so() {
     model.refresh();
     assert_eq!(model.snapshot().eq, [0.0; 3]);
 }
+
+#[test]
+fn the_queue_lists_what_plays_opens_on_it_and_jumps_within_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let tracks: Vec<Track> = ["one", "two", "three"]
+        .iter()
+        .map(|name| {
+            let file = dir.path().join(format!("{name}.wav"));
+            common::silence(&file, 8000, 5.0);
+            track(&file.to_string_lossy())
+        })
+        .collect();
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        tracks.clone(),
+        Config::default(),
+    );
+    let index = |model: &Model| model.session().player().status().index;
+    // The last selected track, queued to play next, is in the queue twice.
+    model.set_cursor(View::Selection, Some(2));
+    model.perform(Action::Enqueue(true));
+    model.refresh();
+    let paths: Vec<&str> = model.playing().iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            &tracks[0].path,
+            &tracks[2].path,
+            &tracks[1].path,
+            &tracks[2].path
+        ]
+    );
+
+    model.perform(Action::ShowView(View::Queue));
+    assert_eq!(model.cursors().queue, Some(index(&model)));
+    model.perform(Action::Cursor(1));
+    model.perform(Action::Activate);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while index(&model) != 1 {
+        assert!(Instant::now() < deadline, "did not jump");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(model.playing().len(), 4, "the queue was replaced");
+}
+
+#[test]
+fn playing_over_an_edited_queue_says_what_it_had_to_come() {
+    let dir = tempfile::tempdir().unwrap();
+    let tracks: Vec<Track> = ["one", "two", "three"]
+        .iter()
+        .map(|name| {
+            let file = dir.path().join(format!("{name}.wav"));
+            common::silence(&file, 8000, 5.0);
+            track(&file.to_string_lossy())
+        })
+        .collect();
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        tracks,
+        Config::default(),
+    );
+    // Opened tracks play from the first; nothing was queued, so nothing is lost.
+    model.perform(Action::Activate);
+    assert!(!matches!(
+        model.message(),
+        Some(Message::Core(Notice::Done(Outcome::QueueReplaced { .. })))
+    ));
+    model.perform(Action::Enqueue(false));
+    model.set_cursor(View::Selection, Some(0));
+    model.perform(Action::Activate);
+    assert_eq!(
+        model.message(),
+        Some(&Outcome::QueueReplaced { tracks: 3 }.into())
+    );
+}

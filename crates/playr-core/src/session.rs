@@ -243,10 +243,58 @@ impl Session {
 
     // --- playback ---
 
-    /// Plays `tracks` from `index`. The selection is not touched.
-    pub fn play(&mut self, tracks: &[Track], index: usize) {
+    /// Plays `tracks` from `index`. The selection is not touched. Says so
+    /// when this replaces a queue that was edited with tracks still to come.
+    pub fn play(&mut self, tracks: &[Track], index: usize) -> Option<Outcome> {
+        let status = self.player.status();
+        let left = status.queue.len().saturating_sub(status.index + 1);
+        let replaced = (self.player.queue_edited() && left > 0)
+            .then_some(Outcome::QueueReplaced { tracks: left });
         let paths = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
         self.player.send(Cmd::Play(paths, index));
+        replaced
+    }
+
+    /// Queues `tracks` after the rest of the list playing, or after the
+    /// track playing when `next`. Plays them if nothing is playing.
+    pub fn enqueue(&mut self, tracks: &[Track], next: bool) -> Outcome {
+        let paths = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
+        self.player.send(match next {
+            true => Cmd::Insert(paths),
+            false => Cmd::Enqueue(paths),
+        });
+        Outcome::Queued {
+            tracks: tracks.len(),
+            next,
+        }
+    }
+
+    /// Takes track `index` out of the queue, and says which. Taking out the
+    /// track playing plays the next.
+    pub fn dequeue(&mut self, index: usize) -> Option<Outcome> {
+        let path = self.player.queue().get(index)?.clone();
+        let title = match self.tracks.iter().find(|t| Path::new(&t.path) == path) {
+            Some(t) => t.display_title(),
+            None => Track {
+                path: path.to_string_lossy().into_owned(),
+                ..Default::default()
+            }
+            .display_title(),
+        };
+        self.player.send(Cmd::Remove(index));
+        Some(Outcome::RemovedTrack { title })
+    }
+
+    /// Moves queued track `index` by `by` places, returning where it is now,
+    /// or nothing if either place is outside the queue.
+    pub fn move_in_queue(&mut self, index: usize, by: i64) -> Option<usize> {
+        let len = self.player.queue().len();
+        let to = usize::try_from(index as i64 + by).ok()?;
+        if index >= len || to >= len {
+            return None;
+        }
+        self.player.send(Cmd::Move(index, to));
+        Some(to)
     }
 
     /// Plays `path` alone, from `at`, without touching the selection. For
@@ -268,6 +316,18 @@ impl Session {
     /// Remembers `path` and `at` as where to take up next time.
     pub fn remember(&self, path: &Path, at: Duration) {
         let _ = db::set_resume(&self.conn, path, at);
+    }
+
+    /// The session value remembered under `key`; none without a library file.
+    pub fn state(&self, key: &str) -> Option<String> {
+        db::state(&self.conn, key).ok().flatten()
+    }
+
+    /// Remembers a session value under `key`, if there is a library file.
+    pub fn set_state(&self, key: &str, value: &str) {
+        if self.has_library_file() {
+            let _ = db::set_state(&self.conn, key, value);
+        }
     }
 
     /// Forgets where to take up, after a refused offer or a stop.
@@ -326,8 +386,10 @@ impl Session {
         if tracks.is_empty() {
             return Refusal::PlaylistEmpty.into();
         }
-        self.play(&tracks, 0);
-        Outcome::PlayingPlaylist { name }.into()
+        match self.play(&tracks, 0) {
+            Some(replaced) => replaced.into(),
+            None => Outcome::PlayingPlaylist { name }.into(),
+        }
     }
 
     /// Plays the one playlist named `name`, matched as `playr playlist` does.

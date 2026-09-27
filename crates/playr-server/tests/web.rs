@@ -83,7 +83,7 @@ fn keys_bound_per_view_with_refused_ones_taken_and_ignored() {
     assert_eq!(keys["selection"]["shift-down"], "move +1");
     assert_eq!(keys["library"]["shift-down"], "down");
     assert_eq!(keys["library"]["q"], Value::Null);
-    assert_eq!(keys["library"]["4"], Value::Null);
+    assert_eq!(keys["library"]["5"], Value::Null);
     assert!(keys.get("sampler").is_none());
 }
 
@@ -166,7 +166,7 @@ fn the_screen_has_views_counts_input_and_playback() {
     assert_eq!(s["view"], "playlists");
     assert_eq!(
         s["counts"],
-        json!({ "library": 2, "selection": 0, "playlists": 1 })
+        json!({ "library": 2, "selection": 0, "playlists": 1, "queue": 0 })
     );
     assert_eq!(
         s["input"],

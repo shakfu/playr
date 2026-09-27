@@ -17,6 +17,7 @@ pub enum Column {
     Artist,
     AlbumArtist,
     Album,
+    Genre,
     Disc,
     TrackNo,
     Year,
@@ -30,11 +31,12 @@ pub enum Column {
 
 impl Column {
     /// Each column's name in `settings.toml` and in `:columns`.
-    pub const NAMES: [(&'static str, Column); 12] = [
+    pub const NAMES: [(&'static str, Column); 13] = [
         ("title", Column::Title),
         ("artist", Column::Artist),
         ("album_artist", Column::AlbumArtist),
         ("album", Column::Album),
+        ("genre", Column::Genre),
         ("disc", Column::Disc),
         ("track", Column::TrackNo),
         ("year", Column::Year),
@@ -61,6 +63,7 @@ impl Column {
             Column::Artist => "Artist",
             Column::AlbumArtist => "Album artist",
             Column::Album => "Album",
+            Column::Genre => "Genre",
             Column::Disc => "Disc",
             Column::TrackNo => "No.",
             Column::Year => "Year",
@@ -194,6 +197,7 @@ pub fn cell(track: &Track, measures: Measures, column: Column) -> Cell {
         Column::Artist => text(track.artist.as_ref()),
         Column::AlbumArtist => text(track.album_artist.as_ref().or(track.artist.as_ref())),
         Column::Album => text(track.album.as_ref()),
+        Column::Genre => text(track.genre.as_ref()),
         Column::Disc => number(track.disc_no.map(f64::from)),
         Column::TrackNo => number(track.track_no.map(f64::from)),
         Column::Year => number(track.year.map(f64::from)),

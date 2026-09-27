@@ -8,13 +8,15 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 - `TIME` is seconds, `m:ss` or `h:mm:ss`, as in `90`, `1:23`, `1:02:03`.
 
-- A leading `+` or `-` makes a number relative: `:seek +10`, `:volume -5`, `:speed +1`. Without a sign it is absolute. `=` makes a signed speed absolute: `:speed =-3`.
+- A leading `+` or `-` makes a number relative: `:seek +10`, `:volume -5`, `:speed +1`. Without a sign it is absolute. `=` makes a signed `:volume`, `:speed` or `:eq` value absolute: `:speed =-3`.
 
 - `NAME` and `QUERY` run to the end of the line, so spaces need no quotes.
 
 - `[ ]` marks an optional argument. Without it, `:search`, `:save` and `:rename` open their prompt.
 
 - `PATH` and `DIR` run to the end of the line; a leading `~` is the home directory, and a relative path is relative to where playr started. `:scan` runs in the background, reports progress on the bottom line, and creates the library if there is none. It keeps tracks whose files are gone and counts them, then asks to prune, or prunes at once if `auto_prune` is set. `:rescan`, or `:sync`, re-scans every directory previously given to `:scan` or `playr scan`. `:roots` lists those directories; `:roots add DIR` is another spelling of `:scan DIR`, and `:roots rm DIR` forgets one, removing the tracks and marks under it after asking. `:prune` removes the tracks of missing files, their places in playlists, and the marks of missing files under `DIR`, after asking; with no directory it covers every directory previously scanned. `:open` adds the files to the end of the selection and plays them.
+
+- Renamed commands keep their old names, so bindings written for them still work: `:next-view` and `:prev-view` are `:view next` and `:view prev`; `:unmark`, `:delmarks`, `:next-mark`, `:prev-mark`, `:pick`, `:nudge-mark`, `:move-mark`, `:snap-mark` and `:del-mark` are `:mark-undo`, `:mark-clear`, `:mark-next`, `:mark-prev`, `:mark-pick`, `:mark-nudge`, `:mark-move`, `:mark-snap` and `:mark-rm`; `:clear-search` is `:search-clear`.
 
 - `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
 
@@ -25,14 +27,13 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:help`                               |                         | list these commands                         |
 | `:keys`                               | `?`                     | list the keys for this view                 |
 | `:quit`                               | `q`                     | quit                                        |
-| `:view VIEW`                          | `1` `2` `3` `4`         | library, selection, playlists or sampler    |
-| `:next-view`                          | `tab`                   | switch to the next view                     |
-| `:prev-view`                          | shift-tab               | switch to the previous view                 |
+| `:view VIEW \| next \| prev`          | `1` to `5`, `tab`, shift-tab | a view by its tab's name, or next or prev |
 | `:down [N]`                           | `j`, down, page down    | move the cursor down N rows, default 1      |
 | `:up [N]`                             | `k`, up, page up        | move the cursor up N rows, default 1        |
 | `:first`                              | `g`, home               | move the cursor to the first row            |
 | `:last`                               | `G`, end                | move the cursor to the last row             |
 | `:play`                               | `enter`                 | play the list in view from the cursor       |
+| `:enqueue [next]`                     | `e` `E`                 | queue the row, or play it next              |
 | `:search [QUERY]`                     | `/`                     | search the library; no query opens /        |
 | `:playlist NAME`                      |                         | play a saved playlist                       |
 | `:save [NAME]`                        | `s`                     | save the selection as a playlist            |
@@ -58,10 +59,10 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:replaygain SETTING`                 |                         | level by loudness: off, track, album, auto  |
 | `:slice-edges exact\|zero\|fade`       |                         | slice edges: exact, at zeros, or faded      |
 | `:mark [TIME]`                        | `b`                     | mark the playing position, or a time        |
-| `:unmark`                             | `B`                     | undo the last mark                          |
-| `:delmarks`                           | `C`                     | clear all marks in this track; asks y/n     |
-| `:next-mark`                          | `.`                     | seek to the next mark                       |
-| `:prev-mark`                          | `,`                     | seek to the previous mark                   |
+| `:mark-undo`                          | `B`                     | undo the last mark                          |
+| `:mark-clear`                         | `C`                     | clear all marks in this track; asks y/n     |
+| `:mark-next`                          | `.`                     | seek to the next mark                       |
+| `:mark-prev`                          | `,`                     | seek to the previous mark                   |
 | `:slice region\|marks\|N\|onsets [S]` |                         | write samples from the region or the track  |
 | `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |
 | `:unmap [VIEW] KEY`                   |                         | remove a key binding                        |
@@ -72,7 +73,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | command         | key   | does                         |
 |-----------------|-------|------------------------------|
 | `:toggle`       | `a`   | select or unselect the track |
-| `:clear-search` | `esc` | show the whole library again |
+| `:search-clear` | `esc` | show the whole library again |
 
 ## Selection
 
@@ -81,6 +82,13 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:remove`        | `d`                     | remove the track from the selection |
 | `:move +N \| -N` | `J` `K`, shift up, down | move the track N places             |
 | `:clear`         | `c`                     | empty the selection; asks y/n       |
+
+## Queue
+
+| command             | key                     | does                             |
+|---------------------|-------------------------|----------------------------------|
+| `:dequeue`          | `d`                     | take the track out of the queue  |
+| `:reorder +N \| -N` | `J` `K`, shift up, down | move the track N places          |
 
 ## Playlists
 
@@ -106,11 +114,11 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:loops clear`                    |                         | clear this track's loops; asks y/n     |
 | `:audition [next\|prev]`          | `a`, `n` `p`            | play a slice, the range or region once; step slices |
 | `:cursor TIME\|+N\|-N\|N%\|off`     | `;` `'` `h`             | move the cursor; `h` returns it to the playhead |
-| `:pick next\|prev`                 | `u` `i`                 | move the cursor to a mark              |
-| `:nudge-mark +N\|-N\|N%`           | `y` `o`                 | move the mark under the cursor         |
-| `:move-mark TIME`                 | drag it                 | move it to a time                      |
-| `:snap-mark`                      | `#`                     | move it to the nearest rise            |
-| `:del-mark`                       | `delete`                | remove it                              |
+| `:mark-pick next\|prev`            | `u` `i`                 | move the cursor to a mark              |
+| `:mark-nudge +N\|-N\|N%`           | `y` `o`                 | move the mark under the cursor         |
+| `:mark-move TIME`                 | drag it                 | move it to a time                      |
+| `:mark-snap`                      | `#`                     | move it to the nearest rise            |
+| `:mark-rm`                        | `delete`                | remove it                              |
 | `:edge start\|end \| +N \| -N \| +N%` | `[` `]`, then `{` `}`   | pick a range end, or move it N columns |
 | `:write`                           | `enter`                 | write the slices :slice planned        |
 | `:discard`                         | `esc`                   | discard planned slices, else the range |

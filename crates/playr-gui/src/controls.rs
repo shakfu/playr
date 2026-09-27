@@ -83,12 +83,24 @@ pub const HELP_MENU: &[Control] = &[
 pub const LIBRARY_ROW: &[Control] = &[
     control("Play from here", Action::Activate),
     control("Select or unselect", Action::Add),
+    control("Play next", Action::Enqueue(true)),
+    control("Add to queue", Action::Enqueue(false)),
     control("Track info", Action::ShowInfo),
 ];
 
 pub const SELECTION_ROW: &[Control] = &[
     control("Play from here", Action::Activate),
     control("Remove", Action::Remove),
+    control("Play next", Action::Enqueue(true)),
+    control("Add to queue", Action::Enqueue(false)),
+    control("Track info", Action::ShowInfo),
+    control("Move up", Action::MoveTrack(-1)),
+    control("Move down", Action::MoveTrack(1)),
+];
+
+pub const QUEUE_ROW: &[Control] = &[
+    control("Play from here", Action::Activate),
+    control("Remove from queue", Action::Remove),
     control("Track info", Action::ShowInfo),
     control("Move up", Action::MoveTrack(-1)),
     control("Move down", Action::MoveTrack(1)),
@@ -103,6 +115,8 @@ pub const SELECTION_BAR: &[Control] = &[
 pub const PLAYLIST_ROW: &[Control] = &[
     control("Play", Action::Activate),
     control("Add to selection", Action::Add),
+    control("Play next", Action::Enqueue(true)),
+    control("Add to queue", Action::Enqueue(false)),
     control("Rename", Action::StartRename),
     control("Delete", Action::DeletePlaylist),
 ];

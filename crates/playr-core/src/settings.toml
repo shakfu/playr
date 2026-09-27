@@ -35,13 +35,18 @@ device = ""
 # `playr analyze`, else from the files' tags; files are never changed.
 replaygain = "off"
 # The columns a track list shows, in order: title, artist, album_artist,
-# album, disc, track, year, time, tempo, loudness, peak or path. tempo,
+# album, genre, disc, track, year, time, tempo, loudness, peak or path. tempo,
 # loudness and peak come from `playr analyze`. A [terminal], [gui] or
 # [server] table may name its own list.
 columns = ["artist", "album", "title", "time"]
 # The keys the library is sorted by, most important first; add `desc` to a
 # name to reverse it. Tracks with nothing to sort on come last either way.
 sort = ["album_artist", "album", "disc", "track", "title"]
+# Session values to remember in the library between runs: eq, volume, mode,
+# replaygain, theme, columns and sort. While a name is listed, its
+# remembered value wins over the setting above; columns and sort are
+# remembered for each program. Nothing is remembered without a library.
+persist = []
 
 # The window has room for the title first, and the page's columns are fixed
 # for now. A program's table wins over the keys above.

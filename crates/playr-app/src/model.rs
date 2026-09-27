@@ -14,6 +14,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use playr_core::audio::eq::Band;
 use playr_core::audio::{Cmd, Player, State, Status};
 use playr_core::columns::{Column, Measures};
 use playr_core::db::query::{Mark, Playlist};
@@ -22,14 +23,16 @@ use playr_core::event::{Event, EventSink, JobId};
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
 use playr_core::samples::{Cut, Plan};
 use playr_core::session::Session;
+use playr_core::settings::Persist;
 use rusqlite::Connection;
 
 use crate::action::{Action, Keymap, Zoom};
 use crate::command::{self, CommandLine, History};
-use crate::config::Config;
+use crate::config::{Config, Program};
 use crate::dispatch::{self, Confirm, Frontend, Presentation, Prompt};
 use crate::media::Media;
 use crate::message::{self, Message};
+use crate::persist;
 use crate::sampler::{DetailRead, Sampler, Wave, DETAIL_MARGIN};
 use crate::View;
 
@@ -38,6 +41,9 @@ pub const MESSAGE_FOR: Duration = Duration::from_secs(4);
 
 /// How long the meter keeps showing a peak after it passes.
 pub const PEAK_HOLD: Duration = Duration::from_millis(1500);
+
+/// How long a remembered value must hold still before it is stored.
+pub const SAVE_AFTER: Duration = Duration::from_millis(500);
 
 /// What typed input is being collected, or what is open over the view.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -71,6 +77,7 @@ pub struct Cursors {
     pub library: Option<usize>,
     pub selection: Option<usize>,
     pub playlists: Option<usize>,
+    pub queue: Option<usize>,
 }
 
 /// What the interface shows about playback, sampled once per frame.
@@ -137,6 +144,13 @@ pub struct Model {
     media: Media,
     sampler: Sampler,
     theme: crate::Theme,
+    /// The values the `persist` setting names, for this program.
+    persist: Vec<Persist>,
+    program: Program,
+    /// The remembered values as last stored, and a change not yet stored,
+    /// with when it was first seen.
+    saved: persist::Values,
+    unsaved: Option<(persist::Values, Instant)>,
     transport_text_buttons: bool,
     /// The message showing, its words, and when it was shown.
     message: Option<(Message, String, Instant)>,
@@ -177,6 +191,21 @@ impl Model {
             sending();
         });
         let mut session = Session::new(conn, player, sink);
+        // The settings, then what `persist` says to remember over them.
+        let mut values = persist::Values {
+            eq: [0.0; 3],
+            volume: config.settings.volume,
+            mode: config.settings.mode,
+            replaygain: config.settings.replaygain,
+            theme: config.theme,
+            columns: config.settings.columns.clone(),
+            sort: config.settings.sort.clone(),
+        };
+        for &p in &config.settings.persist {
+            if let Some(text) = session.state(&persist::key(p, config.program)) {
+                persist::decode(p, &text, &mut values);
+            }
+        }
         session.set_samples_dir(config.settings.samples);
         session.set_slice_edges(config.settings.slice_edges);
         session.set_fades(config.settings.slice_fades);
@@ -193,12 +222,16 @@ impl Model {
             onset_sensitivity: config.settings.onset_sensitivity,
             auto_prune: config.settings.auto_prune,
             analyze_on_scan: config.settings.analyze_on_scan,
-            columns: config.settings.columns.clone(),
+            columns: values.columns.clone(),
             events,
             wake,
             media: Media::none(),
             sampler: Sampler::default(),
-            theme: config.theme,
+            theme: values.theme,
+            persist: config.settings.persist.clone(),
+            program: config.program,
+            saved: values.clone(),
+            unsaved: None,
             transport_text_buttons: config.transport_text_buttons,
             message: None,
             quit: false,
@@ -207,13 +240,16 @@ impl Model {
             bpm_for: None,
             snapshot: Snapshot::default(),
         };
-        model.session.send(Cmd::SetVolume(config.settings.volume));
-        model.session.send(Cmd::SetMode(config.settings.mode));
+        model.session.send(Cmd::SetVolume(values.volume));
+        model.session.send(Cmd::SetMode(values.mode));
         model.session.send(Cmd::SetSpeed(config.settings.speed));
+        for (band, db) in Band::ALL.into_iter().zip(values.eq) {
+            model.session.send(Cmd::SetEq(band, db));
+        }
         // `set_sort` re-orders the library the session already read.
-        model.session.set_sort(config.settings.sort.clone());
+        model.session.set_sort(values.sort);
         // Silent, as the other settings are: nothing was asked for.
-        let _ = model.session.set_replaygain(config.settings.replaygain);
+        let _ = model.session.set_replaygain(values.replaygain);
         if !tracks.is_empty() {
             model.open_tracks(tracks);
         } else if let Some((path, at)) = model.session.resumable() {
@@ -229,6 +265,7 @@ impl Model {
     /// background work have sent since the last one.
     pub fn refresh(&mut self) {
         self.follow_player();
+        self.save_values(false);
         let player = self.session.player();
         self.peak_hold = hold_peak(self.peak_hold, player.take_peak(), Instant::now());
         self.snapshot = Snapshot {
@@ -344,7 +381,53 @@ impl Model {
     /// Asks the interface to exit.
     pub fn quit(&mut self) {
         self.remember_position();
+        self.save_values(true);
         self.quit = true;
+    }
+
+    /// The values `persist` can name, as they are now.
+    fn values(&self) -> persist::Values {
+        let player = self.session.player();
+        persist::Values {
+            eq: player.eq(),
+            volume: player.volume(),
+            mode: player.mode(),
+            replaygain: self.session.replaygain(),
+            theme: self.theme,
+            columns: self.columns.clone(),
+            sort: self.session.sort().to_vec(),
+        }
+    }
+
+    /// Stores the remembered values that changed, once they have held still
+    /// for [`SAVE_AFTER`], or at once when `now`. A slider dragged across a
+    /// range is then one write, not one a frame.
+    fn save_values(&mut self, now: bool) {
+        if self.persist.is_empty() {
+            return;
+        }
+        let values = self.values();
+        if values == self.saved {
+            self.unsaved = None;
+            return;
+        }
+        let since = match &self.unsaved {
+            Some((pending, since)) if *pending == values => *since,
+            _ => Instant::now(),
+        };
+        if !now && since.elapsed() < SAVE_AFTER {
+            self.unsaved = Some((values, since));
+            return;
+        }
+        for &p in &self.persist {
+            let text = persist::encode(p, &values);
+            if text != persist::encode(p, &self.saved) {
+                self.session
+                    .set_state(&persist::key(p, self.program), &text);
+            }
+        }
+        self.saved = values;
+        self.unsaved = None;
     }
 
     /// Stores the playing track and position, to offer at the next start.
@@ -450,6 +533,7 @@ impl Model {
         let track = match self.view {
             View::Library => self.cursor_row(self.listed(), self.cursors.library),
             View::Selection => self.cursor_row(self.session.selection(), self.cursors.selection),
+            View::Queue => self.cursor_row(&self.playing, self.cursors.queue),
             _ => None,
         };
         let track = track.or_else(|| {
@@ -574,6 +658,8 @@ impl Model {
             })
             .collect();
         self.playing_source = current;
+        let n = self.playing.len();
+        self.cursors.queue = self.cursors.queue.filter(|_| n > 0).map(|i| i.min(n - 1));
     }
 
     fn reload(&mut self) {
@@ -815,7 +901,9 @@ impl Model {
 
     /// Plays `tracks` from `index`. The selection is not touched.
     fn play(&mut self, tracks: Vec<Track>, index: usize) {
-        self.session.play(&tracks, index);
+        if let Some(replaced) = self.session.play(&tracks, index) {
+            self.notify(replaced);
+        }
         self.playing = tracks;
         self.playing_source = self.session.player().queue();
     }
@@ -918,6 +1006,11 @@ impl Frontend for Model {
 
     fn set_view(&mut self, view: View) {
         self.view = view;
+        // The queue opens on the track playing.
+        if view == View::Queue && self.cursors.queue.is_none() && !self.playing.is_empty() {
+            let index = self.session.player().status().index;
+            self.cursors.queue = Some(index.min(self.playing.len() - 1));
+        }
     }
 
     fn cursor(&self, view: View) -> Option<usize> {
@@ -925,6 +1018,7 @@ impl Frontend for Model {
             View::Library => self.cursors.library,
             View::Selection => self.cursors.selection,
             View::Playlists => self.cursors.playlists,
+            View::Queue => self.cursors.queue,
             View::Sampler => None,
         }
     }
@@ -934,6 +1028,7 @@ impl Frontend for Model {
             View::Library => self.cursors.library = row,
             View::Selection => self.cursors.selection = row,
             View::Playlists => self.cursors.playlists = row,
+            View::Queue => self.cursors.queue = row,
             View::Sampler => {}
         }
     }
@@ -1062,6 +1157,14 @@ pub fn hold_peak(
     match held {
         Some((level, at)) if level >= reading && now.duration_since(at) < PEAK_HOLD => held,
         _ => (reading > 0.0).then_some((reading, now)),
+    }
+}
+
+impl Drop for Model {
+    /// A window closed from its title bar never reaches [`Model::quit`], so a
+    /// change not yet stored is stored here.
+    fn drop(&mut self) {
+        self.save_values(true);
     }
 }
 

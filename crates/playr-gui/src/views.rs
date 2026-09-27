@@ -1,9 +1,9 @@
-//! The library, selection and playlists views as tables.
+//! The library, selection, playlists and queue views as tables.
 //!
 //! Only the rows in view are laid out, so a library of 50,000 tracks costs as
 //! much to draw as a screenful. A click puts the cursor on a row, a double
 //! click plays from it, as enter does, and a right click opens the row's menu
-//! with the cursor on it. Selection rows can be dragged to a new place.
+//! with the cursor on it. Selection and queue rows can be dragged to a new place.
 
 use std::collections::HashSet;
 
@@ -23,10 +23,10 @@ const ROW: f32 = 20.0;
 /// the action to perform, if any.
 pub type Clicked = Option<(Option<usize>, Option<Action>)>;
 
-/// The payload of a selection row being dragged: its index.
+/// The payload of a selection or queue row being dragged: its index.
 struct Dragged(usize);
 
-/// The library or the selection, as `view` shows it.
+/// The library, the selection or the queue, as `view` shows it.
 pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize>) -> Clicked {
     let mut result: Clicked = None;
     if view == View::Selection {
@@ -40,19 +40,25 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     }
     let tracks = match view {
         View::Library => model.listed(),
+        View::Queue => model.playing(),
         _ => model.session().selection(),
     };
     if tracks.is_empty() {
         ui.weak(match (view, model.results()) {
             (View::Library, Some(_)) => "No matches. Esc in the search field clears it.",
             (View::Library, None) => "The library is empty. File, Add folder to library adds one.",
+            (View::Queue, _) => "Nothing is playing. A track's menu queues it, or plays it next.",
             _ => "The selection is empty. Tick tracks in the library to add them.",
         });
         return result;
     }
     let mut sorted: Option<SortKey> = None;
     let cursor = model.cursor(view);
-    let playing = model.snapshot().status.current().cloned();
+    let status = &model.snapshot().status;
+    let playing = status.current().cloned();
+    // A track queued twice is two rows, so the queue marks the playing row
+    // by its index.
+    let playing_row = (status.state != playr_core::audio::State::Stopped).then_some(status.index);
     let selected: HashSet<&str> = match view {
         View::Library => model
             .session()
@@ -64,6 +70,7 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     };
     let (menu, sense) = match view {
         View::Library => (controls::LIBRARY_ROW, egui::Sense::click()),
+        View::Queue => (controls::QUEUE_ROW, egui::Sense::click_and_drag()),
         _ => (controls::SELECTION_ROW, egui::Sense::click_and_drag()),
     };
 
@@ -112,9 +119,11 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                         None => "",
                     };
                     let label = format!("{}{arrow}", column.heading());
+                    // The queue plays in the order it was queued in.
                     if ui
                         .add(egui::Button::new(label).frame(false).wrap())
                         .clicked()
+                        && view != View::Queue
                     {
                         let descending = key.is_some_and(|k| !k.descending);
                         sorted = Some(SortKey {
@@ -138,9 +147,12 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                         }
                     });
                 }
-                let is_playing = playing
-                    .as_ref()
-                    .is_some_and(|p| p.as_os_str() == t.path.as_str());
+                let is_playing = match view {
+                    View::Queue => playing_row == Some(i),
+                    _ => playing
+                        .as_ref()
+                        .is_some_and(|p| p.as_os_str() == t.path.as_str()),
+                };
                 let measured = measures.get(&t.path).copied().unwrap_or_default();
                 for column in &shown {
                     row.col(|ui| {
@@ -162,7 +174,7 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                 if let Some(picked) = respond(&row, menu) {
                     result = Some(picked);
                 }
-                if view == View::Selection {
+                if matches!(view, View::Selection | View::Queue) {
                     let response = row.response();
                     response.dnd_set_drag_payload(Dragged(i));
                     if let Some(from) = response.dnd_release_payload::<Dragged>() {

@@ -72,14 +72,7 @@ pub fn run(
         }
     }
 
-    let rows = db::analysis::rows(conn)?;
-    let current: HashMap<String, Analysis> = chosen
-        .iter()
-        .filter_map(|t| {
-            let (stat, a) = rows.get(&t.path)?;
-            analysis::is_current(t, Some(stat)).then(|| (t.path.clone(), a.clone()))
-        })
-        .collect();
+    let current = db::analysis::current(conn, &chosen)?;
     let dupes = analysis::duplicates(&chosen, &current);
     if opts.json {
         println!("{}", report_json(&chosen, &current, &dupes));

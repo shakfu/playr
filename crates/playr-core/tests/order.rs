@@ -157,3 +157,90 @@ fn an_empty_or_single_list_does_not_panic() {
     let mut one = Order::new(1, Mode::Shuffle, 0, 1);
     assert_eq!(run(&mut one, 0, 3), [0, 0, 0]);
 }
+
+#[test]
+fn inserted_tracks_play_after_the_current_one_in_every_mode() {
+    for mode in [Mode::Normal, Mode::Repeat, Mode::Shuffle] {
+        let mut order = Order::new(5, mode, 1, 7);
+        let played = run(&mut order, 1, 2);
+        // Two tracks go in after the one playing; 2..5 become 4..7.
+        let current = played[1];
+        order.insert(current + 1, 2, current);
+        let next = run(&mut order, current, 3);
+        assert_eq!(
+            next[1..],
+            [current + 1, current + 2],
+            "{mode:?}: {played:?} then {next:?}"
+        );
+        if mode == Mode::Shuffle {
+            // The rest of the pass still plays each track once, counting the
+            // tracks played before the insert by their new indices.
+            let at = current + 1;
+            let mut pass: Vec<usize> = played
+                .iter()
+                .map(|&i| if i >= at { i + 2 } else { i })
+                .collect();
+            pass.extend(run(&mut order, current, 7).into_iter().skip(1));
+            pass.truncate(7);
+            pass.sort();
+            assert_eq!(pass, [0, 1, 2, 3, 4, 5, 6], "{mode:?}");
+        }
+    }
+}
+
+#[test]
+fn an_insert_before_the_current_track_still_plays_next_in_shuffle() {
+    // The insert point was chosen after track 0, but the engine had moved on.
+    let mut order = Order::new(5, Mode::Shuffle, 0, 11);
+    let played = run(&mut order, 0, 2);
+    let current = played[1] + 1;
+    order.insert(1, 1, current);
+    assert_eq!(order.successor(current, false), Some(1));
+}
+
+#[test]
+fn a_run_of_inserts_keeps_its_order_in_shuffle() {
+    let mut order = Order::new(6, Mode::Shuffle, 0, 5);
+    // Tracks 1 and then 2 are each inserted after the last, as 1 and 2.
+    order.insert(1, 1, 0);
+    order.insert(2, 1, 0);
+    assert_eq!(run(&mut order, 0, 3), [0, 1, 2]);
+}
+
+#[test]
+fn moving_an_entry_shifts_the_ones_between() {
+    use playr_core::audio::order::moved;
+    let list = |from, to| (0..5).map(|i| moved(i, from, to)).collect::<Vec<_>>();
+    // Each entry's new index: 3 moves to 1, and 1 and 2 move down a place.
+    assert_eq!(list(3, 1), [0, 2, 3, 1, 4]);
+    assert_eq!(list(1, 3), [0, 3, 1, 2, 4]);
+    assert_eq!(list(2, 2), [0, 1, 2, 3, 4]);
+}
+
+#[test]
+fn removing_and_relabelling_keep_the_shuffle_order() {
+    // Two orders from one seed shuffle alike.
+    let before = run(&mut Order::new(5, Mode::Shuffle, 0, 3), 0, 5);
+    let gone = before[2];
+    let shift = |i: usize| if i > gone { i - 1 } else { i };
+    let expected: Vec<usize> = before
+        .iter()
+        .filter(|&&i| i != gone)
+        .map(|&i| shift(i))
+        .collect();
+    let mut order = Order::new(5, Mode::Shuffle, 0, 3);
+    order.remove(gone);
+    assert_eq!(run(&mut order, 0, 4), expected);
+
+    use playr_core::audio::order::moved;
+    order.relabel(|i| moved(i, 3, 1));
+    let relabelled: Vec<usize> = expected.iter().map(|&i| moved(i, 3, 1)).collect();
+    assert_eq!(run(&mut order, relabelled[0], 4), relabelled);
+}
+
+#[test]
+fn in_list_order_a_relabel_follows_the_new_list() {
+    let mut order = Order::new(4, Mode::Normal, 0, 1);
+    order.relabel(|i| playr_core::audio::order::moved(i, 3, 1));
+    assert_eq!(run(&mut order, 0, 4), [0, 1, 2, 3]);
+}

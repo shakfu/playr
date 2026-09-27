@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use crate::state;
 
 /// The views the page shows, in tab order.
-pub const VIEWS: [View; 3] = [View::Library, View::Selection, View::Playlists];
+pub const VIEWS: [View; 4] = [View::Library, View::Queue, View::Selection, View::Playlists];
 
 /// Whether the page may perform `action`. Not quitting, which would stop the
 /// server; not a path from the page, which could name any file; not changing
@@ -72,11 +72,11 @@ pub fn allowed(action: &Action) -> bool {
         | DiscardSlices => false,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
-        | Remove | MoveTrack(_) | ClearSelection | StartSave | SaveAs(_) | DeletePlaylist
-        | StartRename | Analyze(None) | ShowInfo | SetColumns(_) | SetSort(_) | RenameTo(_)
-        | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None) | TogglePause | Restart | Next
-        | Prev | Stop | SeekBy(_) | SeekTo(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_)
-        | SetSpeed(_) | SetEq(..) | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_)
+        | Enqueue(_) | Remove | MoveTrack(_) | ClearSelection | StartSave | SaveAs(_)
+        | DeletePlaylist | StartRename | Analyze(None) | ShowInfo | SetColumns(_) | SetSort(_)
+        | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None) | TogglePause
+        | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | VolumeBy(_) | SetVolume(_)
+        | SpeedBy(_) | SetSpeed(_) | SetEq(..) | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_)
         | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark | ClearMarks | NextMark | PrevMark
         | Theme(_) => true,
     }
@@ -112,12 +112,14 @@ pub fn screen(model: &Model) -> Value {
             "library": model.listed().len(),
             "selection": model.session().selection().len(),
             "playlists": model.session().playlists().len(),
+            "queue": model.playing().len(),
         },
         "searching": model.results().is_some(),
         "cursors": {
             "library": cursors.library,
             "selection": cursors.selection,
             "playlists": cursors.playlists,
+            "queue": cursors.queue,
         },
         "lists": lists_revision(model),
         "input": input(model.input()),
@@ -129,6 +131,9 @@ pub fn screen(model: &Model) -> Value {
             State::Paused => "paused",
         },
         "path": status.current().map(|p| p.to_string_lossy()),
+        // The queue marks the playing row by this, since a track queued
+        // twice is two rows with one path.
+        "index": (status.state != State::Stopped).then_some(status.index),
         "title": state::title(model),
         "artist": track.map(Track::display_artist),
         "format": format,
@@ -167,6 +172,9 @@ fn lists_revision(model: &Model) -> u64 {
     for p in model.session().playlists() {
         (p.id, &p.name, p.len).hash(&mut hasher);
     }
+    // Rebuilt whenever the queue changes, as the library is.
+    let playing = model.playing();
+    (playing.as_ptr() as usize, playing.len()).hash(&mut hasher);
     hasher.finish()
 }
 
@@ -223,6 +231,7 @@ pub fn rows(model: &Model, view: View, start: usize, count: usize) -> Value {
     }
     let tracks = match view {
         View::Library => model.listed(),
+        View::Queue => model.playing(),
         _ => model.session().selection(),
     };
     let selected: std::collections::HashSet<&str> = match view {
@@ -262,6 +271,7 @@ pub fn row_key(model: &Model, view: View, row: usize) -> Option<String> {
             .playlists()
             .get(row)
             .map(|p| p.id.to_string()),
+        View::Queue => model.playing().get(row).map(|t| t.path.clone()),
         View::Sampler => None,
     }
 }

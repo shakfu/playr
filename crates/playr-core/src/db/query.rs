@@ -1,6 +1,10 @@
 //! Queries over the library: listing, full-text search, playlist CRUD.
 
+use std::collections::{HashMap, HashSet};
+
 use super::{Result, Track};
+use crate::analysis;
+use crate::columns::{cell, Cell, Column, Measures};
 use rusqlite::{Connection, OptionalExtension, Row};
 
 const COLS: &str = "id, path, title, artist, album, album_artist, track_no, disc_no,
@@ -52,28 +56,46 @@ pub fn count(conn: &Connection) -> Result<i64> {
     conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
 }
 
-/// The name `bpm:` is matched against the library's tempos, not the text
-/// index, so [`search`] takes it out before building the FTS5 query.
-const BPM: &str = "bpm";
-
 /// How far either side of a bare `bpm:128` a tempo still matches.
-const BPM_WITHIN: f32 = 1.0;
+const BPM_WITHIN: f64 = 1.0;
 
-/// Fields a search term can be limited to, as typed, and their FTS5 columns.
-const FIELDS: &[(&str, &str)] = &[
-    (BPM, BPM),
-    ("title", "title"),
-    ("artist", "artist"),
-    ("album", "album"),
-    ("albumartist", "album_artist"),
-    ("album_artist", "album_artist"),
-    ("file", "file"),
-];
+/// What a `field:` prefix limits a search term to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Field {
+    /// An FTS5 column.
+    Text(&'static str),
+    /// The tempos `playr analyze` recorded, matched in SQL.
+    Tempo,
+    /// A column's value, matched in Rust after the query.
+    Column(Column),
+    /// A finding of `playr analyze`, or `duplicate` or `unanalysed`.
+    Is,
+}
+
+/// The field `name` names: a column's name, as `:columns` takes it, or one
+/// of the search-only names `file`, `is`, and `bpm` and `albumartist` kept
+/// from before columns were searchable.
+fn field(name: &str) -> Option<Field> {
+    match name {
+        "file" => Some(Field::Text("file")),
+        "albumartist" => Some(Field::Text("album_artist")),
+        "bpm" => Some(Field::Tempo),
+        "is" => Some(Field::Is),
+        _ => Some(match Column::named(name)? {
+            Column::Title => Field::Text("title"),
+            Column::Artist => Field::Text("artist"),
+            Column::Album => Field::Text("album"),
+            Column::AlbumArtist => Field::Text("album_artist"),
+            Column::Tempo => Field::Tempo,
+            column => Field::Column(column),
+        }),
+    }
+}
 
 /// Splits search input into terms: whitespace separates them except inside
 /// double quotes, which are removed. A term that starts with a known `field:`,
-/// before any quote, is limited to that field's column.
-fn terms(input: &str) -> Vec<(Option<&'static str>, String)> {
+/// before any quote, is limited to that field.
+fn terms(input: &str) -> Vec<(Option<Field>, String)> {
     let mut out = Vec::new();
     let mut chars = input.chars().peekable();
     loop {
@@ -92,35 +114,164 @@ fn terms(input: &str) -> Vec<(Option<&'static str>, String)> {
                 _ => text.push(c),
             }
         }
-        let field = colon.and_then(|at| {
-            let name = text[..at].to_ascii_lowercase();
-            FIELDS
-                .iter()
-                .find(|(typed, _)| *typed == name)
-                .map(|(_, column)| (at, *column))
-        });
+        let field = colon.and_then(|at| Some((at, field(&text[..at].to_ascii_lowercase())?)));
         match field {
-            Some((at, column)) => out.push((Some(column), text[at + 1..].to_string())),
+            Some((at, field)) => out.push((Some(field), text[at + 1..].to_string())),
             None => out.push((None, text)),
         }
     }
 }
 
-/// The tempo range `text` names: `120..130`, `120..`, `..130`, or `128` for
-/// [`BPM_WITHIN`] either side of it. `None` when it names no range, which
+/// The inclusive range `text` names: `lo..hi`, `lo..`, `..hi`, or a bare
+/// value for `near` either side of it. `None` when it names no range, which
 /// matches nothing rather than everything.
-fn bpm_range(text: &str) -> Option<(f32, f32)> {
-    let number = |t: &str| t.trim().parse::<f32>().ok().filter(|n| n.is_finite());
+fn range(text: &str, value: impl Fn(&str) -> Option<f64>, near: f64) -> Option<(f64, f64)> {
+    let value = |t: &str| value(t.trim()).filter(|n| n.is_finite());
     match text.split_once("..") {
         Some(("", "")) => None,
-        Some((lo, "")) => Some((number(lo)?, f32::INFINITY)),
-        Some(("", hi)) => Some((0.0, number(hi)?)),
-        Some((lo, hi)) => Some((number(lo)?, number(hi)?)),
+        Some((lo, "")) => Some((value(lo)?, f64::INFINITY)),
+        Some(("", hi)) => Some((f64::NEG_INFINITY, value(hi)?)),
+        Some((lo, hi)) => Some((value(lo)?, value(hi)?)),
         None => {
-            let at = number(text)?;
-            Some((at - BPM_WITHIN, at + BPM_WITHIN))
+            let at = value(text)?;
+            Some((at - near, at + near))
         }
     }
+}
+
+/// Whole seconds in `5:00`, `1:02:03` or `300`.
+fn seconds(text: &str) -> Option<f64> {
+    text.split(':').try_fold(0.0, |total, part| {
+        let n = part.parse::<u32>().ok()?;
+        Some(total * 60.0 + n as f64)
+    })
+}
+
+/// How far either side of a bare value a column still matches: half the
+/// step the column is shown in, so `loudness:-14` matches what reads -14.0.
+fn near(column: Column) -> f64 {
+    match column {
+        Column::Loudness => 0.05,
+        Column::Peak => 0.0005,
+        _ => 0.0,
+    }
+}
+
+/// What a finding, `duplicate` or `unanalysed` names after `is:`, and the
+/// finding's name in [`Finding::name`], if it is one.
+const IS: &[(&str, Is)] = &[
+    ("unreadable", Is::Finding("unreadable")),
+    ("damaged", Is::Finding("damaged")),
+    ("no-checksum", Is::Finding("no checksum")),
+    ("wrong-length", Is::Finding("wrong length")),
+    ("padded", Is::Finding("padded")),
+    ("lossy", Is::Finding("possible lossy source")),
+    ("upsampled", Is::Finding("possible upsampling")),
+    ("duplicate", Is::Duplicate),
+    ("unanalysed", Is::Unanalysed),
+    ("unanalyzed", Is::Unanalysed),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Is {
+    Finding(&'static str),
+    Duplicate,
+    Unanalysed,
+}
+
+/// A term matched against each track after the query.
+#[derive(Debug, Clone, PartialEq)]
+enum Filter {
+    /// A number within an inclusive range; seconds, for `time`.
+    Within(Column, f64, f64),
+    /// Text holding this, lowercased.
+    Holds(Column, String),
+    Is(Is),
+    /// A value that names nothing, such as `year:soon`.
+    Never,
+}
+
+impl Filter {
+    fn new(field: Field, text: &str) -> Filter {
+        let filter = match field {
+            Field::Is => IS
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(text))
+                .map(|(_, is)| Filter::Is(*is)),
+            Field::Column(column) if column.numeric() => {
+                let value = |t: &str| match column {
+                    Column::Time => seconds(t),
+                    _ => t.parse::<f64>().ok(),
+                };
+                range(text, value, near(column)).map(|(lo, hi)| Filter::Within(column, lo, hi))
+            }
+            Field::Column(column) => {
+                (!text.is_empty()).then(|| Filter::Holds(column, text.to_lowercase()))
+            }
+            Field::Text(_) | Field::Tempo => None,
+        };
+        filter.unwrap_or(Filter::Never)
+    }
+
+    fn measured(&self) -> bool {
+        matches!(self, Filter::Within(column, ..) if column.measured())
+    }
+}
+
+/// Keeps the tracks every filter matches, reading only what the filters need.
+fn filter(conn: &Connection, tracks: Vec<Track>, filters: &[Filter]) -> Result<Vec<Track>> {
+    if filters.contains(&Filter::Never) {
+        return Ok(Vec::new());
+    }
+    let measures = match filters.iter().any(Filter::measured) {
+        true => super::analysis::measures(conn, &tracks)?,
+        false => HashMap::new(),
+    };
+    let checks = filters.iter().any(|f| matches!(f, Filter::Is(_)));
+    // Duplicates are found across the whole library, not the tracks at hand.
+    let library = match checks {
+        true => all(conn)?,
+        false => Vec::new(),
+    };
+    let current = match checks {
+        true => super::analysis::current(conn, &library)?,
+        false => HashMap::new(),
+    };
+    let duplicates: HashSet<String> = match filters.contains(&Filter::Is(Is::Duplicate)) {
+        true => analysis::duplicates(&library, &current)
+            .into_iter()
+            .flatten()
+            .collect(),
+        false => HashSet::new(),
+    };
+    let found = |t: &Track| -> Vec<&'static str> {
+        current
+            .get(&t.path)
+            .map(|a| analysis::findings(a).iter().map(|f| f.name()).collect())
+            .unwrap_or_default()
+    };
+    let matches = |t: &Track, f: &Filter| match f {
+        Filter::Within(column, lo, hi) => {
+            let measures = measures.get(&t.path).copied().unwrap_or_default();
+            match cell(t, measures, *column) {
+                Cell::Number(n) if *column == Column::Time => (lo..=hi).contains(&&n.floor()),
+                Cell::Number(n) => (lo..=hi).contains(&&n),
+                _ => false,
+            }
+        }
+        Filter::Holds(column, text) => match cell(t, Measures::default(), *column) {
+            Cell::Text(s) => s.to_lowercase().contains(text),
+            _ => false,
+        },
+        Filter::Is(Is::Finding(name)) => found(t).contains(name),
+        Filter::Is(Is::Duplicate) => duplicates.contains(&t.path),
+        Filter::Is(Is::Unanalysed) => !current.contains_key(&t.path),
+        Filter::Never => false,
+    };
+    Ok(tracks
+        .into_iter()
+        .filter(|t| filters.iter().all(|f| matches(t, f)))
+        .collect())
 }
 
 /// Turns search input into an FTS5 query of prefix terms, all of which must match.
@@ -129,7 +280,7 @@ fn bpm_range(text: &str) -> Option<(f32, f32)> {
 /// matched as text rather than parsed or raising an error. `artist:evans`
 /// limits a term to one column, and `artist:"bill evans"` a phrase; a prefix
 /// that names no field, as in `op:1`, stays part of the text.
-fn fts_query(terms: Vec<(Option<&'static str>, String)>) -> Option<String> {
+fn fts_query(terms: Vec<(Option<&str>, String)>) -> Option<String> {
     let terms: Vec<String> = terms
         .into_iter()
         .filter(|(_, text)| !text.trim().is_empty())
@@ -144,8 +295,9 @@ fn fts_query(terms: Vec<(Option<&'static str>, String)>) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
-/// Full-text search over title, artist, album and album artist, and over the
-/// tempos `playr analyze` recorded with `bpm:`.
+/// Full-text search over title, artist, album and album artist; over the
+/// tempos `playr analyze` recorded with `tempo:` or `bpm:`; over every other
+/// column by its name; and over findings with `is:`.
 ///
 /// A track matches on its BPM tag when it has one; otherwise on the tempo
 /// measured or on the metrical level either side of it, so a track recorded
@@ -153,27 +305,49 @@ fn fts_query(terms: Vec<(Option<&'static str>, String)>) -> Option<String> {
 ///
 /// Results come in library order, so a matching album plays in track order.
 /// Empty or whitespace-only input returns an empty vector rather than every
-/// track. `bpm:` alone matches every track in the range; a track keeps its
-/// place in library order either way.
+/// track. A field term alone matches every track it admits; a track keeps
+/// its place in library order either way.
 pub fn search(conn: &Connection, input: &str) -> Result<Vec<Track>> {
-    let (bpm, text): (Vec<_>, Vec<_>) = terms(input)
-        .into_iter()
-        .partition(|(field, _)| *field == Some(BPM));
+    let (mut text, mut tempo, mut filters) = (Vec::new(), None, Vec::new());
+    for (field, value) in terms(input) {
+        match field {
+            None => text.push((None, value)),
+            Some(Field::Text(column)) => text.push((Some(column), value)),
+            Some(Field::Tempo) => {
+                tempo.get_or_insert(value);
+            }
+            Some(field) => filters.push(Filter::new(field, &value)),
+        }
+    }
     let fts = fts_query(text);
-    let Some(range) = bpm.first().map(|(_, text)| bpm_range(text)) else {
-        let Some(q) = fts else {
-            return Ok(Vec::new());
-        };
-        let sql = format!(
-            "SELECT {COLS} FROM tracks
-             WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
-             {ORDER}"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        return stmt.query_map([&q], row_to_track)?.collect();
+    let tracks = match (tempo, &fts) {
+        (Some(tempo), _) => by_tempo(conn, &tempo, fts.as_deref())?,
+        (None, Some(q)) => by_text(conn, q)?,
+        (None, None) if !filters.is_empty() => all(conn)?,
+        (None, None) => return Ok(Vec::new()),
     };
+    match filters.is_empty() {
+        true => Ok(tracks),
+        false => filter(conn, tracks, &filters),
+    }
+}
+
+fn by_text(conn: &Connection, q: &str) -> Result<Vec<Track>> {
+    let sql = format!(
+        "SELECT {COLS} FROM tracks
+         WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
+         {ORDER}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([q], row_to_track)?;
+    rows.collect()
+}
+
+/// Tracks whose tempo is in the range `text` names, and that match `fts`.
+fn by_tempo(conn: &Connection, text: &str, fts: Option<&str>) -> Result<Vec<Track>> {
+    let number = |t: &str| t.parse::<f64>().ok();
     // A range that parses as nothing, such as `bpm:fast`, matches nothing.
-    let Some((lo, hi)) = range else {
+    let Some((lo, hi)) = range(text, number, BPM_WITHIN) else {
         return Ok(Vec::new());
     };
     let matching = match fts.is_some() {

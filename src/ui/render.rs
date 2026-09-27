@@ -43,6 +43,7 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
         View::Library => drawn.lists.library = draw_library(app, f, body),
         View::Selection => drawn.lists.selection = draw_selection(app, f, body),
         View::Playlists => drawn.lists.playlists = draw_playlists(app, f, body),
+        View::Queue => drawn.lists.queue = draw_queue(app, f, body),
         View::Sampler => (drawn.zoom, drawn.scale) = draw_sampler(app, f, body),
     }
     draw_bar(app, f, bar);
@@ -442,6 +443,7 @@ fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
             View::Library => app.visible().len(),
             View::Selection => app.selection.len(),
             View::Playlists => app.playlists.len(),
+            View::Queue => app.playing.len(),
             View::Sampler => return format!(" {} ", view_title(v)),
         };
         format!(" {} {} ", view_title(v), n)
@@ -604,9 +606,25 @@ fn draw_tracks(
     scroll: Scroll,
     marked: impl Fn(&Track) -> bool,
 ) -> Scroll {
-    let p = app.palette();
     let current = app.snapshot.status.current();
-    let playing = |t: &Track| current.is_some_and(|p| p.as_os_str() == t.path.as_str());
+    let playing = |_, t: &Track| current.is_some_and(|p| p.as_os_str() == t.path.as_str());
+    draw_rows(app, f, area, title, tracks, scroll, marked, playing)
+}
+
+/// As [`draw_tracks`], with `playing` choosing the row marked as playing by
+/// its index as well as its track.
+#[allow(clippy::too_many_arguments)]
+fn draw_rows(
+    app: &Screen<'_>,
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    tracks: &[Track],
+    scroll: Scroll,
+    marked: impl Fn(&Track) -> bool,
+    playing: impl Fn(usize, &Track) -> bool,
+) -> Scroll {
+    let p = app.palette();
     let len = tracks.len();
     let selected = scroll.row.map(|s| s.min(len.saturating_sub(1)));
     let rows = area.height.saturating_sub(2) as usize;
@@ -624,7 +642,7 @@ fn draw_tracks(
                 t,
                 app.measures.get(&t.path).copied().unwrap_or_default(),
                 &widths,
-                playing(t),
+                playing(i, t),
                 marked(t),
                 selected == Some(i),
             )
@@ -694,6 +712,38 @@ fn draw_selection(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
         f.render_widget(
             Paragraph::new("Selection is empty. Press a in the library to add tracks, then s to save them as a playlist.")
                 .style(Style::default().fg(p.dim)),
+            inner,
+        );
+    }
+    scroll
+}
+
+/// The list playing. A track queued twice is two rows, so the playing row is
+/// found by its index, not its path.
+fn draw_queue(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
+    let p = app.palette();
+    let status = &app.snapshot.status;
+    let index = (status.state != State::Stopped).then_some(status.index);
+    let scroll = draw_rows(
+        app,
+        f,
+        area,
+        "",
+        app.playing,
+        app.lists.queue,
+        |_| false,
+        |i, _| index == Some(i),
+    );
+    if app.playing.is_empty() {
+        let inner = area.inner(ratatui::layout::Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
+        f.render_widget(
+            Paragraph::new(
+                "Nothing is playing. Press e on a track to queue it, or E to play it next.",
+            )
+            .style(Style::default().fg(p.dim)),
             inner,
         );
     }

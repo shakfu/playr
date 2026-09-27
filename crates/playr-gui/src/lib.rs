@@ -330,6 +330,7 @@ impl Gui {
                         view.title(),
                         self.model.session().playlists().len()
                     ),
+                    View::Queue => format!("{} {}", view.title(), self.model.playing().len()),
                     View::Sampler => view.title().to_string(),
                 };
                 if ui
@@ -465,7 +466,9 @@ impl Gui {
         // A row the cursor moved to by a key, not a click, is scrolled into view.
         let scroll = (self.cursor != (view, cursor)).then_some(cursor).flatten();
         let clicked = match view {
-            View::Library | View::Selection => views::tracks(&self.model, ui, view, scroll),
+            View::Library | View::Selection | View::Queue => {
+                views::tracks(&self.model, ui, view, scroll)
+            }
             View::Playlists => views::playlists(&self.model, ui, scroll),
             View::Sampler => {
                 for action in sampler::show(&mut self.model, ui, &mut self.sampler) {

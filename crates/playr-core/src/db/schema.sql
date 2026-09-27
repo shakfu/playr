@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS resume (
   position INTEGER NOT NULL  -- milliseconds into the track
 );
 
+-- Session values playr remembers between runs, as the `persist` setting
+-- chooses: the EQ, the volume, a program's sort. Keyed by name; the value is
+-- text in the form a command takes. Compatible with older libraries: CREATE
+-- IF NOT EXISTS needs no version bump.
+CREATE TABLE IF NOT EXISTS state (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 -- What `playr analyze` measured in each file: measurements, not verdicts, so
 -- a report's thresholds can change without decoding again. Keyed by path,
 -- like `marks`. A row is current while `mtime`, `size` and `version` match

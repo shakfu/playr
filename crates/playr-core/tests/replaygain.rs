@@ -455,6 +455,152 @@ fn bpm_searches_the_tempos_analysis_recorded() {
 }
 
 #[test]
+fn tempo_is_the_column_name_for_bpm() {
+    let conn = db::open_memory().unwrap();
+    with_tempo(&conn, "/m/house.flac", Some(128.0), None);
+    with_tempo(&conn, "/m/slow.flac", Some(90.0), None);
+    for q in ["tempo:120..130", "tempo:128", "TEMPO:128"] {
+        let hits = db::query::search(&conn, q).unwrap();
+        assert_eq!(hits.len(), 1, "{q}");
+        assert_eq!(hits[0].path, "/m/house.flac", "{q}");
+    }
+}
+
+#[test]
+fn loudness_and_peak_search_what_analysis_measured() {
+    let conn = db::open_memory().unwrap();
+    let loud = library_track(&conn, "/m/loud.flac", "X");
+    db::analysis::put(&conn, &loud, measured(-8.0, 0.99)).unwrap();
+    let quiet = library_track(&conn, "/m/quiet.flac", "X");
+    db::analysis::put(&conn, &quiet, measured(-20.0, 0.25)).unwrap();
+    library_track(&conn, "/m/none.flac", "X");
+    let found = |q: &str| -> Vec<String> {
+        db::query::search(&conn, q)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.path)
+            .collect()
+    };
+    assert_eq!(found("loudness:..-14"), ["/m/quiet.flac"]);
+    assert_eq!(found("loudness:-14.."), ["/m/loud.flac"]);
+    assert_eq!(found("peak:0.25"), ["/m/quiet.flac"]);
+    assert_eq!(found("peak:0.9..1"), ["/m/loud.flac"]);
+    // An unanalysed track has no loudness, so no range holds it.
+    assert!(!found("loudness:-100..100").contains(&"/m/none.flac".to_string()));
+}
+
+/// A library track with tags, for duplicates.
+fn tagged(conn: &rusqlite::Connection, path: &str, title: &str, ms: i64) -> Track {
+    let mut t = Track {
+        path: path.into(),
+        title: Some(title.into()),
+        artist: Some("A".into()),
+        duration_ms: Some(ms),
+        mtime: 1,
+        size: 1,
+        ..Default::default()
+    };
+    t.id = db::upsert(conn, &t).unwrap();
+    t
+}
+
+#[test]
+fn is_searches_the_findings_of_analysis() {
+    let conn = db::open_memory().unwrap();
+    let put = |path: &str, a: Analysis| {
+        let t = tagged(&conn, path, path, 1000);
+        db::analysis::put(&conn, &t, a).unwrap();
+        t
+    };
+    put(
+        "/m/damaged.flac",
+        Analysis {
+            md5: Some(analysis::Md5::Bad),
+            ..Default::default()
+        },
+    );
+    put(
+        "/m/padded.flac",
+        Analysis {
+            bits: Some(24),
+            bits_used: Some(16),
+            ..Default::default()
+        },
+    );
+    put(
+        "/m/lossy.flac",
+        Analysis {
+            lossless: true,
+            rate: 44100,
+            cutoff: Some(analysis::cutoff::Measured {
+                hz: 16000,
+                fall_db: 40.0,
+            }),
+            ..Default::default()
+        },
+    );
+    put("/m/clean.flac", Analysis::default());
+    let mut stale = put(
+        "/m/stale.flac",
+        Analysis {
+            md5: Some(analysis::Md5::Bad),
+            ..Default::default()
+        },
+    );
+    // The file changed since it was analysed, so its row no longer counts.
+    stale.mtime = 2;
+    db::upsert(&conn, &stale).unwrap();
+    tagged(&conn, "/m/never.flac", "never", 1000);
+
+    let found = |q: &str| -> Vec<String> {
+        db::query::search(&conn, q)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.path)
+            .collect()
+    };
+    assert_eq!(found("is:damaged"), ["/m/damaged.flac"]);
+    assert_eq!(found("is:padded"), ["/m/padded.flac"]);
+    assert_eq!(found("is:lossy"), ["/m/lossy.flac"]);
+    assert_eq!(found("IS:Damaged"), ["/m/damaged.flac"]);
+    let mut unanalysed = found("is:unanalysed");
+    unanalysed.sort();
+    assert_eq!(unanalysed, ["/m/never.flac", "/m/stale.flac"]);
+    assert_eq!(found("is:unanalyzed").len(), 2);
+    // Two filters must both hold.
+    assert!(found("is:damaged is:padded").is_empty());
+    assert!(found("is:broken").is_empty());
+    assert!(found("is:").is_empty());
+}
+
+#[test]
+fn is_duplicate_looks_across_the_whole_library() {
+    let conn = db::open_memory().unwrap();
+    // The same album scanned from two folders; neither copy analysed.
+    tagged(&conn, "/music/Kind/so-what.flac", "So What", 545_000);
+    tagged(&conn, "/backup/Kind/so-what.flac", "So What", 545_500);
+    tagged(&conn, "/music/Kind/blue.flac", "Blue in Green", 337_000);
+    let found = |q: &str| -> Vec<String> {
+        db::query::search(&conn, q)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.path)
+            .collect()
+    };
+    let mut both = found("is:duplicate");
+    both.sort();
+    assert_eq!(
+        both,
+        ["/backup/Kind/so-what.flac", "/music/Kind/so-what.flac"]
+    );
+    // A path filter narrows the list, not what counts as a copy.
+    assert_eq!(
+        found("is:duplicate path:/backup/"),
+        ["/backup/Kind/so-what.flac"]
+    );
+}
+
+#[test]
 fn a_bpm_search_matches_the_alternate_level_too() {
     let conn = db::open_memory().unwrap();
     let t = library_track(&conn, "/m/dnb.flac", "X");

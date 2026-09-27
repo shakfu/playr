@@ -56,6 +56,15 @@ pub enum Outcome {
     PlayingPlaylist {
         name: String,
     },
+    /// Tracks queued after the rest of the list, or after the track playing.
+    Queued {
+        tracks: usize,
+        next: bool,
+    },
+    /// A queue that had been edited was replaced with `tracks` still to come.
+    QueueReplaced {
+        tracks: usize,
+    },
     Mode(Mode),
     /// An analysis finished: `failed` of `analysed` could not be decoded.
     Analysed {

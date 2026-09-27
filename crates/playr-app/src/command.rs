@@ -47,13 +47,17 @@ pub const COMMANDS: &[Command] = &[
     any("help", "", "list these commands"),
     any("keys", "", "list the keys for this view"),
     any("quit", "", "quit"),
-    any("view", "VIEW", "library, selection, playlists or sampler"),
-    any("next-view", "", "switch to the next view"),
+    any(
+        "view",
+        "VIEW | next | prev",
+        "a view by its tab's name, or next or prev",
+    ),
     any("down", "[N]", "move the cursor down N rows, default 1"),
     any("up", "[N]", "move the cursor up N rows, default 1"),
     any("first", "", "move the cursor to the first row"),
     any("last", "", "move the cursor to the last row"),
     any("play", "", "play the list in view from the cursor"),
+    any("enqueue", "[next]", "queue the row, or play it next"),
     any("search", "[QUERY]", "search the library; no query opens /"),
     any("playlist", "NAME", "play a saved playlist"),
     any("save", "[NAME]", "save the selection as a playlist"),
@@ -123,11 +127,10 @@ pub const COMMANDS: &[Command] = &[
         "slice edges: exact, at zeros, or faded",
     ),
     any("mark", "[TIME]", "mark the playing position, or a time"),
-    any("unmark", "", "undo the last mark"),
-    any("delmarks", "", "clear all marks in this track; asks y/n"),
-    any("next-mark", "", "seek to the next mark"),
-    any("prev-mark", "", "seek to the previous mark"),
-    any("prev-view", "", "switch to the previous view"),
+    any("mark-undo", "", "undo the last mark"),
+    any("mark-clear", "", "clear all marks in this track; asks y/n"),
+    any("mark-next", "", "seek to the next mark"),
+    any("mark-prev", "", "seek to the previous mark"),
     any(
         "slice",
         "region|marks|N|onsets [S]",
@@ -141,7 +144,7 @@ pub const COMMANDS: &[Command] = &[
     any("unmap", "[VIEW] KEY", "remove a key binding"),
     any("theme", "THEME", "system, light or dark colours"),
     only(Library, "toggle", "", "select or unselect the track"),
-    only(Library, "clear-search", "", "show the whole library again"),
+    only(Library, "search-clear", "", "show the whole library again"),
     only(
         Selection,
         "remove",
@@ -150,6 +153,13 @@ pub const COMMANDS: &[Command] = &[
     ),
     only(Selection, "move", "+N | -N", "move the track N places"),
     only(Selection, "clear", "", "empty the selection; asks y/n"),
+    only(
+        View::Queue,
+        "dequeue",
+        "",
+        "take the track out of the queue",
+    ),
+    only(View::Queue, "reorder", "+N | -N", "move the track N places"),
     only(
         Playlists,
         "add",
@@ -209,16 +219,21 @@ pub const COMMANDS: &[Command] = &[
         "clear this track's loops; asks y/n",
     ),
     only(Sampler, "cursor", "TIME|+N|-N|N%|off", "move the cursor"),
-    only(Sampler, "pick", "next|prev", "move the cursor to a mark"),
     only(
         Sampler,
-        "nudge-mark",
+        "mark-pick",
+        "next|prev",
+        "move the cursor to a mark",
+    ),
+    only(
+        Sampler,
+        "mark-nudge",
         "+N|-N|N%",
         "move the mark under the cursor",
     ),
-    only(Sampler, "move-mark", "TIME", "move it to a time"),
-    only(Sampler, "snap-mark", "", "move it to the nearest rise"),
-    only(Sampler, "del-mark", "", "remove it"),
+    only(Sampler, "mark-move", "TIME", "move it to a time"),
+    only(Sampler, "mark-snap", "", "move it to the nearest rise"),
+    only(Sampler, "mark-rm", "", "remove it"),
     only(
         Sampler,
         "audition",
@@ -249,6 +264,7 @@ const EDGES: &[(&str, playr_core::samples::Edges)] = &playr_core::samples::Edges
 
 const VIEWS: &[(&str, View)] = &[
     ("library", Library),
+    ("queue", View::Queue),
     ("selection", Selection),
     ("playlists", Playlists),
     ("sampler", Sampler),
@@ -278,6 +294,25 @@ fn resolve<'a>(
         many => Err(format!("ambiguous {what} {word}: {}", many.join(", "))),
     }
 }
+
+/// Names that were renamed, and what each is now, with its argument where
+/// the old name implied one. Bindings written for an old name keep working;
+/// help and completion list only the new.
+const ALIASES: &[(&str, &str)] = &[
+    ("sync", "rescan"),
+    ("next-view", "view next"),
+    ("prev-view", "view prev"),
+    ("unmark", "mark-undo"),
+    ("delmarks", "mark-clear"),
+    ("next-mark", "mark-next"),
+    ("prev-mark", "mark-prev"),
+    ("pick", "mark-pick"),
+    ("nudge-mark", "mark-nudge"),
+    ("move-mark", "mark-move"),
+    ("snap-mark", "mark-snap"),
+    ("del-mark", "mark-rm"),
+    ("clear-search", "search-clear"),
+];
 
 /// The commands that work in `view`, or in every view when `view` is `None`.
 fn usable(view: Option<View>) -> impl Iterator<Item = &'static Command> + Clone {
@@ -330,8 +365,8 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Help => "keys".into(),
         CommandHelp => "help".into(),
         ShowView(v) => format!("view {}", view_name(*v)),
-        NextView => "next-view".into(),
-        PrevView => "prev-view".into(),
+        NextView => "view next".into(),
+        PrevView => "view prev".into(),
         Cursor(1) => "down".into(),
         Cursor(-1) => "up".into(),
         Cursor(n) if *n > 0 => format!("down {n}"),
@@ -340,12 +375,16 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         CursorLast => "last".into(),
         StartSearch => "search".into(),
         Search(q) => format!("search {q}"),
-        ClearSearch => "clear-search".into(),
+        ClearSearch => "search-clear".into(),
         StartCommand => "command".into(),
         Activate => "play".into(),
         Add if view == Some(Library) => "toggle".into(),
         Add => "add".into(),
+        Enqueue(false) => "enqueue".into(),
+        Enqueue(true) => "enqueue next".into(),
+        Remove if view == Some(View::Queue) => "dequeue".into(),
         Remove => "remove".into(),
+        MoveTrack(n) if view == Some(View::Queue) => format!("reorder {n:+}"),
         MoveTrack(n) => format!("move {n:+}"),
         ClearSelection => "clear".into(),
         StartSave => "save".into(),
@@ -401,10 +440,10 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         SetSliceEdges(e) => format!("slice-edges {}", e.name()),
         Mark => "mark".into(),
         MarkAt(d) => format!("mark {}", time(d)),
-        UndoMark => "unmark".into(),
-        ClearMarks => "delmarks".into(),
-        NextMark => "next-mark".into(),
-        PrevMark => "prev-mark".into(),
+        UndoMark => "mark-undo".into(),
+        ClearMarks => "mark-clear".into(),
+        NextMark => "mark-next".into(),
+        PrevMark => "mark-prev".into(),
         Zoom(crate::action::Zoom::In) => "zoom +".into(),
         Zoom(crate::action::Zoom::Out) => "zoom -".into(),
         Zoom(crate::action::Zoom::All) => "zoom all".into(),
@@ -431,13 +470,13 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         MoveCursor(crate::action::Nudge::Percent(n)) => format!("cursor {n:+}%"),
         SetCursor(None) => "cursor off".into(),
         SetCursor(Some(d)) => format!("cursor {}", time(d)),
-        PickMark(true) => "pick next".into(),
-        PickMark(false) => "pick prev".into(),
-        MoveMark(crate::action::Nudge::Columns(n)) => format!("nudge-mark {n:+}"),
-        MoveMark(crate::action::Nudge::Percent(n)) => format!("nudge-mark {n:+}%"),
-        MoveMarkTo(d) => format!("move-mark {}", time(d)),
-        SnapMark => "snap-mark".into(),
-        DeleteMark => "del-mark".into(),
+        PickMark(true) => "mark-pick next".into(),
+        PickMark(false) => "mark-pick prev".into(),
+        MoveMark(crate::action::Nudge::Columns(n)) => format!("mark-nudge {n:+}"),
+        MoveMark(crate::action::Nudge::Percent(n)) => format!("mark-nudge {n:+}%"),
+        MoveMarkTo(d) => format!("mark-move {}", time(d)),
+        SnapMark => "mark-snap".into(),
+        DeleteMark => "mark-rm".into(),
         Loop(None) => "loop".into(),
         Loop(Some(true)) => "loop on".into(),
         Loop(Some(false)) => "loop off".into(),
@@ -534,6 +573,20 @@ fn signed(text: &str) -> Option<(f64, &str)> {
         Some(b'+') => Some((1.0, &text[1..])),
         Some(b'-') => Some((-1.0, &text[1..])),
         _ => None,
+    }
+}
+
+/// A number to set or to change by, as `:volume`, `:speed` and `:eq` take
+/// it: a sign makes it a change, and `=` makes it a value, so `=-3` sets a
+/// negative one. Returns whether it is a change, its sign, and its digits.
+fn amount(text: &str) -> (bool, f64, &str) {
+    match (text.strip_prefix('='), signed(text)) {
+        (Some(t), _) => {
+            let (sign, n) = signed(t).unwrap_or((1.0, t));
+            (false, sign, n)
+        }
+        (None, Some((sign, n))) => (true, sign, n),
+        (None, None) => (false, 1.0, text),
     }
 }
 
@@ -640,8 +693,9 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
     if line.is_empty() {
         return Err("no command".into());
     }
-    // `:sync` is an alias, so help and completion list only `:rescan`.
-    let word = if word == "sync" { "rescan" } else { word };
+    if let Some((_, new)) = ALIASES.iter().find(|a| a.0 == word) {
+        return parse_in(&format!("{new} {rest}"), view);
+    }
     let command = resolve_command(word, view)?;
     let name = command.name;
     let usage = || format!("usage: :{} {}", name, command.args);
@@ -664,14 +718,21 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "help" => nothing(Action::CommandHelp),
         "keys" => nothing(Action::Help),
         "quit" => nothing(Action::Quit),
-        "view" => choose(rest, VIEWS, "view").map(Action::ShowView),
-        "next-view" => nothing(Action::NextView),
-        "prev-view" => nothing(Action::PrevView),
+        "view" => match rest {
+            "next" => Ok(Action::NextView),
+            "prev" => Ok(Action::PrevView),
+            _ => choose(rest, VIEWS, "view").map(Action::ShowView),
+        },
         "down" => rows(1),
         "up" => rows(-1),
         "first" => nothing(Action::CursorFirst),
         "last" => nothing(Action::CursorLast),
         "play" => nothing(Action::Activate),
+        "enqueue" => match rest {
+            "" => Ok(Action::Enqueue(false)),
+            "next" => Ok(Action::Enqueue(true)),
+            _ => Err(usage()),
+        },
         "search" if rest.is_empty() => Ok(Action::StartSearch),
         "search" => Ok(Action::Search(rest.to_string())),
         "playlist" if rest.is_empty() => Err(usage()),
@@ -700,12 +761,20 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         }
         "sort" if rest.is_empty() => Err(usage()),
         "sort" if rest == "off" => Ok(Action::SetSort(Vec::new())),
-        "sort" => rest
-            .split(',')
-            .filter(|k| !k.trim().is_empty())
-            .map(|k| SortKey::named(k).ok_or_else(|| unknown_column(k)))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Action::SetSort),
+        "sort" => {
+            // Split as `:columns` is; `desc` or `asc` turns the key before it.
+            let mut keys: Vec<String> = Vec::new();
+            for word in rest.split([',', ' ']).filter(|w| !w.trim().is_empty()) {
+                match (keys.last_mut(), word) {
+                    (Some(key), "desc" | "asc") => *key = format!("{key} {word}"),
+                    _ => keys.push(word.to_string()),
+                }
+            }
+            keys.iter()
+                .map(|k| SortKey::named(k).ok_or_else(|| unknown_column(k)))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Action::SetSort)
+        }
         "prune" if rest.is_empty() => Ok(Action::Prune(None)),
         "prune" => Ok(Action::Prune(Some(path(rest)))),
         "open" => Ok(Action::Open(vec![path(rest)])),
@@ -728,10 +797,10 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
                 t.parse::<f32>()
                     .map_err(|_| format!("not a volume: {rest}"))
             };
-            match signed(rest) {
+            match amount(rest) {
                 _ if rest.is_empty() => Err(usage()),
-                Some((sign, n)) => Ok(Action::VolumeBy(sign as f32 * number(n)? / 100.0)),
-                None => match number(rest)? {
+                (true, sign, n) => Ok(Action::VolumeBy(sign as f32 * number(n)? / 100.0)),
+                (false, sign, n) => match sign as f32 * number(n)? {
                     v if (0.0..=100.0).contains(&v) => Ok(Action::SetVolume(v / 100.0)),
                     _ => Err("volume is 0 to 100".into()),
                 },
@@ -745,20 +814,13 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
                     .map(|n| n as i32)
                     .ok_or_else(|| format!("not a number of semitones: {rest}"))
             };
-            match signed(rest) {
+            match amount(rest) {
                 _ if rest.is_empty() => Err(usage()),
-                Some((sign, n)) => Ok(Action::SpeedBy(sign as i32 * semitones(n)?)),
-                None => {
-                    // A sign alone means relative, so `=` sets a negative speed: `=-3`.
-                    let (sign, n) = match rest.strip_prefix('=') {
-                        Some(t) => signed(t).unwrap_or((1.0, t)),
-                        None => (1.0, rest),
-                    };
-                    match sign as i32 * semitones(n)? {
-                        n if n.abs() <= 12 => Ok(Action::SetSpeed(n)),
-                        _ => Err("speed is -12 to 12 semitones".into()),
-                    }
-                }
+                (true, sign, n) => Ok(Action::SpeedBy(sign as i32 * semitones(n)?)),
+                (false, sign, n) => match sign as i32 * semitones(n)? {
+                    n if n.abs() <= 12 => Ok(Action::SetSpeed(n)),
+                    _ => Err("speed is -12 to 12 semitones".into()),
+                },
             }
         }
         "eq" => {
@@ -773,14 +835,13 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
                     .filter(|n| n.is_finite())
                     .ok_or_else(|| format!("not a number of dB: {change}"))
             };
-            // A sign alone means relative, so `=` sets a band: `=-3`.
-            match (change.strip_prefix('='), signed(change)) {
-                (Some(n), _) => match db(n)? {
+            match amount(change) {
+                _ if change.is_empty() => Err(usage()),
+                (true, sign, n) => Ok(Action::EqBy(band, sign as f32 * db(n)?)),
+                (false, sign, n) => match sign as f32 * db(n)? {
                     n if n.abs() <= RANGE_DB => Ok(Action::SetEq(band, n)),
                     _ => Err("eq is -12 to 12 dB".into()),
                 },
-                (None, Some((sign, n))) => Ok(Action::EqBy(band, sign as f32 * db(n)?)),
-                (None, None) => Err(usage()),
             }
         }
         "mode" => match rest {
@@ -795,10 +856,10 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "slice-edges" => choose(rest, EDGES, "slice edges").map(Action::SetSliceEdges),
         "mark" if rest.is_empty() => Ok(Action::Mark),
         "mark" => Ok(Action::MarkAt(parse_time(rest)?)),
-        "unmark" => nothing(Action::UndoMark),
-        "delmarks" => nothing(Action::ClearMarks),
-        "next-mark" => nothing(Action::NextMark),
-        "prev-mark" => nothing(Action::PrevMark),
+        "mark-undo" => nothing(Action::UndoMark),
+        "mark-clear" => nothing(Action::ClearMarks),
+        "mark-next" => nothing(Action::NextMark),
+        "mark-prev" => nothing(Action::PrevMark),
         "zoom" => match rest {
             "+" => Ok(Action::Zoom(Zoom::In)),
             "-" => Ok(Action::Zoom(Zoom::Out)),
@@ -869,16 +930,16 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         }
         "cursor" if rest.is_empty() => Err(usage()),
         "cursor" => Ok(Action::SetCursor(Some(parse_time(rest)?))),
-        "pick" => match rest {
+        "mark-pick" => match rest {
             "next" => Ok(Action::PickMark(true)),
             "prev" => Ok(Action::PickMark(false)),
             _ => Err(usage()),
         },
-        "nudge-mark" => nudge(rest).map(Action::MoveMark).ok_or_else(usage),
-        "move-mark" if rest.is_empty() => Err(usage()),
-        "move-mark" => Ok(Action::MoveMarkTo(parse_time(rest)?)),
-        "snap-mark" => nothing(Action::SnapMark),
-        "del-mark" => nothing(Action::DeleteMark),
+        "mark-nudge" => nudge(rest).map(Action::MoveMark).ok_or_else(usage),
+        "mark-move" if rest.is_empty() => Err(usage()),
+        "mark-move" => Ok(Action::MoveMarkTo(parse_time(rest)?)),
+        "mark-snap" => nothing(Action::SnapMark),
+        "mark-rm" => nothing(Action::DeleteMark),
         "in" => nothing(Action::RangeIn),
         "out" => nothing(Action::RangeOut),
         "range" if rest.is_empty() => Ok(Action::SetRange(None)),
@@ -930,9 +991,10 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             _ => Err(usage()),
         },
         "toggle" | "add" => nothing(Action::Add),
-        "clear-search" => nothing(Action::ClearSearch),
+        "search-clear" => nothing(Action::ClearSearch),
         "remove" => nothing(Action::Remove),
-        "move" => match signed(rest).map(|(sign, n)| (sign as i64, n.parse::<i64>())) {
+        "dequeue" => nothing(Action::Remove),
+        "move" | "reorder" => match signed(rest).map(|(sign, n)| (sign as i64, n.parse::<i64>())) {
             Some((sign, Ok(n))) if n > 0 => Ok(Action::MoveTrack(sign * n)),
             _ => Err(usage()),
         },
@@ -968,9 +1030,15 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
         "slice-edges" => EDGES.iter().map(|e| e.0.to_string()).collect(),
         "snap" | "fit" | "loop" => vec!["on".into(), "off".into()],
         "edge" => vec!["start".into(), "end".into()],
-        "pick" | "audition" => vec!["next".into(), "prev".into()],
+        "mark-pick" | "audition" => vec!["next".into(), "prev".into()],
         "loops" => vec!["clear".into()],
-        "view" => VIEWS.iter().map(|v| v.0.to_string()).collect(),
+        "view" => VIEWS
+            .iter()
+            .map(|v| v.0)
+            .chain(["next", "prev"])
+            .map(String::from)
+            .collect(),
+        "enqueue" => vec!["next".into()],
         "playlist" | "rename" => playlists.to_vec(),
         _ => Vec::new(),
     };

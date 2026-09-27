@@ -211,21 +211,39 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Activate => activate(f),
 
         Action::Add => add(f),
+        Action::Enqueue(next) => enqueue(f, next),
         Action::Remove => {
-            let Some(i) = f.cursor(View::Selection) else {
+            // The queue's, or else the selection's.
+            let view = match f.view() {
+                View::Queue => View::Queue,
+                _ => View::Selection,
+            };
+            let Some(i) = f.cursor(view) else {
                 return;
             };
-            if let Some(outcome) = f.session_mut().remove_from_selection(i) {
+            let outcome = match view {
+                View::Queue => f.session_mut().dequeue(i),
+                _ => f.session_mut().remove_from_selection(i),
+            };
+            if let Some(outcome) = outcome {
                 select(f, i);
                 f.notify(outcome.into());
             }
         }
         Action::MoveTrack(by) => {
-            let Some(i) = f.cursor(View::Selection) else {
+            let view = match f.view() {
+                View::Queue => View::Queue,
+                _ => View::Selection,
+            };
+            let Some(i) = f.cursor(view) else {
                 return;
             };
-            if let Some(to) = f.session_mut().move_in_selection(i, by) {
-                f.set_cursor(View::Selection, Some(to));
+            let to = match view {
+                View::Queue => f.session_mut().move_in_queue(i, by),
+                _ => f.session_mut().move_in_selection(i, by),
+            };
+            if let Some(to) = to {
+                f.set_cursor(view, Some(to));
             }
         }
         Action::ClearSelection => match f.session().selection().len() {
@@ -733,6 +751,7 @@ fn len(f: &impl Frontend, view: View) -> usize {
         View::Library => f.listed().len(),
         View::Selection => f.session().selection().len(),
         View::Playlists => f.session().playlists().len(),
+        View::Queue => f.session().player().queue().len(),
         View::Sampler => 0,
     }
 }
@@ -793,13 +812,17 @@ fn activate(f: &mut impl Frontend) {
             };
             let tracks = f.listed().to_vec();
             if !tracks.is_empty() {
-                f.session_mut().play(&tracks, i);
+                if let Some(replaced) = f.session_mut().play(&tracks, i) {
+                    f.notify(replaced.into());
+                }
             }
         }
         View::Selection => {
             if let Some(i) = f.cursor(View::Selection) {
                 let tracks = f.session().selection().to_vec();
-                f.session_mut().play(&tracks, i);
+                if let Some(replaced) = f.session_mut().play(&tracks, i) {
+                    f.notify(replaced.into());
+                }
             }
         }
         View::Playlists => {
@@ -808,8 +831,37 @@ fn activate(f: &mut impl Frontend) {
                 f.notify(notice.into());
             }
         }
+        View::Queue => {
+            if let Some(i) = f.cursor(View::Queue) {
+                f.session().send(Cmd::Jump(i));
+            }
+        }
         View::Sampler => {}
     }
+}
+
+/// Queues the track under the cursor, or the playlist's tracks, and moves
+/// the cursor on a row, so a run of tracks takes one key each.
+fn enqueue(f: &mut impl Frontend, next: bool) {
+    let tracks: Vec<Track> = match f.view() {
+        View::Library => library_track(f).into_iter().collect(),
+        View::Selection => f
+            .cursor(View::Selection)
+            .and_then(|i| f.session().selection().get(i).cloned())
+            .into_iter()
+            .collect(),
+        View::Playlists => match playlist_under_cursor(f) {
+            Some(pl) => f.session().playlist_tracks(pl.id),
+            None => Vec::new(),
+        },
+        View::Sampler | View::Queue => Vec::new(),
+    };
+    if tracks.is_empty() {
+        return;
+    }
+    let outcome = f.session_mut().enqueue(&tracks, next);
+    move_cursor(f, 1);
+    f.notify(outcome.into());
 }
 
 /// In the library, selects the track under the cursor or unselects it; on a
@@ -835,7 +887,7 @@ fn add(f: &mut impl Frontend) {
             };
             outcome
         }
-        View::Selection | View::Sampler => return,
+        View::Selection | View::Sampler | View::Queue => return,
     };
     // Keep the selection's cursor on a track: on the first once a track is
     // added, and within the list when unselecting shortens it.

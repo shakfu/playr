@@ -17,7 +17,7 @@ pub mod resample;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -141,6 +141,14 @@ pub enum Cmd {
     Play(Vec<PathBuf>, usize),
     /// Append to the queue, starting playback if stopped.
     Enqueue(Vec<PathBuf>),
+    /// Insert into the queue after the track playing, to play next in any
+    /// mode, starting playback if stopped.
+    Insert(Vec<PathBuf>),
+    /// Take the track at this index out of the queue. Taking out the track
+    /// playing plays the one that would have followed it.
+    Remove(usize),
+    /// Move the queued track at the first index to the second.
+    Move(usize, usize),
     /// Play the queued track at `index`, keeping the queue.
     Jump(usize),
     TogglePause,
@@ -223,6 +231,10 @@ impl Status {
 enum Msg {
     Play(Arc<[PathBuf]>, usize),
     Enqueue(Arc<[PathBuf]>),
+    /// The new queue, where the inserted tracks start in it, and how many.
+    Insert(Arc<[PathBuf]>, usize, usize),
+    Remove(Arc<[PathBuf]>, usize),
+    Move(Arc<[PathBuf]>, usize, usize),
     Cmd(Cmd),
 }
 
@@ -237,6 +249,18 @@ pub struct Player {
     pending: Arc<Pending>,
     events: Events,
     handle: Option<std::thread::JoinHandle<()>>,
+    next_at: Mutex<Option<NextAt>>,
+    /// Whether the queue was changed since `Cmd::Play` last replaced it.
+    edited: AtomicBool,
+}
+
+/// Where the next `Cmd::Insert` goes while the same track plays in the same
+/// queue: after the tracks inserted before it, so they play in the order they
+/// were sent.
+struct NextAt {
+    playing: usize,
+    at: usize,
+    queue: Arc<[PathBuf]>,
 }
 
 impl Player {
@@ -276,7 +300,15 @@ impl Player {
             pending,
             events,
             handle: Some(handle),
+            next_at: Mutex::new(None),
+            edited: AtomicBool::new(false),
         })
+    }
+
+    /// Whether the queue was added to, taken from or reordered since it was
+    /// last replaced, so replacing it would lose that.
+    pub fn queue_edited(&self) -> bool {
+        self.edited.load(Ordering::Relaxed)
     }
 
     /// Sends the engine's events, track and state changes and playback
@@ -291,14 +323,67 @@ impl Player {
         let Ok(mut status) = self.status.lock() else {
             return;
         };
+        let edits = matches!(
+            cmd,
+            Cmd::Enqueue(_) | Cmd::Insert(_) | Cmd::Remove(_) | Cmd::Move(..)
+        );
+        if edits || matches!(cmd, Cmd::Play(..)) {
+            self.edited.store(edits, Ordering::Relaxed);
+        }
         let msg = match cmd {
             Cmd::Play(paths, index) => {
                 status.queue = paths.into();
                 Msg::Play(status.queue.clone(), index)
             }
+            Cmd::Remove(i) => {
+                if i >= status.queue.len() {
+                    return;
+                }
+                let mut queue = status.queue.to_vec();
+                queue.remove(i);
+                status.queue = queue.into();
+                // Set here, so the playing row is right before the engine runs.
+                if status.index > i {
+                    status.index -= 1;
+                }
+                Msg::Remove(status.queue.clone(), i)
+            }
+            Cmd::Move(from, to) => {
+                let len = status.queue.len();
+                if from >= len || to >= len || from == to {
+                    return;
+                }
+                let mut queue = status.queue.to_vec();
+                let path = queue.remove(from);
+                queue.insert(to, path);
+                status.queue = queue.into();
+                status.index = order::moved(status.index, from, to);
+                Msg::Move(status.queue.clone(), from, to)
+            }
             Cmd::Enqueue(paths) => {
                 status.queue = status.queue.iter().cloned().chain(paths).collect();
                 Msg::Enqueue(status.queue.clone())
+            }
+            Cmd::Insert(paths) => {
+                let mut next_at = self.next_at.lock().unwrap_or_else(|e| e.into_inner());
+                let at = match &*next_at {
+                    Some(n)
+                        if n.playing == status.index && Arc::ptr_eq(&n.queue, &status.queue) =>
+                    {
+                        n.at
+                    }
+                    _ => (status.index + 1).min(status.queue.len()),
+                };
+                let n = paths.len();
+                let mut queue = status.queue.to_vec();
+                queue.splice(at..at, paths);
+                status.queue = queue.into();
+                *next_at = Some(NextAt {
+                    playing: status.index,
+                    at: at + n,
+                    queue: status.queue.clone(),
+                });
+                Msg::Insert(status.queue.clone(), at, n)
             }
             // Set here, so the next `volume` call sees it even before the engine runs.
             Cmd::SetVolume(v) => return self.shared.set_volume(v),
@@ -581,11 +666,29 @@ impl Engine {
                 self.queue = queue;
                 return self.enqueued(first_new);
             }
+            Msg::Insert(queue, at, n) => {
+                self.queue = queue;
+                return self.inserted(at, n);
+            }
+            Msg::Remove(queue, i) => {
+                self.queue = queue;
+                return self.removed(i);
+            }
+            Msg::Move(queue, from, to) => {
+                self.queue = queue;
+                self.renumber(|j| order::moved(j, from, to));
+                self.order.relabel(|j| order::moved(j, from, to));
+                return self.discard_chosen();
+            }
             Msg::Cmd(cmd) => cmd,
         };
         match cmd {
-            // `Player::send` delivers these as `Msg::Play` and `Msg::Enqueue`.
-            Cmd::Play(..) | Cmd::Enqueue(..) => {}
+            // `Player::send` delivers these as their own `Msg`.
+            Cmd::Play(..)
+            | Cmd::Enqueue(..)
+            | Cmd::Insert(..)
+            | Cmd::Remove(..)
+            | Cmd::Move(..) => {}
             Cmd::Jump(index) => self.jump(index),
             Cmd::TogglePause => match self.state {
                 State::Playing => {
@@ -714,6 +817,80 @@ impl Engine {
             // The last track already decoded to its end, and `pump`
             // stages nothing once the queue has run out.
             self.stage_from(first_new);
+        }
+    }
+
+    /// Takes in `n` tracks inserted at `at`, to play after the audible one.
+    ///
+    /// Every index from `at` on moves up by `n`. A next track already chosen
+    /// is discarded by seeking to the current position, as a mode change does.
+    fn inserted(&mut self, at: usize, n: usize) {
+        self.renumber(|i| if i >= at { i + n } else { i });
+        let current = self.marks.front().map_or(self.index, |m| m.1);
+        self.order.insert(at, n, current);
+        if self.state == State::Stopped {
+            self.start(at, false);
+            return;
+        }
+        self.discard_chosen();
+    }
+
+    /// Takes out the track at `i`; every index after it moves down one.
+    /// Taking out the audible track plays the one that would have followed.
+    fn removed(&mut self, i: usize) {
+        let audible = self.marks.front().map_or(self.index, |m| m.1);
+        let next = match self.state {
+            State::Stopped => None,
+            _ if audible != i => None,
+            _ => Some(self.order.successor(i, true)),
+        };
+        // Checked before renumbering, which gives the next track index `i`.
+        let chosen_gone = self.marks.iter().skip(1).any(|m| m.1 == i)
+            || self.staged.as_ref().is_some_and(|s| s.index == i);
+        let shift = |j: usize| if j > i { j - 1 } else { j };
+        self.gain_of.remove(&i);
+        self.renumber(shift);
+        self.order.remove(i);
+        match next {
+            Some(next) => {
+                self.teardown();
+                match next.filter(|&n| n != i).map(shift) {
+                    Some(n) => {
+                        self.index = n;
+                        self.start(n, false);
+                    }
+                    None => self.state = State::Stopped,
+                }
+            }
+            None if chosen_gone => self.discard_chosen(),
+            None => {}
+        }
+        self.index = self.index.min(self.queue.len().saturating_sub(1));
+    }
+
+    /// Renames queue indices by `map` wherever the engine holds one, after
+    /// the queue changed under them.
+    fn renumber(&mut self, map: impl Fn(usize) -> usize) {
+        self.gain_of = self.gain_of.drain().map(|(i, g)| (map(i), g)).collect();
+        for mark in &mut self.marks {
+            mark.1 = map(mark.1);
+        }
+        self.index = map(self.index);
+        self.published.1 = map(self.published.1);
+        if let Some(l) = &mut self.looping {
+            l.index = map(l.index);
+        }
+        if let Some(s) = &mut self.staged {
+            s.index = map(s.index);
+        }
+    }
+
+    /// Drops a next track already chosen, whether decoding into the ring or
+    /// staged, by seeking to the current position, as a mode change does.
+    fn discard_chosen(&mut self) {
+        let chosen = self.marks.len() > 1 || self.staged.is_some() || self.stream.is_none();
+        if chosen && !self.marks.is_empty() {
+            self.seek(self.elapsed());
         }
     }
 

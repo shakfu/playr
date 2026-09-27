@@ -199,6 +199,7 @@ dialog input[type=text] { width: 100%; }
 <header>
   <nav role="tablist" aria-label="Views">
     <button class="tab" role="tab" data-view="library" aria-selected="true">Library <span class="num" data-count="library">0</span></button>
+    <button class="tab" role="tab" data-view="queue" aria-selected="false">Queue <span class="num" data-count="queue">0</span></button>
     <button class="tab" role="tab" data-view="selection" aria-selected="false">Selection <span class="num" data-count="selection">0</span></button>
     <button class="tab" role="tab" data-view="playlists" aria-selected="false">Playlists <span class="num" data-count="playlists">0</span></button>
   </nav>
@@ -239,9 +240,9 @@ dialog input[type=text] { width: 100%; }
     <div class="group">
       <button data-command="prev-mark" aria-label="Previous mark">&lt; Mark</button>
       <button data-command="mark">Mark</button>
-      <button data-command="unmark" aria-label="Undo mark">Undo</button>
+      <button data-command="mark-undo" aria-label="Undo mark">Undo</button>
       <button data-command="next-mark" aria-label="Next mark">Mark &gt;</button>
-      <button data-command="delmarks" aria-label="Clear marks">Clear</button>
+      <button data-command="mark-clear" aria-label="Clear marks">Clear</button>
     </div>
   </div>
   <div class="extra" id="extra" data-open="false">
@@ -416,6 +417,7 @@ function drawRows() {
     empty.textContent = list.view === "library"
       ? (state.searching ? "No matches. Esc in the search field clears it." : "The library is empty.")
       : list.view === "selection" ? "The selection is empty. Tap - on a library row to add it."
+      : list.view === "queue" ? "Nothing is playing. A row's menu queues a track, or plays it next."
       : "No playlists. Build a selection, then save it.";
   }
 }
@@ -452,7 +454,8 @@ function drawRow(i, row, cursor, h) {
     }
     el.append(sel, span("artist", row.artist), span("album", row.album),
       span("title", row.title), span("time", row.time || "-"));
-    if (row.key === state.path) el.classList.add("playing");
+    // A track queued twice is two rows, so the queue marks one by its index.
+    if (list.view === "queue" ? i === state.index : row.key === state.path) el.classList.add("playing");
   }
   const menu = document.createElement("button");
   menu.className = "menu";
@@ -475,9 +478,12 @@ function followCursor() {
 }
 
 const ROW_MENUS = {
-  library: [["Play from here", "play"], ["Select or unselect", "toggle"]],
-  selection: [["Play from here", "play"], ["Remove", "remove"], ["Move up", "move -1"], ["Move down", "move +1"]],
-  playlists: [["Play", "play"], ["Add to selection", "add"], ["Rename", "rename"], ["Delete", "delete"]],
+  library: [["Play from here", "play"], ["Select or unselect", "toggle"], ["Play next", "enqueue next"], ["Add to queue", "enqueue"]],
+  selection: [["Play from here", "play"], ["Remove", "remove"], ["Move up", "move -1"], ["Move down", "move +1"],
+    ["Play next", "enqueue next"], ["Add to queue", "enqueue"]],
+  playlists: [["Play", "play"], ["Add to selection", "add"], ["Play next", "enqueue next"], ["Add to queue", "enqueue"],
+    ["Rename", "rename"], ["Delete", "delete"]],
+  queue: [["Play from here", "play"], ["Remove from queue", "dequeue"], ["Move up", "reorder -1"], ["Move down", "reorder +1"]],
 };
 
 // Puts the cursor on row `i`, then runs `command` there.
@@ -528,7 +534,7 @@ function openRowMenu(i) {
 $("menu-button").addEventListener("click", () => {
   const items = [
     ["Keys", "keys"], ["Commands", "help"], ["Command line", "command"],
-    ["Clear search", "clear-search"],
+    ["Clear search", "search-clear"],
     ["Save selection as playlist", "save"], ["Clear selection", "clear"],
     ["Theme: system", "theme system"], ["Theme: light", "theme light"], ["Theme: dark", "theme dark"],
   ];
@@ -849,6 +855,7 @@ function draw(next) {
   }
   followCursor();
   if (!previous || viewChanged || previous.lists !== s.lists || previous.path !== s.path
+      || previous.index !== s.index
       || previous.cursors[s.view] !== s.cursors[s.view] || previous.searching !== s.searching) {
     drawRows();
   }

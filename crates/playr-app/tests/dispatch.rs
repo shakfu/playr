@@ -24,7 +24,7 @@ struct Headless {
     session: Session,
     keys: Keymap,
     view: View,
-    cursors: [Option<usize>; 3],
+    cursors: [Option<usize>; 4],
     results: Option<Vec<Track>>,
     messages: Vec<Message>,
     asked: Option<Confirm>,
@@ -40,6 +40,7 @@ fn slot(view: View) -> Option<usize> {
         Library => Some(0),
         Selection => Some(1),
         Playlists => Some(2),
+        View::Queue => Some(3),
         Sampler => None,
     }
 }
@@ -128,7 +129,7 @@ fn headless() -> (Headless, tempfile::TempDir) {
         session,
         keys: Keymap::default(),
         view: Library,
-        cursors: [Some(0), None, Some(0)],
+        cursors: [Some(0), None, Some(0), None],
         results: None,
         messages: Vec::new(),
         asked: None,
@@ -192,6 +193,94 @@ fn adding_moves_the_cursor_and_playing_starts_from_it() {
     dispatch(Action::Remove, &mut f);
     assert_eq!(selection(&f), ["/m/b.flac"]);
     assert_eq!(f.cursor(Selection), Some(0));
+}
+
+#[test]
+fn enqueueing_adds_the_row_under_the_cursor_and_moves_on() {
+    let (mut f, _dir) = headless();
+    // Nothing playing: a track to play next is the whole queue.
+    f.set_cursor(Library, Some(1));
+    dispatch(Action::Enqueue(true), &mut f);
+    assert_eq!(queue(&f), [PathBuf::from("/m/b.flac")]);
+    assert_eq!(
+        last(&f),
+        Some(
+            &Outcome::Queued {
+                tracks: 1,
+                next: true
+            }
+            .into()
+        )
+    );
+    assert_eq!(f.cursor(Library), Some(2), "the cursor did not move on");
+    dispatch(Action::Enqueue(false), &mut f);
+    assert_eq!(
+        queue(&f),
+        [PathBuf::from("/m/b.flac"), PathBuf::from("/m/c.flac")]
+    );
+
+    // On a playlist, its tracks; the playlists are listed by name.
+    dispatch(Action::ShowView(Playlists), &mut f);
+    f.set_cursor(Playlists, Some(1));
+    dispatch(Action::Enqueue(false), &mut f);
+    assert_eq!(queue(&f).len(), 4);
+    assert_eq!(
+        last(&f),
+        Some(
+            &Outcome::Queued {
+                tracks: 2,
+                next: false
+            }
+            .into()
+        )
+    );
+
+    // The sampler and the queue list no rows to queue.
+    let before = f.messages.len();
+    for view in [Sampler, View::Queue] {
+        dispatch(Action::ShowView(view), &mut f);
+        dispatch(Action::Enqueue(false), &mut f);
+    }
+    assert_eq!(queue(&f).len(), 4);
+    assert_eq!(f.messages.len(), before);
+}
+
+#[test]
+fn the_queue_view_takes_tracks_out_and_moves_them() {
+    let (mut f, _dir) = headless();
+    dispatch(Action::Add, &mut f);
+    dispatch(Action::Activate, &mut f);
+    let path = |name: &str| PathBuf::from(format!("/m/{name}.flac"));
+    dispatch(Action::ShowView(View::Queue), &mut f);
+    f.set_cursor(View::Queue, Some(2));
+    dispatch(Action::MoveTrack(-1), &mut f);
+    assert_eq!(queue(&f), [path("a"), path("c"), path("b")]);
+    assert_eq!(f.cursor(View::Queue), Some(1), "the cursor stays on c");
+    dispatch(Action::MoveTrack(-5), &mut f);
+    assert_eq!(queue(&f)[1], path("c"), "a move past the start is refused");
+
+    dispatch(Action::Remove, &mut f);
+    assert_eq!(queue(&f), [path("a"), path("b")]);
+    assert!(matches!(
+        last(&f),
+        Some(Message::Core(Notice::Done(Outcome::RemovedTrack { .. })))
+    ));
+    assert_eq!(f.cursor(View::Queue), Some(1));
+    assert_eq!(selection(&f), ["/m/a.flac"], "the selection was touched");
+}
+
+#[test]
+fn enter_in_the_queue_jumps_without_replacing_it() {
+    let (mut f, _dir) = headless();
+    dispatch(Action::Activate, &mut f);
+    let playing = f.session.player().queue();
+    dispatch(Action::ShowView(View::Queue), &mut f);
+    f.set_cursor(View::Queue, Some(2));
+    dispatch(Action::Activate, &mut f);
+    assert!(
+        std::sync::Arc::ptr_eq(&playing, &f.session.player().queue()),
+        "the queue was replaced"
+    );
 }
 
 #[test]
@@ -279,7 +368,7 @@ fn commands_parse_and_dispatch_in_the_frontend_s_view() {
     );
     // No rows in the sampler: cursor commands change nothing.
     run(&mut f, "down");
-    assert_eq!(f.cursors, [Some(0), None, Some(0)]);
+    assert_eq!(f.cursors, [Some(0), None, Some(0), None]);
     run(&mut f, "slice 4");
     assert_eq!(last(&f), Some(&Refusal::NothingPlaying.into()));
     assert!(!f.planning);

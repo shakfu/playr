@@ -43,6 +43,9 @@ pub enum Action {
 
     /// Select or unselect the track under the cursor, or add a playlist's tracks.
     Add,
+    /// Queue the track under the cursor, or a playlist's tracks: after the
+    /// rest of the list playing, or after the track playing when `true`.
+    Enqueue(bool),
     /// Remove the track under the cursor from the selection.
     Remove,
     /// Move the selected track this many places.

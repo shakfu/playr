@@ -655,3 +655,74 @@ fn loops_are_saved_by_slot_replaced_and_cleared() {
     assert_eq!(query::loops(&conn, path).unwrap(), [(3, 5_000, 7_000)]);
     assert_eq!(query::loops(&conn, "/m/b.flac").unwrap(), [(1, 5, 6)]);
 }
+
+fn seeded_for_columns() -> rusqlite::Connection {
+    let conn = db::open_memory().unwrap();
+    let with = |path: &str, title: &str, year: i32, genre: &str, ms: i64| Track {
+        year: Some(year),
+        genre: Some(genre.into()),
+        duration_ms: Some(ms),
+        disc_no: Some(1),
+        track_no: Some((year - 1950) as u32),
+        ..track(path, title, "Bill Evans", "Sunday")
+    };
+    for t in [
+        with("/m/jazz/a.flac", "Waltz for Debby", 1961, "Jazz", 300_400),
+        with("/m/jazz/b.flac", "Peace Piece", 1959, "Modal Jazz", 299_999),
+        with("/m/rock/c.flac", "Other", 1970, "Rock", 3_723_000),
+    ] {
+        db::upsert(&conn, &t).unwrap();
+    }
+    conn
+}
+
+#[test]
+fn every_column_is_a_search_field() {
+    let conn = seeded_for_columns();
+    assert_eq!(titles(&conn, "year:1959"), ["Peace Piece"]);
+    assert_eq!(
+        titles(&conn, "year:1959..1961"),
+        ["Peace Piece", "Waltz for Debby"]
+    );
+    assert_eq!(titles(&conn, "year:1962.."), ["Other"]);
+    assert_eq!(titles(&conn, "year:..1959"), ["Peace Piece"]);
+    assert_eq!(titles(&conn, "track:11"), ["Waltz for Debby"]);
+    assert_eq!(titles(&conn, "disc:2").len(), 0);
+    // Text columns match anywhere, ignoring case.
+    assert_eq!(
+        titles(&conn, "genre:jazz"),
+        ["Peace Piece", "Waltz for Debby"]
+    );
+    assert_eq!(titles(&conn, "genre:\"modal jazz\""), ["Peace Piece"]);
+    assert_eq!(titles(&conn, "path:/ROCK/"), ["Other"]);
+    // Time matches the whole seconds a list shows: 4:59.999 reads 4:59.
+    assert_eq!(titles(&conn, "time:5:00"), ["Waltz for Debby"]);
+    assert_eq!(titles(&conn, "time:300"), ["Waltz for Debby"]);
+    assert_eq!(titles(&conn, "time:1:00:00.."), ["Other"]);
+    assert_eq!(titles(&conn, "time:..4:59"), ["Peace Piece"]);
+}
+
+#[test]
+fn a_field_term_combines_with_text_and_other_fields() {
+    let conn = seeded_for_columns();
+    assert_eq!(titles(&conn, "waltz year:1955..1965"), ["Waltz for Debby"]);
+    assert_eq!(titles(&conn, "other year:1955..1965").len(), 0);
+    assert_eq!(titles(&conn, "genre:jazz year:1960.."), ["Waltz for Debby"]);
+    // Field names ignore case, as column names do.
+    assert_eq!(titles(&conn, "YEAR:1959"), ["Peace Piece"]);
+}
+
+#[test]
+fn a_field_value_that_names_nothing_matches_nothing() {
+    let conn = seeded_for_columns();
+    for q in [
+        "year:soon",
+        "year:",
+        "year:..",
+        "time:5:xx",
+        "genre:",
+        "waltz year:x",
+    ] {
+        assert_eq!(titles(&conn, q).len(), 0, "{q}");
+    }
+}

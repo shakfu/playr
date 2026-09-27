@@ -19,6 +19,7 @@ pub mod media;
 pub mod message;
 pub mod meter;
 pub mod model;
+pub mod persist;
 pub mod sampler;
 
 /// A part of the interface that scopes key bindings and commands. A terminal
@@ -26,6 +27,8 @@ pub mod sampler;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Library,
+    /// The list playing, with tracks queued into it.
+    Queue,
     Selection,
     Playlists,
     /// The playing track's waveform, for marking and slicing it.
@@ -34,8 +37,9 @@ pub enum View {
 
 impl View {
     /// The views in tab order.
-    pub const ALL: [View; 4] = [
+    pub const ALL: [View; 5] = [
         View::Library,
+        View::Queue,
         View::Selection,
         View::Playlists,
         View::Sampler,
@@ -48,13 +52,15 @@ impl View {
             View::Selection => "Selection",
             View::Playlists => "Playlists",
             View::Sampler => "Sampler",
+            View::Queue => "Queue",
         }
     }
 
     /// The view `next-view` switches to after this one.
     pub fn next(self) -> Self {
         match self {
-            View::Library => View::Selection,
+            View::Library => View::Queue,
+            View::Queue => View::Selection,
             View::Selection => View::Playlists,
             View::Playlists => View::Sampler,
             View::Sampler => View::Library,

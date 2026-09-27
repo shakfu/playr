@@ -259,7 +259,7 @@ fn columns_and_sort_are_lists_of_column_names() {
 
     assert_eq!(
         parse("columns = ['loudest']").unwrap_err()[0],
-        "line 1: unknown column loudest; choices: title, artist, album_artist, album, disc, track, year, time, tempo, loudness, peak, path"
+        "line 1: unknown column loudest; choices: title, artist, album_artist, album, genre, disc, track, year, time, tempo, loudness, peak, path"
     );
     assert_eq!(
         parse("columns = []").unwrap_err(),
@@ -313,4 +313,39 @@ fn slice_edges_default_exact_with_short_fades_and_take_a_name_and_milliseconds()
             "{bad}"
         );
     }
+}
+
+#[test]
+fn persist_names_the_values_to_remember() {
+    use playr_core::settings::Persist;
+    assert_eq!(
+        parse("").unwrap().persist,
+        [],
+        "nothing is remembered by default"
+    );
+    assert_eq!(
+        parse("persist = ['eq', 'Volume', 'sort']").unwrap().persist,
+        [Persist::Eq, Persist::Volume, Persist::Sort]
+    );
+    assert_eq!(
+        parse("persist = ['eq', 'speed', 3]").unwrap_err(),
+        [
+            "line 1: unknown persist speed; choices: eq, volume, mode, replaygain, theme, columns, sort",
+            "line 1: a name, not an integer",
+        ]
+    );
+    assert_eq!(
+        parse("persist = true").unwrap_err(),
+        ["line 1: persist cannot be a boolean"]
+    );
+}
+
+#[test]
+fn state_is_remembered_by_key_and_replaced() {
+    use playr_core::db;
+    let conn = db::open_memory().unwrap();
+    assert_eq!(db::state(&conn, "eq").unwrap(), None);
+    db::set_state(&conn, "eq", "3 0 -2").unwrap();
+    db::set_state(&conn, "eq", "1 0 0").unwrap();
+    assert_eq!(db::state(&conn, "eq").unwrap().as_deref(), Some("1 0 0"));
 }

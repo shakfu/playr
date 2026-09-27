@@ -49,11 +49,13 @@ fn commands_without_arguments() {
 fn view_commands_work_only_in_their_view() {
     for (view, line, action) in [
         (Library, "toggle", Action::Add),
-        (Library, "clear-search", Action::ClearSearch),
+        (Library, "search-clear", Action::ClearSearch),
         (Selection, "remove", Action::Remove),
         (Selection, "move +2", Action::MoveTrack(2)),
         (Selection, "move -1", Action::MoveTrack(-1)),
         (Selection, "clear", Action::ClearSelection),
+        (View::Queue, "dequeue", Action::Remove),
+        (View::Queue, "reorder +1", Action::MoveTrack(1)),
         (Playlists, "add", Action::Add),
         (Playlists, "delete", Action::DeletePlaylist),
         (Playlists, "rename", Action::StartRename),
@@ -80,12 +82,33 @@ fn view_commands_work_only_in_their_view() {
         parse("clear", Library),
         Err(":clear works in the selection view".into())
     );
-    assert_eq!(parse("cl", Library), Ok(Action::ClearSearch));
+    assert_eq!(parse("search-c", Library), Ok(Action::ClearSearch));
     assert_eq!(parse("cl", Selection), Ok(Action::ClearSelection));
     assert_eq!(
         parse("move 2", Selection),
         Err("usage: :move +N | -N".into())
     );
+}
+
+#[test]
+fn a_selection_command_is_named_for_the_queue_there() {
+    for (action, selection, queue) in [
+        (Action::Remove, "remove", "dequeue"),
+        (Action::MoveTrack(-1), "move -1", "reorder -1"),
+    ] {
+        assert_eq!(line(&action, Some(Selection)), selection);
+        assert_eq!(line(&action, Some(View::Queue)), queue);
+        assert_eq!(parse(queue, View::Queue), Ok(action));
+    }
+    assert_eq!(
+        lib("enqueue"),
+        Ok(Action::Enqueue(false)),
+        "enqueue works in every view"
+    );
+    assert_eq!(lib("enqueue next"), Ok(Action::Enqueue(true)));
+    assert!(lib("enqueue later").is_err());
+    // `:q` still quits: the queue's command is not called `queue`.
+    assert_eq!(lib("q"), Ok(Action::Quit));
 }
 
 #[test]
@@ -99,15 +122,16 @@ fn a_unique_prefix_names_a_command_and_an_ambiguous_one_lists_the_choices() {
     assert_eq!(
         lib("s"),
         Err(
-            "ambiguous command s: search, save, scan, sort, stop, seek, speed, slice-edges, slice"
+            "ambiguous command s: search, save, scan, sort, stop, seek, speed, slice-edges, slice, search-clear"
                 .into()
         )
     );
-    // Only the commands usable here count: `de` is `delmarks` unless `delete` works too.
-    assert_eq!(lib("de"), Ok(Action::ClearMarks));
+    // Only the commands usable here count: `mark-p` is `mark-prev` unless
+    // `mark-pick` works too.
+    assert_eq!(lib("mark-p"), Ok(Action::PrevMark));
     assert_eq!(
-        parse("de", Playlists),
-        Err("ambiguous command de: delmarks, delete".into())
+        parse("mark-p", Sampler),
+        Err("ambiguous command mark-p: mark-prev, mark-pick".into())
     );
     assert_eq!(lib("frobnicate"), Err("unknown command: frobnicate".into()));
     assert!(lib("").is_err());
@@ -286,8 +310,11 @@ fn volume_is_a_percentage_or_a_signed_change() {
     assert_eq!(lib("volume 0"), Ok(Action::SetVolume(0.0)));
     assert_eq!(lib("volume +10"), Ok(Action::VolumeBy(0.1)));
     assert_eq!(lib("volume -25"), Ok(Action::VolumeBy(-0.25)));
+    assert_eq!(lib("volume =60"), Ok(Action::SetVolume(0.6)));
     assert_eq!(lib("volume 101"), Err("volume is 0 to 100".into()));
+    assert_eq!(lib("volume =-5"), Err("volume is 0 to 100".into()));
     assert!(lib("volume loud").is_err());
+    assert!(lib("volume =").is_err());
 }
 
 #[test]
@@ -302,8 +329,11 @@ fn eq_names_a_band_and_a_sign_makes_it_relative() {
     assert_eq!(lib("eq b -1"), Ok(Action::EqBy(Band::Bass, -1.0)));
     assert_eq!(lib("eq flat"), Ok(Action::FlatEq));
     assert_eq!(lib("eq bass =13"), Err("eq is -12 to 12 dB".into()));
-    // A bare number would be ambiguous: set, or move?
-    assert!(lib("eq bass 3").is_err());
+    // Unsigned sets, as for :volume and :speed.
+    assert_eq!(lib("eq bass 3"), Ok(Action::SetEq(Band::Bass, 3.0)));
+    assert_eq!(lib("eq bass 13"), Err("eq is -12 to 12 dB".into()));
+    assert!(lib("eq bass").is_err());
+    assert!(lib("eq bass =").is_err());
     assert!(lib("eq loud +1").is_err());
     assert!(lib("eq bass =x").is_err());
     assert!(lib("eq").is_err());
@@ -393,9 +423,10 @@ fn mode_and_view_take_a_name_or_its_prefix() {
     );
     assert_eq!(lib("view sel"), Ok(Action::ShowView(Selection)));
     assert_eq!(lib("view p"), Ok(Action::ShowView(Playlists)));
+    assert_eq!(lib("view q"), Ok(Action::ShowView(View::Queue)));
     assert_eq!(
-        lib("view queue"),
-        Err("views: library, selection, playlists, sampler".into())
+        lib("view nope"),
+        Err("views: library, queue, selection, playlists, sampler".into())
     );
     assert_eq!(
         lib("mode"),
@@ -437,15 +468,7 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     };
     assert_eq!(
         completions("p", Library, &playlists),
-        [
-            "play",
-            "playlist",
-            "prune",
-            "pause",
-            "prev",
-            "prev-mark",
-            "prev-view"
-        ]
+        ["play", "playlist", "prune", "pause", "prev",]
     );
     assert_eq!(completions("", Library, &playlists).len(), usable(Library));
     assert_eq!(
@@ -468,9 +491,12 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
         completions("vi ", Library, &playlists),
         [
             "view library",
+            "view queue",
             "view selection",
             "view playlists",
-            "view sampler"
+            "view sampler",
+            "view next",
+            "view prev"
         ]
     );
     // Playlist names match without regard to case.
@@ -499,12 +525,12 @@ fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     assert_eq!(line.text, "play");
     line.complete(true, Library, &[]);
     assert_eq!(line.text, "playlist");
-    for _ in 0..6 {
+    for _ in 0..4 {
         line.complete(true, Library, &[]);
     }
     assert_eq!(line.text, "play", "the cycle does not wrap");
     line.complete(false, Library, &[]);
-    assert_eq!(line.text, "prev-view");
+    assert_eq!(line.text, "prev");
 
     // Typing ends the cycle, so Tab now completes the new text.
     line.text.clear();
@@ -515,10 +541,7 @@ fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     let mut back = CommandLine::default();
     back.push('p');
     back.complete(false, Library, &[]);
-    assert_eq!(
-        back.text, "prev-view",
-        "shift-tab does not start from the last"
-    );
+    assert_eq!(back.text, "prev", "shift-tab does not start from the last");
 
     let mut none = CommandLine::default();
     none.push('z');
@@ -825,6 +848,7 @@ fn the_cheatsheet_lists_every_command_under_its_view() {
             Some(Selection) => "Selection",
             Some(Playlists) => "Playlists",
             Some(View::Sampler) => "Sampler",
+            Some(View::Queue) => "Queue",
         };
         let usage = format!("`:{} {}", c.name, c.args.replace('|', "\\|"));
         let usage = format!("{}`", usage.trim_end());
@@ -900,20 +924,23 @@ fn the_cursor_and_mark_commands_parse_in_the_sampler_only() {
         sampler("cursor 1:30"),
         Ok(Action::SetCursor(Some(Duration::from_secs(90))))
     );
-    assert_eq!(sampler("pick next"), Ok(Action::PickMark(true)));
-    assert_eq!(sampler("pick prev"), Ok(Action::PickMark(false)));
-    assert_eq!(sampler("pick"), Err("usage: :pick next|prev".into()));
+    assert_eq!(sampler("mark-pick next"), Ok(Action::PickMark(true)));
+    assert_eq!(sampler("mark-pick prev"), Ok(Action::PickMark(false)));
     assert_eq!(
-        sampler("nudge-mark -1"),
+        sampler("mark-pick"),
+        Err("usage: :mark-pick next|prev".into())
+    );
+    assert_eq!(
+        sampler("mark-nudge -1"),
         Ok(Action::MoveMark(Nudge::Columns(-1)))
     );
     assert_eq!(
-        sampler("move-mark 0:02"),
+        sampler("mark-move 0:02"),
         Ok(Action::MoveMarkTo(Duration::from_secs(2)))
     );
-    assert_eq!(sampler("move-mark"), Err("usage: :move-mark TIME".into()));
-    assert_eq!(sampler("snap-mark"), Ok(Action::SnapMark));
-    assert_eq!(sampler("del-mark"), Ok(Action::DeleteMark));
+    assert_eq!(sampler("mark-move"), Err("usage: :mark-move TIME".into()));
+    assert_eq!(sampler("mark-snap"), Ok(Action::SnapMark));
+    assert_eq!(sampler("mark-rm"), Ok(Action::DeleteMark));
 
     // They belong to the sampler, so elsewhere they say where to go.
     assert_eq!(
@@ -921,9 +948,65 @@ fn the_cursor_and_mark_commands_parse_in_the_sampler_only() {
         Err(":cursor works in the sampler view".into())
     );
     assert_eq!(
-        library("del-mark"),
-        Err(":del-mark works in the sampler view".into())
+        library("mark-rm"),
+        Err(":mark-rm works in the sampler view".into())
     );
+}
+
+#[test]
+fn renamed_commands_keep_their_old_names_as_aliases() {
+    for (old, new) in [
+        ("sync", "rescan"),
+        ("next-view", "view next"),
+        ("prev-view", "view prev"),
+        ("unmark", "mark-undo"),
+        ("delmarks", "mark-clear"),
+        ("next-mark", "mark-next"),
+        ("prev-mark", "mark-prev"),
+        ("clear-search", "search-clear"),
+    ] {
+        assert_eq!(lib(old), lib(new), "{old}");
+        assert!(lib(new).is_ok(), "{new}");
+    }
+    for (old, new) in [
+        ("pick next", "mark-pick next"),
+        ("nudge-mark -1", "mark-nudge -1"),
+        ("move-mark 0:02", "mark-move 0:02"),
+        ("snap-mark", "mark-snap"),
+        ("del-mark", "mark-rm"),
+    ] {
+        assert_eq!(parse(old, Sampler), parse(new, Sampler), "{old}");
+        assert!(parse(new, Sampler).is_ok(), "{new}");
+    }
+    // An old name still says where it works, by its new name.
+    assert_eq!(
+        parse("del-mark", Library),
+        Err(":mark-rm works in the sampler view".into())
+    );
+    // Help and completion list only the new names.
+    let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
+    for old in [
+        "sync",
+        "unmark",
+        "delmarks",
+        "pick",
+        "del-mark",
+        "clear-search",
+        "next-view",
+    ] {
+        assert!(!names.contains(&old), "{old} is listed");
+    }
+    // The shipped bindings use the new names.
+    let keys = include_str!("../src/keys.toml");
+    for old in [
+        "\"unmark\"",
+        "\"delmarks\"",
+        "\"pick ",
+        "\"del-mark\"",
+        "\"next-view\"",
+    ] {
+        assert!(!keys.contains(old), "keys.toml binds {old}");
+    }
 }
 
 #[test]
@@ -993,6 +1076,24 @@ fn columns_and_sort_name_columns() {
             },
         ]))
     );
+    // Spaces separate keys as commas do; `desc` turns the key before it.
+    for text in ["sort tempo desc title", "sort tempo desc,title"] {
+        assert_eq!(lib(text), lib("sort tempo desc, title"), "{text}");
+    }
+    assert_eq!(
+        lib("sort tempo title"),
+        Ok(Action::SetSort(vec![
+            SortKey {
+                column: Column::Tempo,
+                descending: false
+            },
+            SortKey {
+                column: Column::Title,
+                descending: false
+            },
+        ]))
+    );
+    assert!(lib("sort desc").unwrap_err().contains("unknown column"));
     assert_eq!(lib("sort off"), Ok(Action::SetSort(Vec::new())));
     assert!(lib("columns").is_err());
     assert!(lib("sort").is_err());
@@ -1007,5 +1108,6 @@ fn views_step_forward_and_back_in_tab_order() {
         assert_eq!(view.next().prev(), view);
     }
     assert_eq!(Library.prev(), Sampler);
+    assert_eq!(View::Queue.prev(), Library);
     assert_eq!(Sampler.prev(), Playlists);
 }
