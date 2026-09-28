@@ -275,6 +275,17 @@ fn handle(stream: &mut TcpStream, context: &Context) -> io::Result<()> {
             "no" => perform(stream, context, Request::Answer(false)),
             _ => text(stream, 400, "send yes or no"),
         },
+        ("POST", "/draft") => {
+            use playr_app::model::DraftAnswer;
+            let answer = match body.trim() {
+                "overwrite" => Some(DraftAnswer::Overwrite),
+                "append" => Some(DraftAnswer::Append),
+                "save" => Some(DraftAnswer::Save),
+                "cancel" => None,
+                _ => return text(stream, 400, "send overwrite, append, save or cancel"),
+            };
+            perform(stream, context, Request::Draft(answer))
+        }
         ("POST", "/name") => perform(stream, context, Request::Name(body.trim().to_string())),
         ("POST", "/close") => perform(stream, context, Request::Close),
         ("POST", "/rescan") if config.rescan => {
@@ -304,7 +315,7 @@ fn handle(stream: &mut TcpStream, context: &Context) -> io::Result<()> {
         (
             _,
             "/" | "/events" | "/config" | "/command" | "/key" | "/row" | "/search" | "/answer"
-            | "/name" | "/close" | "/rescan" | "/rows" | "/keys" | "/help" | "/complete",
+            | "/draft" | "/name" | "/close" | "/rescan" | "/rows" | "/keys" | "/help" | "/complete",
         ) => text(stream, 405, "method not allowed"),
         _ => text(stream, 404, "not found"),
     }

@@ -601,14 +601,18 @@ fn what_was_playing_is_remembered_and_offered_only_while_the_file_is_there() {
     session.remember(&track, Duration::from_millis(90_500));
     assert_eq!(
         session.resumable(),
-        Some((track.clone(), Duration::from_millis(90_500)))
+        Some((
+            track.clone(),
+            Duration::from_millis(90_500),
+            Default::default()
+        ))
     );
 
     // Storing again replaces the one row rather than adding another.
     session.remember(&track, Duration::from_secs(5));
     assert_eq!(
         session.resumable(),
-        Some((track.clone(), Duration::from_secs(5)))
+        Some((track.clone(), Duration::from_secs(5), Default::default()))
     );
 
     // A file that has gone is not offered: answering yes would do nothing.

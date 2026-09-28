@@ -23,7 +23,7 @@ use playr_app::command::CommandLine;
 use playr_app::config::Config;
 use playr_app::dispatch::Frontend;
 use playr_app::message::Message;
-use playr_app::model::Model;
+use playr_app::model::{DraftAnswer, Model};
 use playr_app::sampler::Sampler;
 use playr_core::audio::{Player, State};
 use playr_core::columns::{Column, Measures};
@@ -103,7 +103,10 @@ pub struct Screen<'a> {
     /// The queue's rows, and which of them is playing, if one is.
     pub queue: &'a [Track],
     pub queue_playing: Option<usize>,
+    pub queue_played: usize,
     pub selection: &'a [Track],
+    /// The playlist the selection holds to edit.
+    pub editing: Option<&'a str>,
     pub playlists: &'a [Playlist],
     pub input: &'a Input,
     pub keys: &'a Keymap,
@@ -141,7 +144,9 @@ impl<'a> Screen<'a> {
             playing: &[],
             queue: &[],
             queue_playing: None,
+            queue_played: 0,
             selection: &[],
+            editing: None,
             playlists: &[],
             input: &NO_INPUT,
             bpm: None,
@@ -231,7 +236,9 @@ impl App {
             playing: m.playing(),
             queue: m.queue(),
             queue_playing: m.queue_playing(),
+            queue_played: m.queue_played(),
             selection: m.session().selection(),
+            editing: m.session().editing().map(|p| p.name.as_str()),
             playlists: m.session().playlists(),
             input: m.input(),
             help_scroll: self.help_scroll,
@@ -327,6 +334,13 @@ impl App {
         match self.model.input() {
             // Anything but `y` cancels, so a stray key cannot confirm.
             Input::Confirm(_) => self.model.answer(typed(&key) == Some('y')),
+            // As a confirmation: anything but an answer leaves the draft alone.
+            Input::Draft(_) => self.model.answer_draft(match typed(&key) {
+                Some('o') => Some(DraftAnswer::Overwrite),
+                Some('a') => Some(DraftAnswer::Append),
+                Some('s') => Some(DraftAnswer::Save),
+                _ => None,
+            }),
             Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_) => {
                 // The lists can be longer than the screen.
                 match key.code {
@@ -497,6 +511,11 @@ pub fn view_title(view: View) -> &'static str {
 /// The question asked before `confirm`, with how to answer it.
 pub fn confirm_prompt(confirm: &Confirm) -> String {
     format!("{} (y/n)", confirm.question())
+}
+
+/// The draft question, with the keys that answer it.
+pub fn draft_prompt(tracks: usize) -> String {
+    format!("{} (o/a/s)", playr_app::message::draft_question(tracks))
 }
 
 /// The character `key` types, or `None` for any other key and for a Ctrl or

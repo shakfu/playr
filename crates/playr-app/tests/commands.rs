@@ -42,7 +42,7 @@ fn commands_without_arguments() {
     ] {
         assert_eq!(lib(line), Ok(action), "{line:?}");
     }
-    assert_eq!(lib("stop now"), Err(":stop takes no arguments".into()));
+    assert_eq!(lib("pause now"), Err(":pause takes no arguments".into()));
 }
 
 #[test]
@@ -50,13 +50,6 @@ fn view_commands_work_only_in_their_view() {
     for (view, line, action) in [
         (Library, "toggle", Action::Add),
         (Library, "search-clear", Action::ClearSearch),
-        (Selection, "remove", Action::Remove),
-        (Selection, "move +2", Action::MoveTrack(2)),
-        (Selection, "move -1", Action::MoveTrack(-1)),
-        (Selection, "clear", Action::ClearSelection),
-        (View::Queue, "dequeue", Action::Remove),
-        (View::Queue, "reorder +1", Action::MoveTrack(1)),
-        (Playlists, "add", Action::Add),
         (Playlists, "delete", Action::DeletePlaylist),
         (Playlists, "rename", Action::StartRename),
         (Playlists, "rename  dawn ", Action::RenameTo("dawn".into())),
@@ -72,15 +65,32 @@ fn view_commands_work_only_in_their_view() {
             );
         }
     }
-    // A prefix that matches nothing here names the view it would work in.
+    // The selection and the queue share their editing commands.
+    for (line, selection, queue) in [
+        ("remove", Action::Remove, Action::Remove),
+        ("move +2", Action::MoveTrack(2), Action::MoveTrack(2)),
+        ("clear", Action::ClearSelection, Action::ClearQueue),
+    ] {
+        assert_eq!(parse(line, Selection), Ok(selection), "{line:?}");
+        assert_eq!(parse(line, View::Queue), Ok(queue), "{line:?}");
+        let name = line.split_whitespace().next().unwrap();
+        assert_eq!(
+            parse(line, Library),
+            Err(format!(":{name} works in the selection and queue views"))
+        );
+    }
+    assert_eq!(parse("add", Playlists), Ok(Action::Add));
+    assert_eq!(parse("add", View::Queue), Ok(Action::Add));
+    // A prefix that matches nothing here names the views it would work in,
+    // though two views list it.
     assert_eq!(
         parse("rem", Library),
-        Err(":remove works in the selection view".into())
+        Err(":remove works in the selection and queue views".into())
     );
     // Typed in full, a command from another view is not taken as a prefix of one here.
     assert_eq!(
         parse("clear", Library),
-        Err(":clear works in the selection view".into())
+        Err(":clear works in the selection and queue views".into())
     );
     assert_eq!(parse("search-c", Library), Ok(Action::ClearSearch));
     assert_eq!(parse("cl", Selection), Ok(Action::ClearSelection));
@@ -91,14 +101,14 @@ fn view_commands_work_only_in_their_view() {
 }
 
 #[test]
-fn a_selection_command_is_named_for_the_queue_there() {
-    for (action, selection, queue) in [
+fn the_queue_takes_the_selection_s_command_names_and_its_old_ones() {
+    for (action, name, old) in [
         (Action::Remove, "remove", "dequeue"),
         (Action::MoveTrack(-1), "move -1", "reorder -1"),
+        (Action::ClearQueue, "clear", "queue-clear"),
     ] {
-        assert_eq!(line(&action, Some(Selection)), selection);
-        assert_eq!(line(&action, Some(View::Queue)), queue);
-        assert_eq!(parse(queue, View::Queue), Ok(action));
+        assert_eq!(line(&action, Some(View::Queue)), name);
+        assert_eq!(parse(old, View::Queue), Ok(action), "{old:?}");
     }
     assert_eq!(
         lib("enqueue"),
@@ -739,8 +749,13 @@ fn map_and_unmap_parse_a_view_a_key_and_a_command() {
         })
     );
     assert_eq!(
+        lib("map d delete"),
+        Err(":delete works in the playlists view; use map playlists d delete".into())
+    );
+    // Two views take it, so no one view is suggested.
+    assert_eq!(
         lib("map d remove"),
-        Err(":remove works in the selection view; use map selection d remove".into())
+        Err(":remove works in the selection and queue views".into())
     );
     assert_eq!(
         lib("map x map y quit"),
@@ -1110,4 +1125,22 @@ fn views_step_forward_and_back_in_tab_order() {
     assert_eq!(Library.prev(), Sampler);
     assert_eq!(View::Queue.prev(), Library);
     assert_eq!(Sampler.prev(), Playlists);
+}
+
+#[test]
+fn stop_takes_after_or_a_sleep_time_and_round_trips() {
+    assert_eq!(lib("stop"), Ok(Action::Stop));
+    assert_eq!(lib("stop after"), Ok(Action::StopAfter));
+    assert_eq!(lib("stop in 30:00"), Ok(Action::StopIn(Some(secs(1800.0)))));
+    assert_eq!(lib("stop in off"), Ok(Action::StopIn(None)));
+    for bad in ["stop in", "stop after 1", "stop soon", "stop in x"] {
+        assert!(lib(bad).is_err(), "{bad:?} parsed");
+    }
+    for action in [
+        Action::StopAfter,
+        Action::StopIn(Some(secs(1800.0))),
+        Action::StopIn(None),
+    ] {
+        assert_eq!(lib(&line(&action, None)), Ok(action));
+    }
 }

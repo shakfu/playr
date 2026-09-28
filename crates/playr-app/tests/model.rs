@@ -972,21 +972,36 @@ fn a_remembered_track_is_offered_at_the_next_start_and_plays_on_a_yes() {
     model.session().remember(&first, Duration::from_secs(42));
     drop(model);
 
+    // The queue is stored beside it: b had played, c waits.
+    let queue = db::SavedQueue {
+        played: vec![songs.join("b.wav")],
+        playing: false,
+        waiting: vec![songs.join("c.wav")],
+    };
+    db::set_resume_queue(&db::open(&library).unwrap(), &queue, &first).unwrap();
+
     let mut model = model_in(dir.path(), false);
     assert_eq!(
         model.input(),
         &Input::Confirm(Confirm::Resume {
             path: first.clone(),
-            at: Duration::from_secs(42)
+            at: Duration::from_secs(42),
+            queue,
         })
     );
     model.answer(true);
     model.refresh();
     assert_eq!(
         model.session().player().status().queue.as_ref(),
-        std::slice::from_ref(&first),
-        "not playing the track taken up"
+        [first.clone(), songs.join("c.wav")],
+        "not playing the track taken up, then the queue"
     );
+    let rows: Vec<&str> = model.queue().iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(
+        rows,
+        [songs.join("b.wav"), songs.join("c.wav")].map(|p| p.to_string_lossy().into_owned())
+    );
+    assert_eq!(model.queue_played(), 1);
 
     // Tracks handed over say what to play, so nothing is offered.
     let conn = db::open(&library).unwrap();
@@ -1840,4 +1855,180 @@ fn replacing_the_queue_says_how_many_tracks_were_waiting() {
     model.set_cursor(View::Selection, Some(0));
     model.perform(Action::Activate);
     assert_eq!(replaced(&model), Some(4));
+}
+
+#[test]
+fn the_sleep_timer_counts_down_and_stops_playback() {
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.session().player().status().state != State::Playing {
+        assert!(Instant::now() < deadline, "not playing");
+        model.refresh();
+    }
+
+    model.perform(Action::StopIn(Some(Duration::from_secs(3600))));
+    model.refresh();
+    let left = model.snapshot().sleep.unwrap();
+    assert!(left > Duration::from_secs(3590), "{left:?}");
+    model.perform(Action::StopIn(None));
+    model.refresh();
+    assert_eq!(model.snapshot().sleep, None);
+
+    model.perform(Action::StopIn(Some(Duration::ZERO)));
+    model.refresh();
+    assert_eq!(model.message(), Some(&Message::Slept));
+    assert_eq!(model.snapshot().sleep, None, "set once run out");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.session().player().status().state != State::Stopped {
+        assert!(Instant::now() < deadline, "not stopped");
+        model.refresh();
+    }
+    // Nothing plays, so there is no track to stop after.
+    model.perform(Action::StopAfter);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NothingPlaying)))
+    );
+}
+
+#[test]
+fn an_old_draft_is_asked_about_and_can_be_saved_under_a_name() {
+    use playr_app::model::DraftAnswer;
+    use playr_core::session::DRAFT;
+
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library.db");
+    {
+        let conn = db::open(&library).unwrap();
+        for p in ["/m/a.flac", "/m/b.flac"] {
+            db::upsert(&conn, &track(p)).unwrap();
+        }
+    }
+    let open = || {
+        let config = Config::default();
+        let conn = db::open(&library).unwrap();
+        Model::new(conn, common::fake_player().0, Vec::new(), config)
+    };
+    let names = |m: &Model| -> Vec<String> {
+        m.session()
+            .playlists()
+            .iter()
+            .map(|p| p.name.clone())
+            .collect()
+    };
+
+    let mut first = open();
+    first.set_cursor(View::Library, Some(0));
+    first.perform(Action::Add);
+    first.refresh();
+    assert_eq!(first.input(), &Input::None, "asked with no old draft");
+    assert_eq!(names(&first), [DRAFT]);
+    drop(first);
+
+    let mut second = open();
+    assert!(second.session().selection().is_empty());
+    second.set_cursor(View::Library, Some(1));
+    second.perform(Action::Add);
+    second.refresh();
+    assert_eq!(second.input(), &Input::Draft(1));
+    second.answer_draft(Some(DraftAnswer::Save));
+    assert_eq!(second.save_title(), "Save the old draft as");
+    // Closing the prompt ends saving the draft; the next save is the selection's.
+    second.set_input(Input::None);
+    assert_eq!(second.save_title(), "Save the selection as");
+
+    second.perform(Action::Add);
+    second.perform(Action::Add);
+    second.refresh();
+    assert_eq!(second.input(), &Input::Draft(1));
+    second.answer_draft(Some(DraftAnswer::Save));
+    second.save_as("kept");
+    assert_eq!(names(&second), [DRAFT, "kept"]);
+    let draft = second.session().playlists()[0].id;
+    let paths: Vec<String> = (second.session().playlist_tracks(draft).into_iter())
+        .map(|t| t.path)
+        .collect();
+    assert_eq!(paths, ["/m/b.flac"]);
+}
+
+#[test]
+fn a_in_the_queue_view_adds_the_track_to_the_selection_once() {
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let a = track(&songs.join("a.wav").to_string_lossy());
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        Config::parse("draft = 'off'").unwrap(),
+    );
+    model.session_mut().enqueue(std::slice::from_ref(&a), false);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !(model.session().player().caught_up()
+        && model.session().player().status().state != State::Stopped)
+    {
+        assert!(Instant::now() < deadline, "not playing");
+        model.refresh();
+    }
+    model.refresh();
+    model.perform(Action::ShowView(View::Queue));
+    model.set_cursor(View::Queue, Some(0));
+    model.perform(Action::Add);
+    assert_eq!(model.session().selection().len(), 1);
+    assert_eq!(model.session().selection()[0].path, a.path);
+    model.perform(Action::Add);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::AlreadyInSelection)))
+    );
+    assert_eq!(model.session().selection().len(), 1);
+}
+
+#[test]
+fn edit_fills_the_selection_asking_first_and_save_offers_the_playlist_s_name() {
+    let (mut model, _dir) = model();
+    let row = |m: &Model, name: &str| m.session().playlists().iter().position(|p| p.name == name);
+    model.perform(Action::ShowView(View::Playlists));
+    model.set_cursor(View::Playlists, row(&model, "late"));
+    model.perform(Action::EditPlaylist);
+    assert_eq!(model.view(), View::Selection);
+    assert_eq!(model.session().selection().len(), 2);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::Editing {
+            name: "late".into()
+        })))
+    );
+    model.perform(Action::StartSave);
+    assert_eq!(model.input(), &Input::SavePlaylist("late".into()));
+    model.set_input(Input::None);
+
+    // A selection in progress is replaced only once confirmed.
+    model.perform(Action::ShowView(View::Playlists));
+    model.set_cursor(View::Playlists, row(&model, "early"));
+    model.perform(Action::EditPlaylist);
+    assert!(matches!(
+        model.input(),
+        Input::Confirm(Confirm::EditPlaylist { replacing: 2, .. })
+    ));
+    assert_eq!(model.session().selection().len(), 2);
+    model.answer(true);
+    assert_eq!(model.session().selection().len(), 1);
+    assert_eq!(
+        model.session().editing().map(|p| p.name.as_str()),
+        Some("early")
+    );
 }

@@ -95,6 +95,7 @@ main { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minma
 .row.cursor { background: var(--selected-bg); font-weight: 700; }
 .row.cursor .album, .row.cursor .time, .row.cursor .tracks { color: var(--dim-selected); }
 .row.playing .title { color: var(--accent); }
+.row.played .title { color: var(--dim); }
 .row.loading { color: var(--dim); }
 .empty { padding: 16px 12px; color: var(--dim); margin: 0; }
 
@@ -209,12 +210,14 @@ dialog input[type=text] { width: 100%; }
 
 <main>
   <div class="toolbar" id="selection-bar" hidden>
+    <strong id="editing" hidden></strong>
     <button data-command="save">Save as playlist</button>
     <button data-command="clear">Clear selection</button>
     <button data-command="enqueue all">Queue the selection</button>
   </div>
   <div class="toolbar" id="queue-bar" hidden>
-    <button data-command="queue-clear">Clear queue</button>
+    <button data-command="save">Save as playlist</button>
+    <button data-command="clear">Clear queue</button>
   </div>
   <div class="list" id="list" role="listbox" tabindex="0" aria-label="Tracks">
     <div class="spacer" id="spacer"></div>
@@ -223,7 +226,7 @@ dialog input[type=text] { width: 100%; }
 </main>
 
 <footer>
-  <div class="now"><span class="dim" aria-hidden="true">&gt;</span><strong id="now">nothing playing</strong><span class="dim" id="format"></span><span class="dim" id="bpm"></span></div>
+  <div class="now"><span class="dim" aria-hidden="true">&gt;</span><strong id="now">nothing playing</strong><span class="dim" id="format"></span><span class="dim" id="bpm"></span><span class="dim" id="stopping"></span></div>
   <div class="progress-row">
     <span class="clock" id="position">0:00</span>
     <div class="bar" id="bar" role="slider" tabindex="0" aria-label="Position; shift-click marks" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
@@ -292,6 +295,15 @@ dialog input[type=text] { width: 100%; }
   <h2>Confirm</h2>
   <p id="question"></p>
   <div class="actions"><button id="no">No</button><button id="yes">Yes</button></div>
+</dialog>
+
+<dialog id="draft-dialog">
+  <h2>Draft</h2>
+  <p id="draft-question"></p>
+  <div class="actions">
+    <button data-draft="cancel">Cancel</button><button data-draft="save">Save as...</button>
+    <button data-draft="append">Append</button><button data-draft="overwrite">Overwrite</button>
+  </div>
 </dialog>
 
 <dialog id="name-dialog">
@@ -460,6 +472,7 @@ function drawRow(i, row, cursor, h) {
       span("title", row.title), span("time", row.time || "-"));
     // A track queued twice is two rows, so the queue marks one by its index.
     if (list.view === "queue" ? i === state.queue_playing : row.key === state.path) el.classList.add("playing");
+    if (list.view === "queue" && i < state.queue_played) el.classList.add("played");
   }
   const menu = document.createElement("button");
   menu.className = "menu";
@@ -486,8 +499,9 @@ const ROW_MENUS = {
   selection: [["Play from here", "play"], ["Remove", "remove"], ["Move up", "move -1"], ["Move down", "move +1"],
     ["Play next", "enqueue next"], ["Add to queue", "enqueue"]],
   playlists: [["Play", "play"], ["Add to selection", "add"], ["Play next", "enqueue next"], ["Add to queue", "enqueue"],
-    ["Rename", "rename"], ["Delete", "delete"]],
-  queue: [["Play from here", "play"], ["Remove from queue", "dequeue"], ["Move up", "reorder -1"], ["Move down", "reorder +1"]],
+    ["Edit", "edit"], ["Rename", "rename"], ["Delete", "delete"]],
+  queue: [["Play from here", "play"], ["Remove from queue", "remove"], ["Add to selection", "add"],
+    ["Move up", "move -1"], ["Move down", "move +1"]],
 };
 
 // Puts the cursor on row `i`, then runs `command` there.
@@ -539,7 +553,9 @@ $("menu-button").addEventListener("click", () => {
   const items = [
     ["Keys", "keys"], ["Commands", "help"], ["Command line", "command"],
     ["Clear search", "search-clear"],
-    ["Save selection as playlist", "save"], ["Clear selection", "clear"],
+    ["Save as playlist", "save"], ["Clear selection", "clear"],
+    ["Stop after this track", "stop after"], ["Stop in 30 minutes", "stop in 30:00"],
+    ["Sleep timer off", "stop in off"],
     ["Theme: system", "theme system"], ["Theme: light", "theme light"], ["Theme: dark", "theme dark"],
   ];
   const buttons = items.map(([label, command]) =>
@@ -634,17 +650,27 @@ search.addEventListener("blur", () => {
 
 $("yes").addEventListener("click", () => call("/answer", "yes"));
 $("no").addEventListener("click", () => call("/answer", "no"));
+for (const b of document.querySelectorAll("[data-draft]")) {
+  b.addEventListener("click", () => call("/draft", b.dataset.draft));
+}
+$("draft-dialog").addEventListener("keydown", e => {
+  // As in the other frontends: o, a or s answers.
+  const answer = { o: "overwrite", a: "append", s: "save" }[e.key];
+  if (answer) { e.preventDefault(); call("/draft", answer); }
+});
 $("name-ok").addEventListener("click", () => call("/name", $("name").value));
 $("name-cancel").addEventListener("click", () => call("/close", ""));
 $("name").addEventListener("keydown", e => {
   if (e.key === "Enter") { e.preventDefault(); call("/name", $("name").value); }
 });
 $("list-close").addEventListener("click", () => call("/close", ""));
-for (const id of ["confirm-dialog", "name-dialog", "list-dialog"]) {
+for (const id of ["confirm-dialog", "draft-dialog", "name-dialog", "list-dialog"]) {
   // Escape asks the model to close what it has open, rather than hiding it.
   $(id).addEventListener("cancel", e => {
     e.preventDefault();
-    if (id === "confirm-dialog") call("/answer", "no"); else call("/close", "");
+    if (id === "confirm-dialog") call("/answer", "no");
+    else if (id === "draft-dialog") call("/draft", "cancel");
+    else call("/close", "");
   });
 }
 $("confirm-dialog").addEventListener("keydown", e => {
@@ -661,14 +687,16 @@ async function followInput() {
   const input = state.input, kind = input.kind, opened = kind !== shownInput;
   shownInput = kind;
   show($("confirm-dialog"), kind === "confirm");
+  show($("draft-dialog"), kind === "draft");
   show($("name-dialog"), kind === "save" || kind === "rename");
   show($("list-dialog"), kind === "keys" || kind === "commands" || kind === "roots" || kind === "info");
   $("commandbar").hidden = kind !== "command";
   $("status").hidden = kind === "command";
   if (!opened) return;
   if (kind === "confirm") $("question").textContent = input.question;
+  if (kind === "draft") $("draft-question").textContent = input.question;
   if (kind === "save" || kind === "rename") {
-    $("name-heading").textContent = kind === "save" ? "Save the selection as" : `Rename "${input.from}" to`;
+    $("name-heading").textContent = kind === "save" ? input.title : `Rename "${input.from}" to`;
     $("name").value = input.text;
     $("name").focus();
   }
@@ -848,6 +876,8 @@ function draw(next) {
     count.textContent = s.counts[count.dataset.count];
   }
   $("selection-bar").hidden = s.view !== "selection";
+  $("editing").hidden = s.editing == null;
+  $("editing").textContent = s.editing == null ? "" : `Editing "${s.editing}"`;
   $("queue-bar").hidden = s.view !== "queue";
   $("list").setAttribute("aria-label", s.view === "playlists" ? "Playlists" : "Tracks");
 
@@ -860,7 +890,7 @@ function draw(next) {
   }
   followCursor();
   if (!previous || viewChanged || previous.lists !== s.lists || previous.path !== s.path
-      || previous.queue_playing !== s.queue_playing
+      || previous.queue_playing !== s.queue_playing || previous.queue_played !== s.queue_played
       || previous.cursors[s.view] !== s.cursors[s.view] || previous.searching !== s.searching) {
     drawRows();
   }
@@ -872,6 +902,7 @@ function draw(next) {
   $("now").textContent = s.title ? (s.artist ? s.title + " - " + s.artist : s.title) : "nothing playing";
   $("format").textContent = s.format || "";
   $("bpm").textContent = s.bpm != null ? "  " + s.bpm + " BPM" : "";
+  $("stopping").textContent = s.stopping != null ? "  " + s.stopping : "";
   $("pause").textContent = s.state === "playing" ? "Pause" : "Play";
   document.title = s.title ? s.title + " - playr" : "playr";
   showProgress();

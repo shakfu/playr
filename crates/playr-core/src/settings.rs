@@ -49,6 +49,10 @@ pub struct Settings {
     pub slice_fades: crate::samples::Fades,
     /// After a scan, remove tracks whose files are gone, without asking.
     pub auto_prune: bool,
+    /// Store the queue, to offer with the track playing at the next start.
+    pub keep_queue: bool,
+    /// What a session does with the draft playlist an earlier one left.
+    pub draft: Draft,
     /// After a scan, analyse the tracks it added or found changed.
     pub analyze_on_scan: bool,
     /// The output device's ID, or `None` for the default.
@@ -60,6 +64,29 @@ pub struct Settings {
     pub sort: Vec<SortKey>,
     /// Session values to remember in the library between runs.
     pub persist: Vec<Persist>,
+}
+
+/// What a session does with a draft playlist an earlier session left, once
+/// its own selection first changes. See `Session::set_draft`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Draft {
+    /// Ask whether to overwrite it, append to it, or save it under a name.
+    #[default]
+    Ask,
+    Overwrite,
+    /// Put its tracks back in the selection, before the new ones.
+    Append,
+    /// Keep no draft: the selection is not saved.
+    Off,
+}
+
+impl Draft {
+    pub const NAMES: [(&'static str, Draft); 4] = [
+        ("ask", Draft::Ask),
+        ("overwrite", Draft::Overwrite),
+        ("append", Draft::Append),
+        ("off", Draft::Off),
+    ];
 }
 
 /// A session value `persist` can name. While it is named, a remembered value
@@ -74,10 +101,12 @@ pub enum Persist {
     /// Remembered for each program, as a program's table may set them.
     Columns,
     Sort,
+    /// `:` command lines, shared by every program.
+    History,
 }
 
 impl Persist {
-    pub const NAMES: [(&'static str, Persist); 7] = [
+    pub const NAMES: [(&'static str, Persist); 8] = [
         ("eq", Persist::Eq),
         ("volume", Persist::Volume),
         ("mode", Persist::Mode),
@@ -85,6 +114,7 @@ impl Persist {
         ("theme", Persist::Theme),
         ("columns", Persist::Columns),
         ("sort", Persist::Sort),
+        ("history", Persist::History),
     ];
 
     pub fn name(self) -> &'static str {
@@ -108,6 +138,8 @@ impl Default for Settings {
             slice_edges: crate::samples::Edges::Exact,
             slice_fades: crate::samples::Fades::default(),
             auto_prune: false,
+            keep_queue: true,
+            draft: Draft::Ask,
             analyze_on_scan: false,
             device: None,
             replaygain: ReplayGain::Off,
@@ -280,6 +312,16 @@ impl Settings {
                     ),
                 },
                 ("auto_prune", DeValue::Boolean(b)) => self.auto_prune = *b,
+                ("keep_queue", DeValue::Boolean(b)) => self.keep_queue = *b,
+                ("draft", DeValue::String(s)) => {
+                    match Draft::NAMES.iter().find(|d| d.0.eq_ignore_ascii_case(s)) {
+                        Some(&(_, draft)) => self.draft = draft,
+                        None => {
+                            let names = Draft::NAMES.map(|d| d.0).join(", ");
+                            errors.add(at, format!("unknown draft {s}; choices: {names}"))
+                        }
+                    }
+                }
                 ("analyze_on_scan", DeValue::Boolean(b)) => self.analyze_on_scan = *b,
                 // A control character is a backslash read as an escape: `\n`
                 // in "C:\new". No path means one.
@@ -344,7 +386,7 @@ impl Settings {
                 }
                 (
                     "mode" | "samples" | "slice_edges" | "auto_prune" | "analyze_on_scan"
-                    | "device" | "replaygain" | "persist" | "after_queue",
+                    | "device" | "replaygain" | "persist" | "after_queue" | "keep_queue" | "draft",
                     v,
                 ) => errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v))),
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),

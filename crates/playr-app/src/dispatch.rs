@@ -12,7 +12,7 @@ use std::time::Duration;
 use playr_core::audio::eq::Band;
 use playr_core::audio::Cmd;
 use playr_core::db::query::Playlist;
-use playr_core::db::Track;
+use playr_core::db::{SavedQueue, Track};
 use playr_core::event::JobId;
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_core::samples::{Cut, Plan};
@@ -28,21 +28,32 @@ use crate::{Display, Theme, View};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Confirm {
     DeletePlaylist(Playlist),
-    /// Overwrite the playlist of this name with the selection.
-    ReplacePlaylist(String),
+    /// Replace the selection, which holds `replacing` tracks, with the
+    /// playlist's, to edit it.
+    EditPlaylist {
+        playlist: Playlist,
+        replacing: usize,
+    },
+    /// Overwrite the playlist `name` with the selection, or the queue.
+    ReplacePlaylist {
+        name: String,
+        queue: bool,
+    },
     /// Empty the selection, which holds this many tracks.
     ClearSelection(usize),
-    /// Take this many waiting tracks out of the queue.
+    /// Take this many tracks, played and waiting, out of the queue.
     ClearQueue(usize),
     /// Remove the tracks and marks under this directory whose files are gone,
     /// or under every recorded root when `None`.
     Prune(Option<PathBuf>),
     /// Forget this root, and every track and mark under it.
     ForgetRoot(PathBuf),
-    /// Take up this track again, at the position playr closed on.
+    /// Take up this track again, at the position playr closed on, and the
+    /// queue stored with it.
     Resume {
         path: PathBuf,
         at: Duration,
+        queue: SavedQueue,
     },
     /// Remove `count` marks from the track at `path`, which was playing when asked.
     ClearMarks {
@@ -61,11 +72,25 @@ impl Confirm {
     pub fn question(&self) -> String {
         match self {
             Confirm::DeletePlaylist(p) => format!("delete playlist \"{}\"?", p.name),
-            Confirm::ReplacePlaylist(name) => {
-                format!("replace playlist \"{name}\" with the selection?")
+            Confirm::EditPlaylist {
+                playlist,
+                replacing,
+            } => {
+                let tracks = match replacing {
+                    1 => "1 selected track".into(),
+                    n => format!("{n} selected tracks"),
+                };
+                format!(
+                    "replace the {tracks} with \"{}\" to edit it?",
+                    playlist.name
+                )
+            }
+            Confirm::ReplacePlaylist { name, queue } => {
+                let with = if *queue { "the queue" } else { "the selection" };
+                format!("replace playlist \"{name}\" with {with}?")
             }
             Confirm::ClearSelection(n) => format!("clear all {n} tracks from the selection?"),
-            Confirm::ClearQueue(n) => format!("take all {n} waiting tracks out of the queue?"),
+            Confirm::ClearQueue(n) => format!("clear all {n} tracks from the queue?"),
             Confirm::Prune(Some(dir)) => format!(
                 "remove tracks and marks under {} whose files are gone?",
                 crate::message::home_as_tilde(dir)
@@ -77,12 +102,18 @@ impl Confirm {
                 "forget {}, and every track and mark under it?",
                 crate::message::home_as_tilde(dir)
             ),
-            Confirm::Resume { path, at } => {
+            Confirm::Resume { path, at, queue } => {
                 let name = path
                     .file_name()
                     .unwrap_or(path.as_os_str())
                     .to_string_lossy();
-                format!("take up {name} again at {}?", crate::message::fmt_time(*at))
+                let queued = match queue.len() {
+                    0 => String::new(),
+                    1 => ", with its queue of 1 track".into(),
+                    n => format!(", with its queue of {n} tracks"),
+                };
+                let at = crate::message::fmt_time(*at);
+                format!("take up {name} again at {at}{queued}?")
             }
             Confirm::ClearMarks { path, count } => {
                 let name = path
@@ -235,7 +266,8 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             let status = f.session().player().status();
             let playing = f.session().queue_rows().first() == Some(&status.index)
                 && status.state != playr_core::audio::State::Stopped;
-            match f.session().queue_rows().len() - usize::from(playing) {
+            let live = f.session().queue_rows().len() - usize::from(playing);
+            match f.session().played().len() + live {
                 0 => f.notify(Message::QueueEmpty),
                 n => f.confirm(Confirm::ClearQueue(n)),
             }
@@ -278,13 +310,23 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             0 => f.notify(Refusal::SelectionEmpty.into()),
             n => f.confirm(Confirm::ClearSelection(n)),
         },
-        Action::StartSave => match f.session().check_save() {
+        Action::StartSave => match check_save(f) {
             Ok(()) => f.prompt(Prompt::Save),
             Err(refusal) => f.notify(refusal.into()),
         },
-        Action::SaveAs(name) => match f.session().check_save() {
+        Action::SaveAs(name) => match check_save(f) {
             Ok(()) => save_as(f, &name),
             Err(refusal) => f.notify(refusal.into()),
+        },
+        Action::EditPlaylist => match playlist_under_cursor(f) {
+            None => f.notify(Message::NoPlaylistUnderCursor),
+            Some(playlist) => match f.session().selection().len() {
+                0 => edit(f, &playlist),
+                replacing => f.confirm(Confirm::EditPlaylist {
+                    playlist,
+                    replacing,
+                }),
+            },
         },
         Action::DeletePlaylist => {
             if let Some(pl) = playlist_under_cursor(f) {
@@ -335,6 +377,19 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Next => f.session().send(Cmd::Next),
         Action::Prev => f.session().send(Cmd::Prev),
         Action::Stop => f.session().send(Cmd::Stop),
+        Action::StopAfter => {
+            let status = f.session().player().status();
+            if status.state == playr_core::audio::State::Stopped {
+                return f.notify(Refusal::NothingPlaying.into());
+            }
+            let on = !status.stop_after;
+            f.session().send(Cmd::StopAfter(on));
+            f.notify(Message::StopAfter(on));
+        }
+        Action::StopIn(after) => {
+            f.session_mut().sleep_in(after);
+            f.notify(Message::StopIn(after));
+        }
         Action::Restart => {
             let status = f.session().player().status();
             let Some(path) = status.current().cloned() else {
@@ -706,8 +761,11 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
 /// Does what `question` asked about, once the listener has said yes.
 pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
     match question {
-        Confirm::ReplacePlaylist(name) => {
-            let notice = f.session_mut().save_selection(&name, true);
+        Confirm::ReplacePlaylist { name, queue } => {
+            let notice = match queue {
+                true => f.session_mut().save_queue(&name, true),
+                false => f.session_mut().save_selection(&name, true),
+            };
             f.notify(notice.into());
         }
         Confirm::ClearMarks { path, .. } => {
@@ -727,7 +785,7 @@ pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
             Ok(removed) => f.notify(Outcome::Forgot { dir, removed }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
-        Confirm::Resume { path, at } => f.session_mut().resume(path, at),
+        Confirm::Resume { path, at, queue } => f.session_mut().resume(path, at, queue),
         Confirm::ClearQueue(_) => {
             let outcome = f.session_mut().clear_queue();
             f.notify(outcome.into());
@@ -737,6 +795,7 @@ pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
             f.set_cursor(View::Selection, None);
             f.notify(outcome.into());
         }
+        Confirm::EditPlaylist { playlist, .. } => edit(f, &playlist),
         Confirm::DeletePlaylist(pl) => {
             if let Some(notice) = f.session_mut().delete_playlist(pl.id) {
                 f.set_view(View::Playlists);
@@ -758,10 +817,37 @@ pub fn search(f: &mut impl Frontend, query: &str) {
     f.set_cursor(View::Library, row);
 }
 
-/// Saves the selection as `name`, asking first if that replaces a playlist.
+/// Puts `playlist`'s tracks in the selection to edit, and shows them.
+fn edit(f: &mut impl Frontend, playlist: &Playlist) {
+    let Some(outcome) = f.session_mut().edit_playlist(playlist.id) else {
+        return;
+    };
+    f.set_view(View::Selection);
+    let row = (!f.session().selection().is_empty()).then_some(0);
+    f.set_cursor(View::Selection, row);
+    f.notify(outcome.into());
+}
+
+/// Whether `:save` can save: the queue in its view, else the selection.
+fn check_save(f: &impl Frontend) -> Result<(), Refusal> {
+    match f.view() {
+        View::Queue => f.session().check_save_queue(),
+        _ => f.session().check_save(),
+    }
+}
+
+/// Saves the queue in its view, else the selection, as `name`, asking first
+/// if that replaces a playlist.
 pub fn save_as(f: &mut impl Frontend, name: &str) {
-    match f.session_mut().save_selection(name, false) {
-        Notice::Refused(Refusal::WouldReplace(name)) => f.confirm(Confirm::ReplacePlaylist(name)),
+    let queue = f.view() == View::Queue;
+    let notice = match queue {
+        true => f.session_mut().save_queue(name, false),
+        false => f.session_mut().save_selection(name, false),
+    };
+    match notice {
+        Notice::Refused(Refusal::WouldReplace(name)) => {
+            f.confirm(Confirm::ReplacePlaylist { name, queue })
+        }
         notice => f.notify(notice.into()),
     }
 }
@@ -783,7 +869,7 @@ fn len(f: &impl Frontend, view: View) -> usize {
         View::Library => f.listed().len(),
         View::Selection => f.session().selection().len(),
         View::Playlists => f.session().playlists().len(),
-        View::Queue => f.session().queue_rows().len(),
+        View::Queue => f.session().played().len() + f.session().queue_rows().len(),
         View::Sampler => 0,
     }
 }
@@ -872,9 +958,8 @@ fn activate(f: &mut impl Frontend) {
             }
         }
         View::Queue => {
-            let rows = f.session().queue_rows();
-            if let Some(&index) = f.cursor(View::Queue).and_then(|i| rows.get(i)) {
-                f.session().send(Cmd::Jump(index));
+            if let Some(row) = f.cursor(View::Queue) {
+                f.session_mut().play_queue_row(row);
             }
         }
         View::Sampler => {}
@@ -928,7 +1013,16 @@ fn add(f: &mut impl Frontend) {
             };
             outcome
         }
-        View::Selection | View::Sampler | View::Queue => return,
+        View::Queue => {
+            let Some(i) = f.cursor(View::Queue) else {
+                return;
+            };
+            let Some(track) = f.session().queue_tracks().get(i).cloned() else {
+                return;
+            };
+            f.session_mut().add_to_selection(track)
+        }
+        View::Selection | View::Sampler => return,
     };
     // Keep the selection's cursor on a track: on the first once a track is
     // added, and within the list when unselecting shortens it.

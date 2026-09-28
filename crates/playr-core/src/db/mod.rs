@@ -312,10 +312,70 @@ pub fn set_state(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Forgets what was playing, so the next start offers nothing.
+/// Forgets what was playing and the queue, so the next start offers nothing.
 pub fn clear_resume(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM resume WHERE id = 0", [])?;
+    conn.execute("DELETE FROM resume_queue", [])?;
     Ok(())
+}
+
+/// The queue as stored with the resume row.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SavedQueue {
+    /// Queued tracks that had played, oldest first.
+    pub played: Vec<PathBuf>,
+    /// Whether the resume row's track was itself queued.
+    pub playing: bool,
+    pub waiting: Vec<PathBuf>,
+}
+
+impl SavedQueue {
+    /// Rows in the Queue view, the track playing among them if queued.
+    pub fn len(&self) -> usize {
+        self.played.len() + usize::from(self.playing) + self.waiting.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Stores `queue`, replacing what was there. `playing` is the track playing,
+/// stored only when `queue.playing` is set. Paths that are not valid UTF-8
+/// are dropped, as [`set_resume`] drops them.
+pub fn set_resume_queue(conn: &Connection, queue: &SavedQueue, playing: &Path) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM resume_queue", [])?;
+    let rows = queue
+        .played
+        .iter()
+        .map(|p| (p.as_path(), "played"))
+        .chain(queue.playing.then_some((playing, "playing")))
+        .chain(queue.waiting.iter().map(|p| (p.as_path(), "waiting")));
+    let mut insert = tx.prepare("INSERT INTO resume_queue (path, state) VALUES (?1, ?2)")?;
+    for (path, state) in rows {
+        if let Some(path) = path.to_str() {
+            insert.execute([path, state])?;
+        }
+    }
+    drop(insert);
+    tx.commit()
+}
+
+/// The queue stored with the resume row; empty if none was.
+pub fn resume_queue(conn: &Connection) -> Result<SavedQueue> {
+    let mut stmt = conn.prepare("SELECT path, state FROM resume_queue ORDER BY row")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut queue = SavedQueue::default();
+    for row in rows {
+        let (path, state) = row?;
+        match state.as_str() {
+            "played" => queue.played.push(path.into()),
+            "playing" => queue.playing = true,
+            _ => queue.waiting.push(path.into()),
+        }
+    }
+    Ok(queue)
 }
 
 /// The recorded root `root` names: the path as stored, a path that resolves

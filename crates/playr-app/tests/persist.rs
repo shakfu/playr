@@ -25,6 +25,7 @@ fn values() -> Values {
         mode: Mode::RepeatOne,
         replaygain: ReplayGain::Album,
         theme: Theme::Light,
+        history: vec!["view queue".into(), "view library".into()],
         columns: vec![Column::Title, Column::Tempo],
         sort: vec![
             SortKey {
@@ -50,6 +51,7 @@ fn every_value_reads_back_as_stored() {
         theme: Theme::Dark,
         columns: vec![Column::Artist],
         sort: Vec::new(),
+        history: Vec::new(),
     };
     for (_, p) in Persist::NAMES {
         persist::decode(p, &persist::encode(p, &stored), &mut read);
@@ -84,7 +86,7 @@ fn model(library: &Path, program: Program, settings: &str) -> Model {
 }
 
 const REMEMBER: &str =
-    "persist = ['eq', 'volume', 'mode', 'replaygain', 'theme', 'columns', 'sort']";
+    "persist = ['eq', 'volume', 'mode', 'replaygain', 'theme', 'columns', 'sort', 'history']";
 
 #[test]
 fn remembered_values_win_over_the_settings_at_the_next_start() {
@@ -104,6 +106,9 @@ fn remembered_values_win_over_the_settings_at_the_next_start() {
     ] {
         first.perform(action);
     }
+    for line in &v.history {
+        first.run_command(line);
+    }
     first.quit();
     drop(first);
 
@@ -117,6 +122,7 @@ fn remembered_values_win_over_the_settings_at_the_next_start() {
     assert_eq!(again.theme(), v.theme);
     assert_eq!(again.columns(), &v.columns[..]);
     assert_eq!(again.session().sort(), &v.sort[..]);
+    assert_eq!(again.history().lines(), &v.history[..]);
     drop(again);
 
     // Another program shares the EQ, but keeps its own columns and sort.

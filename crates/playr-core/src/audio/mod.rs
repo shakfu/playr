@@ -190,6 +190,9 @@ pub enum Cmd {
     SetMode(Mode),
     /// What follows the last queued track. See [`AfterQueue`].
     SetAfterQueue(AfterQueue),
+    /// Stop once the track playing ends, or no longer. Ignored while
+    /// stopped, and cleared once playback stops. See [`Status::stop_after`].
+    StopAfter(bool),
     /// Play source frames `start..end` of the current track over and over,
     /// or play on for `None`. A playhead outside them starts at `start`.
     Loop(Option<(u64, u64)>),
@@ -241,6 +244,8 @@ pub struct Status {
     pub looping: Option<(u64, u64)>,
     /// The ReplayGain applied to the audible track, in dB; `None` while off.
     pub gain_db: Option<f32>,
+    /// Whether playback stops once the track playing ends.
+    pub stop_after: bool,
 }
 
 impl Status {
@@ -551,6 +556,8 @@ struct Engine {
     /// Which tracks of `queue` the listener queued.
     queued: Arc<[bool]>,
     after_queue: AfterQueue,
+    /// Stop once the audible track ends. See [`Cmd::StopAfter`].
+    stop_after: bool,
     /// Which track follows which, for the current mode.
     order: Order,
     index: usize,
@@ -611,6 +618,7 @@ impl Engine {
             queue: Arc::default(),
             queued: Arc::default(),
             after_queue: AfterQueue::default(),
+            stop_after: false,
             order: Order::new(0, Mode::Normal, 0, order::random_seed()),
             index: 0,
             state: State::Stopped,
@@ -782,6 +790,11 @@ impl Engine {
                 self.after_queue = after;
                 self.discard_chosen();
             }
+            Cmd::StopAfter(on) => {
+                self.stop_after = on && self.state != State::Stopped;
+                // As a mode change: drops or restores the next track chosen.
+                self.discard_chosen();
+            }
             Cmd::Loop(bounds) => self.set_loop(bounds, false, (0, 0)),
             Cmd::PlayOnce(start, end, fades) => {
                 self.set_loop(Some((start, end)), true, fades);
@@ -852,8 +865,12 @@ impl Engine {
     }
 
     /// The track to play after `i`, as the order has it, unless `i` is the
-    /// last queued track and the queue is set to stop there.
+    /// last queued track and the queue is set to stop there, or playback is
+    /// set to stop after it. A skip is never stopped.
     fn following(&mut self, i: usize, skipping: bool) -> Option<usize> {
+        if self.stop_after && !skipping {
+            return None;
+        }
         let next = self.order.successor(i, skipping)?;
         let queued = |j: usize| self.queued.get(j).copied().unwrap_or(false);
         let ends_queue = queued(i) && !queued(next);
@@ -1807,6 +1824,9 @@ impl Engine {
             self.emit(Event::StateChanged(self.state));
         }
         self.published = (self.state, self.index);
+        if self.state == State::Stopped {
+            self.stop_after = false;
+        }
         let Ok(mut s) = self.status.lock() else {
             return;
         };
@@ -1824,6 +1844,7 @@ impl Engine {
         s.output_rate = self.out.as_ref().map(|o| o.plan.rate).unwrap_or(0);
         s.resampling = self.conv.as_ref().is_some_and(Converter::resampling);
         s.semitones = self.semitones;
+        s.stop_after = self.stop_after;
         s.gain_db = match self.replaygain {
             ReplayGain::Off => None,
             _ => Some(

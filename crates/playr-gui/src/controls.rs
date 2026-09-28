@@ -4,6 +4,8 @@
 //! test reads them, so a control cannot perform one thing and be counted as
 //! another.
 
+use std::time::Duration;
+
 use playr_app::action::{Action, Nudge, Slicing, Zoom};
 use playr_app::sampler::Edge;
 use playr_app::{Display, Theme, View};
@@ -56,6 +58,12 @@ pub const THEME_MENU: &[Control] = &[
 pub const PLAYBACK_MENU: &[Control] = &[
     control("Play or pause", Action::TogglePause),
     control("Stop", Action::Stop),
+    control("Stop after this track", Action::StopAfter),
+    control(
+        "Stop in 30 minutes",
+        Action::StopIn(Some(Duration::from_secs(1800))),
+    ),
+    control("Sleep timer off", Action::StopIn(None)),
     control("Next track", Action::Next),
     control("Previous track", Action::Prev),
     control("Next mode", Action::CycleMode(true)),
@@ -101,6 +109,7 @@ pub const SELECTION_ROW: &[Control] = &[
 pub const QUEUE_ROW: &[Control] = &[
     control("Play from here", Action::Activate),
     control("Remove from queue", Action::Remove),
+    control("Add to selection", Action::Add),
     control("Track info", Action::ShowInfo),
     control("Move up", Action::MoveTrack(-1)),
     control("Move down", Action::MoveTrack(1)),
@@ -114,7 +123,10 @@ pub const SELECTION_BAR: &[Control] = &[
 ];
 
 /// Buttons above the queue.
-pub const QUEUE_BAR: &[Control] = &[control("Clear queue", Action::ClearQueue)];
+pub const QUEUE_BAR: &[Control] = &[
+    control("Save as playlist", Action::StartSave),
+    control("Clear queue", Action::ClearQueue),
+];
 
 /// Buttons above search results.
 pub const RESULTS_BAR: &[Control] = &[control("Queue all results", Action::EnqueueAll)];
@@ -124,6 +136,7 @@ pub const PLAYLIST_ROW: &[Control] = &[
     control("Add to selection", Action::Add),
     control("Play next", Action::Enqueue(true)),
     control("Add to queue", Action::Enqueue(false)),
+    control("Edit", Action::EditPlaylist),
     control("Rename", Action::StartRename),
     control("Delete", Action::DeletePlaylist),
 ];

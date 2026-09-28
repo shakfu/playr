@@ -101,6 +101,16 @@ CREATE TABLE IF NOT EXISTS resume (
   position INTEGER NOT NULL  -- milliseconds into the track
 );
 
+-- The queue when playr last closed, offered with the resume row: the queued
+-- tracks that had played, the track playing if it was queued, and those
+-- waiting. Compatible with older libraries: CREATE IF NOT EXISTS needs no
+-- version bump.
+CREATE TABLE IF NOT EXISTS resume_queue (
+  row   INTEGER PRIMARY KEY,  -- order in the Queue view
+  path  TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('played', 'playing', 'waiting'))
+);
+
 -- Session values playr remembers between runs, as the `persist` setting
 -- chooses: the EQ, the volume, a program's sort. Keyed by name; the value is
 -- text in the form a command takes. Compatible with older libraries: CREATE

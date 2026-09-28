@@ -20,7 +20,7 @@ use eframe::egui;
 use playr_app::action::Action;
 use playr_app::command::{self, view_name};
 use playr_app::dispatch::Frontend;
-use playr_app::model::{Input, Model};
+use playr_app::model::{DraftAnswer, Input, Model};
 use playr_app::{Theme, View};
 use playr_core::audio::State;
 
@@ -166,6 +166,19 @@ impl Gui {
                 Input::Confirm(_) => self
                     .model
                     .answer(key == playr_app::action::Key::parse("y").expect("a key")),
+                // As in the terminal: anything but an answer leaves the draft alone.
+                Input::Draft(_) => {
+                    let is = |k: &str| key == playr_app::action::Key::parse(k).expect("a key");
+                    let answer = [
+                        ("o", DraftAnswer::Overwrite),
+                        ("a", DraftAnswer::Append),
+                        ("s", DraftAnswer::Save),
+                    ]
+                    .into_iter()
+                    .find(|(k, _)| is(k))
+                    .map(|(_, a)| a);
+                    self.model.answer_draft(answer);
+                }
                 // Any key closes a list.
                 Input::Help | Input::CommandHelp => self.model.set_input(Input::None),
                 _ => match self.model.keymap().lookup(key, self.model.view()).cloned() {
@@ -504,7 +517,24 @@ impl Gui {
                     });
                 });
             }
-            Input::SavePlaylist(_) => self.name_dialog(ctx, "Save the selection as"),
+            Input::Draft(tracks) => {
+                egui::Modal::new(egui::Id::new("draft")).show(ctx, |ui| {
+                    ui.label(playr_app::message::draft_question(tracks));
+                    ui.horizontal(|ui| {
+                        for (label, answer) in [
+                            ("Overwrite", Some(DraftAnswer::Overwrite)),
+                            ("Append", Some(DraftAnswer::Append)),
+                            ("Save as...", Some(DraftAnswer::Save)),
+                            ("Cancel", None),
+                        ] {
+                            if ui.button(label).clicked() {
+                                self.model.answer_draft(answer);
+                            }
+                        }
+                    });
+                });
+            }
+            Input::SavePlaylist(_) => self.name_dialog(ctx, self.model.save_title()),
             Input::RenamePlaylist { from, .. } => {
                 self.name_dialog(ctx, &format!("Rename \"{}\" to", from.name))
             }

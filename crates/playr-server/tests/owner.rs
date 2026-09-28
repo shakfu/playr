@@ -102,7 +102,15 @@ fn library() -> (Model, tempfile::TempDir) {
     query::save_playlist(&mut conn, "late", &ids).unwrap();
     query::save_playlist(&mut conn, "early", &ids[1..2]).unwrap();
     let player = common::fake_player().0;
-    (Model::new(conn, player, Vec::new(), Config::default()), dir)
+    (Model::new(conn, player, Vec::new(), no_draft()), dir)
+}
+
+/// The default config without the draft playlist, which would show among
+/// the playlists these tests count.
+fn no_draft() -> Config {
+    let mut config = Config::default();
+    config.settings.draft = playr_core::settings::Draft::Off;
+    config
 }
 
 /// Runs `requests` on `model` until they are done, and returns it.

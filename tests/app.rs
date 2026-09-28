@@ -6,6 +6,7 @@ mod common;
 
 use playr::ui::{App, Input};
 use playr_app::action::Key;
+use playr_app::config::Config;
 use playr_app::message::Message;
 use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal};
@@ -72,7 +73,15 @@ fn app_with(
         })
         .collect();
     query::save_playlist(&mut conn, "late", &[tracks[0].id]).unwrap();
-    (App::with_selection(conn, player, tracks), dir)
+    (App::configured(conn, player, tracks, no_draft()), dir)
+}
+
+/// The default config without the draft playlist, which would show among
+/// the playlists these tests count.
+fn no_draft() -> Config {
+    let mut config = Config::default();
+    config.settings.draft = playr_core::settings::Draft::Off;
+    config
 }
 
 fn playlist_lens(app: &mut App) -> Vec<(String, i64)> {
@@ -946,7 +955,7 @@ fn view_commands_act_on_the_view_they_belong_to() {
     assert_eq!(
         said(&app),
         msg(Message::Command(
-            ":clear works in the selection view".into()
+            ":clear works in the selection and queue views".into()
         ))
     );
     command(&mut app, "add");
@@ -1057,7 +1066,7 @@ fn map_and_unmap_change_keys_while_running() {
     assert_eq!(
         said(&app),
         msg(Message::Command(
-            ":clear works in the selection view; use map selection ctrl-x clear".into()
+            ":clear works in the selection and queue views".into()
         ))
     );
     command(&mut app, "map selection ctrl-x clear");

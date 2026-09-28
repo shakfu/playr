@@ -395,7 +395,13 @@ fn playlists_are_renamed_deleted_and_replaced_through_confirmation() {
     assert_eq!(last(&f), Some(&Refusal::SelectionEmpty.into()));
     dispatch(Action::Add, &mut f);
     dispatch(Action::SaveAs("late".into()), &mut f);
-    assert_eq!(f.asked, Some(Confirm::ReplacePlaylist("late".into())));
+    assert_eq!(
+        f.asked,
+        Some(Confirm::ReplacePlaylist {
+            name: "late".into(),
+            queue: false
+        })
+    );
     confirmed(f.asked.take().unwrap(), &mut f);
     assert!(matches!(
         last(&f),
@@ -544,8 +550,23 @@ fn the_new_questions_say_what_they_will_do() {
         Confirm::Resume {
             path: "/mnt/music/amen.flac".into(),
             at: std::time::Duration::from_secs(95),
+            queue: Default::default(),
         }
         .question(),
         "take up amen.flac again at 1:35?"
+    );
+    let queue = playr_core::db::SavedQueue {
+        played: vec!["/mnt/music/a.flac".into()],
+        playing: true,
+        waiting: vec!["/mnt/music/b.flac".into()],
+    };
+    assert_eq!(
+        Confirm::Resume {
+            path: "/mnt/music/amen.flac".into(),
+            at: std::time::Duration::from_secs(95),
+            queue,
+        }
+        .question(),
+        "take up amen.flac again at 1:35, with its queue of 3 tracks?"
     );
 }

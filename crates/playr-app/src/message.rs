@@ -28,7 +28,7 @@ pub enum Message {
     NoPlaylistUnderCursor,
     /// `:enqueue all` with no search results or selection to queue.
     NothingToQueue,
-    /// `:queue-clear` with nothing waiting in the queue.
+    /// `:clear` in the Queue view, with nothing in the queue.
     QueueEmpty,
     Display(Display),
     Theme(Theme),
@@ -82,6 +82,12 @@ pub enum Message {
     SlicesDiscarded,
     /// A `:` command could not be parsed or run; the parser's own words.
     Command(String),
+    /// Playback will stop once the track playing ends, or no longer will.
+    StopAfter(bool),
+    /// The sleep timer was set to this, or turned off.
+    StopIn(Option<Duration>),
+    /// The sleep timer ran out and stopped playback.
+    Slept,
 }
 
 impl From<Notice> for Message {
@@ -144,7 +150,12 @@ pub fn text(message: &Message) -> String {
         Message::NothingToQueue => {
             "nothing to queue; :enqueue all queues search results or the selection".into()
         }
-        Message::QueueEmpty => "nothing is waiting in the queue".into(),
+        Message::QueueEmpty => "the queue is empty".into(),
+        Message::StopAfter(true) => "stopping after this track".into(),
+        Message::StopAfter(false) => "playing on after this track".into(),
+        Message::StopIn(Some(d)) => format!("stopping in {}", fmt_time(*d)),
+        Message::StopIn(None) => "sleep timer off".into(),
+        Message::Slept => "sleep timer ran out; stopped".into(),
         Message::NoPlaylistUnderCursor => {
             "no playlist under the cursor in the playlists view".into()
         }
@@ -234,6 +245,9 @@ fn outcome_text(outcome: &Outcome) -> String {
             true => "plays next".into(),
             false => "queued".into(),
         },
+        Outcome::Editing { name } => format!("editing \"{name}\"; s saves it"),
+        Outcome::DraftOverwritten => "the old draft gives way to the selection".into(),
+        Outcome::DraftAppended => "the old draft is back in the selection".into(),
         Outcome::QueueCleared { tracks: 1 } => "took 1 track out of the queue".into(),
         Outcome::QueueCleared { tracks } => format!("took {tracks} tracks out of the queue"),
         Outcome::QueueReplaced { tracks: 1 } => "queue replaced; 1 track was waiting".into(),
@@ -355,6 +369,8 @@ fn refusal_text(refusal: &Refusal) -> String {
     match refusal {
         Refusal::NothingPlaying => "nothing is playing".into(),
         Refusal::SelectionEmpty => "selection is empty".into(),
+        Refusal::NameReserved(name) => format!("\"{name}\" is kept for the selection's draft"),
+        Refusal::QueueEmpty => "the queue is empty".into(),
         Refusal::NoLibraryFile => "no library to save to; `playr scan <dir>` creates one".into(),
         Refusal::NameEmpty => "playlist name cannot be empty".into(),
         Refusal::NameUnchanged => "name unchanged".into(),
@@ -392,6 +408,26 @@ pub fn fmt_time(d: Duration) -> String {
         format!("{h}:{m:02}:{s:02}")
     } else {
         format!("{m}:{s:02}")
+    }
+}
+
+/// The question [`crate::model::Input::Draft`] asks, about a draft of `tracks`.
+pub fn draft_question(tracks: usize) -> String {
+    let tracks = match tracks {
+        1 => "1 track".into(),
+        n => format!("{n} tracks"),
+    };
+    format!("the draft from before holds {tracks}: overwrite it, append it, or save it as?")
+}
+
+/// A pending stop, for the status bar: after this track, on the sleep
+/// timer's `left`, or both; `None` when neither is set.
+pub fn stopping(after: bool, left: Option<Duration>) -> Option<String> {
+    match (after, left) {
+        (false, None) => None,
+        (true, None) => Some("stop after track".into()),
+        (false, Some(d)) => Some(format!("stop in {}", fmt_time(d))),
+        (true, Some(d)) => Some(format!("stop after track, or in {}", fmt_time(d))),
     }
 }
 

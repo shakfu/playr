@@ -59,6 +59,9 @@ pub enum Input {
     },
     /// Waiting for an answer before an action that cannot be undone.
     Confirm(Confirm),
+    /// Asking what to do with the draft an earlier session left, which
+    /// holds this many tracks. See [`Model::answer_draft`].
+    Draft(usize),
     /// The key list is open.
     Help,
     /// The command list is open.
@@ -69,6 +72,15 @@ pub enum Input {
     Info(TrackInfo),
     /// A `:` command being typed.
     Command(CommandLine),
+}
+
+/// An answer to [`Input::Draft`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftAnswer {
+    Overwrite,
+    Append,
+    /// Ask for a name to keep the old draft under.
+    Save,
 }
 
 /// The row under each list's cursor, if the list has rows and one is chosen.
@@ -107,6 +119,8 @@ pub struct Snapshot {
     pub loops: playr_core::session::Loops,
     /// The tone control's gains in dB, by band.
     pub eq: [f32; 3],
+    /// Time left on the sleep timer, if set.
+    pub sleep: Option<Duration>,
 }
 
 /// The interface's state. See the module documentation.
@@ -120,13 +134,16 @@ pub struct Model {
 
     /// Rows for the list the player is playing from.
     playing: Vec<Track>,
-    /// The queue's rows, and whether the first is the track playing.
+    /// The queue's rows, and whether the first after the played rows is the
+    /// track playing.
     queue: Vec<Track>,
     queue_playing: bool,
     /// The player list `playing` was built from, compared by identity.
     playing_source: Arc<[PathBuf]>,
 
     input: Input,
+    /// The save prompt open names the old draft, not the selection.
+    saving_draft: bool,
     /// `:` command lines entered this session.
     history: History,
     keys: Keymap,
@@ -203,6 +220,7 @@ impl Model {
             theme: config.theme,
             columns: config.settings.columns.clone(),
             sort: config.settings.sort.clone(),
+            history: Vec::new(),
         };
         for &p in &config.settings.persist {
             if let Some(text) = session.state(&persist::key(p, config.program)) {
@@ -212,6 +230,8 @@ impl Model {
         session.set_samples_dir(config.settings.samples);
         session.set_slice_edges(config.settings.slice_edges);
         session.set_fades(config.settings.slice_fades);
+        session.keep_queue(config.settings.keep_queue);
+        session.set_draft(config.settings.draft);
         let mut model = Model {
             session,
             view: View::Library,
@@ -222,7 +242,8 @@ impl Model {
             queue_playing: false,
             playing_source: Arc::default(),
             input: Input::None,
-            history: History::default(),
+            saving_draft: false,
+            history: History::new(values.history.clone()),
             keys: config.keys,
             onset_sensitivity: config.settings.onset_sensitivity,
             auto_prune: config.settings.auto_prune,
@@ -260,10 +281,10 @@ impl Model {
         let _ = model.session.set_replaygain(values.replaygain);
         if !tracks.is_empty() {
             model.open_tracks(tracks);
-        } else if let Some((path, at)) = model.session.resumable() {
+        } else if let Some((path, at, queue)) = model.session.resumable() {
             // Only when nothing was handed over: a command line that named
             // tracks has already said what to play.
-            model.input = Input::Confirm(Confirm::Resume { path, at });
+            model.input = Input::Confirm(Confirm::Resume { path, at, queue });
         }
         model.reload();
         model
@@ -272,8 +293,20 @@ impl Model {
     /// Samples the player for the next frame, and takes in what the engine and
     /// background work have sent since the last one.
     pub fn refresh(&mut self) {
+        if self.session.sleep_due() {
+            self.notify(Message::Slept);
+        }
+        // Asked once nothing else is open, so no prompt is cut short.
+        if self.input == Input::None {
+            if let Some(tracks) = self.session.take_draft_question() {
+                self.input = Input::Draft(tracks);
+            }
+        }
         self.follow_player();
         self.follow_queue();
+        // The draft playlist comes and goes as the selection changes.
+        let n = self.session.playlists().len();
+        self.cursors.playlists = (n > 0).then(|| self.cursors.playlists.unwrap_or(0).min(n - 1));
         self.save_values(false);
         let player = self.session.player();
         self.peak_hold = hold_peak(self.peak_hold, player.take_peak(), Instant::now());
@@ -286,6 +319,7 @@ impl Model {
             marks: Vec::new(),
             loops: Default::default(),
             eq: player.eq(),
+            sleep: self.session.sleep_left(),
         };
         let current = self.snapshot.status.current().cloned();
         self.snapshot.loops = self.session.loops_for(current.as_ref());
@@ -367,7 +401,41 @@ impl Model {
     /// Closes the save prompt and saves the selection as `name`.
     pub fn save_as(&mut self, name: &str) {
         self.input = Input::None;
+        if std::mem::take(&mut self.saving_draft) {
+            let notice = self
+                .session
+                .settle_draft(playr_core::session::DraftChoice::SaveAs(name.into()));
+            return self.notify(Message::from(notice));
+        }
         dispatch::save_as(self, name);
+    }
+
+    /// Answers [`Input::Draft`]; `None` leaves the old draft as it is, and
+    /// the question comes again with the next change to the selection.
+    pub fn answer_draft(&mut self, answer: Option<DraftAnswer>) {
+        use playr_core::session::DraftChoice;
+        self.input = Input::None;
+        let choice = match answer {
+            None => return self.notify(Message::Cancelled),
+            Some(DraftAnswer::Save) => {
+                self.input = Input::SavePlaylist(String::new());
+                self.saving_draft = true;
+                return;
+            }
+            Some(DraftAnswer::Overwrite) => DraftChoice::Overwrite,
+            Some(DraftAnswer::Append) => DraftChoice::Append,
+        };
+        let notice = self.session.settle_draft(choice);
+        self.notify(Message::from(notice));
+    }
+
+    /// What the save prompt open saves, as its title words it.
+    pub fn save_title(&self) -> &'static str {
+        match (self.saving_draft, self.view) {
+            (true, _) => "Save the old draft as",
+            (false, View::Queue) => "Save the queue as",
+            _ => "Save the selection as",
+        }
     }
 
     /// Closes the rename prompt and renames `from` to `name`.
@@ -405,6 +473,7 @@ impl Model {
             theme: self.theme,
             columns: self.columns.clone(),
             sort: self.session.sort().to_vec(),
+            history: self.history.lines().to_vec(),
         }
     }
 
@@ -504,26 +573,39 @@ impl Model {
         &self.playing
     }
 
-    /// The queue's rows: the track playing, if it was queued, then the
-    /// queued tracks waiting.
+    /// The queue's rows: the queued tracks that have played, the track
+    /// playing if it was queued, then the queued tracks waiting.
     pub fn queue(&self) -> &[Track] {
         &self.queue
     }
 
     /// The queue row playing, if the track playing was queued.
     pub fn queue_playing(&self) -> Option<usize> {
-        self.queue_playing.then_some(0)
+        self.queue_playing.then_some(self.session.played().len())
     }
 
-    /// Rebuilds the queue's rows from the player's list, which they index.
+    /// How many of the queue's first rows have played.
+    pub fn queue_played(&self) -> usize {
+        self.session.played().len()
+    }
+
+    /// Rebuilds the queue's rows from the played tracks and the player's
+    /// list, and stores them when they change, so a kill loses no edit.
     fn follow_queue(&mut self) {
         let rows = self.session.queue_rows();
         let status = self.session.player().status();
         self.queue_playing = status.state != State::Stopped && rows.first() == Some(&status.index);
-        self.queue = rows
-            .iter()
-            .filter_map(|&i| self.playing.get(i).cloned())
+        let queue: Vec<Track> = (self.session.played().iter().cloned())
+            .chain(rows.iter().filter_map(|&i| self.playing.get(i).cloned()))
             .collect();
+        if !queue
+            .iter()
+            .map(|t| &t.path)
+            .eq(self.queue.iter().map(|t| &t.path))
+        {
+            self.session.remember_queue();
+        }
+        self.queue = queue;
         let n = self.queue.len();
         self.cursors.queue = self.cursors.queue.filter(|_| n > 0).map(|i| i.min(n - 1));
     }
@@ -544,6 +626,8 @@ impl Model {
     /// Replaces the input being collected, as a frontend does while text is
     /// typed into a prompt.
     pub fn set_input(&mut self, input: Input) {
+        // Typing into the save prompt resets it each key; closing it ends it.
+        self.saving_draft &= matches!(input, Input::SavePlaylist(_));
         self.input = input;
     }
 
@@ -718,8 +802,8 @@ impl Model {
                 // The frame's snapshot already shows the track and state;
                 // the new track is stored so a kill still leaves it behind.
                 Event::TrackChanged { .. } => {
-                    self.remember_position();
                     self.session.drop_played();
+                    self.remember_position();
                 }
                 Event::StateChanged(_) => {}
                 Event::PlaybackError(e) => {
@@ -1093,7 +1177,12 @@ impl Frontend for Model {
         self.input = match prompt {
             Prompt::Search => Input::Search(String::new()),
             Prompt::Command => Input::Command(CommandLine::default()),
-            Prompt::Save => Input::SavePlaylist(String::new()),
+            // An edit is saved over its playlist unless renamed here.
+            Prompt::Save => {
+                self.saving_draft = false;
+                let editing = self.session.editing().filter(|_| self.view != View::Queue);
+                Input::SavePlaylist(editing.map(|p| p.name.clone()).unwrap_or_default())
+            }
             // Starts from the current name, which is usually a small edit away.
             Prompt::Rename(from) => {
                 let name = from.name.clone();

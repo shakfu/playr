@@ -64,7 +64,11 @@ pub const COMMANDS: &[Command] = &[
     ),
     any("search", "[QUERY]", "search the library; no query opens /"),
     any("playlist", "NAME", "play a saved playlist"),
-    any("save", "[NAME]", "save the selection as a playlist"),
+    any(
+        "save",
+        "[NAME]",
+        "save the selection or queue as a playlist",
+    ),
     any("scan", "DIR", "add a directory to the library"),
     any("rescan", "", "re-scan directories previously added"),
     any(
@@ -93,7 +97,11 @@ pub const COMMANDS: &[Command] = &[
     any("pause", "", "play or pause"),
     any("next", "", "next track"),
     any("prev", "", "previous track"),
-    any("stop", "", "stop"),
+    any(
+        "stop",
+        "[after | in TIME | in off]",
+        "now, after this track, or in TIME",
+    ),
     any("restart", "", "play from the range's start, or the track's"),
     any(
         "seek",
@@ -157,19 +165,15 @@ pub const COMMANDS: &[Command] = &[
     ),
     only(Selection, "move", "+N | -N", "move the track N places"),
     only(Selection, "clear", "", "empty the selection; asks y/n"),
+    only(View::Queue, "remove", "", "take the track out of the queue"),
+    only(View::Queue, "move", "+N | -N", "move the track N places"),
     only(
         View::Queue,
-        "dequeue",
+        "clear",
         "",
-        "take the track out of the queue",
+        "empty the queue, played too; asks y/n",
     ),
-    only(View::Queue, "reorder", "+N | -N", "move the track N places"),
-    only(
-        View::Queue,
-        "queue-clear",
-        "",
-        "empty the queue of waiting tracks; asks y/n",
-    ),
+    only(View::Queue, "add", "", "add the track to the selection"),
     only(
         Playlists,
         "add",
@@ -177,6 +181,7 @@ pub const COMMANDS: &[Command] = &[
         "add the playlist's tracks to the selection",
     ),
     only(Playlists, "delete", "", "delete the playlist; asks y/n"),
+    only(Playlists, "edit", "", "edit the playlist in the selection"),
     only(Playlists, "rename", "[NAME]", "rename the playlist"),
     only(
         Sampler,
@@ -322,6 +327,9 @@ const ALIASES: &[(&str, &str)] = &[
     ("snap-mark", "mark-snap"),
     ("del-mark", "mark-rm"),
     ("clear-search", "search-clear"),
+    ("dequeue", "remove"),
+    ("reorder", "move"),
+    ("queue-clear", "clear"),
 ];
 
 /// The commands that work in `view`, or in every view when `view` is `None`.
@@ -336,9 +344,15 @@ fn usable(view: Option<View>) -> impl Iterator<Item = &'static Command> + Clone 
 /// A command from another view is an error naming that view, whether typed in
 /// full or as a prefix that matches nothing here.
 fn resolve_command(word: &str, view: Option<View>) -> Result<&'static Command, String> {
+    // A name may work in more than one view, as `:clear` does.
     let elsewhere = |c: &Command| {
-        let there = c.view.expect("usable in every view");
-        format!(":{} works in the {} view", c.name, view_name(there))
+        let there: Vec<&str> = (COMMANDS.iter().filter(|o| o.name == c.name))
+            .map(|o| view_name(o.view.expect("usable in every view")))
+            .collect();
+        match there.as_slice() {
+            [one] => format!(":{} works in the {one} view", c.name),
+            _ => format!(":{} works in the {} views", c.name, there.join(" and ")),
+        }
     };
     if let Some(c) = COMMANDS.iter().find(|c| c.name == word) {
         return if usable(view).any(|u| u.name == c.name) {
@@ -351,7 +365,10 @@ fn resolve_command(word: &str, view: Option<View>) -> Result<&'static Command, S
     match resolve(word, usable(view).map(|c| c.name), "command") {
         Ok(name) => Ok(find(name)),
         Err(e) if e.starts_with("unknown") => {
-            match resolve(word, COMMANDS.iter().map(|c| c.name), "command") {
+            let mut names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
+            names.sort_unstable();
+            names.dedup();
+            match resolve(word, names.into_iter(), "command") {
                 Ok(name) => Err(elsewhere(find(name))),
                 Err(_) => Err(e),
             }
@@ -393,15 +410,14 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Enqueue(false) => "enqueue".into(),
         Enqueue(true) => "enqueue next".into(),
         EnqueueAll => "enqueue all".into(),
-        ClearQueue => "queue-clear".into(),
-        Remove if view == Some(View::Queue) => "dequeue".into(),
+        ClearQueue => "clear".into(),
         Remove => "remove".into(),
-        MoveTrack(n) if view == Some(View::Queue) => format!("reorder {n:+}"),
         MoveTrack(n) => format!("move {n:+}"),
         ClearSelection => "clear".into(),
         StartSave => "save".into(),
         SaveAs(name) => format!("save {name}"),
         DeletePlaylist => "delete".into(),
+        EditPlaylist => "edit".into(),
         StartRename => "rename".into(),
         RenameTo(name) => format!("rename {name}"),
         PlayPlaylist(name) => format!("playlist {name}"),
@@ -422,6 +438,9 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Next => "next".into(),
         Prev => "prev".into(),
         Stop => "stop".into(),
+        StopAfter => "stop after".into(),
+        StopIn(Some(d)) => format!("stop in {}", time(d)),
+        StopIn(None) => "stop in off".into(),
         Restart => "restart".into(),
         SeekBy(n) => format!("seek {n:+}"),
         SeekTo(d) => format!("seek {}", time(d)),
@@ -650,10 +669,8 @@ pub fn only_view(target: &str) -> Option<View> {
     if parse_in(target, None).is_ok() {
         return None;
     }
-    VIEWS
-        .iter()
-        .map(|v| v.1)
-        .find(|v| parse_in(target, Some(*v)).is_ok())
+    let mut views = (VIEWS.iter().map(|v| v.1)).filter(|v| parse_in(target, Some(*v)).is_ok());
+    views.next().filter(|_| views.next().is_none())
 }
 
 /// The playback mode named by `name` or a unique prefix of it.
@@ -796,7 +813,13 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "pause" => nothing(Action::TogglePause),
         "next" => nothing(Action::Next),
         "prev" => nothing(Action::Prev),
-        "stop" => nothing(Action::Stop),
+        "stop" => match rest.split_once(' ').unwrap_or((rest, "")) {
+            ("", _) => Ok(Action::Stop),
+            ("after", "") => Ok(Action::StopAfter),
+            ("in", "off") => Ok(Action::StopIn(None)),
+            ("in", t) if !t.is_empty() => parse_time(t).map(|d| Action::StopIn(Some(d))),
+            _ => Err(usage()),
+        },
         "restart" => nothing(Action::Restart),
         "seek" => match signed(rest) {
             _ if rest.is_empty() => Err(usage()),
@@ -1006,14 +1029,14 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         "toggle" | "add" => nothing(Action::Add),
         "search-clear" => nothing(Action::ClearSearch),
         "remove" => nothing(Action::Remove),
-        "dequeue" => nothing(Action::Remove),
-        "queue-clear" => nothing(Action::ClearQueue),
-        "move" | "reorder" => match signed(rest).map(|(sign, n)| (sign as i64, n.parse::<i64>())) {
+        "move" => match signed(rest).map(|(sign, n)| (sign as i64, n.parse::<i64>())) {
             Some((sign, Ok(n))) if n > 0 => Ok(Action::MoveTrack(sign * n)),
             _ => Err(usage()),
         },
+        "clear" if view == Some(View::Queue) => nothing(Action::ClearQueue),
         "clear" => nothing(Action::ClearSelection),
         "delete" => nothing(Action::DeletePlaylist),
+        "edit" => nothing(Action::EditPlaylist),
         "rename" if rest.is_empty() => Ok(Action::StartRename),
         "rename" => Ok(Action::RenameTo(unquote(rest).to_string())),
         _ => unreachable!("command {name} has no parser"),
@@ -1074,6 +1097,12 @@ pub struct History {
 }
 
 impl History {
+    /// A history holding the last [`HISTORY_LEN`] of `lines`, oldest first.
+    pub fn new(mut lines: Vec<String>) -> History {
+        lines.drain(..lines.len().saturating_sub(HISTORY_LEN));
+        History { lines }
+    }
+
     /// Records `line`, unless it is blank or repeats the line before it.
     pub fn push(&mut self, line: &str) {
         let line = line.trim();

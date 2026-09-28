@@ -177,6 +177,30 @@ fn onset_sensitivity_defaults_to_the_middle_and_stays_in_range() {
 }
 
 #[test]
+fn the_queue_is_kept_and_the_draft_asked_about_unless_set_otherwise() {
+    use playr_core::settings::Draft;
+    let defaults = Settings::default();
+    assert!(defaults.keep_queue);
+    assert_eq!(defaults.draft, Draft::Ask);
+    let set = parse("keep_queue = false\ndraft = 'Append'").unwrap();
+    assert!(!set.keep_queue);
+    assert_eq!(set.draft, Draft::Append);
+    // Naming values to remember leaves both alone.
+    assert!(parse("persist = ['eq']").unwrap().keep_queue);
+    assert_eq!(
+        parse("keep_queue = 'no'\ndraft = 'later'").unwrap_err(),
+        [
+            "line 1: keep_queue cannot be a string",
+            "line 2: unknown draft later; choices: ask, overwrite, append, off",
+        ]
+    );
+    assert_eq!(
+        parse("draft = true").unwrap_err(),
+        ["line 1: draft cannot be a boolean"]
+    );
+}
+
+#[test]
 fn auto_prune_defaults_off_and_takes_a_boolean() {
     assert!(!Settings::default().auto_prune);
     assert!(parse("auto_prune = true").unwrap().auto_prune);
@@ -330,7 +354,7 @@ fn persist_names_the_values_to_remember() {
     assert_eq!(
         parse("persist = ['eq', 'speed', 3]").unwrap_err(),
         [
-            "line 1: unknown persist speed; choices: eq, volume, mode, replaygain, theme, columns, sort",
+            "line 1: unknown persist speed; choices: eq, volume, mode, replaygain, theme, columns, sort, history",
             "line 1: a name, not an integer",
         ]
     );

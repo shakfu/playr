@@ -62,6 +62,8 @@ pub enum Request {
     Search { query: String, done: bool },
     /// Answers the question open.
     Answer(bool),
+    /// Answers the draft question open; `None` leaves the draft alone.
+    Draft(Option<playr_app::model::DraftAnswer>),
     /// The name typed into the save or rename prompt open.
     Name(String),
     /// Closes the prompt or list open.
@@ -134,6 +136,7 @@ pub fn run(
             }
             Ok(Request::Search { query, done }) => search(&mut model, query, done),
             Ok(Request::Answer(yes)) => model.answer(yes),
+            Ok(Request::Draft(answer)) => model.answer_draft(answer),
             Ok(Request::Name(name)) => match model.input().clone() {
                 Input::SavePlaylist(_) => model.save_as(&name),
                 Input::RenamePlaylist { from, .. } => model.rename_to(&from, &name),

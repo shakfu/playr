@@ -40,6 +40,7 @@ fn every_action() -> Vec<Action> {
         Action::StartSave,
         Action::SaveAs("n".into()),
         Action::DeletePlaylist,
+        Action::EditPlaylist,
         Action::StartRename,
         Action::RenameTo("n".into()),
         Action::PlayPlaylist("n".into()),
@@ -56,6 +57,8 @@ fn every_action() -> Vec<Action> {
         Action::Next,
         Action::Prev,
         Action::Stop,
+        Action::StopAfter,
+        Action::StopIn(None),
         Action::SeekBy(5),
         Action::SeekTo(Duration::ZERO),
         Action::VolumeBy(0.05),
@@ -138,6 +141,7 @@ fn every_action() -> Vec<Action> {
             | Action::StartSave
             | Action::SaveAs(_)
             | Action::DeletePlaylist
+            | Action::EditPlaylist
             | Action::StartRename
             | Action::RenameTo(_)
             | Action::PlayPlaylist(_)
@@ -154,6 +158,8 @@ fn every_action() -> Vec<Action> {
             | Action::Next
             | Action::Prev
             | Action::Stop
+            | Action::StopAfter
+            | Action::StopIn(_)
             | Action::SeekBy(_)
             | Action::SeekTo(_)
             | Action::VolumeBy(_)

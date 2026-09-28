@@ -358,3 +358,42 @@ fn which_tracks_were_queued_follows_every_change_to_the_list() {
     player.send(Cmd::Play(p, 0));
     assert!(player.status().queued.iter().all(|q| !q));
 }
+
+#[test]
+fn stop_after_ends_playback_with_the_track_playing_then_clears() {
+    let (player, control, dir) = setup(Mode::Normal);
+    let levels_ = [0.2, -0.2, 0.4];
+    let paths = tracks(dir.path(), 0.5, &levels_);
+    player.send(Cmd::Play(paths.clone(), 0));
+    assert!(wait_until(|| player.position() > Duration::ZERO));
+    player.send(Cmd::StopAfter(true));
+    assert!(wait_until(|| player.status().stop_after));
+    // Long enough to count as played.
+    assert!(wait_until(|| player.position() > Duration::from_millis(150)));
+    // A skip is the listener's own choice, so it is not stopped.
+    player.send(Cmd::Next);
+    assert!(wait_until(|| player.status().state == State::Stopped));
+    assert_eq!(played_order(&control, &levels_), [0, 1]);
+    assert!(!player.status().stop_after, "still set once stopped");
+
+    // Set while stopped, it is ignored rather than left for a later play.
+    player.send(Cmd::StopAfter(true));
+    player.send(Cmd::Play(paths, 0));
+    assert!(wait_until(|| {
+        player.caught_up() && player.status().state == State::Stopped
+    }));
+    assert_eq!(played_order(&control, &levels_), [0, 1, 0, 1, 2]);
+}
+
+#[test]
+fn stop_after_turned_off_plays_on() {
+    let (player, control, dir) = setup(Mode::Normal);
+    let levels_ = [0.2, -0.2];
+    let paths = tracks(dir.path(), 0.5, &levels_);
+    player.send(Cmd::Play(paths, 0));
+    assert!(wait_until(|| player.position() > Duration::ZERO));
+    player.send(Cmd::StopAfter(true));
+    player.send(Cmd::StopAfter(false));
+    assert!(wait_until(|| player.status().state == State::Stopped));
+    assert_eq!(played_order(&control, &levels_), [0, 1]);
+}

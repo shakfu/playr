@@ -323,7 +323,7 @@ None of it is required. A machine with no session bus or no panel runs playr as 
 
 ### Taking up again
 
-playr remembers the track playing and how far into it when it closes, and offers it at the next start: "take up amen.flac again at 1:35?". Only `y` takes it up; anything else starts as playr always did. Nothing is offered when the command line named tracks to play, or when the file has gone. The position is stored in the library when playr closes and again at each track change, so a playr that is killed still leaves the track behind, if not the second.
+playr remembers the track playing and how far into it when it closes, and offers it at the next start: "take up amen.flac again at 1:35?". Only `y` takes it up; anything else starts as playr always did. Nothing is offered when the command line named tracks to play, or when the file has gone. The position is stored in the library when playr closes and again at each track change, so a playr that is killed still leaves the track behind, if not the second. Unless `keep_queue = false`, the queue is stored beside it at each change and offered with it: "take up amen.flac again at 1:35, with its queue of 5 tracks?". The list that was playing is not stored, so playback stops once the queue has played.
 
 ## Keys
 
@@ -336,15 +336,15 @@ These keys are the same in the terminal, the window and the web page, and any of
 | `g` `G`, home/end        | jump to first or last                       |
 | page up/down             | move by ten                                 |
 | `enter`                  | play from here; in playlists, play it       |
-| `a`                      | select or unselect, then move down          |
+| `a`                      | select or unselect, then move down; in the queue, select |
 | `e` `E` `A`              | queue the track or playlist; first; all listed |
 | `/`                      | search; `esc` clears                        |
 | `r`                      | rename the selected playlist                |
-| `s`                      | save the selection; asks before overwriting |
-| `d`                      | remove from selection or queue; delete a playlist |
+| `o`                      | edit the selected playlist in the selection |
+| `s`                      | save the selection, or the queue in its view; asks before overwriting |
+| `d` backspace delete     | remove from selection or queue; `d` deletes a playlist |
 | `c`                      | clear the selection or the queue; asks y/n  |
 | `J` `K`, shift up/down   | move a track within the selection or queue  |
-| `c`                      | clear the selection; asks y/n               |
 | `space`                  | play or pause                               |
 | `n` `p`                  | next or previous track                      |
 | `x`                      | stop                                        |
@@ -371,11 +371,15 @@ Every other column is a field too, by the name `:columns` takes. A number column
 
 `is:` finds what `playr analyze` flagged: `is:damaged`, `is:unreadable`, `is:padded`, `is:no-checksum`, `is:wrong-length`, `is:lossy` for a possible lossy source, and `is:upsampled`. `is:duplicate` finds tracks that look like copies of another in the library: the same FLAC checksum, or the same title and artist within 2 seconds, which needs no analysis. `is:unanalysed` finds tracks with no current measurement. A field alone lists every track it admits, and terms combine, so `is:duplicate path:/backup/` lists the copies under one folder.
 
-Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist. To edit a playlist, add it to the selection with `a`, change it, and save it under the same name.
+Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist.
+
+The selection starts empty each run. As it changes, playr saves it to a playlist named `draft`, which the Playlists view lists; an empty selection leaves no draft. No other playlist may be named `draft`. The first time the selection changes in a run, if an earlier run left a draft, playr asks what to do with it: overwrite it with the selection, append it (put its tracks back in the selection, before the new ones), or save it under a name and start a new draft. Anything else leaves the old draft alone until the next change. `draft = "overwrite"` or `"append"` answers without asking, and `draft = "off"` keeps no draft. The draft holds only library tracks, as any playlist does.
+
+To edit a playlist, press `o` on it, or run `:edit`: the selection is replaced with its tracks, after asking if it held any, and titled "Editing" with the playlist's name. `s` then offers that name, and saves over the playlist without asking. Saving, or clearing with `c`, ends the edit. An edit in progress is kept in the draft; taking up the draft, by appending it or by `o` on it, takes up the edit too.
 
 The library plays by itself: enter in it plays on through it, and puts nothing in the queue. The queue holds the tracks you choose. `e` queues the track or playlist under the cursor; the first queued over the library plays at once, and the rest wait in the order queued. `E` puts a track first among those waiting. `A` queues every search result, or the whole selection. Enter on search results, a playlist or the selection replaces the queue with that list, from the track chosen, and says how many tracks were waiting. Once the queue has played, the library resumes at the track after the one the queue interrupted; `after_queue = "stop"` stops instead. Tracks waiting survive enter in the library, and play after the track chosen.
 
-The queue view lists the track playing, if it came from the queue, then the tracks waiting; a queued track leaves once it has played. Enter there jumps to a track, and drops those before it. `d` takes a track out; taking out the track playing plays the next. `J` and `K` move a waiting track. `c` takes out every waiting track, after asking. The queue is not kept when playr exits.
+The queue view lists the queued tracks that have played, dimmed, then the track playing if it came from the queue, then the tracks waiting. Enter there jumps to a waiting track, and those skipped count as played; enter on a played track plays it again. `d`, backspace or delete takes a track out; taking out the track playing plays the next. `J` and `K` move a track among the played or the waiting ones. `a` adds a track to the selection. `s` saves every row as a playlist, so tracks can be queued, heard, pruned and kept. The queue and the selection share `:remove`, `:move` and `:clear`; the queue's old names `:dequeue`, `:reorder` and `:queue-clear` still work. `c` empties the queue, after asking. The next start offers the queue again, with the track playing.
 
 ### Playback modes
 
@@ -389,6 +393,8 @@ The queue view lists the track playing, if it came from the queue, then the trac
 | repeat one | the current track only                             | play it again        |
 
 A mode applies to whatever list is playing: the library, search results, the selection, or a playlist. To shuffle across several playlists, add them to the selection with `a` and play the selection. Shuffle keeps the list on screen in its own order, and `p` goes back through the tracks it has played. Under repeat one, `n` moves on to the next track, which then repeats. Changing mode takes effect from the next track, even if it has already started loading.
+
+`:stop after` stops once the track playing ends, in any mode; again, it plays on. `n` still moves to the next track, which then stops. `:stop in 30:00` stops playback 30 minutes from now, and `:stop in off` cancels it. The bottom line shows either while set. The window's Playback menu and the page's menu have both, with a 30-minute timer.
 
 ### Marks
 
@@ -529,7 +535,7 @@ A gain never pushes the track's peak past full scale, and with no peak known it 
 
 ### Commands
 
-`:` opens a command line: `:seek 1:23`, `:volume 60`, `:playlist late night`. Every key's action has a command, and commands also take arguments no key can, such as a time or a name. Some commands work only in one view, as `:remove` in the selection. Tab completes, up recalls earlier lines, and `:help` lists every command. [docs/cheatsheet.md](docs/cheatsheet.md) has the full list.
+`:` opens a command line: `:seek 1:23`, `:volume 60`, `:playlist late night`. Every key's action has a command, and commands also take arguments no key can, such as a time or a name. Some commands work only in some views, as `:remove` in the selection and the queue. Tab completes, up recalls earlier lines, and `:help` lists every command. [docs/cheatsheet.md](docs/cheatsheet.md) has the full list.
 
 `:scan ~/music` adds a directory to the library without leaving playr. It runs in the background and counts files on the bottom line; once it finishes, the library view shows the new tracks. `:rescan` or `:sync` re-scans every directory previously added that way, or by `playr scan`. If any tracks are missing, playr asks to prune them, unless `auto_prune` is set. `:prune` (or `:prune ~/music`) does what `playr prune` does, after asking. Saving a playlist or a mark while a scan runs waits for the scan to finish writing its current batch of 500 files, and fails with "database is locked" if that takes more than 5 seconds. `:open ~/music/some/album` plays a file or directory, as `playr <path>` does, and adds its tracks to the end of the selection.
 
@@ -556,6 +562,8 @@ sort = ["album_artist", "album", "disc", "track"] # and the order it comes in
 device = "alsa:hw:CARD=DAC,DEV=0"  # output device from `playr devices`; "" is the default
 replaygain = "auto"                # off, track, album or auto
 theme = "light"                    # system, light or dark
+keep_queue = false                 # forget the queue on exit
+draft = "append"                   # continue the draft; or ask, overwrite, off
 persist = ["eq", "volume"]         # session values to remember; see below
 
 [terminal]                         # or [gui] or [server]: that program only
@@ -588,7 +596,9 @@ x = "remove"
 
 Any error stops playr before it starts, and every bad setting is listed with its line number. `?` lists the keys as bound in the view you are in. `:map` and `:unmap` change keys until playr exits.
 
-`persist` names session values playr remembers between runs: `eq`, `volume`, `mode`, `replaygain`, `theme`, `columns` and `sort`. None are remembered unless named. playr stores them in the library, not in this file: `settings.toml` holds only what you write, and playr never changes it. While a name is listed, its remembered value wins over the setting of the same name, which then applies only until something is remembered. Remove the name to go back to the setting. `columns` and `sort` are remembered for each program, as a program's table sets them; the rest are shared. A change is stored once it has held still for half a second, so dragging a slider is one write. Without a library, nothing is remembered.
+`keep_queue`, on by default, keeps the queue between runs, and offers it with the track that was playing. Turning it off also forgets the queue stored. `draft` chooses what happens to the selection's draft playlist; see Keys, under the selection.
+
+`persist` names session values playr remembers between runs: `eq`, `volume`, `mode`, `replaygain`, `theme`, `columns`, `sort`, and `history`, the last 100 `:` command lines. None are remembered unless named. playr stores them in the library, not in this file: `settings.toml` holds only what you write, and playr never changes it. While a name is listed, its remembered value wins over the setting of the same name, which then applies only until something is remembered. Remove the name to go back to the setting. `columns` and `sort` are remembered for each program, as a program's table sets them; the rest are shared. A change is stored once it has held still for half a second, so dragging a slider is one write. Without a library, nothing is remembered.
 
 `theme` sets the colours, `dark` unless set, and `:theme` changes them until playr exits. In the window, `system` follows the system's light or dark appearance. A terminal cannot report its background reliably, so there `system` and `dark` use the terminal's own ANSI colours, which its theme shades, and `light` uses fixed colours for a light background. With `NO_COLOR` set to any value, the terminal draws without colour and reverses the cursor row.
 

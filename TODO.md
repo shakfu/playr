@@ -10,17 +10,9 @@ What is missing, grouped by priority:
 
 - **Low:** niche, large for its benefit, or blocked **upstream**, which marks items not fixable here without replacing a dependency.
 
-## Decisions
+An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions.md).
 
-Settled; items below cite them.
-
-1. **Settings and state.** `settings.toml` holds settings, which the user writes: how playr behaves, including whether it remembers something, as `persist` does. `library.db` holds state, which playr writes: tracks, analysis, playlists, marks, loops, the resume position, and any session value a setting says to remember. playr never writes `settings.toml`, and a user never needs to open `library.db`.
-
-2. **The primary user** buys music rather than streams it, has eclectic tastes, and both listens to it and samples it for music production, as a hobby or semi-professionally. The player and the cutter matter equally.
-
-3. **Exported slices serve any sampler,** not only rtrack. What an export means should reach other software in formats it reads, not only in `samples.json`.
-
-4. **Command renames** are acceptable before 1.0, each with the owner's approval.
+## Critical
 
 ## High
 
@@ -38,8 +30,6 @@ Settled; items below cite them.
 
 - [ ] **Fine varispeed.** `:speed` parses whole semitones. A semitone is 5.9%, so 120 BPM moves to 127.1 or 113.3 with nothing between. Add `:speed +50c`, and `:tempo 128` on an analysed track to set the ratio that gives 128 BPM. Check first whether the resampler takes an arbitrary ratio.
 
-- [ ] **Stop after this track; sleep timer.** `:stop after` and `:stop in 30:00`. Needs one flag and one deadline.
-
 - [ ] **A key for the EQ.** Every other playback control has one.
 
 ### Sampler
@@ -56,7 +46,7 @@ Settled; items below cite them.
 
 ### Library
 
-- [ ] **Deduplicate entries** - Sometimes successive scans lead to duplicates in the library when the same album has been scanned twice from two different paths. There should be mechanism to address this. Currently if two songs are seen, we check info and have a look at their paths and the remove the the duplicate folder and refresh, this removes the duplicates entries. `is:duplicate` now lists them, and `is:duplicate path:DIR` the copies under one folder; removing them is still manual.
+- [ ] **Deduplicate entries.** Scanning one album from two paths adds it twice. `is:duplicate` lists the copies, and `is:duplicate path:DIR` the copies under one folder. Removing them is manual: delete the duplicate folder, then rescan.
 
 - [ ] **Group, a date added, and play history.** `columns` and `sort` order the library by any column, but there is no grouping, and no date added to sort by: the schema has no `added_at`, and `mtime` is the file's. A column would only be meaningful for tracks added after it. A `plays(path, at)` table would add history; with every column a search field, `added:30d..` and `played:..1y` follow. Album and artist grouping needs a new view in three frontends, and `Frontend` assumes one cursor row per view. A cheaper first step: `:filter album|artist` searches for the cursor row's album or artist. A buyer of music thinks in releases (decision 2), which argues for grouping (inference about users).
 
@@ -74,15 +64,11 @@ Settled; items below cite them.
 
 - [ ] **Relative rows from 0.1.0.** A 0.1.0 scan with a relative path stored relative rows. Rescanning adds absolute duplicates, and pruning never matches the old rows. A one-off cleanup would delete them, and their playlist entries with them.
 
-- [ ] **Empty library message.** `src/ui/render.rs` says "Run: playr scan <directory>". It should also name `:scan DIR`, which works without leaving.
-
 ### Interface
 
-- [ ] **Editing a playlist.** Today: add the playlist to the selection, edit, save under the same name. A selection in progress is mixed with the playlist's tracks. `:edit` in the playlists view would replace the selection after asking, and `:save` would default to that name.
+- [ ] **One list for the selection and the queue.** Both are hand-edited track lists that save as playlists, in two views. Option B in `docs/dev/selection-and-queue.md` merges them. Weigh it with "Multi-row selection", which uses "selection" for rows picked in any view.
 
 - [ ] **Multi-row selection.** Select several rows at once, in the window especially. `dispatch` assumes one cursor row per view, so `Frontend` grows; see `docs/architecture.md`. A cheaper step: `:toggle all` on the listed rows keeps one cursor per view.
-
-- [ ] **Command history across sessions.** `:` history is kept in memory and lost on exit. The library's `state` table could keep it, under a `persist` name such as `history`.
 
 - [ ] **Platform directories.** Both interfaces keep the library in `~/.local/share/playr` and settings in `~/.config/playr` on every platform, which is unusual on macOS and Windows. Moving to each platform's directories must move existing libraries.
 

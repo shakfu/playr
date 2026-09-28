@@ -69,6 +69,7 @@ fn fake_owner(requests: Receiver<Request>, tell: mpsc::Sender<String>) {
             } => format!("row {view:?} {row} {key} {command:?}"),
             Request::Search { query, done } => format!("search {query:?} {done}"),
             Request::Answer(yes) => format!("answer {yes}"),
+            Request::Draft(answer) => format!("draft {answer:?}"),
             Request::Name(name) => format!("name {name}"),
             Request::Close => "close".into(),
             Request::Read { query, .. } => format!("read {query:?}"),
@@ -358,6 +359,9 @@ fn prompts_are_answered_named_and_searched() {
     assert_eq!(server.send("POST", "/answer", "yes").status, 204);
     assert_eq!(server.send("POST", "/answer", "no").status, 204);
     assert_eq!(server.send("POST", "/answer", "maybe").status, 400);
+    assert_eq!(server.send("POST", "/draft", "append").status, 204);
+    assert_eq!(server.send("POST", "/draft", "cancel").status, 204);
+    assert_eq!(server.send("POST", "/draft", "later").status, 400);
     assert_eq!(server.send("POST", "/name", " late night ").status, 204);
     let typed = r#"{"query": "evans", "done": false}"#;
     assert_eq!(server.send("POST", "/search", typed).status, 204);
@@ -367,6 +371,8 @@ fn prompts_are_answered_named_and_searched() {
         [
             "answer true",
             "answer false",
+            "draft Some(Append)",
+            "draft None",
             "name late night",
             r#"search "evans" false"#
         ]

@@ -520,6 +520,7 @@ fn fit(s: &str, width: usize) -> String {
 
 /// One track row. `playing` marks it `>`, `marked` (in the selection) `+`, and
 /// `cursor` gives it the cursor row's dimmed colours.
+#[allow(clippy::too_many_arguments)]
 fn track_line(
     p: &Palette,
     t: &Track,
@@ -528,6 +529,7 @@ fn track_line(
     playing: bool,
     marked: bool,
     cursor: bool,
+    played: bool,
 ) -> ListItem<'static> {
     let dim = if cursor { p.dim_selected } else { p.dim };
     let mut spans = vec![
@@ -545,6 +547,7 @@ fn track_line(
         // The title reads as the row's subject, so it keeps the plain colour
         // and everything around it is dimmed; a number sits to the right.
         let style = match column {
+            Column::Title if played => Style::default().fg(dim),
             Column::Title => Style::default(),
             Column::Artist | Column::AlbumArtist => Style::default().fg(p.name),
             _ => Style::default().fg(dim),
@@ -608,11 +611,11 @@ fn draw_tracks(
 ) -> Scroll {
     let current = app.snapshot.status.current();
     let playing = |_, t: &Track| current.is_some_and(|p| p.as_os_str() == t.path.as_str());
-    draw_rows(app, f, area, title, tracks, scroll, marked, playing)
+    draw_rows(app, f, area, title, tracks, scroll, marked, playing, 0)
 }
 
 /// As [`draw_tracks`], with `playing` choosing the row marked as playing by
-/// its index as well as its track.
+/// its index as well as its track, and the first `played` rows dimmed.
 #[allow(clippy::too_many_arguments)]
 fn draw_rows(
     app: &Screen<'_>,
@@ -623,6 +626,7 @@ fn draw_rows(
     scroll: Scroll,
     marked: impl Fn(&Track) -> bool,
     playing: impl Fn(usize, &Track) -> bool,
+    played: usize,
 ) -> Scroll {
     let p = app.palette();
     let len = tracks.len();
@@ -645,6 +649,7 @@ fn draw_rows(
                 playing(i, t),
                 marked(t),
                 selected == Some(i),
+                i < played,
             )
         })
         .collect();
@@ -683,7 +688,7 @@ fn draw_library(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
         let hint = if app.results.is_some() {
             "No matches. Esc clears the search."
         } else {
-            "Library is empty. Run: playr scan <directory>"
+            "Library is empty. :scan DIR adds a directory, as playr scan DIR does."
         };
         let inner = area.inner(ratatui::layout::Margin {
             horizontal: 2,
@@ -700,9 +705,18 @@ fn draw_library(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
 fn draw_selection(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
     let p = app.palette();
     // Every row here is selected, so no row is marked.
-    let scroll = draw_tracks(app, f, area, "", app.selection, app.lists.selection, |_| {
-        false
-    });
+    let title = app
+        .editing
+        .map_or(String::new(), |name| format!("Editing \"{name}\""));
+    let scroll = draw_tracks(
+        app,
+        f,
+        area,
+        &title,
+        app.selection,
+        app.lists.selection,
+        |_| false,
+    );
 
     if app.selection.is_empty() {
         let inner = area.inner(ratatui::layout::Margin {
@@ -718,8 +732,8 @@ fn draw_selection(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
     scroll
 }
 
-/// The list playing. A track queued twice is two rows, so the playing row is
-/// found by its index, not its path.
+/// The queue, its played rows dimmed. A track queued twice is two rows, so
+/// the playing row is found by its index, not its path.
 fn draw_queue(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
     let p = app.palette();
     let scroll = draw_rows(
@@ -731,6 +745,7 @@ fn draw_queue(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
         app.lists.queue,
         |_| false,
         |i, _| app.queue_playing == Some(i),
+        app.queue_played,
     );
     if app.queue.is_empty() {
         let inner = area.inner(ratatui::layout::Margin {
@@ -888,6 +903,10 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
             confirm_prompt(c),
             Style::default().fg(p.notice),
         ))),
+        Input::Draft(tracks) => Some(Line::from(Span::styled(
+            super::draft_prompt(*tracks),
+            Style::default().fg(p.notice),
+        ))),
         _ => None,
     };
     if let Some(prompt) = prompt {
@@ -1027,6 +1046,12 @@ fn indicators(
     if mode != playr_core::audio::Mode::Normal {
         spans.push(Span::styled(
             format!("{}  ", mode.name()),
+            Style::default().fg(p.notice),
+        ));
+    }
+    if let Some(text) = playr_app::message::stopping(snapshot.status.stop_after, snapshot.sleep) {
+        spans.push(Span::styled(
+            format!("{text}  "),
             Style::default().fg(p.notice),
         ));
     }

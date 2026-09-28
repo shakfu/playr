@@ -73,12 +73,13 @@ pub fn allowed(action: &Action) -> bool {
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection
-        | StartSave | SaveAs(_) | DeletePlaylist | StartRename | Analyze(None) | ShowInfo
-        | SetColumns(_) | SetSort(_) | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots
-        | Prune(None) | TogglePause | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_)
-        | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | SetEq(..) | EqBy(..) | FlatEq
-        | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark
-        | ClearMarks | NextMark | PrevMark | Theme(_) => true,
+        | StartSave | SaveAs(_) | DeletePlaylist | EditPlaylist | StartRename | Analyze(None)
+        | ShowInfo | SetColumns(_) | SetSort(_) | RenameTo(_) | PlayPlaylist(_) | Rescan
+        | ShowRoots | Prune(None) | TogglePause | Restart | Next | Prev | Stop | SeekBy(_)
+        | SeekTo(_) | StopAfter | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_)
+        | SetSpeed(_) | SetEq(..) | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_)
+        | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark | ClearMarks | NextMark | PrevMark
+        | Theme(_) => true,
     }
 }
 
@@ -115,6 +116,7 @@ pub fn screen(model: &Model) -> Value {
             "queue": model.queue().len(),
         },
         "searching": model.results().is_some(),
+        "editing": model.session().editing().map(|p| p.name.clone()),
         "cursors": {
             "library": cursors.library,
             "selection": cursors.selection,
@@ -122,7 +124,7 @@ pub fn screen(model: &Model) -> Value {
             "queue": cursors.queue,
         },
         "lists": lists_revision(model),
-        "input": input(model.input()),
+        "input": input(model),
         "message": model.message_text(),
         "theme": model.theme().name(),
         "state": match status.state {
@@ -134,6 +136,8 @@ pub fn screen(model: &Model) -> Value {
         // The queue marks the playing row by this, since a track queued
         // twice is two rows with one path.
         "queue_playing": model.queue_playing(),
+        // The queue's first rows, which have played, are dimmed.
+        "queue_played": model.queue_played(),
         "title": state::title(model),
         "artist": track.map(Track::display_artist),
         "format": format,
@@ -148,6 +152,7 @@ pub fn screen(model: &Model) -> Value {
         "sort": model.session().sort().first().map(|k| k.text()),
         "replaygain": model.replaygain().name(),
         "gain_label": status.gain_db.map(message::replaygain),
+        "stopping": message::stopping(status.stop_after, snapshot.sleep),
         "loudness": snapshot.loudness.map(tenths),
         "peak": snapshot.peak.filter(|p| p.is_finite()).map(tenths),
         "clipping": snapshot.peak.is_some_and(meter::clipping),
@@ -179,15 +184,20 @@ fn lists_revision(model: &Model) -> u64 {
 }
 
 /// The prompt, question or list open, as the page draws it.
-fn input(input: &Input) -> Value {
-    match input {
+fn input(model: &Model) -> Value {
+    match model.input() {
         Input::None => json!({ "kind": "none" }),
         Input::Search(query) => json!({ "kind": "search", "text": query }),
-        Input::SavePlaylist(name) => json!({ "kind": "save", "text": name }),
+        Input::SavePlaylist(name) => {
+            json!({ "kind": "save", "text": name, "title": model.save_title() })
+        }
         Input::RenamePlaylist { from, name } => {
             json!({ "kind": "rename", "text": name, "from": from.name })
         }
         Input::Confirm(question) => json!({ "kind": "confirm", "question": question.question() }),
+        Input::Draft(tracks) => {
+            json!({ "kind": "draft", "question": message::draft_question(*tracks) })
+        }
         Input::Help => json!({ "kind": "keys" }),
         Input::CommandHelp => json!({ "kind": "commands" }),
         // Carried with the state: the page has no path of its own to ask on.

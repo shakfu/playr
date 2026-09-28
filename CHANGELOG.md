@@ -4,6 +4,32 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Added
+
+- The queue is kept between runs, unless `keep_queue = false`. It is a setting of its own rather than a `persist` name, since a user's `persist` list replaces the default and would turn it off unseen. The queue is stored in the library at each change, in a new `resume_queue` table, and offered with the track playing at the next start: "take up amen.flac again at 1:35, with its queue of 5 tracks?". The list that was playing is not stored, so playback stops once the queue has played. Library API: `db::SavedQueue`, `db::set_resume_queue`, `db::resume_queue`, `Session::remember_queue`, `Session::keep_queue`, `Settings::keep_queue`; `Session::resume` and `Session::resumable` take and return the queue, and `Confirm::Resume` has a `queue` field.
+
+- `:save` in the Queue view saves every queue row as a playlist, played, playing and waiting, so tracks can be queued, heard, pruned and kept. The window and the page have a Save as playlist button above the queue. Library API: `Session::save_queue`, `Session::check_save_queue`, `Session::queue_tracks`, `Refusal::QueueEmpty`; `Confirm::ReplacePlaylist` is a struct variant with a `queue` field.
+
+- The selection is saved, as it changes, to a playlist named `draft`, and starts empty each run. A draft restored silently into the selection could end up in a new playlist unnoticed; as a playlist, it is visible and can be played, edited or deleted. The first change in a run that finds an earlier draft asks whether to overwrite it, append it, or save it under a name; `draft = "overwrite"`, `"append"` or `"off"` sets the answer. The name `draft` is reserved. Library API: `settings::Draft`, `Settings::draft`, `session::DRAFT`, `DraftChoice`, `Session::set_draft`, `Session::take_draft_question`, `Session::settle_draft`, `Refusal::NameReserved`, `Outcome::DraftOverwritten`, `Outcome::DraftAppended`, `Input::Draft`, `DraftAnswer`, `Model::answer_draft`, `Model::save_title`.
+
+- `:edit`, on `o` in the Playlists view, replaces the selection with the playlist's tracks to edit, asking first if it held any. The selection's title names the playlist, `s` offers its name, and saving under it replaces the playlist without the usual question; saving or clearing ends the edit. Adding a playlist to the selection to edit it mixed in any tracks already selected. The playlist being edited is remembered with the draft, so appending an old draft, or `:edit` on the draft, takes the edit up again. Library API: `Session::edit_playlist`, `Session::editing`, `Outcome::Editing`, `Action::EditPlaylist`, `Confirm::EditPlaylist`.
+
+- `backspace` and `delete` take a track out in the Queue and Selection views, as `d` does.
+
+- `:add`, on `a`, in the Queue view adds the track to the selection. A track could move from the selection to the queue, but not back. Library API: `Session::add_to_selection`.
+
+- `:stop after` stops once the track playing ends, and `:stop in TIME` is a sleep timer; `:stop in off` cancels it. The engine checks the flag where it picks the next track, as `after_queue = "stop"` does, so the next track is never started and cut. The status bar shows either while set, and the window's Playback menu and the page's menu have both. Library API: `Cmd::StopAfter`, `Status::stop_after`, `Session::sleep_in`, `Session::sleep_left`, `Session::sleep_due`, `Snapshot::sleep`, `Action::StopAfter`, `Action::StopIn`, `message::stopping`.
+
+- `history` in `persist` keeps the last 100 `:` command lines between runs. Library API: `Persist::History`, `History::new`.
+
+- The empty library view names `:scan DIR`, which fills it without leaving playr.
+
+### Changed
+
+- The queue's commands take the selection's names: `:remove`, `:move` and `:clear`. The old names, `:dequeue`, `:reorder` and `:queue-clear`, remain as aliases, so key bindings written for them still work. A command two views share names both when refused elsewhere, and `:map` no longer suggests one view for it.
+
+- Queued tracks that have played stay in the Queue view, dimmed, above the track playing; they used to leave it, so a queue could not be saved once heard. Tracks skipped by enter on a later row count as played, where they were dropped. Enter on a played row plays it again, `:move` moves a track among the played rows or among the waiting ones, and `:clear` empties both. The session holds them, not the player's list, so repeat and shuffle do not replay them. Library API: `Session::played`, `Session::play_queue_row`, `Model::queue_played`.
+
 ## [0.13.0]
 
 ### Added

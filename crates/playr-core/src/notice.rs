@@ -65,6 +65,14 @@ pub enum Outcome {
     QueueReplaced {
         tracks: usize,
     },
+    /// The selection holds playlist `name`'s tracks, to edit and save.
+    Editing {
+        name: String,
+    },
+    /// The draft an earlier session left gives way to the selection.
+    DraftOverwritten,
+    /// The draft an earlier session left is back in the selection.
+    DraftAppended,
     /// The queue's `tracks` waiting were taken out.
     QueueCleared {
         tracks: usize,
@@ -164,10 +172,14 @@ pub enum Outcome {
 pub enum Refusal {
     NothingPlaying,
     SelectionEmpty,
+    /// Nothing has played from the queue, nor waits in it.
+    QueueEmpty,
     /// Playlists and marks would be lost on exit without a library file.
     NoLibraryFile,
     NameEmpty,
     NameUnchanged,
+    /// The name is kept for the selection's draft.
+    NameReserved(String),
     NameTaken(String),
     /// Saving would replace the playlist of this name; ask, then save again.
     WouldReplace(String),

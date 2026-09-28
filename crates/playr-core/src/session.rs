@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
@@ -20,12 +20,13 @@ use crate::audio::{Cmd, Mode, Player, State};
 use crate::columns::{self, Measures, SortKey};
 use crate::db;
 use crate::db::query::{self, Mark, Playlist};
-use crate::db::{Pruned, Track};
+use crate::db::{Pruned, SavedQueue, Track};
 use crate::event::{Event, EventSink, JobId};
 use crate::gain::ReplayGain;
 use crate::notice::{Notice, Outcome, Refusal, Task};
 use crate::samples::{self, Cut, Edges, Fades, Job, OnsetAudio, Plan};
 use crate::scan;
+use crate::settings::Draft;
 use crate::wave::Peaks;
 
 /// Marks closer than this to one another are the same mark.
@@ -33,6 +34,28 @@ pub const MARK_NEAR: Duration = Duration::from_millis(500);
 /// How far past a mark playback must be before seeking back returns to it
 /// rather than the one before.
 pub const MARK_BACK: Duration = Duration::from_secs(1);
+
+/// The playlist the selection is saved to as it changes. The name is
+/// reserved: no other playlist may take it.
+pub const DRAFT: &str = "draft";
+
+/// What the listener chose to do with a draft an earlier session left.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DraftChoice {
+    Overwrite,
+    /// Put its tracks back in the selection, before the new ones.
+    Append,
+    /// Keep it as a playlist of this name; the selection starts a new draft.
+    SaveAs(String),
+}
+
+/// The `state` key the playlist being edited is remembered under.
+const EDITING: &str = "editing";
+
+/// Whether `name` is the draft's, which no other playlist may take.
+fn reserved(name: &str) -> bool {
+    name.eq_ignore_ascii_case(DRAFT)
+}
 
 /// How many loops a track can keep.
 pub const LOOP_SLOTS: u8 = 8;
@@ -49,6 +72,21 @@ pub struct Session {
     /// Tracks collected to edit and save as a playlist. It does not change
     /// what plays unless it is played itself.
     selection: Vec<Track>,
+    /// Queued tracks that have played, oldest first. The Queue view lists
+    /// them above the track playing, so a queue can be saved once heard.
+    played: Vec<Track>,
+    /// When the sleep timer stops playback.
+    sleep_at: Option<Instant>,
+    /// Whether the queue is stored for the next start.
+    keep_queue: bool,
+    /// What to do with a draft an earlier session left, and whether this
+    /// session has settled it, so its selection may be written as the draft.
+    draft: Draft,
+    draft_settled: bool,
+    /// A change waits on the listener's answer about the old draft.
+    draft_question: bool,
+    /// The playlist whose tracks the selection holds to edit, by id.
+    editing: Option<i64>,
     /// Marks in the track `marks_for`, earliest first.
     marks: Vec<Mark>,
     marks_for: Option<PathBuf>,
@@ -95,6 +133,13 @@ impl Session {
             tracks: Vec::new(),
             playlists: Vec::new(),
             selection: Vec::new(),
+            played: Vec::new(),
+            sleep_at: None,
+            keep_queue: true,
+            draft: Draft::Ask,
+            draft_settled: false,
+            draft_question: false,
+            editing: None,
             marks: Vec::new(),
             marks_for: None,
             loops: [None; LOOP_SLOTS as usize],
@@ -340,48 +385,105 @@ impl Session {
             .collect()
     }
 
-    /// Takes queue row `row` out, and says which track it was. Taking out the
-    /// track playing plays the next.
-    pub fn dequeue(&mut self, row: usize) -> Option<Outcome> {
-        let index = *self.queue_rows().get(row)?;
-        let path = self.player.queue().get(index)?.clone();
-        let title = match self.tracks.iter().find(|t| Path::new(&t.path) == path) {
-            Some(t) => t.display_title(),
+    /// Queued tracks that have played, oldest first: the Queue view's first
+    /// rows, above [`queue_rows`](Self::queue_rows).
+    pub fn played(&self) -> &[Track] {
+        &self.played
+    }
+
+    /// Every row of the Queue view, played first, for saving as a playlist.
+    pub fn queue_tracks(&self) -> Vec<Track> {
+        let list = self.player.queue();
+        let live = self
+            .queue_rows()
+            .into_iter()
+            .map(|i| self.track_for(&list[i]));
+        self.played.iter().cloned().chain(live).collect()
+    }
+
+    /// The library's track at `path`, or a bare one for a file outside it.
+    fn track_for(&self, path: &Path) -> Track {
+        match self.tracks.iter().find(|t| Path::new(&t.path) == path) {
+            Some(t) => t.clone(),
             None => Track {
                 path: path.to_string_lossy().into_owned(),
                 ..Default::default()
-            }
-            .display_title(),
-        };
+            },
+        }
+    }
+
+    /// Takes Queue view row `row` out, and says which track it was. Taking
+    /// out the track playing plays the next.
+    pub fn dequeue(&mut self, row: usize) -> Option<Outcome> {
+        if row < self.played.len() {
+            let title = self.played.remove(row).display_title();
+            return Some(Outcome::RemovedTrack { title });
+        }
+        let index = *self.queue_rows().get(row - self.played.len())?;
+        let path = self.player.queue().get(index)?.clone();
+        let title = self.track_for(&path).display_title();
         self.player.send(Cmd::Remove(index));
         Some(Outcome::RemovedTrack { title })
     }
 
-    /// Moves waiting queue row `row` by `by` places, returning where it is
-    /// now, or nothing if either place is not a waiting row. The track
-    /// playing keeps its place.
+    /// Moves Queue view row `row` by `by` places, returning where it is now,
+    /// or nothing if the move leaves the played rows or the waiting rows it
+    /// started in. The track playing keeps its place.
     pub fn move_in_queue(&mut self, row: usize, by: i64) -> Option<usize> {
+        let to = usize::try_from(row as i64 + by).ok()?;
+        let h = self.played.len();
+        if row < h {
+            if to >= h {
+                return None;
+            }
+            let track = self.played.remove(row);
+            self.played.insert(to, track);
+            return Some(to);
+        }
+        let (row, to) = (row - h, to.checked_sub(h)?);
         let rows = self.queue_rows();
         let status = self.player.status();
         let stopped = self.stopped(&status);
         let first = rows.iter().position(|&i| i > status.index || stopped)?;
-        let to = usize::try_from(row as i64 + by).ok()?;
         if row < first || to < first || row >= rows.len() || to >= rows.len() {
             return None;
         }
         self.player.send(Cmd::Move(rows[row], rows[to]));
-        Some(to)
+        Some(to + h)
     }
 
-    /// Empties the queue of the tracks waiting; the track playing plays on.
+    /// Plays Queue view row `row`: a waiting track at once, or a played one
+    /// again, which then leaves the played rows until it has played.
+    pub fn play_queue_row(&mut self, row: usize) {
+        let h = self.played.len();
+        if row >= h {
+            if let Some(&index) = self.queue_rows().get(row - h) {
+                self.player.send(Cmd::Jump(index));
+            }
+            return;
+        }
+        let path = PathBuf::from(&self.played.remove(row).path);
+        let status = self.player.status();
+        match status.queue.is_empty() {
+            true => self.player.send(Cmd::PlayWith(vec![path], vec![true], 0)),
+            false => {
+                self.player.send(Cmd::Insert(status.index + 1, vec![path]));
+                self.player.send(Cmd::Jump(status.index + 1));
+            }
+        }
+    }
+
+    /// Empties the queue of the tracks waiting and those played; the track
+    /// playing plays on.
     pub fn clear_queue(&mut self) -> Outcome {
         let status = self.player.status();
         let waiting: Vec<usize> = waiting(&status).collect();
         for &i in waiting.iter().rev() {
             self.player.send(Cmd::Remove(i));
         }
+        let played = std::mem::take(&mut self.played).len();
         Outcome::QueueCleared {
-            tracks: waiting.len(),
+            tracks: waiting.len() + played,
         }
     }
 
@@ -391,37 +493,224 @@ impl Session {
         status.state == State::Stopped && self.player.caught_up()
     }
 
-    /// Takes the queued tracks that have played out of the list, once
-    /// playback has moved past them.
+    /// Moves the queued tracks that have played out of the list and into
+    /// [`played`](Self::played), once playback has moved past them.
     pub fn drop_played(&mut self) {
         let status = self.player.status();
         let played: Vec<usize> = (0..status.index.min(status.queued.len()))
             .filter(|&i| status.queued[i])
             .collect();
+        for &i in &played {
+            let track = self.track_for(&status.queue[i]);
+            self.played.push(track);
+        }
         for &i in played.iter().rev() {
             self.player.send(Cmd::Remove(i));
         }
     }
 
-    /// Plays `path` alone, from `at`, without touching the selection. For
-    /// taking up where playr left off.
-    pub fn resume(&mut self, path: PathBuf, at: Duration) {
-        self.player.send(Cmd::Play(vec![path], 0));
+    /// Plays `path` from `at`, then the waiting tracks of `queue`, without
+    /// touching the selection. For taking up where playr left off; the list
+    /// that was playing is not kept, so playback stops after the queue.
+    pub fn resume(&mut self, path: PathBuf, at: Duration, queue: SavedQueue) {
+        self.played = queue.played.iter().map(|p| self.track_for(p)).collect();
+        let mut list = vec![path];
+        list.extend(queue.waiting);
+        let mut queued = vec![true; list.len()];
+        queued[0] = queue.playing;
+        self.player.send(Cmd::PlayWith(list, queued, 0));
         self.player.send(Cmd::Seek(at));
     }
 
-    /// What playr was playing when it last closed, if the file is still there.
+    /// What playr was playing when it last closed, if the file is still
+    /// there, with the queue stored beside it, less files that have gone.
     ///
     /// A file that has gone is not offered: the question would be about a
     /// track that cannot play, and answering yes would do nothing.
-    pub fn resumable(&self) -> Option<(PathBuf, Duration)> {
+    pub fn resumable(&self) -> Option<(PathBuf, Duration, SavedQueue)> {
         let (path, at) = db::resume(&self.conn).ok().flatten()?;
-        path.is_file().then_some((path, at))
+        let mut queue = match self.keep_queue {
+            true => db::resume_queue(&self.conn).unwrap_or_default(),
+            false => SavedQueue::default(),
+        };
+        queue.played.retain(|p| p.is_file());
+        queue.waiting.retain(|p| p.is_file());
+        path.is_file().then_some((path, at, queue))
     }
 
-    /// Remembers `path` and `at` as where to take up next time.
+    /// Remembers `path` and `at` as where to take up next time, with the queue.
     pub fn remember(&self, path: &Path, at: Duration) {
         let _ = db::set_resume(&self.conn, path, at);
+        self.remember_queue();
+    }
+
+    /// Chooses whether the queue is stored for the next start. It is unless
+    /// this says not; a queue stored before is then forgotten.
+    pub fn keep_queue(&mut self, keep: bool) {
+        self.keep_queue = keep;
+        if !keep {
+            let _ = db::set_resume_queue(&self.conn, &SavedQueue::default(), Path::new(""));
+        }
+    }
+
+    // The selection starts empty each session and is written, as it changes,
+    // to the playlist `DRAFT`. A draft an earlier session left is settled, as
+    // `draft` says, before the first write replaces it.
+
+    /// The playlist the selection holds to edit, if it still exists.
+    pub fn editing(&self) -> Option<&Playlist> {
+        let id = self.editing?;
+        self.playlists.iter().find(|p| p.id == id)
+    }
+
+    /// Records the playlist being edited, in the library too, so an edit the
+    /// draft holds can go on in a later session.
+    fn set_editing(&mut self, id: Option<i64>) {
+        self.editing = id;
+        self.set_state(EDITING, &id.map_or(String::new(), |id| id.to_string()));
+    }
+
+    /// Replaces the selection with playlist `id`'s tracks to edit them;
+    /// saving under its name then replaces it without asking. The draft
+    /// itself is taken up as an old draft appended; nothing, once settled.
+    pub fn edit_playlist(&mut self, id: i64) -> Option<Outcome> {
+        let name = self.playlist_name(id)?;
+        if name == DRAFT {
+            // Settled, the draft already is the selection.
+            if self.draft_settled {
+                return None;
+            }
+            self.selection.clear();
+            self.settle_draft(DraftChoice::Append);
+            return Some(Outcome::DraftAppended);
+        }
+        self.selection = self.playlist_tracks(id);
+        self.set_editing(Some(id));
+        self.selection_changed();
+        Some(Outcome::Editing { name })
+    }
+
+    /// Chooses what happens to a draft an earlier session left.
+    pub fn set_draft(&mut self, draft: Draft) {
+        self.draft = draft;
+    }
+
+    /// The draft playlist, if there is one.
+    fn draft_playlist(&self) -> Option<&Playlist> {
+        self.playlists.iter().find(|p| p.name == DRAFT)
+    }
+
+    /// Writes the selection as the draft once the old draft is settled, or
+    /// settles it first as `draft` says, or waits on the listener's answer.
+    fn selection_changed(&mut self) {
+        if self.draft == Draft::Off || !self.has_library_file() {
+            return;
+        }
+        if !self.draft_settled {
+            let old = self.draft_playlist().map_or(0, |p| p.len);
+            match (old, self.draft) {
+                (0, _) | (_, Draft::Overwrite) => self.set_editing(self.editing),
+                (_, Draft::Append) => self.append_old_draft(),
+                _ => {
+                    self.draft_question = true;
+                    return;
+                }
+            }
+            self.draft_settled = true;
+        }
+        self.write_draft();
+    }
+
+    /// Puts the old draft's tracks before the selection's, leaving out
+    /// those the selection already holds. An edit the old draft held goes
+    /// on, unless one has begun since.
+    fn append_old_draft(&mut self) {
+        let Some(id) = self.draft_playlist().map(|p| p.id) else {
+            return;
+        };
+        let editing = self.state(EDITING).and_then(|id| id.parse().ok());
+        self.set_editing(self.editing.or(editing));
+        let new = std::mem::take(&mut self.selection);
+        self.selection = self.playlist_tracks(id);
+        let old: HashSet<String> = self.selection.iter().map(|t| t.path.clone()).collect();
+        self.selection
+            .extend(new.into_iter().filter(|t| !old.contains(&t.path)));
+    }
+
+    /// Makes the draft playlist the selection's library tracks, or removes it
+    /// when there are none.
+    fn write_draft(&mut self) {
+        let ids: Vec<i64> = (self.selection.iter().map(|t| t.id))
+            .filter(|id| *id != 0)
+            .collect();
+        let _ = match (ids.is_empty(), self.draft_playlist().map(|p| p.id)) {
+            (true, Some(id)) => query::delete_playlist(&self.conn, id),
+            (true, None) => Ok(()),
+            (false, _) => query::save_playlist(&mut self.conn, DRAFT, &ids).map(|_| ()),
+        };
+        self.playlists = query::playlists(&self.conn).unwrap_or_default();
+    }
+
+    /// How many tracks the old draft holds, once, when a change waits on the
+    /// listener: they answer with [`settle_draft`](Self::settle_draft).
+    /// Unanswered, the question comes again with the next change.
+    pub fn take_draft_question(&mut self) -> Option<usize> {
+        if !std::mem::take(&mut self.draft_question) || self.draft_settled {
+            return None;
+        }
+        self.draft_playlist().map(|p| p.len as usize)
+    }
+
+    /// Settles the old draft as the listener chose, then writes the selection
+    /// as the draft. Saving under a name that is refused leaves it unsettled,
+    /// and asks again.
+    pub fn settle_draft(&mut self, choice: DraftChoice) -> Notice {
+        let notice = match choice {
+            DraftChoice::Overwrite => {
+                self.set_editing(self.editing);
+                Outcome::DraftOverwritten.into()
+            }
+            DraftChoice::Append => {
+                self.append_old_draft();
+                Outcome::DraftAppended.into()
+            }
+            DraftChoice::SaveAs(name) => {
+                let Some(id) = self.draft_playlist().map(|p| p.id) else {
+                    return Refusal::NoPlaylistNamed(DRAFT.into()).into();
+                };
+                let notice = self.rename_playlist(id, &name);
+                if !matches!(notice, Notice::Done(_)) {
+                    self.draft_question = true;
+                    return notice;
+                }
+                self.set_editing(self.editing);
+                notice
+            }
+        };
+        self.draft_settled = true;
+        self.write_draft();
+        notice
+    }
+
+    /// Remembers the queue, to offer with the track playing next time, if
+    /// it is kept.
+    pub fn remember_queue(&self) {
+        if !self.keep_queue {
+            return;
+        }
+        let status = self.player.status();
+        let rows = self.queue_rows();
+        let playing = rows.first() == Some(&status.index) && !self.stopped(&status);
+        let queue = SavedQueue {
+            played: self.played.iter().map(|t| PathBuf::from(&t.path)).collect(),
+            playing,
+            waiting: rows[usize::from(playing)..]
+                .iter()
+                .map(|&i| status.queue[i].clone())
+                .collect(),
+        };
+        let current = status.current().map_or(Path::new(""), |p| p.as_path());
+        let _ = db::set_resume_queue(&self.conn, &queue, current);
     }
 
     /// The session value remembered under `key`; none without a library file.
@@ -439,6 +728,28 @@ impl Session {
     /// Forgets where to take up, after a refused offer or a stop.
     pub fn forget_resume(&self) {
         let _ = db::clear_resume(&self.conn);
+    }
+
+    /// Sets the sleep timer to stop playback `after` from now, or turns it
+    /// off with `None`.
+    pub fn sleep_in(&mut self, after: Option<Duration>) {
+        self.sleep_at = after.map(|d| Instant::now() + d);
+    }
+
+    /// Time left on the sleep timer, if set.
+    pub fn sleep_left(&self) -> Option<Duration> {
+        self.sleep_at
+            .map(|at| at.saturating_duration_since(Instant::now()))
+    }
+
+    /// Stops playback once the sleep timer has run out; says whether it did.
+    pub fn sleep_due(&mut self) -> bool {
+        if self.sleep_left() != Some(Duration::ZERO) {
+            return false;
+        }
+        self.sleep_at = None;
+        self.player.send(Cmd::Stop);
+        true
     }
 
     /// Sends a playback command: pause, next, seek, speed and so on.
@@ -523,17 +834,30 @@ impl Session {
     /// Replaces the selection, as when files are given on the command line.
     pub fn set_selection(&mut self, tracks: Vec<Track>) {
         self.selection = tracks;
+        self.selection_changed();
     }
 
     /// Selects `track`, or unselects every copy of it if it is selected.
     pub fn toggle_selected(&mut self, track: Track) -> Outcome {
-        if self.selection.iter().any(|t| t.path == track.path) {
+        let outcome = if self.selection.iter().any(|t| t.path == track.path) {
             self.selection.retain(|t| t.path != track.path);
             Outcome::RemovedFromSelection
         } else {
             self.selection.push(track);
             Outcome::AddedToSelection
+        };
+        self.selection_changed();
+        outcome
+    }
+
+    /// Selects `track`, unless it is selected already.
+    pub fn add_to_selection(&mut self, track: Track) -> Outcome {
+        if self.selection.iter().any(|t| t.path == track.path) {
+            return Outcome::AlreadyInSelection;
         }
+        self.selection.push(track);
+        self.selection_changed();
+        Outcome::AddedToSelection
     }
 
     /// Adds the tracks of playlist `id` that are not selected yet, or nothing
@@ -553,13 +877,16 @@ impl Session {
             return Some(Outcome::AlreadyInSelection);
         }
         self.selection.extend(new);
+        self.selection_changed();
         Some(Outcome::AddedToSelection)
     }
 
     /// Removes the track at `index`, or nothing if there is none.
     pub fn remove_from_selection(&mut self, index: usize) -> Option<Outcome> {
-        (index < self.selection.len()).then(|| Outcome::RemovedTrack {
-            title: self.selection.remove(index).display_title(),
+        let track = (index < self.selection.len()).then(|| self.selection.remove(index))?;
+        self.selection_changed();
+        Some(Outcome::RemovedTrack {
+            title: track.display_title(),
         })
     }
 
@@ -573,11 +900,16 @@ impl Session {
         // Moved, not swapped: the tracks between keep their order.
         let track = self.selection.remove(index);
         self.selection.insert(to, track);
+        self.selection_changed();
         Some(to)
     }
 
     pub fn clear_selection(&mut self) -> Outcome {
         self.selection.clear();
+        if self.editing.is_some() {
+            self.set_editing(None);
+        }
+        self.selection_changed();
         Outcome::SelectionCleared
     }
 
@@ -599,28 +931,55 @@ impl Session {
     /// name is refused with [`Refusal::WouldReplace`] unless `replace` is set,
     /// so a frontend can ask first.
     pub fn save_selection(&mut self, name: &str, replace: bool) -> Notice {
+        // Saving an edit over its playlist is what the edit was for.
+        let edited = self.editing().is_some_and(|p| p.name == name.trim());
+        let tracks = self.selection.clone();
+        let notice = self.save_tracks(name, &tracks, replace || edited);
+        if matches!(notice, Notice::Done(_)) && self.editing.is_some() {
+            self.set_editing(None);
+        }
+        notice
+    }
+
+    /// As [`check_save`](Self::check_save), for the queue.
+    pub fn check_save_queue(&self) -> Result<(), Refusal> {
+        if self.played.is_empty() && self.queue_rows().is_empty() {
+            Err(Refusal::QueueEmpty)
+        } else if !self.has_library_file() {
+            Err(Refusal::NoLibraryFile)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// As [`save_selection`](Self::save_selection), for every row of the
+    /// Queue view: played, playing and waiting.
+    pub fn save_queue(&mut self, name: &str, replace: bool) -> Notice {
+        let tracks = self.queue_tracks();
+        self.save_tracks(name, &tracks, replace)
+    }
+
+    fn save_tracks(&mut self, name: &str, tracks: &[Track], replace: bool) -> Notice {
         let name = name.trim();
         if name.is_empty() {
             return Refusal::NameEmpty.into();
+        }
+        if reserved(name) {
+            return Refusal::NameReserved(name.to_string()).into();
         }
         if !replace && self.playlists.iter().any(|p| p.name == name) {
             return Refusal::WouldReplace(name.to_string()).into();
         }
         // A playlist holds only library tracks; files given on the command line
         // are selected without being in the library.
-        let ids: Vec<i64> = self
-            .selection
-            .iter()
-            .map(|t| t.id)
-            .filter(|id| *id != 0)
-            .collect();
+        let ids: Vec<i64> = tracks.iter().map(|t| t.id).filter(|id| *id != 0).collect();
         match query::save_playlist(&mut self.conn, name, &ids) {
             Ok(_) => {
                 self.playlists = query::playlists(&self.conn).unwrap_or_default();
                 Outcome::Saved {
                     name: name.to_string(),
                     tracks: ids.len(),
-                    left_out: self.selection.len() - ids.len(),
+                    left_out: tracks.len() - ids.len(),
                 }
                 .into()
             }
@@ -641,6 +1000,9 @@ impl Session {
         }
         if name == from {
             return Refusal::NameUnchanged.into();
+        }
+        if reserved(name) {
+            return Refusal::NameReserved(name.to_string()).into();
         }
         if self.playlists.iter().any(|p| p.name == name) {
             // Renaming onto it would have to merge or replace two playlists.

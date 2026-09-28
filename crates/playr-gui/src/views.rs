@@ -37,6 +37,13 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     };
     if !bar.is_empty() {
         ui.horizontal(|ui| {
+            if let Some(p) = model
+                .session()
+                .editing()
+                .filter(|_| view == View::Selection)
+            {
+                ui.strong(format!("Editing \"{}\"", p.name));
+            }
             for control in bar {
                 if ui.button(control.label).clicked() {
                     result = Some((None, Some(control.action.clone())));
@@ -65,6 +72,10 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     // A track queued twice is two rows, so the queue marks the playing row
     // by its index.
     let playing_row = model.queue_playing();
+    let played = match view {
+        View::Queue => model.queue_played(),
+        _ => 0,
+    };
     let selected: HashSet<&str> = match view {
         View::Library => model
             .session()
@@ -166,7 +177,11 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                         match column {
                             playr_core::columns::Column::Title => {
                                 let title = egui::RichText::new(text);
-                                ui.label(if is_playing { title.strong() } else { title });
+                                match (is_playing, i < played) {
+                                    (true, _) => ui.label(title.strong()),
+                                    (false, true) => ui.weak(title),
+                                    (false, false) => ui.label(title),
+                                };
                             }
                             c if c.numeric() => {
                                 ui.weak(text);

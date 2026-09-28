@@ -45,10 +45,19 @@ sort = ["album_artist", "album", "disc", "track", "title"]
 # What plays once the queued tracks have: resume, the list that was playing,
 # from the track after the one the queue interrupted; or stop.
 after_queue = "resume"
+# Keep the queue between runs, and offer it at the next start with the track
+# that was playing.
+keep_queue = true
+# The selection starts empty each run, and is saved as it changes to the
+# playlist "draft". What to do with a draft left from an earlier run, once the
+# selection first changes: ask, overwrite, append (put its tracks back first),
+# or off, which keeps no draft.
+draft = "ask"
 # Session values to remember in the library between runs: eq, volume, mode,
-# replaygain, theme, columns and sort. While a name is listed, its
-# remembered value wins over the setting above; columns and sort are
-# remembered for each program. Nothing is remembered without a library.
+# replaygain, theme, columns, sort and history, the : command lines. While a
+# name is listed, its remembered value wins over the setting above; columns
+# and sort are remembered for each program. Nothing is remembered without a
+# library.
 persist = []
 
 # The window has room for the title first, and the page's columns are fixed

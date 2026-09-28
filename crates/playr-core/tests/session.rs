@@ -11,7 +11,8 @@ use playr_core::db::{self, query, Track};
 use playr_core::event;
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_core::samples::Cut;
-use playr_core::session::Session;
+use playr_core::session::{DraftChoice, Session, DRAFT};
+use playr_core::settings::Draft;
 
 fn track(path: &str, title: &str) -> Track {
     Track {
@@ -37,11 +38,10 @@ fn session() -> (Session, Vec<Track>, tempfile::TempDir) {
         })
         .collect();
     query::save_playlist(&mut conn, "late", &[tracks[0].id, tracks[1].id]).unwrap();
-    (
-        Session::new(conn, common::fake_player().0, event::ignore()),
-        tracks,
-        dir,
-    )
+    // The draft playlist would show among the playlists these tests count.
+    let mut session = Session::new(conn, common::fake_player().0, event::ignore());
+    session.set_draft(Draft::Off);
+    (session, tracks, dir)
 }
 
 fn paths(tracks: &[Track]) -> Vec<&str> {
@@ -372,4 +372,252 @@ fn marks_are_added_undone_cleared_and_sought_on_the_playing_track() {
     assert_eq!(session.undo_mark(), Refusal::NoMarks.into());
     assert_eq!(session.seek_to_mark(false), Refusal::NoEarlierMark.into());
     assert_ne!(session.player().status().state, State::Stopped);
+}
+
+/// A session over the library file in `dir`, whose files a, b and c exist.
+fn session_with_files(dir: &Path) -> (Session, Vec<Track>) {
+    let conn = db::open(&dir.join("library.db")).unwrap();
+    let tracks: Vec<Track> = ["a", "b", "c"]
+        .iter()
+        .map(|name| {
+            let path = dir.join(format!("{name}.wav"));
+            if !path.exists() {
+                common::silence(&path, 8000, 0.05);
+            }
+            let mut t = track(&path.to_string_lossy(), name);
+            t.id = db::upsert(&conn, &t).unwrap();
+            t
+        })
+        .collect();
+    let session = Session::new(conn, common::fake_player().0, event::ignore());
+    (session, tracks)
+}
+
+/// The titles of the playlist `name`, or `None` if there is none.
+fn playlist(session: &Session, name: &str) -> Option<Vec<String>> {
+    let id = session.playlists().iter().find(|p| p.name == name)?.id;
+    Some(
+        session
+            .playlist_tracks(id)
+            .iter()
+            .map(|t| t.display_title())
+            .collect(),
+    )
+}
+
+#[test]
+fn the_selection_is_written_as_the_draft_and_the_next_session_starts_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut first, t) = session_with_files(dir.path());
+    assert_eq!(playlist(&first, DRAFT), None);
+    first.toggle_selected(t[0].clone());
+    first.toggle_selected(t[1].clone());
+    first.toggle_selected(t[2].clone());
+    first.move_in_selection(2, -2);
+    first.remove_from_selection(1);
+    assert_eq!(playlist(&first, DRAFT).unwrap(), ["c", "b"]);
+    first.clear_selection();
+    assert_eq!(playlist(&first, DRAFT), None, "an empty draft is kept");
+    first.toggle_selected(t[0].clone());
+    drop(first);
+
+    let (again, _) = session_with_files(dir.path());
+    assert!(again.selection().is_empty());
+    assert_eq!(playlist(&again, DRAFT).unwrap(), ["a"]);
+}
+
+/// A session whose earlier one left a draft of a and b, with `draft` set.
+fn with_old_draft(dir: &Path, draft: Draft) -> (Session, Vec<Track>) {
+    let (mut first, t) = session_with_files(dir);
+    first.set_selection(t[..2].to_vec());
+    drop(first);
+    let (mut s, t) = session_with_files(dir);
+    s.set_draft(draft);
+    (s, t)
+}
+
+#[test]
+fn an_old_draft_is_asked_about_once_a_change_comes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, t) = with_old_draft(dir.path(), Draft::Ask);
+    assert_eq!(s.take_draft_question(), None, "asked before any change");
+    s.toggle_selected(t[2].clone());
+    assert_eq!(s.take_draft_question(), Some(2));
+    assert_eq!(s.take_draft_question(), None, "asked twice for one change");
+    assert_eq!(playlist(&s, DRAFT).unwrap(), ["a", "b"], "written unasked");
+    // Unanswered, the next change asks again.
+    s.toggle_selected(t[1].clone());
+    assert_eq!(s.take_draft_question(), Some(2));
+}
+
+#[test]
+fn an_old_draft_is_overwritten_appended_or_saved_as_answered() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, t) = with_old_draft(dir.path(), Draft::Ask);
+    s.toggle_selected(t[2].clone());
+    s.settle_draft(DraftChoice::Overwrite);
+    assert_eq!(playlist(&s, DRAFT).unwrap(), ["c"]);
+    drop(s);
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, t) = with_old_draft(dir.path(), Draft::Ask);
+    s.toggle_selected(t[2].clone());
+    assert_eq!(
+        s.settle_draft(DraftChoice::Append),
+        Notice::Done(Outcome::DraftAppended)
+    );
+    assert_eq!(paths(s.selection()), paths(&t));
+    assert_eq!(playlist(&s, DRAFT).unwrap(), ["a", "b", "c"]);
+    drop(s);
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, t) = with_old_draft(dir.path(), Draft::Ask);
+    s.toggle_selected(t[2].clone());
+    // The draft's name is reserved, and a refused name asks again.
+    assert_eq!(
+        s.settle_draft(DraftChoice::SaveAs("Draft".into())),
+        Notice::Refused(Refusal::NameReserved("Draft".into()))
+    );
+    assert_eq!(s.take_draft_question(), Some(2));
+    s.settle_draft(DraftChoice::SaveAs("kept".into()));
+    assert_eq!(playlist(&s, "kept").unwrap(), ["a", "b"]);
+    assert_eq!(playlist(&s, DRAFT).unwrap(), ["c"]);
+}
+
+#[test]
+fn the_draft_setting_can_answer_for_the_listener_or_keep_no_draft() {
+    for (draft, expected) in [
+        (Draft::Overwrite, Some(vec!["c"])),
+        (Draft::Append, Some(vec!["a", "b", "c"])),
+        (Draft::Off, Some(vec!["a", "b"])),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut s, t) = with_old_draft(dir.path(), draft);
+        s.toggle_selected(t[2].clone());
+        assert_eq!(s.take_draft_question(), None, "{draft:?} asked");
+        let expected = expected.map(|v| v.into_iter().map(String::from).collect::<Vec<_>>());
+        assert_eq!(playlist(&s, DRAFT), expected, "{draft:?}");
+    }
+}
+
+#[test]
+fn no_other_playlist_takes_the_draft_s_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, t) = session_with_files(dir.path());
+    s.toggle_selected(t[0].clone());
+    assert_eq!(
+        s.save_selection("draft", false),
+        Notice::Refused(Refusal::NameReserved("draft".into()))
+    );
+    s.save_selection("mine", false);
+    let id = s.playlists().iter().find(|p| p.name == "mine").unwrap().id;
+    assert_eq!(
+        s.rename_playlist(id, "DRAFT"),
+        Notice::Refused(Refusal::NameReserved("DRAFT".into()))
+    );
+}
+
+#[test]
+fn a_queue_not_kept_is_neither_stored_nor_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut first, t) = session_with_files(dir.path());
+    let path = PathBuf::from(&t[1].path);
+    first.remember(&path, Duration::from_secs(1));
+    db::set_resume_queue(
+        &db::open(&dir.path().join("library.db")).unwrap(),
+        &db::SavedQueue {
+            played: vec![PathBuf::from(&t[0].path)],
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    assert!(!first.resumable().unwrap().2.is_empty());
+    // What was stored is forgotten once the queue is not kept.
+    first.keep_queue(false);
+    first.remember(&path, Duration::from_secs(1));
+    drop(first);
+
+    let (again, _) = session_with_files(dir.path());
+    let (_, _, queue) = again.resumable().unwrap();
+    assert!(queue.is_empty(), "{queue:?}");
+}
+
+/// The id of playlist `name`.
+fn id_of(session: &Session, name: &str) -> i64 {
+    session
+        .playlists()
+        .iter()
+        .find(|p| p.name == name)
+        .unwrap()
+        .id
+}
+
+#[test]
+fn an_edit_saves_over_its_playlist_without_asking_and_then_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, t) = session_with_files(dir.path());
+    s.set_selection(t[..2].to_vec());
+    s.save_selection("mine", false);
+    s.clear_selection();
+
+    let mine = id_of(&s, "mine");
+    assert_eq!(
+        s.edit_playlist(mine),
+        Some(Outcome::Editing {
+            name: "mine".into()
+        })
+    );
+    assert_eq!(paths(s.selection()), paths(&t[..2]));
+    assert_eq!(s.editing().map(|p| p.name.as_str()), Some("mine"));
+    s.remove_from_selection(0);
+    s.toggle_selected(t[2].clone());
+    assert!(matches!(s.save_selection("mine", false), Notice::Done(_)));
+    assert_eq!(playlist(&s, "mine").unwrap(), ["b", "c"]);
+    assert_eq!(s.editing(), None, "still editing once saved");
+
+    // Another playlist of that name is still asked about, and clearing ends
+    // an edit.
+    s.edit_playlist(id_of(&s, "mine"));
+    s.clear_selection();
+    assert_eq!(s.editing(), None);
+    s.toggle_selected(t[0].clone());
+    assert_eq!(
+        s.save_selection("mine", false),
+        Notice::Refused(Refusal::WouldReplace("mine".into()))
+    );
+}
+
+#[test]
+fn an_edit_goes_on_in_a_later_session_when_its_draft_is_taken_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut first, t) = session_with_files(dir.path());
+    first.set_selection(t[..2].to_vec());
+    first.save_selection("mine", false);
+    first.clear_selection();
+    first.edit_playlist(id_of(&first, "mine"));
+    first.toggle_selected(t[2].clone());
+    drop(first);
+
+    let (mut again, _) = session_with_files(dir.path());
+    assert_eq!(again.editing(), None);
+    let draft = id_of(&again, DRAFT);
+    assert_eq!(again.edit_playlist(draft), Some(Outcome::DraftAppended));
+    assert_eq!(paths(again.selection()), paths(&t));
+    assert_eq!(again.editing().map(|p| p.name.as_str()), Some("mine"));
+    assert_eq!(
+        again.edit_playlist(draft),
+        None,
+        "the draft is the selection"
+    );
+    drop(again);
+
+    // Overwritten, the old draft's edit is dropped with it.
+    let (mut third, t) = session_with_files(dir.path());
+    third.toggle_selected(t[0].clone());
+    third.settle_draft(DraftChoice::Overwrite);
+    drop(third);
+    let (mut fourth, _) = session_with_files(dir.path());
+    fourth.edit_playlist(id_of(&fourth, DRAFT));
+    assert_eq!(fourth.editing(), None);
 }

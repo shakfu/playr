@@ -24,6 +24,8 @@ pub struct Values {
     pub theme: Theme,
     pub columns: Vec<Column>,
     pub sort: Vec<SortKey>,
+    /// `:` command lines, oldest first.
+    pub history: Vec<String>,
 }
 
 /// The key `p` is stored under. Columns and sort are kept for each program,
@@ -46,6 +48,8 @@ pub fn encode(p: Persist, values: &Values) -> String {
         Persist::Theme => values.theme.name().into(),
         Persist::Columns => names(values.columns.iter().map(|c| c.name().into()).collect()),
         Persist::Sort => names(values.sort.iter().map(|k| k.text()).collect()),
+        // A command line is one line, so a newline cannot occur in one.
+        Persist::History => values.history.join("\n"),
     }
 }
 
@@ -87,6 +91,13 @@ pub fn decode(p: Persist, text: &str, values: &mut Values) {
             if let Some(sort) = sort {
                 values.sort = sort;
             }
+        }
+        Persist::History => {
+            values.history = text
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(String::from)
+                .collect()
         }
     }
 }

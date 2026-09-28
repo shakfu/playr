@@ -329,7 +329,7 @@ fn library_lists_tracks_with_artist_album_and_duration() {
 fn empty_library_explains_how_to_fill_it() {
     let joined = Case::new(View::Library, &stopped()).text();
     assert!(
-        joined.contains("playr scan"),
+        joined.contains("playr scan") && joined.contains(":scan DIR"),
         "no guidance for an empty library:\n{joined}"
     );
 }
@@ -356,6 +356,7 @@ fn now_playing_shows_title_position_and_source_format() {
             mode: Default::default(),
             looping: None,
             gain_db: None,
+            stop_after: false,
         },
         position: Duration::from_secs(151),
         volume: 0.75,
@@ -614,7 +615,10 @@ fn an_empty_list_or_area_scrolls_nowhere() {
 #[test]
 fn a_pending_confirmation_is_shown_in_place_of_the_hints() {
     use playr::ui::Confirm;
-    let input = Input::Confirm(Confirm::ReplacePlaylist("late".into()));
+    let input = Input::Confirm(Confirm::ReplacePlaylist {
+        name: "late".into(),
+        queue: false,
+    });
     let joined = Case::new(View::Selection, &stopped()).input(&input).text();
     assert!(
         joined.contains("replace playlist \"late\" with the selection? (y/n)"),

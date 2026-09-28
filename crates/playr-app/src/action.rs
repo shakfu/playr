@@ -59,6 +59,8 @@ pub enum Action {
     StartSave,
     SaveAs(String),
     DeletePlaylist,
+    /// Replace the selection with the playlist's tracks, to edit and save.
+    EditPlaylist,
     /// Open the prompt to rename the playlist under the cursor.
     StartRename,
     RenameTo(String),
@@ -88,6 +90,10 @@ pub enum Action {
     Next,
     Prev,
     Stop,
+    /// Stop once the track playing ends, or no longer if already set.
+    StopAfter,
+    /// Stop playback after this long, or turn the sleep timer off.
+    StopIn(Option<Duration>),
     /// Seek this many seconds; negative is back.
     SeekBy(i64),
     SeekTo(Duration),

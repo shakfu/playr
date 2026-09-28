@@ -74,6 +74,9 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, eq_open: &mut bool) {
             if let Some(db) = status.gain_db {
                 ui.weak(message::replaygain(db));
             }
+            if let Some(text) = message::stopping(status.stop_after, snapshot.sleep) {
+                ui.weak(text);
+            }
             // As it sounds: varispeed moves it with the music.
             if let Some(bpm) = model.bpm() {
                 ui.weak(format!("{bpm:.0} BPM"));

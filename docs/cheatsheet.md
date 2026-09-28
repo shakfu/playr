@@ -49,7 +49,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:pause`                              | `space`                 | play or pause                               |
 | `:next`                               | `n`                     | next track                                  |
 | `:prev`                               | `p`                     | previous track                              |
-| `:stop`                               | `x`                     | stop                                        |
+| `:stop [after \| in TIME \| in off]`   | `x`                     | now, after this track, or in TIME           |
 | `:restart`                            | `R`                     | play from the range's start, or the track's |
 | `:seek TIME \| +TIME \| -TIME`        | left, right, with shift | seek to a time, or by one: 1:23, +10        |
 | `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the volume, or change it: 60, +10       |
@@ -79,7 +79,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 | command          | key                     | does                                |
 |------------------|-------------------------|-------------------------------------|
-| `:remove`        | `d`                     | remove the track from the selection |
+| `:remove`        | `d` backspace delete    | remove the track from the selection |
 | `:move +N \| -N` | `J` `K`, shift up, down | move the track N places             |
 | `:clear`         | `c`                     | empty the selection; asks y/n       |
 
@@ -87,9 +87,11 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 | command             | key                     | does                             |
 |---------------------|-------------------------|----------------------------------|
-| `:dequeue`          | `d`                     | take the track out of the queue  |
-| `:reorder +N \| -N` | `J` `K`, shift up, down | move the track N places          |
-| `:queue-clear`      | `c`                     | empty the queue of waiting tracks; asks y/n |
+| `:remove`           | `d` backspace delete    | take the track out of the queue  |
+| `:move +N \| -N`    | `J` `K`, shift up, down | move the track N places          |
+| `:clear`            | `c`                     | empty the queue, played too; asks y/n |
+| `:add`              | `a`                     | add the track to the selection   |
+| `:save [NAME]`      | `s`                     | save the queue as a playlist     |
 
 ## Playlists
 
@@ -97,6 +99,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 |------------------|-----|--------------------------------------------|
 | `:add`           | `a` | add the playlist's tracks to the selection |
 | `:delete`        | `d` | delete the playlist; asks y/n              |
+| `:edit`          | `o` | edit the playlist in the selection         |
 | `:rename [NAME]` | `r` | rename the playlist                        |
 
 ## Sampler
