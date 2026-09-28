@@ -154,6 +154,7 @@ pub const COMMANDS: &[Command] = &[
         "region|marks|N|onsets [S]",
         "write samples from the region or the track",
     ),
+    any("loop", "off", "stop looping"),
     any(
         "map",
         "[VIEW] KEY COMMAND",
@@ -231,7 +232,7 @@ pub const COMMANDS: &[Command] = &[
         Sampler,
         "loop",
         "[on|off] | N [save|clear]",
-        "loop the range, or recall or save loop N",
+        "loop the range or region, or recall or save",
     ),
     only(
         Sampler,
@@ -345,6 +346,23 @@ fn usable(view: Option<View>) -> impl Iterator<Item = &'static Command> + Clone 
         .filter(move |c| c.view.is_none_or(|v| Some(v) == view))
 }
 
+/// The names of the commands that work in `view`, each once.
+fn usable_names(view: Option<View>) -> Vec<&'static str> {
+    let mut seen = std::collections::HashSet::new();
+    usable(view)
+        .map(|c| c.name)
+        .filter(|n| seen.insert(*n))
+        .collect()
+}
+
+/// The command `name` in `view`: the view's own over an every-view one, as
+/// `:loop` has both.
+fn usable_named(name: &str, view: Option<View>) -> Option<&'static Command> {
+    usable(view)
+        .filter(|c| c.name == name)
+        .max_by_key(|c| c.view.is_some())
+}
+
 /// The command `word` names in `view`.
 ///
 /// A command from another view is an error naming that view, whether typed in
@@ -361,15 +379,11 @@ fn resolve_command(word: &str, view: Option<View>) -> Result<&'static Command, S
         }
     };
     if let Some(c) = COMMANDS.iter().find(|c| c.name == word) {
-        return if usable(view).any(|u| u.name == c.name) {
-            Ok(c)
-        } else {
-            Err(elsewhere(c))
-        };
+        return usable_named(word, view).ok_or_else(|| elsewhere(c));
     }
     let find = |name: &str| COMMANDS.iter().find(|c| c.name == name).expect("resolved");
-    match resolve(word, usable(view).map(|c| c.name), "command") {
-        Ok(name) => Ok(find(name)),
+    match resolve(word, usable_names(view).into_iter(), "command") {
+        Ok(name) => Ok(usable_named(name, view).expect("resolved")),
         Err(e) if e.starts_with("unknown") => {
             let mut names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
             names.sort_unstable();
@@ -938,6 +952,9 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             "off" => Ok(Action::Fit(Some(false))),
             _ => Err(usage()),
         },
+        "loop" if command.view.is_none() && rest != "off" => {
+            Err("outside the sampler view, :loop takes only off".into())
+        }
         "loop" => match rest {
             "" => Ok(Action::Loop(None)),
             "on" => Ok(Action::Loop(Some(true))),
@@ -1063,9 +1080,10 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
 /// `playlist` or `rename` to the names in `playlists`.
 pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> {
     let Some((word, rest)) = text.split_once(' ') else {
-        return usable(Some(view))
-            .filter(|c| c.name.starts_with(text))
-            .map(|c| c.name.to_string())
+        return usable_names(Some(view))
+            .into_iter()
+            .filter(|n| n.starts_with(text))
+            .map(String::from)
             .collect();
     };
     let Ok(command) = resolve_command(word, Some(view)) else {
@@ -1078,6 +1096,7 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
         "columns" | "sort" => Column::NAMES.iter().map(|c| c.0.to_string()).collect(),
         "replaygain" => REPLAYGAINS.iter().map(|r| r.0.to_string()).collect(),
         "slice-edges" => EDGES.iter().map(|e| e.0.to_string()).collect(),
+        "loop" if command.view.is_none() => vec!["off".into()],
         "snap" | "fit" | "loop" => vec!["on".into(), "off".into()],
         "edge" => vec!["start".into(), "end".into()],
         "mark-pick" | "audition" => vec!["next".into(), "prev".into()],

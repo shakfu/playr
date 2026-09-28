@@ -265,6 +265,17 @@ fn loop_takes_a_slot_to_recall_save_or_clear() {
         assert_eq!(line(&s(text).unwrap(), Some(View::Sampler)), text);
     }
     assert!(lib("loop 1").unwrap_err().contains("sampler view"));
+    // Only stopping a loop works outside the sampler.
+    assert_eq!(lib("loop off"), Ok(Action::Loop(Some(false))));
+    for text in ["loop", "loop on"] {
+        assert!(lib(text).unwrap_err().contains("sampler view"), "{text}");
+    }
+    assert_eq!(completions("loop ", View::Library, &[]), ["loop off"]);
+    assert_eq!(
+        completions("loop ", View::Sampler, &[]),
+        ["loop on", "loop off"]
+    );
+    assert_eq!(completions("loo", View::Sampler, &[]), ["loop", "loops"]);
     assert_eq!(s("loops clear"), Ok(Action::ClearLoops));
     assert!(s("loops").is_err() && s("loops 1").is_err());
     assert_eq!(

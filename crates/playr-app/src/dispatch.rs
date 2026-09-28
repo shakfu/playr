@@ -694,6 +694,11 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
                 f.session().send(Cmd::Loop(None));
                 return f.notify(Message::Loop(false));
             }
+            if f.sampler().range_ends(status.current()) == (None, None) {
+                if let Err(message) = range_to_region(f) {
+                    return f.notify(message);
+                }
+            }
             let Some(range) = f.sampler().range(status.current()) else {
                 return f.notify(Message::NoRangeToLoop);
             };
@@ -1364,6 +1369,28 @@ fn follow_loop(f: &impl Frontend) {
         let range = f.sampler().range(status.current());
         f.session().send(Cmd::Loop(range));
     }
+}
+
+/// Sets the range to the region between the marks around the playhead.
+fn range_to_region(f: &mut impl Frontend) -> Result<(), Message> {
+    let status = f.session().player().status();
+    let path = status.current().cloned().ok_or(Refusal::NothingPlaying)?;
+    let peaks = peaks(f).ok_or(Message::NoWaveform)?;
+    let at = sampler::frame_of(f.session().player().position(), peaks.rate);
+    let marks: Vec<u64> = (f.session_mut().marks_for(Some(&path)).iter())
+        .map(|m| m.frame)
+        .collect();
+    let (start, end) = playr_core::samples::region(&marks, at);
+    let end = end.unwrap_or(peaks.frames);
+    if end <= start {
+        return Err(Message::EmptyRange);
+    }
+    f.sampler_mut().range = Some(sampler::Range {
+        path,
+        start: Some(start),
+        end: Some(end),
+    });
+    Ok(())
 }
 
 /// Recalls loop `slot` into the range and loops it, or saves the range to

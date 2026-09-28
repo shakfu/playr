@@ -59,7 +59,7 @@ pub enum Message {
     },
     /// An empty loop slot, or a save, with no range to save.
     NoRangeToSave(u8),
-    /// A loop was asked for with no range set.
+    /// A loop was asked for with only one end of the range set.
     NoRangeToLoop,
     /// Nothing under the playhead has both ends, so there is nothing to hear.
     NothingToAudition,
@@ -215,7 +215,7 @@ pub fn text(message: &Message) -> String {
         Message::NoRangeToSave(slot) => {
             format!("no range to save as loop {slot}: set one with < and >, or drag")
         }
-        Message::NoRangeToLoop => "no range to loop: set one with < and >, or drag".into(),
+        Message::NoRangeToLoop => "the range has one end: set the other with < or >".into(),
         Message::NothingToAudition => "nothing to hear here: set a range, or mark one".into(),
         Message::Auditioning => "playing once".into(),
         Message::Snapping => "looking for the nearest rise".into(),

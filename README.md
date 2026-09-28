@@ -483,7 +483,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `\|`    | `:fit on`               | back to the whole range after `[` or `]`          |
 | `<` `>` | `:in`, `:out`           | start or end the range at the playhead            |
 | backspace | `:range`              | clear the range; `:range 1:02 1:04.5` sets one    |
-| `l`     | `:loop`                 | play the range over and over, or stop             |
+| `l`     | `:loop`                 | play the range, or else the region, over and over, or stop |
 | F1-F8   | `:loop 1` ... `:loop 8` | loop a saved loop, or save the range to an empty slot |
 | shift-F1-F8 | `:loop N save`      | save the range as loop N, over what it holds      |
 | `[` `]` | `:edge start`, `:edge end` | choose the range end to move, shown reversed   |
@@ -525,7 +525,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Fit.** `f`, or the window's Fit range tick box, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `{` and `}` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
 
-- **Loop.** `l` plays the range over and over, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `<` or `>`, with `{` or `}` after `[` or `]` picks it, with `:range` or a drag, moves the loop at once; clearing the range, a new track or `l` again ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
+- **Loop.** `l` plays the range over and over, or with no range sets it to the region and loops that, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `<` or `>`, with `{` or `}` after `[` or `]` picks it, with `:range` or a drag, moves the loop at once; clearing the range, a new track, `l` again or `:loop off` in any view ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
 
 - **Saved loops.** Each track keeps up to 8 loops, in the library beside its marks. `:loop N`, on F1 to F8, saves the range to slot N when it is empty; when it holds a loop, it makes that the range and loops it, from a pause or a stop too, and moves a loop already playing at once. `:loop N save`, on shift-F1 to F8, saves over a slot, `:loop N clear` empties it, and `:loops clear` empties them all, after asking. The title lists the slots saved, with `*` on the one the range is. The window has a numbered button for each: a click does what F1 to F8 do, shift-click saves over, and its menu clears it; Clear loops beside them clears them all. Some terminals send shift-F1 as F13; `:map` binds another key if so.
 

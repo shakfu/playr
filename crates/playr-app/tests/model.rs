@@ -433,8 +433,22 @@ fn the_range_loops_follows_its_changes_and_escape_clears_it() {
     };
     let ms = Duration::from_millis;
 
+    // With no range, the region between the marks around the playhead loops.
+    model.perform(Action::MarkAt(ms(9_000)));
+    model.perform(Action::Loop(None));
+    assert_eq!(model.message(), Some(&Message::Loop(true)));
+    let current = model.snapshot().status.current().cloned();
+    assert_eq!(model.sampler().range(current.as_ref()), Some((0, 72_000)));
+    settle(&model, &|s| s.looping == Some((0, 72_000)));
+    model.perform(Action::Loop(Some(false)));
+    model.perform(Action::SetRange(None));
+    settle(&model, &|s| s.looping.is_none());
+
+    // A range with one end does not loop.
+    model.perform(Action::RangeIn);
     model.perform(Action::Loop(None));
     assert_eq!(model.message(), Some(&Message::NoRangeToLoop));
+    model.perform(Action::SetRange(None));
 
     // A paused track plays once it loops.
     model.perform(Action::TogglePause);

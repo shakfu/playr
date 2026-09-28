@@ -24,9 +24,11 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ## Medium
 
+### Playlists
+
 ### Playback
 
-- [ ] **One span: loop the region, A-B loop in every view.** Region, range, loop and loop slot are four concepts for one span. A region cannot loop. A range is lost at a track change unless saved to a slot. `:loop`, `:range`, `:in` and `:out` are refused outside the sampler view, though they act on playback. Keep the range as the one span, and add `:range region` to set it from the marks around the playhead. Make `:in`, `:out`, `:range`, `:loop` and `:loop N` global; bind `<` and `>` in the sampler only.
+- [ ] **Fade-in / Fade-out**: set `:fade-in 0.1` or `:fade-out 0.2` so that sequential track fade into one another.
 
 - [ ] **Fine varispeed.** `:speed` parses whole semitones. A semitone is 5.9%, so 120 BPM moves to 127.1 or 113.3 with nothing between. Add `:speed +50c`, and `:tempo 128` on an analysed track to set the ratio that gives 128 BPM. Check first whether the resampler takes an arbitrary ratio.
 

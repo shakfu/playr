@@ -363,7 +363,8 @@ pub fn help(model: &Model, commands: bool) -> Value {
 /// Whether the command `usage`, listed under `heading`, is one the page may
 /// run. Its arguments are unknown here, so it is judged by name.
 fn usable_command(heading: Option<&str>, usage: &str) -> bool {
-    const REFUSED: [&str; 7] = [
+    const REFUSED: [&str; 8] = [
+        "loop",
         "quit",
         "scan",
         "open",

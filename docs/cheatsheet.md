@@ -83,6 +83,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:mark-next`                          | `.`                     | seek to the next mark                       |
 | `:mark-prev`                          | `,`                     | seek to the previous mark                   |
 | `:slice region\|marks\|N\|onsets [S]` |                         | write samples from the region or the track  |
+| `:loop off`                           |                         | stop looping                                |
 | `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |
 | `:unmap [VIEW] KEY`                   |                         | remove a key binding                        |
 | `:theme THEME`                        |                         | system, light or dark colours               |
@@ -133,7 +134,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:in`                              | `<`                     | start the range at the playhead        |
 | `:out`                             | `>`                     | end the range at the playhead          |
 | `:range [START END]`               | `backspace`             | set the range to slice, or clear it    |
-| `:loop [on\|off] \| N [save\|clear]` | `l`; F1-F8, with shift  | loop the range, or recall or save loop N |
+| `:loop [on\|off] \| N [save\|clear]` | `l`; F1-F8, with shift  | loop the range or region, or recall or save |
 | `:loops clear`                    |                         | clear this track's loops; asks y/n     |
 | `:audition [next\|prev]`          | `a`, `n` `p`            | play a slice, the range or region once; step slices |
 | `:cursor TIME\|+N\|-N\|N%\|off`     | `;` `'` `h`             | move the cursor; `h` returns it to the playhead |
