@@ -74,6 +74,18 @@ pub enum Input {
     Command(CommandLine),
 }
 
+/// What the save prompt saves under the name typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Saving {
+    /// The selection, or the queue in its view.
+    #[default]
+    List,
+    /// The draft an earlier session left.
+    Draft,
+    /// The search shown.
+    Search,
+}
+
 /// An answer to [`Input::Draft`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DraftAnswer {
@@ -142,8 +154,10 @@ pub struct Model {
     playing_source: Arc<[PathBuf]>,
 
     input: Input,
-    /// The save prompt open names the old draft, not the selection.
-    saving_draft: bool,
+    /// What the save prompt open saves.
+    saving: Saving,
+    /// The `:sql` statement running, and what to do with its tracks.
+    sql: Option<(JobId, dispatch::SqlThen)>,
     /// `:` command lines entered this session.
     history: History,
     keys: Keymap,
@@ -242,7 +256,8 @@ impl Model {
             queue_playing: false,
             playing_source: Arc::default(),
             input: Input::None,
-            saving_draft: false,
+            saving: Saving::List,
+            sql: None,
             history: History::new(values.history.clone()),
             keys: config.keys,
             onset_sensitivity: config.settings.onset_sensitivity,
@@ -305,7 +320,7 @@ impl Model {
         self.follow_player();
         self.follow_queue();
         // The draft playlist comes and goes as the selection changes.
-        let n = self.session.playlists().len();
+        let n = self.session.playlists().len() + self.session.searches().len();
         self.cursors.playlists = (n > 0).then(|| self.cursors.playlists.unwrap_or(0).min(n - 1));
         self.save_values(false);
         let player = self.session.player();
@@ -393,6 +408,7 @@ impl Model {
         self.input = Input::None;
         if !keep {
             self.results = None;
+            self.session.set_shown(None);
         } else if self.listed().is_empty() {
             self.notify(Message::NoMatches);
         }
@@ -401,13 +417,16 @@ impl Model {
     /// Closes the save prompt and saves the selection as `name`.
     pub fn save_as(&mut self, name: &str) {
         self.input = Input::None;
-        if std::mem::take(&mut self.saving_draft) {
-            let notice = self
-                .session
-                .settle_draft(playr_core::session::DraftChoice::SaveAs(name.into()));
-            return self.notify(Message::from(notice));
+        match std::mem::take(&mut self.saving) {
+            Saving::List => dispatch::save_as(self, name),
+            Saving::Draft => {
+                let notice = self
+                    .session
+                    .settle_draft(playr_core::session::DraftChoice::SaveAs(name.into()));
+                self.notify(Message::from(notice));
+            }
+            Saving::Search => self.perform(Action::SaveSearch(name.into())),
         }
-        dispatch::save_as(self, name);
     }
 
     /// Answers [`Input::Draft`]; `None` leaves the old draft as it is, and
@@ -419,7 +438,7 @@ impl Model {
             None => return self.notify(Message::Cancelled),
             Some(DraftAnswer::Save) => {
                 self.input = Input::SavePlaylist(String::new());
-                self.saving_draft = true;
+                self.saving = Saving::Draft;
                 return;
             }
             Some(DraftAnswer::Overwrite) => DraftChoice::Overwrite,
@@ -431,10 +450,11 @@ impl Model {
 
     /// What the save prompt open saves, as its title words it.
     pub fn save_title(&self) -> &'static str {
-        match (self.saving_draft, self.view) {
-            (true, _) => "Save the old draft as",
-            (false, View::Queue) => "Save the queue as",
-            _ => "Save the selection as",
+        match (self.saving, self.view) {
+            (Saving::Draft, _) => "Save the old draft as",
+            (Saving::Search, _) => "Save the search as",
+            (Saving::List, View::Queue) => "Save the queue as",
+            (Saving::List, _) => "Save the selection as",
         }
     }
 
@@ -627,7 +647,9 @@ impl Model {
     /// typed into a prompt.
     pub fn set_input(&mut self, input: Input) {
         // Typing into the save prompt resets it each key; closing it ends it.
-        self.saving_draft &= matches!(input, Input::SavePlaylist(_));
+        if !matches!(input, Input::SavePlaylist(_)) {
+            self.saving = Saving::List;
+        }
         self.input = input;
     }
 
@@ -806,6 +828,12 @@ impl Model {
                     self.remember_position();
                 }
                 Event::StateChanged(_) => {}
+                // Only the latest statement's: an earlier one was replaced.
+                Event::Sql { job, result } => {
+                    if let Some((_, then)) = self.sql.take_if(|(j, _)| *j == job) {
+                        dispatch::sql_done(self, then, result);
+                    }
+                }
                 Event::PlaybackError(e) => {
                     let missed = error.map_or(0, |(_, n)| n + 1);
                     error = Some((e, missed));
@@ -1175,11 +1203,19 @@ impl Frontend for Model {
 
     fn prompt(&mut self, prompt: Prompt) {
         self.input = match prompt {
-            Prompt::Search => Input::Search(String::new()),
-            Prompt::Command => Input::Command(CommandLine::default()),
+            Prompt::Search(text) => Input::Search(text),
+            Prompt::Command(text) => {
+                let mut line = CommandLine::default();
+                line.text = text;
+                Input::Command(line)
+            }
             // An edit is saved over its playlist unless renamed here.
+            Prompt::SaveSearch => {
+                self.saving = Saving::Search;
+                Input::SavePlaylist(String::new())
+            }
             Prompt::Save => {
-                self.saving_draft = false;
+                self.saving = Saving::List;
                 let editing = self.session.editing().filter(|_| self.view != View::Queue);
                 Input::SavePlaylist(editing.map(|p| p.name.clone()).unwrap_or_default())
             }
@@ -1243,6 +1279,10 @@ impl Frontend for Model {
 
     fn take_plan(&mut self) -> Option<Plan> {
         self.sampler.pending.take()
+    }
+
+    fn sql_started(&mut self, job: JobId, then: dispatch::SqlThen) {
+        self.sql = Some((job, then));
     }
 }
 

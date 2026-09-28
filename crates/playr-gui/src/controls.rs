@@ -129,7 +129,19 @@ pub const QUEUE_BAR: &[Control] = &[
 ];
 
 /// Buttons above search results.
-pub const RESULTS_BAR: &[Control] = &[control("Queue all results", Action::EnqueueAll)];
+pub const RESULTS_BAR: &[Control] = &[
+    control("Queue all results", Action::EnqueueAll),
+    control("Save search", Action::StartSaveSearch),
+];
+
+pub const SEARCH_ROW: &[Control] = &[
+    control("Show results", Action::Activate),
+    control("Add to selection", Action::Add),
+    control("Play next", Action::Enqueue(true)),
+    control("Add to queue", Action::Enqueue(false)),
+    control("Edit", Action::EditPlaylist),
+    control("Delete", Action::DeletePlaylist),
+];
 
 pub const PLAYLIST_ROW: &[Control] = &[
     control("Play", Action::Activate),
@@ -221,6 +233,7 @@ pub const TABLES: &[&[Control]] = &[
     QUEUE_BAR,
     RESULTS_BAR,
     PLAYLIST_ROW,
+    SEARCH_ROW,
     SAMPLER_BAR,
     MARK_BAR,
     RANGE_BAR,

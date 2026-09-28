@@ -82,6 +82,12 @@ pub enum Message {
     SlicesDiscarded,
     /// A `:` command could not be parsed or run; the parser's own words.
     Command(String),
+    /// A `:sql` statement is running on its own thread.
+    Querying,
+    /// A `:sql` statement named this many library tracks.
+    Found(usize),
+    /// Saved searches are not renamed in place yet.
+    SearchNotRenamed,
     /// Playback will stop once the track playing ends, or no longer will.
     StopAfter(bool),
     /// The sleep timer was set to this, or turned off.
@@ -151,6 +157,12 @@ pub fn text(message: &Message) -> String {
             "nothing to queue; :enqueue all queues search results or the selection".into()
         }
         Message::QueueEmpty => "the queue is empty".into(),
+        Message::Querying => "running the query...".into(),
+        Message::Found(1) => "1 track".into(),
+        Message::Found(n) => format!("{n} tracks"),
+        Message::SearchNotRenamed => {
+            "save it again under the new name, then delete the old one".into()
+        }
         Message::StopAfter(true) => "stopping after this track".into(),
         Message::StopAfter(false) => "playing on after this track".into(),
         Message::StopIn(Some(d)) => format!("stopping in {}", fmt_time(*d)),
@@ -246,6 +258,7 @@ fn outcome_text(outcome: &Outcome) -> String {
             false => "queued".into(),
         },
         Outcome::Editing { name } => format!("editing \"{name}\"; s saves it"),
+        Outcome::SearchSaved { name } => format!("saved search \"{name}\""),
         Outcome::DraftOverwritten => "the old draft gives way to the selection".into(),
         Outcome::DraftAppended => "the old draft is back in the selection".into(),
         Outcome::QueueCleared { tracks: 1 } => "took 1 track out of the queue".into(),
@@ -369,6 +382,8 @@ fn refusal_text(refusal: &Refusal) -> String {
     match refusal {
         Refusal::NothingPlaying => "nothing is playing".into(),
         Refusal::SelectionEmpty => "selection is empty".into(),
+        Refusal::NoSearch => "no search results to save; search first".into(),
+        Refusal::Sql(error) => format!("sql: {error}"),
         Refusal::NameReserved(name) => format!("\"{name}\" is kept for the selection's draft"),
         Refusal::QueueEmpty => "the queue is empty".into(),
         Refusal::NoLibraryFile => "no library to save to; `playr scan <dir>` creates one".into(),

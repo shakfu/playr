@@ -397,3 +397,19 @@ fn stop_after_turned_off_plays_on() {
     assert!(wait_until(|| player.status().state == State::Stopped));
     assert_eq!(played_order(&control, &levels_), [0, 1]);
 }
+
+#[test]
+fn an_unqueued_track_plays_on_into_the_list() {
+    use playr_core::audio::AfterQueue;
+    let (player, control, dir) = setup(Mode::Normal);
+    player.send(Cmd::SetAfterQueue(AfterQueue::Stop));
+    let levels_ = [0.2, -0.2, 0.4];
+    let paths = tracks(dir.path(), 0.5, &levels_);
+    // The queued track would end the queue, and stop playback there.
+    player.send(Cmd::PlayWith(paths, vec![false, true, false], 1));
+    assert!(wait_until(|| player.position() > Duration::ZERO));
+    player.send(Cmd::Unqueue(1));
+    assert_eq!(player.status().queued[..], [false, false, false]);
+    assert!(wait_until(|| player.status().state == State::Stopped));
+    assert_eq!(played_order(&control, &levels_), [1, 2]);
+}

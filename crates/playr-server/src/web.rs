@@ -73,13 +73,13 @@ pub fn allowed(action: &Action) -> bool {
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection
-        | StartSave | SaveAs(_) | DeletePlaylist | EditPlaylist | StartRename | Analyze(None)
-        | ShowInfo | SetColumns(_) | SetSort(_) | RenameTo(_) | PlayPlaylist(_) | Rescan
-        | ShowRoots | Prune(None) | TogglePause | Restart | Next | Prev | Stop | SeekBy(_)
-        | SeekTo(_) | StopAfter | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_)
-        | SetSpeed(_) | SetEq(..) | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_)
-        | SetReplayGain(_) | Mark | MarkAt(_) | UndoMark | ClearMarks | NextMark | PrevMark
-        | Theme(_) => true,
+        | StartSave | SaveAs(_) | DeletePlaylist | EditPlaylist | StartSaveSearch
+        | SaveSearch(_) | Sql(_) | StartRename | Analyze(None) | ShowInfo | SetColumns(_)
+        | SetSort(_) | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None)
+        | TogglePause | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | StopAfter
+        | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | SetEq(..)
+        | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
+        | UndoMark | ClearMarks | NextMark | PrevMark | Theme(_) => true,
     }
 }
 
@@ -112,7 +112,7 @@ pub fn screen(model: &Model) -> Value {
         "counts": {
             "library": model.listed().len(),
             "selection": model.session().selection().len(),
-            "playlists": model.session().playlists().len(),
+            "playlists": model.session().playlists().len() + model.session().searches().len(),
             "queue": model.queue().len(),
         },
         "searching": model.results().is_some(),
@@ -177,10 +177,18 @@ fn lists_revision(model: &Model) -> u64 {
     for p in model.session().playlists() {
         (p.id, &p.name, p.len).hash(&mut hasher);
     }
+    for s in model.session().searches() {
+        (s.id, &s.name, s.query.text()).hash(&mut hasher);
+    }
     for t in model.queue() {
         t.path.hash(&mut hasher);
     }
     hasher.finish()
+}
+
+/// A saved search's row key, apart from any playlist's id.
+fn search_key(search: &playr_core::db::query::SavedSearch) -> String {
+    format!("search:{}", search.id)
 }
 
 /// The prompt, question or list open, as the page draws it.
@@ -231,13 +239,18 @@ pub fn rows(model: &Model, view: View, start: usize, count: usize) -> Value {
     let count = count.min(ROWS);
     if view == View::Playlists {
         let lists = model.session().playlists();
-        let rows: Vec<Value> = lists
-            .iter()
-            .skip(start)
-            .take(count)
-            .map(|p| json!({ "key": p.id.to_string(), "name": p.name, "tracks": p.len }))
-            .collect();
-        return json!({ "total": lists.len(), "start": start, "rows": rows });
+        let searches = model.session().searches();
+        let rows: Vec<Value> =
+            (lists.iter())
+                .map(|p| json!({ "key": p.id.to_string(), "name": p.name, "tracks": p.len }))
+                .chain(searches.iter().map(
+                    |s| json!({ "key": search_key(s), "name": s.name, "search": s.query.text() }),
+                ))
+                .skip(start)
+                .take(count)
+                .collect();
+        let total = lists.len() + searches.len();
+        return json!({ "total": total, "start": start, "rows": rows });
     }
     let tracks = match view {
         View::Library => model.listed(),
@@ -276,11 +289,15 @@ pub fn row_key(model: &Model, view: View, row: usize) -> Option<String> {
     match view {
         View::Library => model.listed().get(row).map(|t| t.path.clone()),
         View::Selection => model.session().selection().get(row).map(|t| t.path.clone()),
-        View::Playlists => model
-            .session()
-            .playlists()
-            .get(row)
-            .map(|p| p.id.to_string()),
+        View::Playlists => {
+            let lists = model.session().playlists();
+            match lists.get(row) {
+                Some(p) => Some(p.id.to_string()),
+                None => (model.session().searches())
+                    .get(row - lists.len())
+                    .map(search_key),
+            }
+        }
         View::Queue => model.queue().get(row).map(|t| t.path.clone()),
         View::Sampler => None,
     }

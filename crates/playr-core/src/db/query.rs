@@ -421,6 +421,72 @@ pub fn playlists(conn: &Connection) -> Result<Vec<Playlist>> {
     rows.collect()
 }
 
+/// What a list of search results came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Query {
+    /// As typed in the search box.
+    Text(String),
+    /// A `:sql` statement.
+    Sql(String),
+}
+
+impl Query {
+    pub fn text(&self) -> &str {
+        match self {
+            Query::Text(q) | Query::Sql(q) => q,
+        }
+    }
+}
+
+/// A search kept by name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedSearch {
+    pub id: i64,
+    pub name: String,
+    pub query: Query,
+    /// Sort keys as `:sort` takes them, comma-separated; empty for SQL.
+    pub sort: String,
+}
+
+/// Every saved search, by name.
+pub fn searches(conn: &Connection) -> Result<Vec<SavedSearch>> {
+    let mut stmt =
+        conn.prepare("SELECT id, name, kind, query, sort FROM searches ORDER BY name")?;
+    let rows = stmt.query_map([], |r| {
+        let (kind, text): (String, String) = (r.get(2)?, r.get(3)?);
+        Ok(SavedSearch {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            query: match kind.as_str() {
+                "sql" => Query::Sql(text),
+                _ => Query::Text(text),
+            },
+            sort: r.get(4)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Creates or replaces the saved search `name`.
+pub fn save_search(conn: &Connection, name: &str, query: &Query, sort: &str) -> Result<()> {
+    let kind = match query {
+        Query::Text(_) => "search",
+        Query::Sql(_) => "sql",
+    };
+    conn.execute(
+        "INSERT INTO searches (name, kind, query, sort) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(name) DO UPDATE SET kind = excluded.kind, query = excluded.query,
+           sort = excluded.sort",
+        [name, kind, query.text(), sort],
+    )?;
+    Ok(())
+}
+
+pub fn delete_search(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM searches WHERE id = ?1", [id])?;
+    Ok(())
+}
+
 /// The playlist called `name`: an exact match, else the only case-insensitive one.
 ///
 /// Names are unique case-sensitively, so `Late` and `late` can both exist;

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use playr_core::audio::eq::Band;
 use playr_core::audio::Cmd;
-use playr_core::db::query::Playlist;
+use playr_core::db::query::{Playlist, Query, SavedSearch};
 use playr_core::db::{SavedQueue, Track};
 use playr_core::event::JobId;
 use playr_core::notice::{Notice, Outcome, Refusal};
@@ -34,6 +34,9 @@ pub enum Confirm {
         playlist: Playlist,
         replacing: usize,
     },
+    /// Overwrite the saved search `name` with the search shown.
+    ReplaceSearch(String),
+    DeleteSearch(SavedSearch),
     /// Overwrite the playlist `name` with the selection, or the queue.
     ReplacePlaylist {
         name: String,
@@ -72,6 +75,10 @@ impl Confirm {
     pub fn question(&self) -> String {
         match self {
             Confirm::DeletePlaylist(p) => format!("delete playlist \"{}\"?", p.name),
+            Confirm::DeleteSearch(s) => format!("delete saved search \"{}\"?", s.name),
+            Confirm::ReplaceSearch(name) => {
+                format!("replace saved search \"{name}\" with the search shown?")
+            }
             Confirm::EditPlaylist {
                 playlist,
                 replacing,
@@ -136,12 +143,15 @@ impl Confirm {
 /// Text a frontend collects before an action can happen.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
-    /// A search, shown as it is typed through [`search`].
-    Search,
-    /// A `:` command.
-    Command,
+    /// A search, shown as it is typed through [`search`], starting from
+    /// this text.
+    Search(String),
+    /// A `:` command, starting from this text.
+    Command(String),
     /// A name to save the selection as, then [`save_as`].
     Save,
+    /// A name to keep the search shown under.
+    SaveSearch,
     /// A new name for this playlist, then [`rename`].
     Rename(Playlist),
 }
@@ -208,6 +218,63 @@ pub trait Frontend {
     fn planning(&mut self, job: JobId);
     /// Takes the planned slices the frontend is showing, if any.
     fn take_plan(&mut self) -> Option<Plan>;
+    /// A `:sql` statement runs as `job`; once it finishes, the frontend
+    /// passes its result to [`sql_done`] with `then`. A later statement
+    /// replaces an earlier one still running.
+    fn sql_started(&mut self, job: JobId, then: SqlThen);
+}
+
+/// What to do with the tracks a `:sql` statement names, once it finishes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SqlThen {
+    /// Show them as search results, from this statement.
+    Show(String),
+    /// Add them to the selection.
+    Select,
+    /// Queue them, next when set.
+    Enqueue(bool),
+}
+
+/// Starts `statement` on its own thread, to do `then` with its tracks.
+fn run_sql(f: &mut impl Frontend, statement: String, then: SqlThen) {
+    match f.session_mut().sql_in_background(statement) {
+        Ok(job) => {
+            f.sql_started(job, then);
+            f.notify(Message::Querying);
+        }
+        Err(refusal) => f.notify(refusal.into()),
+    }
+}
+
+/// Does what [`SqlThen`] says with a finished statement's `result`.
+pub fn sql_done(f: &mut impl Frontend, then: SqlThen, result: Result<Vec<PathBuf>, String>) {
+    let tracks = match result {
+        Ok(paths) => f.session().tracks_at(&paths),
+        Err(error) => return f.notify(Refusal::Sql(error).into()),
+    };
+    match then {
+        SqlThen::Show(statement) => {
+            f.set_view(View::Library);
+            let empty = tracks.is_empty();
+            f.session_mut().set_shown(Some(Query::Sql(statement)));
+            f.set_results(Some(tracks));
+            f.set_cursor(View::Library, (!empty).then_some(0));
+            f.notify(match empty {
+                true => Message::NoMatches,
+                false => Message::Found(f.listed().len()),
+            });
+        }
+        SqlThen::Select => {
+            if let Some(outcome) = f.session_mut().add_all_to_selection(tracks) {
+                f.notify(outcome.into());
+            }
+        }
+        SqlThen::Enqueue(_) if tracks.is_empty() => f.notify(Message::NoMatches),
+        SqlThen::Enqueue(next) => {
+            let outcome = f.session_mut().enqueue(&tracks, next);
+            f.notify(outcome.into());
+        }
+    }
 }
 
 /// Does `action`.
@@ -231,7 +298,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             let last = len(f, f.view()).saturating_sub(1);
             select(f, last);
         }
-        Action::StartSearch => f.prompt(Prompt::Search),
+        Action::StartSearch => f.prompt(Prompt::Search(String::new())),
         Action::Search(query) => {
             search(f, &query);
             if f.listed().is_empty() {
@@ -239,11 +306,12 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             }
         }
         Action::ClearSearch => {
+            f.session_mut().set_shown(None);
             if f.set_results(None).is_some() {
                 f.set_cursor(View::Library, Some(0));
             }
         }
-        Action::StartCommand => f.prompt(Prompt::Command),
+        Action::StartCommand => f.prompt(Prompt::Command(String::new())),
         Action::Activate => activate(f),
 
         Action::Add => add(f),
@@ -262,16 +330,10 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
                 }
             }
         }
-        Action::ClearQueue => {
-            let status = f.session().player().status();
-            let playing = f.session().queue_rows().first() == Some(&status.index)
-                && status.state != playr_core::audio::State::Stopped;
-            let live = f.session().queue_rows().len() - usize::from(playing);
-            match f.session().played().len() + live {
-                0 => f.notify(Message::QueueEmpty),
-                n => f.confirm(Confirm::ClearQueue(n)),
-            }
-        }
+        Action::ClearQueue => match f.session().played().len() + f.session().queue_rows().len() {
+            0 => f.notify(Message::QueueEmpty),
+            n => f.confirm(Confirm::ClearQueue(n)),
+        },
         Action::Remove => {
             // The queue's, or else the selection's.
             let view = match f.view() {
@@ -318,6 +380,30 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             Ok(()) => save_as(f, &name),
             Err(refusal) => f.notify(refusal.into()),
         },
+        Action::StartSaveSearch => match f.searching() {
+            true => f.prompt(Prompt::SaveSearch),
+            false => f.notify(Refusal::NoSearch.into()),
+        },
+        Action::SaveSearch(name) => {
+            if !f.searching() {
+                return f.notify(Refusal::NoSearch.into());
+            }
+            match f.session_mut().save_search(&name, false) {
+                Notice::Refused(Refusal::WouldReplace(name)) => {
+                    f.confirm(Confirm::ReplaceSearch(name))
+                }
+                notice => f.notify(notice.into()),
+            }
+        }
+        Action::EditPlaylist if search_under_cursor(f).is_some() => {
+            let search = search_under_cursor(f).expect("checked");
+            show_search(f, &search);
+            f.prompt(match &search.query {
+                Query::Text(q) => Prompt::Search(q.clone()),
+                Query::Sql(q) => Prompt::Command(format!("sql {q}")),
+            });
+        }
+        Action::Sql(statement) => run_sql(f, statement.clone(), SqlThen::Show(statement)),
         Action::EditPlaylist => match playlist_under_cursor(f) {
             None => f.notify(Message::NoPlaylistUnderCursor),
             Some(playlist) => match f.session().selection().len() {
@@ -328,10 +414,17 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
                 }),
             },
         },
+        Action::DeletePlaylist if search_under_cursor(f).is_some() => {
+            let search = search_under_cursor(f).expect("checked");
+            f.confirm(Confirm::DeleteSearch(search));
+        }
         Action::DeletePlaylist => {
             if let Some(pl) = playlist_under_cursor(f) {
                 f.confirm(Confirm::DeletePlaylist(pl));
             }
+        }
+        Action::StartRename if search_under_cursor(f).is_some() => {
+            f.notify(Message::SearchNotRenamed)
         }
         Action::StartRename => match playlist_under_cursor(f) {
             // The prompt starts from the current name, usually a small edit away.
@@ -796,6 +889,17 @@ pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
             f.notify(outcome.into());
         }
         Confirm::EditPlaylist { playlist, .. } => edit(f, &playlist),
+        Confirm::ReplaceSearch(name) => {
+            let notice = f.session_mut().save_search(&name, true);
+            f.notify(notice.into());
+        }
+        Confirm::DeleteSearch(search) => {
+            if let Some(notice) = f.session_mut().delete_search(search.id) {
+                let row = f.cursor(View::Playlists).unwrap_or(0);
+                select(f, row);
+                f.notify(notice.into());
+            }
+        }
         Confirm::DeletePlaylist(pl) => {
             if let Some(notice) = f.session_mut().delete_playlist(pl.id) {
                 f.set_view(View::Playlists);
@@ -812,9 +916,39 @@ pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
 pub fn search(f: &mut impl Frontend, query: &str) {
     f.set_view(View::Library);
     let results = (!query.is_empty()).then(|| f.session().search(query));
+    let shown = (!query.is_empty()).then(|| Query::Text(query.to_string()));
+    f.session_mut().set_shown(shown);
     f.set_results(results);
     let row = (!f.listed().is_empty()).then_some(0);
     f.set_cursor(View::Library, row);
+}
+
+/// Shows what `search` finds now in the library view, with the cursor on
+/// the first.
+fn show_search(f: &mut impl Frontend, search: &SavedSearch) {
+    if let Query::Sql(statement) = &search.query {
+        return run_sql(f, statement.clone(), SqlThen::Show(statement.clone()));
+    }
+    f.set_view(View::Library);
+    let results = f.session().run_search(search);
+    let empty = results.is_empty();
+    f.session_mut().set_shown(Some(search.query.clone()));
+    f.set_results(Some(results));
+    f.set_cursor(View::Library, (!empty).then_some(0));
+    if empty {
+        f.notify(Message::NoMatches);
+    }
+}
+
+/// The saved search under the playlists view's cursor. They are listed after
+/// the playlists.
+fn search_under_cursor(f: &impl Frontend) -> Option<SavedSearch> {
+    if f.view() != View::Playlists {
+        return None;
+    }
+    let row = f.cursor(View::Playlists)?;
+    let i = row.checked_sub(f.session().playlists().len())?;
+    f.session().searches().get(i).cloned()
 }
 
 /// Puts `playlist`'s tracks in the selection to edit, and shows them.
@@ -868,7 +1002,7 @@ fn len(f: &impl Frontend, view: View) -> usize {
     match view {
         View::Library => f.listed().len(),
         View::Selection => f.session().selection().len(),
-        View::Playlists => f.session().playlists().len(),
+        View::Playlists => f.session().playlists().len() + f.session().searches().len(),
         View::Queue => f.session().played().len() + f.session().queue_rows().len(),
         View::Sampler => 0,
     }
@@ -955,6 +1089,8 @@ fn activate(f: &mut impl Frontend) {
             if let Some(pl) = playlist_under_cursor(f) {
                 let notice = f.session_mut().play_playlist(pl.id);
                 f.notify(notice.into());
+            } else if let Some(search) = search_under_cursor(f) {
+                show_search(f, &search);
             }
         }
         View::Queue => {
@@ -976,9 +1112,20 @@ fn enqueue(f: &mut impl Frontend, next: bool) {
             .and_then(|i| f.session().selection().get(i).cloned())
             .into_iter()
             .collect(),
-        View::Playlists => match playlist_under_cursor(f) {
-            Some(pl) => f.session().playlist_tracks(pl.id),
-            None => Vec::new(),
+        View::Playlists => match (playlist_under_cursor(f), search_under_cursor(f)) {
+            (Some(pl), _) => f.session().playlist_tracks(pl.id),
+            (
+                None,
+                Some(SavedSearch {
+                    query: Query::Sql(statement),
+                    ..
+                }),
+            ) => {
+                move_cursor(f, 1);
+                return run_sql(f, statement, SqlThen::Enqueue(next));
+            }
+            (None, Some(search)) => f.session().run_search(&search),
+            (None, None) => Vec::new(),
         },
         View::Sampler | View::Queue => Vec::new(),
     };
@@ -1005,10 +1152,25 @@ fn add(f: &mut impl Frontend) {
             f.session_mut().toggle_selected(track)
         }
         View::Playlists => {
-            let Some(pl) = playlist_under_cursor(f) else {
-                return;
+            let added = match (playlist_under_cursor(f), search_under_cursor(f)) {
+                (Some(pl), _) => f.session_mut().add_playlist_to_selection(pl.id),
+                (
+                    None,
+                    Some(SavedSearch {
+                        query: Query::Sql(statement),
+                        ..
+                    }),
+                ) => {
+                    move_cursor(f, 1);
+                    return run_sql(f, statement, SqlThen::Select);
+                }
+                (None, Some(search)) => {
+                    let found = f.session().run_search(&search);
+                    f.session_mut().add_all_to_selection(found)
+                }
+                (None, None) => None,
             };
-            let Some(outcome) = f.session_mut().add_playlist_to_selection(pl.id) else {
+            let Some(outcome) = added else {
                 return;
             };
             outcome

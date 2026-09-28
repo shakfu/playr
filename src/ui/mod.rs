@@ -27,7 +27,7 @@ use playr_app::model::{DraftAnswer, Model};
 use playr_app::sampler::Sampler;
 use playr_core::audio::{Player, State};
 use playr_core::columns::{Column, Measures};
-use playr_core::db::query::Playlist;
+use playr_core::db::query::{Playlist, SavedSearch};
 use playr_core::db::Track;
 
 /// The terminal interface: the shared [`Model`], and what only drawing in a
@@ -108,6 +108,8 @@ pub struct Screen<'a> {
     /// The playlist the selection holds to edit.
     pub editing: Option<&'a str>,
     pub playlists: &'a [Playlist],
+    /// Listed after the playlists.
+    pub searches: &'a [SavedSearch],
     pub input: &'a Input,
     pub keys: &'a Keymap,
     pub sampler: &'a Sampler,
@@ -148,6 +150,7 @@ impl<'a> Screen<'a> {
             selection: &[],
             editing: None,
             playlists: &[],
+            searches: &[],
             input: &NO_INPUT,
             bpm: None,
             columns: DEFAULT_COLUMNS,
@@ -240,6 +243,7 @@ impl App {
             selection: m.session().selection(),
             editing: m.session().editing().map(|p| p.name.as_str()),
             playlists: m.session().playlists(),
+            searches: m.session().searches(),
             input: m.input(),
             help_scroll: self.help_scroll,
             colour: self.colour,

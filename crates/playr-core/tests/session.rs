@@ -621,3 +621,57 @@ fn an_edit_goes_on_in_a_later_session_when_its_draft_is_taken_up() {
     fourth.edit_playlist(id_of(&fourth, DRAFT));
     assert_eq!(fourth.editing(), None);
 }
+
+#[test]
+fn a_saved_search_finds_what_is_there_now_in_the_order_it_was_saved_with() {
+    use playr_core::columns::SortKey;
+    use playr_core::db::query::Query;
+
+    let (mut s, _, _dir) = session();
+    assert_eq!(
+        s.save_search("mine", false),
+        Notice::Refused(Refusal::NoSearch)
+    );
+    s.set_shown(Some(Query::Text("path:/m/".into())));
+    s.set_sort(vec![SortKey::named("title desc").unwrap()]);
+    assert_eq!(
+        s.save_search(" mine ", false),
+        Notice::Done(Outcome::SearchSaved {
+            name: "mine".into()
+        })
+    );
+    // Sorted as saved, whatever the library's sort is now.
+    s.set_sort(Vec::new());
+    let search = s.searches()[0].clone();
+    assert_eq!(
+        paths(&s.run_search(&search)),
+        ["/m/c.flac", "/m/b.flac", "/m/a.flac"]
+    );
+    // Names are shared with playlists, and the draft's is reserved.
+    assert_eq!(
+        s.save_search("mine", false),
+        Notice::Refused(Refusal::WouldReplace("mine".into()))
+    );
+    assert!(matches!(s.save_search("mine", true), Notice::Done(_)));
+    assert_eq!(
+        s.save_search("late", false),
+        Notice::Refused(Refusal::NameTaken("late".into()))
+    );
+    assert_eq!(
+        s.save_search("draft", false),
+        Notice::Refused(Refusal::NameReserved("draft".into()))
+    );
+    s.set_selection(vec![track("/m/a.flac", "A")]);
+    assert_eq!(
+        s.save_selection("mine", false),
+        Notice::Refused(Refusal::NameTaken("mine".into()))
+    );
+    let late = id_of(&s, "late");
+    assert_eq!(
+        s.rename_playlist(late, "mine"),
+        Notice::Refused(Refusal::NameTaken("mine".into()))
+    );
+
+    assert!(s.delete_search(search.id).is_some());
+    assert!(s.searches().is_empty());
+}

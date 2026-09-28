@@ -4,6 +4,16 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Fixed
+
+- `:clear`, `c` and Clear queue did nothing when the only queued track left was the one playing or paused: clearing kept it, so as not to cut it off, then counted nothing to clear and said the queue was empty. It now leaves the queue too and plays on as part of the list, which continues after it as it would after the queue. Library API: `Cmd::Unqueue`.
+
+### Added
+
+- `|` in the sampler returns a fitted view to the whole range after `[` or `]` centred it on one end, as `:fit on` does. It took `f` twice.
+
+## [0.14.0]
+
 ### Added
 
 - The queue is kept between runs, unless `keep_queue = false`. It is a setting of its own rather than a `persist` name, since a user's `persist` list replaces the default and would turn it off unseen. The queue is stored in the library at each change, in a new `resume_queue` table, and offered with the track playing at the next start: "take up amen.flac again at 1:35, with its queue of 5 tracks?". The list that was playing is not stored, so playback stops once the queue has played. Library API: `db::SavedQueue`, `db::set_resume_queue`, `db::resume_queue`, `Session::remember_queue`, `Session::keep_queue`, `Settings::keep_queue`; `Session::resume` and `Session::resumable` take and return the queue, and `Confirm::Resume` has a `queue` field.
@@ -11,6 +21,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 - `:save` in the Queue view saves every queue row as a playlist, played, playing and waiting, so tracks can be queued, heard, pruned and kept. The window and the page have a Save as playlist button above the queue. Library API: `Session::save_queue`, `Session::check_save_queue`, `Session::queue_tracks`, `Refusal::QueueEmpty`; `Confirm::ReplacePlaylist` is a struct variant with a `queue` field.
 
 - The selection is saved, as it changes, to a playlist named `draft`, and starts empty each run. A draft restored silently into the selection could end up in a new playlist unnoticed; as a playlist, it is visible and can be played, edited or deleted. The first change in a run that finds an earlier draft asks whether to overwrite it, append it, or save it under a name; `draft = "overwrite"`, `"append"` or `"off"` sets the answer. The name `draft` is reserved. Library API: `settings::Draft`, `Settings::draft`, `session::DRAFT`, `DraftChoice`, `Session::set_draft`, `Session::take_draft_question`, `Session::settle_draft`, `Refusal::NameReserved`, `Outcome::DraftOverwritten`, `Outcome::DraftAppended`, `Input::Draft`, `DraftAnswer`, `Model::answer_draft`, `Model::save_title`.
+
+- `:save-search [NAME]` keeps the search shown, with its sort, as a list that stays current: it runs again each time it is opened. The Playlists view lists saved searches after the playlists; enter shows the results in the library view, `a` selects them, `e` and `E` queue them, `o` reopens the search and `d` deletes it. Names are shared with playlists, so `:playlist NAME` stays unambiguous. Renaming one in place is not yet possible. Library API: `query::Query`, `query::SavedSearch`, `query::searches`, `query::save_search`, `query::delete_search`, `Session::searches`, `Session::set_shown`, `Session::shown`, `Session::save_search`, `Session::run_search`, `Session::delete_search`, `Session::add_all_to_selection`, `Refusal::NoSearch`, `Outcome::SearchSaved`, `Action::StartSaveSearch`, `Action::SaveSearch`, `Prompt::SaveSearch`, `Confirm::ReplaceSearch`, `Confirm::DeleteSearch`; `Prompt::Search` carries the text to start from.
+
+- `:sql SELECT path ...` lists the tracks a statement names, as search results, keeping its `ORDER BY`, and `:save-search` keeps it as a list that stays current. Statements read the views `library`, `playlists` and `marks`, named as the search fields are, not the tables, so a saved one outlasts schema changes. The page may send one, so it runs on a read-only connection whose authorizer allows only `SELECT`, reads through those views and a list of functions, refusing writes, `PRAGMA` and `ATTACH`, which could read any file on the host; it is stopped after 2 s, refused past 100,000 rows, and no value may exceed 1 MB. It runs on its own thread, as a scan does, so the interface keeps responding; a later statement replaces one still running. rusqlite gains its `hooks` and `limits` features. Library API: `db::sql`, `Session::sql`, `Session::sql_in_background`, `Session::tracks_at`, `Event::Sql`, `Refusal::Sql`, `Action::Sql`, `SqlThen`, `dispatch::sql_done`, `Frontend::sql_started`; `Prompt::Command` carries the text to start from.
 
 - `:edit`, on `o` in the Playlists view, replaces the selection with the playlist's tracks to edit, asking first if it held any. The selection's title names the playlist, `s` offers its name, and saving under it replaces the playlist without the usual question; saving or clearing ends the edit. Adding a playlist to the selection to edit it mixed in any tracks already selected. The playlist being edited is remembered with the draft, so appending an old draft, or `:edit` on the draft, takes the edit up again. Library API: `Session::edit_playlist`, `Session::editing`, `Outcome::Editing`, `Action::EditPlaylist`, `Confirm::EditPlaylist`.
 
@@ -25,6 +39,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 - The empty library view names `:scan DIR`, which fills it without leaving playr.
 
 ### Changed
+
+- Library API changes that break callers: `Confirm::ReplacePlaylist` is a struct variant and `Confirm::Resume` has a `queue` field; `Prompt::Search` and `Prompt::Command` carry the text to start from; `Session::resume` takes the queue and `Session::resumable` returns it; `Frontend` requires `sql_started`.
 
 - The queue's commands take the selection's names: `:remove`, `:move` and `:clear`. The old names, `:dequeue`, `:reorder` and `:queue-clear`, remain as aliases, so key bindings written for them still work. A command two views share names both when refused elsewhere, and `:map` no longer suggests one view for it.
 

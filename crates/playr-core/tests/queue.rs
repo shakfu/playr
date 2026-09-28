@@ -155,7 +155,7 @@ fn a_search_or_playlist_replaces_the_queue_over_the_library() {
 }
 
 #[test]
-fn waiting_tracks_move_and_clear_but_the_one_playing_stays() {
+fn waiting_tracks_move_and_clearing_leaves_the_one_playing_to_play_on() {
     let (mut s, t, _dir) = setup(5);
     s.play(&t[..1], 0);
     wait_until("playing", || s.player().status().state == State::Playing);
@@ -168,9 +168,13 @@ fn waiting_tracks_move_and_clear_but_the_one_playing_stays() {
     assert_eq!(s.move_in_queue(1, -1), None, "a track moved above it");
     assert_eq!(s.move_in_queue(2, -1), Some(1));
     assert_eq!(rows(&s), ["t1", "t3", "t2"]);
-    assert_eq!(s.clear_queue(), Outcome::QueueCleared { tracks: 2 });
-    assert_eq!(rows(&s), ["t1"]);
+    assert_eq!(s.clear_queue(), Outcome::QueueCleared { tracks: 3 });
+    assert!(rows(&s).is_empty());
+    wait_until("cleared", || s.player().caught_up());
     assert_eq!(playing(&s), "t1");
+    assert_eq!(list(&s), ["t0", "t1"]);
+    assert_eq!(s.player().status().queued[..], [false, false]);
+    assert_eq!(s.player().status().state, State::Playing);
 }
 
 #[test]
@@ -273,8 +277,9 @@ fn a_played_row_plays_again_and_clearing_empties_the_played_rows_too() {
     s.drop_played();
     // t2, interrupted by the replay, has played as far as the queue goes.
     assert_eq!(names(s.played()), ["t2", "t1"]);
-    assert_eq!(s.clear_queue(), Outcome::QueueCleared { tracks: 2 });
+    assert_eq!(s.clear_queue(), Outcome::QueueCleared { tracks: 3 });
     assert!(s.played().is_empty());
+    assert!(rows(&s).is_empty(), "t3, playing, still in the queue");
 }
 
 #[test]

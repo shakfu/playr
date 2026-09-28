@@ -313,7 +313,38 @@ One order serves the library, its search results and playback: the list you see 
 
 `:info` shows what was measured about one track: its format, loudness and peak, the gain ReplayGain would apply, its tempo with how sure playr is of it, where its content stops, how many of its bits it uses, its FLAC checksum, and any findings. It describes the row under the cursor in the library and selection views, and the playing track elsewhere; the window has Track info in a row's menu and on the sampler's button bar, where it describes the playing track. A track that has not been analysed says so.
 
-An analysed track shows its tempo beside the now-playing line, as it sounds: varispeed moves it, so a track at 120 BPM reads 143 BPM at +3 semitones. `bpm:` searches the recorded tempos: `bpm:128` matches within 1 BPM, `bpm:120..130` a range, and `bpm:140..` or `bpm:..90` one end of one. It combines with text, as in `evans bpm:120..130`, and matches nothing for a track playr has not analysed or is unsure of. A track whose tempo was halved, which happens above about 170 BPM, also matches at the tempo it is heard at: one recorded at 87 answers to `bpm:174`.
+An analysed track shows its tempo beside the now-playing line, as it sounds: varispeed moves it, so a track at 120 BPM reads 143 BPM at +3 semitones.
+
+### Search
+
+`/` opens the search, and the library view filters as you type, across title, artist, album, album artist and the file name without its folder or extension. The file name is what finds an untagged file, which the list shows by that name. Pressing enter on the results plays them. `playr search` takes the same syntax from the shell.
+
+Every word must match, as the start of a word. Prefix a word with a field to match it in that field alone: `title:`, `artist:`, `album:`, `albumartist:`, or `file:`. Quote words to match them together in order, as in `artist:"bill evans"`; unquoted, a field applies only to the word it is attached to. A prefix that is not one of these fields is searched as text, so `op:1` still finds a title with a colon in it.
+
+Every other column is a field too, by the name `:columns` takes. A number column takes a value or a range: `year:1959`, `year:1955..1965`, `loudness:..-14`, `time:5:00..`. A bare value matches what the list shows, so `time:5:00` matches 5:00.9 but not 4:59.9, and `loudness:-14` matches -14.0. `genre:` and `path:` match anywhere in the text, ignoring case. `tempo:` is `bpm:`, below. `loudness` is integrated loudness in LUFS, and `peak` the sample peak as a linear value from 0 to 1, as the columns show them; both come from `playr analyze`. A value that names nothing, such as `year:soon`, matches nothing.
+
+`bpm:` searches the recorded tempos: `bpm:128` matches within 1 BPM, `bpm:120..130` a range, and `bpm:140..` or `bpm:..90` one end of one. It combines with text, as in `evans bpm:120..130`, and matches nothing for a track playr has not analysed or is unsure of. A track whose tempo was halved, which happens above about 170 BPM, also matches at the tempo it is heard at: one recorded at 87 answers to `bpm:174`.
+
+`is:` finds what `playr analyze` flagged: `is:damaged`, `is:unreadable`, `is:padded`, `is:no-checksum`, `is:wrong-length`, `is:lossy` for a possible lossy source, and `is:upsampled`. `is:duplicate` finds tracks that look like copies of another in the library: the same FLAC checksum, or the same title and artist within 2 seconds, which needs no analysis. `is:unanalysed` finds tracks with no current measurement. A field alone lists every track it admits, and terms combine, so `is:duplicate path:/backup/` lists the copies under one folder.
+
+There is no OR, NOT or exclusion: every term narrows the results. `:sql` answers what the syntax cannot.
+
+#### Saved searches and SQL
+
+`:save-search NAME`, or `:save-search` alone, which asks for a name, keeps the search shown, with the order it is sorted in, and lists it after the playlists. It is run again each time it is opened, so it finds tracks added or analysed since: `:save-search 120-130` after searching `bpm:120..130`. On a saved search, enter shows what it finds in the library view, `a` selects all of it, `e` and `E` queue it, `o` opens it in the search box to change, and `d` deletes it. It shares names with the playlists; to rename one, save it again under the new name and delete the old.
+
+`:sql` lists the tracks a `SELECT` names, as search results, for questions the search syntax cannot ask. The statement must return a column named `path`, and its `ORDER BY` is kept. It reads three views:
+
+- `library`, one row per track: `path`, `title`, `artist`, `album_artist`, `album`, `genre`, `disc`, `track`, `year`, `time` (seconds), `rate`, `channels`, `bits`, `size`, `tempo`, `loudness` (LUFS), `peak` (linear, 0 to 1), and from `playr analyze`: `analysed`, `error`, `lossless`, `cutoff_hz`, `bits_used`, `md5`, `skipped`. The measured columns match the search fields of the same name.
+- `playlists`: `playlist`, `position`, `path`, one row per entry.
+- `marks`: `path`, `time` (seconds).
+
+```
+:sql SELECT path FROM library WHERE tempo BETWEEN 120 AND 130 AND NOT lossless ORDER BY tempo
+:sql SELECT path FROM library GROUP BY album HAVING count(*) = 1
+```
+
+Only a `SELECT` runs, on its own read-only connection, reading only these views and common text, number, date, aggregate and window functions. It runs on its own thread, so playr keeps responding while it does; a new statement replaces one still running. A statement is stopped after 2 seconds, refused past 100,000 rows, and no value it builds may exceed 1 MB. The web page may send it too. `:save-search` keeps it like any search, and `o` on it opens it on the `:` line to change.
 
 ### Media keys and the now-playing panel
 
@@ -363,13 +394,7 @@ These keys are the same in the terminal, the window and the web page, and any of
 | `?`                      | list the keys for this view                 |
 | `q`                      | quit                                        |
 
-Searching filters as you type, across title, artist, album, album artist and the file name without its folder or extension. The file name is what finds an untagged file, which the list shows by that name. Pressing enter on the results plays them.
-
-Every word must match, as the start of a word. Prefix a word with a field to match it in that field alone: `title:`, `artist:`, `album:`, `albumartist:`, or `file:`. Quote words to match them together in order, as in `artist:"bill evans"`; unquoted, a field applies only to the word it is attached to. A prefix that is not one of these fields is searched as text, so `op:1` still finds a title with a colon in it.
-
-Every other column is a field too, by the name `:columns` takes. A number column takes a value or a range: `year:1959`, `year:1955..1965`, `loudness:..-14`, `time:5:00..`. A bare value matches what the list shows, so `time:5:00` matches 5:00.9 but not 4:59.9, and `loudness:-14` matches -14.0. `genre:` and `path:` match anywhere in the text, ignoring case. `tempo:` is `bpm:`; see [Columns and order](#columns-and-order). A value that names nothing, such as `year:soon`, matches nothing.
-
-`is:` finds what `playr analyze` flagged: `is:damaged`, `is:unreadable`, `is:padded`, `is:no-checksum`, `is:wrong-length`, `is:lossy` for a possible lossy source, and `is:upsampled`. `is:duplicate` finds tracks that look like copies of another in the library: the same FLAC checksum, or the same title and artist within 2 seconds, which needs no analysis. `is:unanalysed` finds tracks with no current measurement. A field alone lists every track it admits, and terms combine, so `is:duplicate path:/backup/` lists the copies under one folder.
+[Search](#search) describes what `/` accepts.
 
 Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist.
 
@@ -379,7 +404,7 @@ To edit a playlist, press `o` on it, or run `:edit`: the selection is replaced w
 
 The library plays by itself: enter in it plays on through it, and puts nothing in the queue. The queue holds the tracks you choose. `e` queues the track or playlist under the cursor; the first queued over the library plays at once, and the rest wait in the order queued. `E` puts a track first among those waiting. `A` queues every search result, or the whole selection. Enter on search results, a playlist or the selection replaces the queue with that list, from the track chosen, and says how many tracks were waiting. Once the queue has played, the library resumes at the track after the one the queue interrupted; `after_queue = "stop"` stops instead. Tracks waiting survive enter in the library, and play after the track chosen.
 
-The queue view lists the queued tracks that have played, dimmed, then the track playing if it came from the queue, then the tracks waiting. Enter there jumps to a waiting track, and those skipped count as played; enter on a played track plays it again. `d`, backspace or delete takes a track out; taking out the track playing plays the next. `J` and `K` move a track among the played or the waiting ones. `a` adds a track to the selection. `s` saves every row as a playlist, so tracks can be queued, heard, pruned and kept. The queue and the selection share `:remove`, `:move` and `:clear`; the queue's old names `:dequeue`, `:reorder` and `:queue-clear` still work. `c` empties the queue, after asking. The next start offers the queue again, with the track playing.
+The queue view lists the queued tracks that have played, dimmed, then the track playing if it came from the queue, then the tracks waiting. Enter there jumps to a waiting track, and those skipped count as played; enter on a played track plays it again. `d`, backspace or delete takes a track out; taking out the track playing plays the next. `J` and `K` move a track among the played or the waiting ones. `a` adds a track to the selection. `s` saves every row as a playlist, so tracks can be queued, heard, pruned and kept. The queue and the selection share `:remove`, `:move` and `:clear`; the queue's old names `:dequeue`, `:reorder` and `:queue-clear` still work. `c` empties the queue, after asking; a queued track playing leaves it and plays on as part of the list, which then goes on as after the queue. The next start offers the queue again, with the track playing.
 
 ### Playback modes
 
@@ -455,6 +480,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | shift-left, shift-right | `:nudge -10%`, `:nudge +10%` | move it a tenth of the view      |
 | `S`     | `:snap`                 | snap to zero crossings, on or off                 |
 | `f`     | `:fit`                  | zoom to the range and centre on it, on or off     |
+| `\|`    | `:fit on`               | back to the whole range after `[` or `]`          |
 | `<` `>` | `:in`, `:out`           | start or end the range at the playhead            |
 | backspace | `:range`              | clear the range; `:range 1:02 1:04.5` sets one    |
 | `l`     | `:loop`                 | play the range over and over, or stop             |
@@ -497,7 +523,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Range.** `<` and `>` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge, within 8 points of it, moves that edge and picks it for `{` and `}`; the pointer turns to a left-right arrow over an edge that can be dragged.
 
-- **Fit.** `f`, or the window's Fit range tick box, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `{` and `}` move the end while it stays still on screen; `z` then zooms in on it. `f` off and on again returns to the whole range.
+- **Fit.** `f`, or the window's Fit range tick box, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `{` and `}` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
 
 - **Loop.** `l` plays the range over and over, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `<` or `>`, with `{` or `}` after `[` or `]` picks it, with `:range` or a drag, moves the loop at once; clearing the range, a new track or `l` again ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
 

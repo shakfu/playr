@@ -5,6 +5,7 @@
 
 pub mod analysis;
 pub mod query;
+pub mod sql;
 
 use rusqlite::{Connection, OptionalExtension};
 use std::path::{Path, PathBuf};

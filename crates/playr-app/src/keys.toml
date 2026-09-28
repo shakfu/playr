@@ -112,6 +112,8 @@ shift-right = "nudge +10%"
 shift-left = "nudge -10%"
 S = "snap"
 f = "fit"
+# Back to the whole range after [ or ] centred the view on one end.
+"|" = "fit on"
 # Shift-comma and shift-period on a US layout, beside the mark keys.
 "<" = "in"
 ">" = "out"

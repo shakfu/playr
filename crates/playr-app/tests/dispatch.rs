@@ -106,6 +106,7 @@ impl Frontend for Headless {
     fn take_plan(&mut self) -> Option<Plan> {
         self.plan.take()
     }
+    fn sql_started(&mut self, _: JobId, _: playr_app::dispatch::SqlThen) {}
 }
 
 /// A headless frontend over a library file of tracks a, b and c, and
@@ -322,12 +323,16 @@ fn the_queue_view_takes_tracks_out_and_keeps_the_one_playing_first() {
         last(&f),
         Some(Message::Core(Notice::Done(Outcome::RemovedTrack { .. })))
     ));
+    // Only b, playing, is left; clearing takes it out of the queue, and it
+    // plays on.
     dispatch(Action::ClearQueue, &mut f);
-    assert_eq!(
-        last(&f),
-        Some(&Message::QueueEmpty),
-        "only b, playing, is left"
-    );
+    assert_eq!(f.asked, Some(Confirm::ClearQueue(1)));
+    confirmed(Confirm::ClearQueue(1), &mut f);
+    assert!(f.session.queue_rows().is_empty());
+    let status = f.session.player().status();
+    assert_eq!(status.current().unwrap().file_stem().unwrap(), "b");
+    dispatch(Action::ClearQueue, &mut f);
+    assert_eq!(last(&f), Some(&Message::QueueEmpty));
 }
 
 #[test]
@@ -458,7 +463,13 @@ fn commands_parse_and_dispatch_in_the_frontend_s_view() {
     run(&mut f, "search");
     // `command` names the prompt only as a key binding's target.
     dispatch(Action::StartCommand, &mut f);
-    assert_eq!(f.prompts, [Prompt::Search, Prompt::Command]);
+    assert_eq!(
+        f.prompts,
+        [
+            Prompt::Search(String::new()),
+            Prompt::Command(String::new())
+        ]
+    );
 }
 
 /// Plays `track` alone, waits until it plays, and marks it at `secs`.

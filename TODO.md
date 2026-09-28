@@ -50,11 +50,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **Group, a date added, and play history.** `columns` and `sort` order the library by any column, but there is no grouping, and no date added to sort by: the schema has no `added_at`, and `mtime` is the file's. A column would only be meaningful for tracks added after it. A `plays(path, at)` table would add history; with every column a search field, `added:30d..` and `played:..1y` follow. Album and artist grouping needs a new view in three frontends, and `Frontend` assumes one cursor row per view. A cheaper first step: `:filter album|artist` searches for the cursor row's album or artist. A buyer of music thinks in releases (decision 2), which argues for grouping (inference about users).
 
-- [ ] **Saved searches.** `:save-search NAME` stores the query and sort. The playlists view lists it and runs it on Enter. With field and `is:` search, this gives lists that stay current, such as "120 to 130 BPM" or "damaged files".
-
 - [ ] **Columns on the page.** `[server] columns` is read but not used: the page's rows are a responsive grid, tuned for a phone's two-line rows, and making the columns dynamic means rebuilding that layout. It sorts and shows a fixed set for now.
-
-- [ ] **Advanced search in SQL.** A `:query SELECT path FROM tracks JOIN analysis ...` whose rows become the library listing, as a search's do, for questions the search syntax cannot ask. It must run on a read-only connection and be refused unless it is a `SELECT`: playlists and marks are the only things in the library that cannot be read back from the files. Saved queries would then be smart playlists. Field search, as in `year:1955..1965` or `is:damaged`, covers most of its uses without SQL.
 
 - [ ] **Calibrate the cutoff heuristics.** The two spectral findings were set against ffmpeg's encoders, not files whose provenance is known; a library of lossless files with known sources would settle them. The tempo confidence is calibrated, against librosa; see `docs/dev/analyze.md`.
 

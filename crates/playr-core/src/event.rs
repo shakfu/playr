@@ -106,6 +106,12 @@ pub enum Event {
         from: u64,
         result: Result<Option<u64>, String>,
     },
+    /// A `:sql` statement finished, naming these paths in its order, or
+    /// was refused or stopped. See `Session::sql_in_background`.
+    Sql {
+        job: JobId,
+        result: Result<Vec<PathBuf>, String>,
+    },
     /// Paths given to `Session::open` are gathered into tracks to play.
     Opened { job: JobId, playable: Playable },
 }

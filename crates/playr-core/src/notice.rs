@@ -69,6 +69,10 @@ pub enum Outcome {
     Editing {
         name: String,
     },
+    /// The search shown was saved as `name`.
+    SearchSaved {
+        name: String,
+    },
     /// The draft an earlier session left gives way to the selection.
     DraftOverwritten,
     /// The draft an earlier session left is back in the selection.
@@ -178,6 +182,11 @@ pub enum Refusal {
     NoLibraryFile,
     NameEmpty,
     NameUnchanged,
+    /// No search results are shown, so there is nothing to save.
+    NoSearch,
+    /// A `:sql` statement was refused or failed, in SQLite's words or a
+    /// limit's.
+    Sql(String),
     /// The name is kept for the selection's draft.
     NameReserved(String),
     NameTaken(String),

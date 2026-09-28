@@ -12,13 +12,30 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 - `NAME` and `QUERY` run to the end of the line, so spaces need no quotes.
 
-- `[ ]` marks an optional argument. Without it, `:search`, `:save` and `:rename` open their prompt.
+- `[ ]` marks an optional argument. Without it, `:search`, `:save`, `:save-search` and `:rename` open their prompt.
 
 - `PATH` and `DIR` run to the end of the line; a leading `~` is the home directory, and a relative path is relative to where playr started. `:scan` runs in the background, reports progress on the bottom line, and creates the library if there is none. It keeps tracks whose files are gone and counts them, then asks to prune, or prunes at once if `auto_prune` is set. `:rescan`, or `:sync`, re-scans every directory previously given to `:scan` or `playr scan`. `:roots` lists those directories; `:roots add DIR` is another spelling of `:scan DIR`, and `:roots rm DIR` forgets one, removing the tracks and marks under it after asking. `:prune` removes the tracks of missing files, their places in playlists, and the marks of missing files under `DIR`, after asking; with no directory it covers every directory previously scanned. `:open` adds the files to the end of the selection and plays them.
 
-- Renamed commands keep their old names, so bindings written for them still work: `:next-view` and `:prev-view` are `:view next` and `:view prev`; `:unmark`, `:delmarks`, `:next-mark`, `:prev-mark`, `:pick`, `:nudge-mark`, `:move-mark`, `:snap-mark` and `:del-mark` are `:mark-undo`, `:mark-clear`, `:mark-next`, `:mark-prev`, `:mark-pick`, `:mark-nudge`, `:mark-move`, `:mark-snap` and `:mark-rm`; `:clear-search` is `:search-clear`.
+- Renamed commands keep their old names, so bindings written for them still work: `:next-view` and `:prev-view` are `:view next` and `:view prev`; `:unmark`, `:delmarks`, `:next-mark`, `:prev-mark`, `:pick`, `:nudge-mark`, `:move-mark`, `:snap-mark` and `:del-mark` are `:mark-undo`, `:mark-clear`, `:mark-next`, `:mark-prev`, `:mark-pick`, `:mark-nudge`, `:mark-move`, `:mark-snap` and `:mark-rm`; `:clear-search` is `:search-clear`; in the queue, `:dequeue`, `:reorder` and `:queue-clear` are `:remove`, `:move` and `:clear`.
 
 - `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
+
+## Search
+
+What `/`, `:search` and `playr search` accept. [Search](../README.md#search) has the details.
+
+| form | example | matches |
+|-|-|-|
+| words | `bill evans` | every word, as the start of a word, in title, artist, album, album artist or file name |
+| field | `artist:evans`, `file:take2` | one word in `title`, `artist`, `album`, `albumartist` or `file` |
+| quoted | `artist:"bill evans"` | the words together, in order |
+| column | `genre:jazz`, `path:/backup/` | text anywhere in that column, ignoring case |
+| number | `year:1959`, `year:1955..1965`, `time:5:00..` | a value as shown, or a range; either end may be left open |
+| measured | `loudness:..-14`, `peak:0.99..` | LUFS, and peak from 0 to 1, from `playr analyze` |
+| tempo | `bpm:128`, `bpm:120..130` | within 1 BPM, or a range; also at double a halved tempo |
+| finding | `is:damaged`, `is:lossy`, `is:duplicate` | what `playr analyze` flagged; also `unreadable`, `padded`, `no-checksum`, `wrong-length`, `upsampled`, `unanalysed` |
+
+Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT path ...` answers the rest, and `:save-search` keeps either.
 
 ## Every view
 
@@ -37,6 +54,8 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:search [QUERY]`                     | `/`                     | search the library; no query opens /        |
 | `:playlist NAME`                      |                         | play a saved playlist                       |
 | `:save [NAME]`                        | `s`                     | save the selection as a playlist            |
+| `:save-search [NAME]`                 |                         | keep the search shown, to run again         |
+| `:sql SELECT path ...`                |                         | list the tracks a query names               |
 | `:scan DIR`                           |                         | add a directory to the library              |
 | `:rescan`                             |                         | re-scan directories previously added; `:sync` |
 | `:roots [add\|rm DIR]`                |                         | list the directories the library covers      |
@@ -110,7 +129,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:display [DISPLAY]`               | `w`                     | envelope, db, braille or spectrogram   |
 | `:nudge +N \| -N \| +N% \| -N%`     | left, right, with shift | move N columns, or N% of the view      |
 | `:snap [on\|off]`                  | `S`                     | snap moves and marks to zero crossings |
-| `:fit [on\|off]`                   | `f`                     | zoom to the range and keep it centred  |
+| `:fit [on\|off]`                   | `f`; `\|` is `:fit on`  | zoom to the range and keep it centred  |
 | `:in`                              | `<`                     | start the range at the playhead        |
 | `:out`                             | `>`                     | end the range at the playhead          |
 | `:range [START END]`               | `backspace`             | set the range to slice, or clear it    |
@@ -127,7 +146,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 | `:write`                           | `enter`                 | write the slices :slice planned        |
 | `:discard`                         | `esc`                   | discard planned slices, else the range |
 
-In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; `[` or `]` picks an end, shown reversed, for `{` and `}` to move while it loops. `esc` clears the range once no slices are planned.
+In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; `[` or `]` picks an end, shown reversed, for `{` and `}` to move while it loops. `esc` clears the range once no slices are planned.
 
 ## Typing commands
 

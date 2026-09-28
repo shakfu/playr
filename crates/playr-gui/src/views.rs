@@ -219,10 +219,12 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     result
 }
 
-/// The saved playlists with their track counts.
+/// The saved playlists with their track counts, then the saved searches with
+/// what they search for.
 pub fn playlists(model: &Model, ui: &mut egui::Ui, scroll: Option<usize>) -> Clicked {
     let playlists = model.session().playlists();
-    if playlists.is_empty() {
+    let searches = model.session().searches();
+    if playlists.is_empty() && searches.is_empty() {
         ui.weak("No playlists. Build a selection, then save it.");
         return None;
     }
@@ -241,23 +243,30 @@ pub fn playlists(model: &Model, ui: &mut egui::Ui, scroll: Option<usize>) -> Cli
         .column(Column::remainder().at_least(160.0).clip(true))
         .column(Column::exact(80.0))
         .header(ROW, |mut header| {
-            for name in ["Playlist", "Tracks"] {
+            for name in ["Playlist", "Tracks or search"] {
                 header.col(|ui| {
                     ui.strong(name);
                 });
             }
         })
         .body(|body| {
-            body.rows(ROW, playlists.len(), |mut row| {
+            body.rows(ROW, playlists.len() + searches.len(), |mut row| {
                 let i = row.index();
                 row.set_selected(cursor == Some(i));
+                let (name, detail, menu) = match playlists.get(i) {
+                    Some(p) => (&p.name, p.len.to_string(), controls::PLAYLIST_ROW),
+                    None => {
+                        let s = &searches[i - playlists.len()];
+                        (&s.name, s.query.text().to_string(), controls::SEARCH_ROW)
+                    }
+                };
                 row.col(|ui| {
-                    ui.label(&playlists[i].name);
+                    ui.label(name);
                 });
                 row.col(|ui| {
-                    ui.weak(playlists[i].len.to_string());
+                    ui.weak(detail);
                 });
-                if let Some(picked) = respond(&row, controls::PLAYLIST_ROW) {
+                if let Some(picked) = respond(&row, menu) {
                     result = Some(picked);
                 }
             });

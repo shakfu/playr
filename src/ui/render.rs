@@ -766,22 +766,28 @@ fn draw_queue(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
 fn draw_playlists(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
     let p = app.palette();
     let selected = app.lists.playlists.row;
-    let items: Vec<ListItem> = app
+    let dim = |i: usize| match selected == Some(i) {
+        true => p.dim_selected,
+        false => p.dim,
+    };
+    let row = |i: usize, name: &str, detail: String| {
+        ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(fit(name, 40), Style::default().fg(p.name)),
+            Span::styled(detail, Style::default().fg(dim(i))),
+        ]))
+    };
+    let lists = app
         .playlists
         .iter()
+        .map(|l| (l.name.as_str(), format!("{:>4} tracks", l.len)));
+    // Saved searches follow, showing what they find rather than a count.
+    let searches =
+        (app.searches.iter()).map(|s| (s.name.as_str(), format!(" / {}", s.query.text())));
+    let items: Vec<ListItem> = lists
+        .chain(searches)
         .enumerate()
-        .map(|(i, list)| {
-            let dim = if selected == Some(i) {
-                p.dim_selected
-            } else {
-                p.dim
-            };
-            ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(fit(&list.name, 40), Style::default().fg(p.name)),
-                Span::styled(format!("{:>4} tracks", list.len), Style::default().fg(dim)),
-            ]))
-        })
+        .map(|(i, (name, detail))| row(i, name, detail))
         .collect();
     let empty = items.is_empty();
     let list = List::new(items)

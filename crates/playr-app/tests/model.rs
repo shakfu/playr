@@ -2032,3 +2032,133 @@ fn edit_fills_the_selection_asking_first_and_save_offers_the_playlist_s_name() {
         Some("early")
     );
 }
+
+#[test]
+fn a_saved_search_is_listed_after_the_playlists_and_acts_on_what_it_finds() {
+    let (mut model, _dir) = model();
+    model.perform(Action::SaveSearch("all".into()));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NoSearch)))
+    );
+    model.perform(Action::Search("path:/m/".into()));
+    // Without a name, the save prompt asks for one.
+    model.perform(Action::StartSaveSearch);
+    assert_eq!(model.save_title(), "Save the search as");
+    model.save_as("all");
+    assert_eq!(model.session().searches().len(), 1);
+
+    // Recounted each time: the draft playlist comes once tracks are selected.
+    let on_search = |m: &mut Model| {
+        let row = m.session().playlists().len();
+        m.perform(Action::ShowView(View::Playlists));
+        m.set_cursor(View::Playlists, Some(row));
+    };
+    model.perform(Action::ClearSearch);
+    on_search(&mut model);
+    model.perform(Action::Activate);
+    assert_eq!(model.view(), View::Library);
+    assert_eq!(model.results().map(<[Track]>::len), Some(3));
+
+    on_search(&mut model);
+    model.perform(Action::Add);
+    assert_eq!(model.session().selection().len(), 3);
+
+    on_search(&mut model);
+    model.perform(Action::EditPlaylist);
+    assert_eq!(model.input(), &Input::Search("path:/m/".into()));
+    model.set_input(Input::None);
+
+    on_search(&mut model);
+    model.perform(Action::DeletePlaylist);
+    assert!(matches!(
+        model.input(),
+        Input::Confirm(Confirm::DeleteSearch(_))
+    ));
+    model.answer(true);
+    assert!(model.session().searches().is_empty());
+}
+
+/// Refreshes until the `:sql` statement running has reported.
+fn after_sql(model: &mut Model) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.message() == Some(&Message::Querying) {
+        assert!(Instant::now() < deadline, "the statement did not report");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn sql_lists_what_a_select_names_and_saves_as_a_search_to_edit_on_the_command_line() {
+    use playr_core::db::query::Query;
+
+    let (mut model, _dir) = model();
+    let statement = "SELECT path FROM library WHERE path LIKE '%b%'";
+    let paths = |m: &Model| -> Vec<String> {
+        (m.results().unwrap_or_default().iter())
+            .map(|t| t.path.clone())
+            .collect()
+    };
+    model.run_command(&format!("sql {statement}"));
+    assert_eq!(model.message(), Some(&Message::Querying));
+    after_sql(&mut model);
+    assert_eq!(paths(&model), ["/m/b.flac"]);
+    assert_eq!(model.message(), Some(&Message::Found(1)));
+
+    model.run_command("sql SELECT title FROM library");
+    after_sql(&mut model);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::Sql(
+            "the statement must select a column named path".into()
+        ))))
+    );
+    assert_eq!(
+        paths(&model),
+        ["/m/b.flac"],
+        "a refusal cleared the results"
+    );
+
+    // A statement sent while another runs replaces it.
+    model.run_command("sql SELECT path FROM library WHERE path LIKE '%a%'");
+    model.run_command(&format!("sql {statement}"));
+    after_sql(&mut model);
+    std::thread::sleep(Duration::from_millis(50));
+    model.refresh();
+    assert_eq!(paths(&model), ["/m/b.flac"]);
+
+    model.perform(Action::SaveSearch("bees".into()));
+    let search = model.session().searches()[0].clone();
+    assert_eq!(search.query, Query::Sql(statement.into()));
+    assert_eq!(search.sort, "", "SQL keeps its own order");
+
+    model.perform(Action::ClearSearch);
+    let row = model.session().playlists().len();
+    let on_search = |m: &mut Model| {
+        m.perform(Action::ShowView(View::Playlists));
+        m.set_cursor(View::Playlists, Some(row));
+    };
+    on_search(&mut model);
+    model.perform(Action::Activate);
+    after_sql(&mut model);
+    assert_eq!(paths(&model), ["/m/b.flac"]);
+
+    on_search(&mut model);
+    model.perform(Action::Add);
+    after_sql(&mut model);
+    let selected: Vec<&str> = (model.session().selection().iter())
+        .map(|t| t.path.as_str())
+        .collect();
+    assert_eq!(selected, ["/m/b.flac"]);
+
+    // The draft playlist, made by the selection, comes before the search.
+    let row = model.session().playlists().len();
+    model.perform(Action::ShowView(View::Playlists));
+    model.set_cursor(View::Playlists, Some(row));
+    model.perform(Action::EditPlaylist);
+    match model.input() {
+        Input::Command(line) => assert_eq!(line.text, format!("sql {statement}")),
+        other => panic!("{other:?}"),
+    }
+}

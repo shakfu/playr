@@ -41,6 +41,9 @@ fn every_action() -> Vec<Action> {
         Action::SaveAs("n".into()),
         Action::DeletePlaylist,
         Action::EditPlaylist,
+        Action::StartSaveSearch,
+        Action::Sql("SELECT path FROM library".into()),
+        Action::SaveSearch("n".into()),
         Action::StartRename,
         Action::RenameTo("n".into()),
         Action::PlayPlaylist("n".into()),
@@ -142,6 +145,9 @@ fn every_action() -> Vec<Action> {
             | Action::SaveAs(_)
             | Action::DeletePlaylist
             | Action::EditPlaylist
+            | Action::StartSaveSearch
+            | Action::Sql(_)
+            | Action::SaveSearch(_)
             | Action::StartRename
             | Action::RenameTo(_)
             | Action::PlayPlaylist(_)
@@ -232,6 +238,10 @@ const ELSEWHERE: &[(&str, &str)] = &[
     ),
     ("SaveAs", "the name dialog saves through Model::save_as"),
     (
+        "SaveSearch",
+        "the name dialog, opened by Save search, saves through Model::save_as",
+    ),
+    (
         "RenameTo",
         "the name dialog renames through Model::rename_to",
     ),
@@ -240,6 +250,7 @@ const ELSEWHERE: &[(&str, &str)] = &[
         "Map",
         "binds a key for the session; typed in the command bar",
     ),
+    ("Sql", "a SELECT typed in the command bar"),
     (
         "Unmap",
         "removes a binding for the session; typed in the command bar",

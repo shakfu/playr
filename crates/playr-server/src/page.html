@@ -456,7 +456,9 @@ function drawRow(i, row, cursor, h) {
   if (isCursor) el.classList.add("cursor");
   if (list.view === "playlists") {
     el.classList.add("playlist");
-    el.append(span("name", row.name), span("tracks", row.tracks + (row.tracks === 1 ? " track" : " tracks")));
+    const detail = row.search != null ? "/ " + row.search
+      : row.tracks + (row.tracks === 1 ? " track" : " tracks");
+    el.append(span("name", row.name), span("tracks", detail));
   } else {
     const sel = span("sel", "");
     if (list.view === "library") {
@@ -500,6 +502,8 @@ const ROW_MENUS = {
     ["Play next", "enqueue next"], ["Add to queue", "enqueue"]],
   playlists: [["Play", "play"], ["Add to selection", "add"], ["Play next", "enqueue next"], ["Add to queue", "enqueue"],
     ["Edit", "edit"], ["Rename", "rename"], ["Delete", "delete"]],
+  search: [["Show results", "play"], ["Add to selection", "add"], ["Play next", "enqueue next"],
+    ["Add to queue", "enqueue"], ["Edit", "edit"], ["Delete", "delete"]],
   queue: [["Play from here", "play"], ["Remove from queue", "remove"], ["Add to selection", "add"],
     ["Move up", "move -1"], ["Move down", "move +1"]],
 };
@@ -542,7 +546,8 @@ function openRowMenu(i) {
   const row = rowAt(i);
   if (!row) return;
   $("sheet-heading").textContent = row.title || row.name;
-  $("sheet-items").replaceChildren(...ROW_MENUS[list.view].map(([label, command]) =>
+  const menu = row.search != null ? ROW_MENUS.search : ROW_MENUS[list.view];
+  $("sheet-items").replaceChildren(...menu.map(([label, command]) =>
     button(label, () => { $("sheet").close(); onRow(i, command); })));
   $("sheet").showModal();
 }
@@ -553,7 +558,7 @@ $("menu-button").addEventListener("click", () => {
   const items = [
     ["Keys", "keys"], ["Commands", "help"], ["Command line", "command"],
     ["Clear search", "search-clear"],
-    ["Save as playlist", "save"], ["Clear selection", "clear"],
+    ["Save as playlist", "save"], ["Save search", "save-search"], ["Clear selection", "clear"],
     ["Stop after this track", "stop after"], ["Stop in 30 minutes", "stop in 30:00"],
     ["Sleep timer off", "stop in off"],
     ["Theme: system", "theme system"], ["Theme: light", "theme light"], ["Theme: dark", "theme dark"],

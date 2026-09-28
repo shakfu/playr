@@ -167,6 +167,9 @@ pub enum Cmd {
     Remove(usize),
     /// Move the queued track at the first index to the second.
     Move(usize, usize),
+    /// Treat the track at this index as one of the list, not queued: it
+    /// stays where it is, and what follows it follows as for the list.
+    Unqueue(usize),
     /// Play the queued track at `index`, keeping the queue.
     Jump(usize),
     TogglePause,
@@ -263,6 +266,8 @@ enum Msg {
     Insert(List, usize, usize),
     Remove(List, usize),
     Move(List, usize, usize),
+    /// Which tracks are queued changed; the list did not.
+    Relabel(List),
     Cmd(Cmd),
 }
 
@@ -384,6 +389,15 @@ impl Player {
                 (status.queue, status.queued) = (queue.into(), queued.into());
                 status.index = order::moved(status.index, from, to);
                 Msg::Move(list(&status), from, to)
+            }
+            Cmd::Unqueue(i) => {
+                if !status.queued.get(i).copied().unwrap_or(false) {
+                    return;
+                }
+                let mut queued = status.queued.to_vec();
+                queued[i] = false;
+                status.queued = queued.into();
+                Msg::Relabel(list(&status))
             }
             Cmd::Enqueue(paths) => {
                 let n = paths.len();
@@ -708,6 +722,11 @@ impl Engine {
                 (self.queue, self.queued) = (queue, queued);
                 return self.removed(i);
             }
+            // The next track chosen may have been chosen as the queue's end.
+            Msg::Relabel((queue, queued)) => {
+                (self.queue, self.queued) = (queue, queued);
+                return self.discard_chosen();
+            }
             Msg::Move((queue, queued), from, to) => {
                 (self.queue, self.queued) = (queue, queued);
                 self.renumber(|j| order::moved(j, from, to));
@@ -723,7 +742,8 @@ impl Engine {
             | Cmd::Enqueue(..)
             | Cmd::Insert(..)
             | Cmd::Remove(..)
-            | Cmd::Move(..) => {}
+            | Cmd::Move(..)
+            | Cmd::Unqueue(_) => {}
             Cmd::Jump(index) => self.jump(index),
             Cmd::TogglePause => match self.state {
                 State::Playing => {

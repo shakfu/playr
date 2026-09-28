@@ -66,6 +66,19 @@ CREATE TABLE IF NOT EXISTS playlist_items (
   PRIMARY KEY (playlist_id, position)
 );
 
+-- Searches kept by name and run again each time they are opened, so the list
+-- stays current. `kind` says how `query` is read: as the search box reads it,
+-- or as `:sql`. `sort` is the order text searches were saved in, as `:sort`
+-- takes it; SQL keeps its own ORDER BY. Compatible with older libraries:
+-- CREATE IF NOT EXISTS needs no version bump.
+CREATE TABLE IF NOT EXISTS searches (
+  id    INTEGER PRIMARY KEY,
+  name  TEXT NOT NULL UNIQUE,
+  kind  TEXT NOT NULL CHECK (kind IN ('search', 'sql')),
+  query TEXT NOT NULL,
+  sort  TEXT NOT NULL DEFAULT ''
+);
+
 -- Positions marked in a track. Keyed by path rather than track id, so marks
 -- survive a rescan that renumbers tracks and work for files outside the library.
 CREATE TABLE IF NOT EXISTS marks (

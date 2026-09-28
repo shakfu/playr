@@ -342,6 +342,7 @@ impl Gui {
                         "{} {}",
                         view.title(),
                         self.model.session().playlists().len()
+                            + self.model.session().searches().len()
                     ),
                     View::Queue => format!("{} {}", view.title(), self.model.queue().len()),
                     View::Sampler => view.title().to_string(),

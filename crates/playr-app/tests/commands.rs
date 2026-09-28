@@ -132,7 +132,7 @@ fn a_unique_prefix_names_a_command_and_an_ambiguous_one_lists_the_choices() {
     assert_eq!(
         lib("s"),
         Err(
-            "ambiguous command s: search, save, scan, sort, stop, seek, speed, slice-edges, slice, search-clear"
+            "ambiguous command s: search, save, save-search, sql, scan, sort, stop, seek, speed, slice-edges, slice, search-clear"
                 .into()
         )
     );
@@ -637,6 +637,8 @@ fn default_keys_map_to_actions_by_view() {
     assert_eq!(default_key("r", Library), None);
     assert_eq!(default_key("a", Selection), None);
     assert_eq!(default_key("J", Selection), Some(Action::MoveTrack(1)));
+    assert_eq!(default_key("|", Sampler), Some(Action::Fit(Some(true))));
+    assert_eq!(default_key("|", Library), None);
     assert_eq!(default_key("shift-down", Library), Some(Action::Cursor(1)));
     assert_eq!(
         default_key("shift-down", Selection),

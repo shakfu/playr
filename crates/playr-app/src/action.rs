@@ -61,6 +61,12 @@ pub enum Action {
     DeletePlaylist,
     /// Replace the selection with the playlist's tracks, to edit and save.
     EditPlaylist,
+    /// List the tracks a `:sql` statement names, as search results.
+    Sql(String),
+    /// Ask for a name to keep the search shown under.
+    StartSaveSearch,
+    /// Save the search results shown as a search kept by this name.
+    SaveSearch(String),
     /// Open the prompt to rename the playlist under the cursor.
     StartRename,
     RenameTo(String),

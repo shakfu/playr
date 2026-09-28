@@ -19,7 +19,7 @@ use crate::analysis;
 use crate::audio::{Cmd, Mode, Player, State};
 use crate::columns::{self, Measures, SortKey};
 use crate::db;
-use crate::db::query::{self, Mark, Playlist};
+use crate::db::query::{self, Mark, Playlist, Query, SavedSearch};
 use crate::db::{Pruned, SavedQueue, Track};
 use crate::event::{Event, EventSink, JobId};
 use crate::gain::ReplayGain;
@@ -69,6 +69,10 @@ pub struct Session {
     /// Every track in the library.
     tracks: Vec<Track>,
     playlists: Vec<Playlist>,
+    /// Searches kept by name, which share the playlists' names.
+    searches: Vec<SavedSearch>,
+    /// What the search results a frontend shows came from, to save.
+    shown: Option<Query>,
     /// Tracks collected to edit and save as a playlist. It does not change
     /// what plays unless it is played itself.
     selection: Vec<Track>,
@@ -132,6 +136,8 @@ impl Session {
             player,
             tracks: Vec::new(),
             playlists: Vec::new(),
+            searches: Vec::new(),
+            shown: None,
             selection: Vec::new(),
             played: Vec::new(),
             sleep_at: None,
@@ -197,6 +203,7 @@ impl Session {
     pub fn reload(&mut self) {
         self.tracks = query::all(&self.conn).unwrap_or_default();
         self.playlists = query::playlists(&self.conn).unwrap_or_default();
+        self.searches = query::searches(&self.conn).unwrap_or_default();
         self.measures = db::analysis::measures(&self.conn, &self.tracks).unwrap_or_default();
         let mut tracks = std::mem::take(&mut self.tracks);
         self.order(&mut tracks);
@@ -207,11 +214,15 @@ impl Session {
     /// Sorts `tracks` by the current keys. Every list a frontend shows goes
     /// through here, so ordering never depends on where the list came from.
     fn order(&self, tracks: &mut [Track]) {
-        if self.sort.is_empty() {
+        self.order_by(tracks, &self.sort);
+    }
+
+    fn order_by(&self, tracks: &mut [Track], sort: &[SortKey]) {
+        if sort.is_empty() {
             return;
         }
         let measures = |t: &Track| self.measures.get(&t.path).copied().unwrap_or_default();
-        tracks.sort_by(|a, b| columns::compare((a, measures(a)), (b, measures(b)), &self.sort));
+        tracks.sort_by(|a, b| columns::compare((a, measures(a)), (b, measures(b)), sort));
     }
 
     /// `tracks` in the order every list is shown in.
@@ -262,6 +273,126 @@ impl Session {
 
     pub fn playlists(&self) -> &[Playlist] {
         &self.playlists
+    }
+
+    pub fn searches(&self) -> &[SavedSearch] {
+        &self.searches
+    }
+
+    /// Records what the search results shown came from, or that none are,
+    /// so they can be saved by name.
+    pub fn set_shown(&mut self, query: Option<Query>) {
+        self.shown = query;
+    }
+
+    pub fn shown(&self) -> Option<&Query> {
+        self.shown.as_ref()
+    }
+
+    /// Whether a playlist or a saved search has `name`.
+    fn name_taken(&self, name: &str) -> bool {
+        self.playlists.iter().any(|p| p.name == name)
+            || self.searches.iter().any(|s| s.name == name)
+    }
+
+    /// Saves the search shown as `name`, with the sort it is shown in. A saved
+    /// search of that name is replaced only with `replace`, so a frontend can
+    /// ask first; a playlist of that name is never replaced.
+    pub fn save_search(&mut self, name: &str, replace: bool) -> Notice {
+        let name = name.trim();
+        let Some(query) = self.shown.clone() else {
+            return Refusal::NoSearch.into();
+        };
+        if name.is_empty() {
+            return Refusal::NameEmpty.into();
+        }
+        if reserved(name) {
+            return Refusal::NameReserved(name.to_string()).into();
+        }
+        if self.playlists.iter().any(|p| p.name == name) {
+            return Refusal::NameTaken(name.to_string()).into();
+        }
+        if !replace && self.searches.iter().any(|s| s.name == name) {
+            return Refusal::WouldReplace(name.to_string()).into();
+        }
+        // SQL keeps its own ORDER BY.
+        let sort = match query {
+            Query::Text(_) => self
+                .sort
+                .iter()
+                .map(|k| k.text())
+                .collect::<Vec<_>>()
+                .join(","),
+            Query::Sql(_) => String::new(),
+        };
+        if let Err(e) = query::save_search(&self.conn, name, &query, &sort) {
+            return Notice::Failed {
+                task: Task::Save,
+                error: e.to_string(),
+            };
+        }
+        self.searches = query::searches(&self.conn).unwrap_or_default();
+        Outcome::SearchSaved {
+            name: name.to_string(),
+        }
+        .into()
+    }
+
+    /// The tracks `search` finds now, in the order it was saved with.
+    pub fn run_search(&self, search: &SavedSearch) -> Vec<Track> {
+        match &search.query {
+            Query::Text(q) => {
+                let mut hits = query::search(&self.conn, q).unwrap_or_default();
+                let sort: Vec<SortKey> =
+                    search.sort.split(',').filter_map(SortKey::named).collect();
+                self.order_by(&mut hits, &sort);
+                hits
+            }
+            Query::Sql(statement) => self.sql(statement).unwrap_or_default(),
+        }
+    }
+
+    /// The library tracks a `:sql` statement names, in its order, run on
+    /// this thread for up to [`db::sql::TIME_LIMIT`]. See [`db::sql`] for what
+    /// it may read and its limits; a frontend uses
+    /// [`sql_in_background`](Self::sql_in_background).
+    pub fn sql(&self, statement: &str) -> Result<Vec<Track>, Refusal> {
+        // Its own read-only connection needs the file.
+        let Some(library) = self.library.as_deref() else {
+            return Err(Refusal::NoLibraryFile);
+        };
+        let paths = db::sql::paths(library, statement).map_err(Refusal::Sql)?;
+        Ok(self.tracks_at(&paths))
+    }
+
+    /// Runs a `:sql` statement on its own thread, which finishes with
+    /// [`Event::Sql`]; [`tracks_at`](Self::tracks_at) turns its paths into
+    /// tracks.
+    pub fn sql_in_background(&mut self, statement: String) -> Result<JobId, Refusal> {
+        let Some(library) = self.library.clone() else {
+            return Err(Refusal::NoLibraryFile);
+        };
+        Ok(self.spawn(move |job| {
+            let result = db::sql::paths(&library, &statement);
+            Some(Event::Sql { job, result })
+        }))
+    }
+
+    /// The library's tracks at `paths`, in that order; others are left out.
+    pub fn tracks_at(&self, paths: &[PathBuf]) -> Vec<Track> {
+        let by_path: HashMap<&str, &Track> =
+            self.tracks.iter().map(|t| (t.path.as_str(), t)).collect();
+        (paths.iter())
+            .filter_map(|p| by_path.get(p.to_str()?).map(|t| (*t).clone()))
+            .collect()
+    }
+
+    /// Deletes saved search `id`, saying which it was.
+    pub fn delete_search(&mut self, id: i64) -> Option<Notice> {
+        let name = self.searches.iter().find(|s| s.id == id)?.name.clone();
+        query::delete_search(&self.conn, id).ok()?;
+        self.searches = query::searches(&self.conn).unwrap_or_default();
+        Some(Outcome::Deleted { name }.into())
     }
 
     pub fn selection(&self) -> &[Track] {
@@ -473,17 +604,24 @@ impl Session {
         }
     }
 
-    /// Empties the queue of the tracks waiting and those played; the track
-    /// playing plays on.
+    /// Empties the queue: the tracks waiting and those played go, and the
+    /// track playing plays on as part of the list, no longer queued.
     pub fn clear_queue(&mut self) -> Outcome {
+        let rows = self.queue_rows();
         let status = self.player.status();
         let waiting: Vec<usize> = waiting(&status).collect();
         for &i in waiting.iter().rev() {
             self.player.send(Cmd::Remove(i));
         }
+        // Not taken out, which would cut it off: it plays on as part of the
+        // list, and leaves the queue's rows.
+        let playing = rows.first().filter(|&&i| i == status.index);
+        if let Some(&i) = playing {
+            self.player.send(Cmd::Unqueue(i));
+        }
         let played = std::mem::take(&mut self.played).len();
         Outcome::QueueCleared {
-            tracks: waiting.len() + played,
+            tracks: waiting.len() + played + usize::from(playing.is_some()),
         }
     }
 
@@ -865,6 +1003,12 @@ impl Session {
     /// playlist that repeats a track on purpose keeps doing so.
     pub fn add_playlist_to_selection(&mut self, id: i64) -> Option<Outcome> {
         let added = self.playlist_tracks(id);
+        self.add_all_to_selection(added)
+    }
+
+    /// Adds the `added` tracks not selected yet, or nothing if there are
+    /// none; repeats within `added` stay.
+    pub fn add_all_to_selection(&mut self, added: Vec<Track>) -> Option<Outcome> {
         if added.is_empty() {
             return None;
         }
@@ -967,6 +1111,9 @@ impl Session {
         if reserved(name) {
             return Refusal::NameReserved(name.to_string()).into();
         }
+        if self.searches.iter().any(|s| s.name == name) {
+            return Refusal::NameTaken(name.to_string()).into();
+        }
         if !replace && self.playlists.iter().any(|p| p.name == name) {
             return Refusal::WouldReplace(name.to_string()).into();
         }
@@ -1004,7 +1151,7 @@ impl Session {
         if reserved(name) {
             return Refusal::NameReserved(name.to_string()).into();
         }
-        if self.playlists.iter().any(|p| p.name == name) {
+        if self.name_taken(name) {
             // Renaming onto it would have to merge or replace two playlists.
             return Refusal::NameTaken(name.to_string()).into();
         }
