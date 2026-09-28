@@ -4,6 +4,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.14.0]
+
 ### Fixed
 
 - `:clear`, `c` and Clear queue did nothing when the only queued track left was the one playing or paused: clearing kept it, so as not to cut it off, then counted nothing to clear and said the queue was empty. It now leaves the queue too and plays on as part of the list, which continues after it as it would after the queue. Library API: `Cmd::Unqueue`.
@@ -11,10 +13,6 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 ### Added
 
 - `|` in the sampler returns a fitted view to the whole range after `[` or `]` centred it on one end, as `:fit on` does. It took `f` twice.
-
-## [0.14.0]
-
-### Added
 
 - The queue is kept between runs, unless `keep_queue = false`. It is a setting of its own rather than a `persist` name, since a user's `persist` list replaces the default and would turn it off unseen. The queue is stored in the library at each change, in a new `resume_queue` table, and offered with the track playing at the next start: "take up amen.flac again at 1:35, with its queue of 5 tracks?". The list that was playing is not stored, so playback stops once the queue has played. Library API: `db::SavedQueue`, `db::set_resume_queue`, `db::resume_queue`, `Session::remember_queue`, `Session::keep_queue`, `Settings::keep_queue`; `Session::resume` and `Session::resumable` take and return the queue, and `Confirm::Resume` has a `queue` field.
 
