@@ -91,7 +91,11 @@ If both land, the name "selection" means two things. Settling A, the playlist ed
 ## What A changed
 
 - `keep_queue`, on by default. A boolean over a `persist` name: a user's `persist` list replaces the default, so naming `eq` alone would have turned it off.
+
 - The selection starts empty each run and is saved as it changes to the reserved playlist `draft`. A draft left by an earlier run is settled at the first change: overwrite, append or save as a name, asked by default, or set by `draft`. This replaced restoring the selection silently, which could carry a stale selection into a new playlist unseen.
+
 - The selection is stored in a `selection` table at each change.
+
 - `a` in the Queue view adds the track to the selection.
+
 - The queue's commands are `:remove`, `:move` and `:clear`; the old names are aliases.

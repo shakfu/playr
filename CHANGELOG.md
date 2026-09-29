@@ -4,6 +4,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Changed
+
+- playr-gui opens 800 points wide, down from 1100. The sampler's controls already crowd the window. They will be redesigned to fit this width rather than given more room; `docs/dev/ui-refactor.md` has the plan.
+
 ## [0.14.0]
 
 ### Fixed

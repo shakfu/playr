@@ -336,7 +336,9 @@ There is no OR, NOT or exclusion: every term narrows the results. `:sql` answers
 `:sql` lists the tracks a `SELECT` names, as search results, for questions the search syntax cannot ask. The statement must return a column named `path`, and its `ORDER BY` is kept. It reads three views:
 
 - `library`, one row per track: `path`, `title`, `artist`, `album_artist`, `album`, `genre`, `disc`, `track`, `year`, `time` (seconds), `rate`, `channels`, `bits`, `size`, `tempo`, `loudness` (LUFS), `peak` (linear, 0 to 1), and from `playr analyze`: `analysed`, `error`, `lossless`, `cutoff_hz`, `bits_used`, `md5`, `skipped`. The measured columns match the search fields of the same name.
+
 - `playlists`: `playlist`, `position`, `path`, one row per entry.
+
 - `marks`: `path`, `time` (seconds).
 
 ```
