@@ -24,9 +24,11 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ## Medium
 
+### Playlists
+
 ### Playback
 
-- [ ] **One span: loop the region, A-B loop in every view.** Region, range, loop and loop slot are four concepts for one span. A region cannot loop. A range is lost at a track change unless saved to a slot. `:loop`, `:range`, `:in` and `:out` are refused outside the sampler view, though they act on playback. Keep the range as the one span, and add `:range region` to set it from the marks around the playhead. Make `:in`, `:out`, `:range`, `:loop` and `:loop N` global; bind `<` and `>` in the sampler only.
+- [ ] **Fade-in / Fade-out**: set `:fade-in 0.1` or `:fade-out 0.2` so that sequential track fade into one another.
 
 - [ ] **Fine varispeed.** `:speed` parses whole semitones. A semitone is 5.9%, so 120 BPM moves to 127.1 or 113.3 with nothing between. Add `:speed +50c`, and `:tempo 128` on an analysed track to set the ratio that gives 128 BPM. Check first whether the resampler takes an arbitrary ratio.
 
@@ -34,7 +36,9 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Sampler
 
-- [ ] **Waveform cache.** The sampler decodes the whole track each time a new track is shown there. Peaks, spectrogram and loudness are about 16 MB for a 4-minute track and could be kept per file. With it, the sampler could open the cursor row's track without playing it.
+- [ ] **Waveform cache.** The sampler keeps one track's `Peaks` and decodes the whole file again on each return to a track. Time `Peaks::read` on a few tracks first; skip this if a read is short. Otherwise keep recent `Arc<Peaks>` in memory, capped at 100 MB and evicting the least recently used. Cap by bytes, not tracks: a 4-minute track is about 17 MB, a 60-minute mix about 250 MB. Check modification time and size on a hit. Optionally read the selection's tracks ahead, so a first visit is fast too. A file cache survives restarts but needs a format, invalidation and cleanup; not worth it for 4 or 5 working tracks.
+
+- [ ] **Preview in the sampler.** Show the waveform of the track highlighted in a list without playing it. The range, marks, `:in`, `:out` and loop all assume the playing track, so decide what each does on a track not playing.
 
 - [ ] **Spectrogram at high sample rates.** The transform is 2048 frames at every rate, so a bin is 21.5 Hz at 44.1 kHz and 94 Hz at 192 kHz, and bass on hi-res files blurs further. Scaling the transform with the rate, 4096 at 96 kHz and 8192 at 192 kHz, keeps about 46 ms and 21 Hz everywhere, at more CPU per read on those files.
 

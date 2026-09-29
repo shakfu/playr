@@ -3,7 +3,8 @@
 #[path = "../../playr-core/tests/common/mod.rs"]
 mod common;
 
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -66,14 +67,21 @@ fn it_stops_on_quit_while_a_sender_remains() {
 #[test]
 fn it_refreshes_with_no_requests() {
     let (send, received) = mpsc::channel::<Request>();
+    let frames = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&frames);
     let handle = thread::spawn(move || {
-        let mut frames = 0;
-        let model = owner::run(model(), received, |_| frames += 1);
-        (model, frames)
+        owner::run(model(), received, |_| {
+            counted.fetch_add(1, Ordering::Relaxed);
+        })
     });
-    thread::sleep(owner::IDLE * 3);
+    // Polled, so a slow runner's model setup does not eat the budget.
+    let deadline = Instant::now() + owner::IDLE * 20;
+    while frames.load(Ordering::Relaxed) < 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
     drop(send);
-    let (_, frames) = handle.join().unwrap();
+    join(handle);
+    let frames = frames.load(Ordering::Relaxed);
     assert!(frames >= 2, "published {frames} times with no requests");
 }
 

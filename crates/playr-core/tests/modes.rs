@@ -334,7 +334,10 @@ fn after_the_queue_the_list_resumes_or_playback_stops() {
         player.send(Cmd::Play(paths, 0));
         assert!(wait_until(|| player.position() > Duration::ZERO));
         player.send(Cmd::Insert(1, vec![queued]));
-        assert!(wait_until(|| player.status().state == State::Stopped));
+        // Status reads Stopped until the engine has taken Play.
+        assert!(wait_until(|| {
+            player.caught_up() && player.status().state == State::Stopped
+        }));
         assert_eq!(played_order(&control, &levels_), expected, "{after:?}");
     }
 }

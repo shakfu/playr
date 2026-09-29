@@ -8,6 +8,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - playr-gui opens 800 points wide, down from 1100. The sampler's controls already crowd the window. They will be redesigned to fit this width rather than given more room; `docs/dev/ui-refactor.md` has the plan.
 
+- `l` and `:loop` with no range set the range to the region around the playhead and loop it, as `:audition` plays the region; they refused before. A range with one end set still refuses.
+
+### Fixed
+
+- A loop kept playing after leaving the sampler, where `:loop` was refused, so only a stop or a new track ended it. `:loop off` now works in every view; starting a loop stays in the sampler, where the marks are shown.
+
+- The playing row could jump back for a moment after rows above it were removed, as when played tracks leave the queue. `Player::send` shifts the status index at once, but the engine published its own index, from before it took the removal, over it. The engine now publishes its index only once it has taken every command sent.
+
 ## [0.14.0]
 
 ### Fixed

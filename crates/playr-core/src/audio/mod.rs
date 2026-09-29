@@ -697,7 +697,7 @@ impl Engine {
             }
             self.advance_marks();
             self.pause_when_reached();
-            self.publish();
+            self.publish(taken);
             self.shared.taken.store(taken, Ordering::Release);
         }
     }
@@ -1831,7 +1831,7 @@ impl Engine {
         }
     }
 
-    fn publish(&mut self) {
+    fn publish(&mut self, taken: u64) {
         let (state, index) = self.published;
         if self.index != index {
             let path = self.queue.get(self.index).cloned();
@@ -1851,8 +1851,11 @@ impl Engine {
             return;
         };
         s.state = self.state;
-        // `queue` is written by `Player::send`; the engine's may be older.
-        s.index = self.index;
+        // `queue` is written by `Player::send`; the engine's may be older. So
+        // is `index` while commands wait, as `Cmd::Remove` shifts it there.
+        if taken >= self.shared.sent.load(Ordering::Relaxed) {
+            s.index = self.index;
+        }
         s.duration = self.marks.front().and_then(|m| m.2);
         // A one-shot range is not a loop: `Cmd::Loop` toggles on this, and a
         // range playing through once must not read as one to switch off.

@@ -383,7 +383,7 @@ fn terminal_messages_are_worded() {
         ),
         (
             Message::NoRangeToLoop,
-            "no range to loop: set one with < and >, or drag",
+            "the range has one end: set the other with < or >",
         ),
         (
             Message::Range {
