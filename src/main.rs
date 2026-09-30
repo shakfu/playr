@@ -42,6 +42,10 @@ struct Cli {
     #[arg(long, value_name = "ID")]
     device: Option<String>,
 
+    /// Print the default settings and keys as one settings.toml, and exit
+    #[arg(long, exclusive = true)]
+    print_settings: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -153,6 +157,15 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    // Before the settings are read, so a broken file cannot stop it.
+    if cli.print_settings {
+        // `exclusive` refuses other options, but not a command.
+        if cli.command.is_some() {
+            return Err("--print-settings takes no command".into());
+        }
+        print!("{}", playr_app::config::default_text());
+        return Ok(ExitCode::SUCCESS);
+    }
     // Read whatever the command, so a bad file is seen early. Only playback
     // uses it; a command that does not warns and runs, so scripts still work.
     let plays = matches!(

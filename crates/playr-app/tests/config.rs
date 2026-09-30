@@ -1,7 +1,7 @@
 //! Key names, the key map, and the settings file.
 
 use playr_app::action::{Action, Key, Keymap};
-use playr_app::config::{Config, DEFAULT_KEYS};
+use playr_app::config::{default_text, Config, Program, DEFAULT_KEYS};
 use playr_app::View::{Library, Playlists, Selection};
 use playr_core::audio::Mode;
 use playr_core::settings::{Settings, DEFAULT_SETTINGS};
@@ -73,8 +73,14 @@ fn the_default_files_are_valid_user_files() {
     // Copied whole to ~/.config/playr/settings.toml, each changes nothing.
     assert_eq!(Config::parse(DEFAULT_SETTINGS), Ok(Config::default()));
     assert_eq!(Config::parse(DEFAULT_KEYS), Ok(Config::default()));
-    let both = format!("{DEFAULT_SETTINGS}\n{DEFAULT_KEYS}");
-    assert_eq!(Config::parse(&both), Ok(Config::default()));
+    // Each program reads the combined file as its own defaults. Joined in
+    // file order, keys.toml's `theme` would fall under settings.toml's [gui].
+    for program in [Program::Terminal, Program::Gui, Program::Server] {
+        assert_eq!(
+            Config::parse_for(program, &default_text()),
+            Ok(Config::for_program(program))
+        );
+    }
 }
 
 #[test]
@@ -217,7 +223,6 @@ fn a_missing_file_is_an_error_only_when_named() {
 
 #[test]
 fn a_program_reads_its_own_table_over_the_shared_keys() {
-    use playr_app::config::Program;
     use playr_core::columns::Column;
     let text = "columns = ['title', 'time']\n\n\
                 [gui]\ncolumns = ['title', 'tempo', 'loudness']\n\n\
@@ -259,7 +264,6 @@ fn a_program_reads_its_own_table_over_the_shared_keys() {
 /// reads its own table wherever the settings come from.
 #[test]
 fn the_defaults_differ_by_program() {
-    use playr_app::config::Program;
     use playr_core::columns::Column;
     let columns = |program| Config::for_program(program).settings.columns;
 
@@ -283,7 +287,6 @@ fn the_defaults_differ_by_program() {
 
 #[test]
 fn loading_a_file_reads_the_table_of_the_program_that_asked() {
-    use playr_app::config::Program;
     use playr_core::columns::Column;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.toml");
@@ -306,7 +309,6 @@ fn loading_a_file_reads_the_table_of_the_program_that_asked() {
 /// Only the window reads `transport_text_buttons`, and only as a boolean.
 #[test]
 fn transport_text_buttons_is_the_window_s_own() {
-    use playr_app::config::Program;
     assert!(
         !Config::parse_for(Program::Gui, "")
             .unwrap()

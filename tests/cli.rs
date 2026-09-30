@@ -569,3 +569,34 @@ fn playlists_go_out_and_come_back_as_m3u() {
         .contains("no library at"));
     assert!(!none.exists());
 }
+
+#[test]
+fn print_settings_prints_the_defaults_whatever_the_user_file_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("playr")).unwrap();
+    std::fs::write(dir.path().join("playr/settings.toml"), "frob = 1\n").unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_playr"))
+            .env("XDG_CONFIG_HOME", dir.path())
+            .env("XDG_DATA_HOME", dir.path())
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let out = run(&["--print-settings"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        playr_app::config::default_text()
+    );
+    // It prints and exits, so it takes neither another option nor a command.
+    assert_eq!(
+        run(&["--print-settings", "--db", "x"]).status.code(),
+        Some(2)
+    );
+    let out = run(&["--print-settings", "scan"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("takes no command"));
+    assert!(!dir.path().join("playr/library.db").exists());
+}

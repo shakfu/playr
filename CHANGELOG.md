@@ -4,6 +4,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Added
+
+- `playr --print-settings` prints the default settings and keys as one `settings.toml`. Before, the defaults were only in the source tree, which an installed binary lacks. It prints even when the user's settings file is broken.
+
+### Fixed
+
+- The README said `settings.toml` and `keys.toml` joined in file order make a valid settings file. The window refused it with `unknown setting: theme`: `keys.toml`'s top-level `theme` fell under `settings.toml`'s `[gui]` table. `--print-settings` puts `theme` first.
+
 ## [0.15.0]
 
 ### Added

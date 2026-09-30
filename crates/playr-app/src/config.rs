@@ -22,6 +22,16 @@ pub use playr_core::settings::default_path;
 /// The default key bindings, as shipped.
 pub const DEFAULT_KEYS: &str = include_str!("keys.toml");
 
+/// Both defaults files as one `settings.toml`. `keys.toml`'s top-level `theme`
+/// comes first, since after `settings.toml` it would fall under `[gui]`.
+pub fn default_text() -> String {
+    // Split before the paragraph holding the first table, to keep its comment.
+    let first = DEFAULT_KEYS.find("\n[").unwrap_or(DEFAULT_KEYS.len());
+    let at = DEFAULT_KEYS[..first].rfind("\n\n").map_or(0, |i| i + 2);
+    let (top, tables) = DEFAULT_KEYS.split_at(at);
+    format!("{top}{}\n{tables}", settings::DEFAULT_SETTINGS)
+}
+
 /// What the settings file sets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {

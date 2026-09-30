@@ -579,7 +579,7 @@ A gain never pushes the track's peak past full scale, and with no peak known it 
 
 ## Configuration
 
-playr reads `$XDG_CONFIG_HOME/playr/settings.toml`, or `~/.config/playr/settings.toml`, when it starts. `--settings <path>` reads another file instead. The file is optional, and it is read on top of the defaults in [`crates/playr-core/src/settings.toml`](crates/playr-core/src/settings.toml) and the default keys in [`crates/playr-app/src/keys.toml`](crates/playr-app/src/keys.toml), so it only needs what it changes. Copying either defaults file whole, or both into one, is also valid.
+playr reads `$XDG_CONFIG_HOME/playr/settings.toml`, or `~/.config/playr/settings.toml`, when it starts. `--settings <path>` reads another file instead. The file is optional, and it is read on top of the defaults in [`crates/playr-core/src/settings.toml`](crates/playr-core/src/settings.toml) and the default keys in [`crates/playr-app/src/keys.toml`](crates/playr-app/src/keys.toml), so it only needs what it changes. `playr --print-settings` prints both as one valid file, to copy from or save whole; a whole copy stops later default changes from reaching you.
 
 An error in the file stops playr before it plays. Subcommands such as `scan` and `search --json` use no settings; they print the errors as warnings and run.
 
