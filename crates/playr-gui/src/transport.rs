@@ -1,6 +1,6 @@
 //! The transport: what is playing, the buttons, the progress bar with its
 //! marks, volume, speed, mode, the level meter, and the EQ button and its
-//! dialog. ReplayGain is in the Playback menu.
+//! dialog. ReplayGain and the mark controls are in the Playback menu.
 
 use std::time::Duration;
 
@@ -9,6 +9,7 @@ use playr_app::action::Action;
 use playr_app::dispatch::Frontend;
 
 use crate::controls;
+use crate::keys;
 use crate::palette::Palette;
 use playr_app::message::{self, fmt_time};
 use playr_app::meter;
@@ -54,7 +55,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, eq_open: &mut bool) {
                 response.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
                 });
-                let tip = match key_for(model, &control.action) {
+                let tip = match keys::key_for(model, &control.action, model.view()) {
                     Some(key) => format!("{label} ({key})"),
                     None => label.to_string(),
                 };
@@ -107,15 +108,6 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, eq_open: &mut bool) {
         ui.monospace(fmt_time(total));
     });
 
-    // Two rows, as one does not fit the window's minimum width; egui does not
-    // wrap a row before a slider or a combo box.
-    ui.horizontal(|ui| {
-        for control in controls::MARKS {
-            if ui.button(control.label).clicked() {
-                actions.push(control.action.clone());
-            }
-        }
-    });
     ui.horizontal(|ui| {
         ui.spacing_mut().slider_width = 90.0;
 
@@ -198,15 +190,6 @@ pub fn eq_dialog(model: &mut Model, ctx: &egui::Context, open: &mut bool) {
     for action in actions {
         model.perform(action);
     }
-}
-
-/// The key that performs `action` in the current view, if one does.
-fn key_for(model: &Model, action: &Action) -> Option<playr_app::action::Key> {
-    let keys = model.keymap();
-    keys.bindings()
-        .iter()
-        .map(|b| b.key)
-        .find(|key| keys.lookup(*key, model.view()) == Some(action))
 }
 
 /// Paints a play triangle centred in `rect`, with a bar before it for From start.

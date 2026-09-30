@@ -69,7 +69,8 @@ pub fn allowed(action: &Action) -> bool {
         | PickEdge(_)
         | MoveEdge(_)
         | WriteSlices
-        | DiscardSlices => false,
+        | DiscardSlices
+        | Convert(_) => false,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection
@@ -332,7 +333,8 @@ pub fn keys(model: &Model) -> Value {
 pub fn help(model: &Model, commands: bool) -> Value {
     let view = model.view();
     let rows = if commands {
-        command::command_rows()
+        // The page runs no extension.
+        command::command_rows(false)
     } else {
         command::key_rows(model.keymap(), view)
     };
@@ -390,7 +392,7 @@ pub fn completions(model: &Model, text: &str) -> Value {
         .map(|p| p.name.clone())
         .collect();
     json!({
-        "completions": command::completions(text, model.view(), &names),
+        "completions": command::completions(text, model.view(), &names, false),
         "history": model.history().lines(),
     })
 }
@@ -398,7 +400,8 @@ pub fn completions(model: &Model, text: &str) -> Value {
 /// Whether a `:` line is one the page may run, in the view shown. The error
 /// is the parser's words, or why the page may not.
 pub fn check(model: &Model, line: &str) -> Result<(), (u16, String)> {
-    let action = command::parse(line.trim(), model.view()).map_err(|e| (400, e))?;
+    // The page runs no extension, so its errors name none.
+    let action = command::parse_typed(line.trim(), model.view(), false).map_err(|e| (400, e))?;
     if allowed(&action) {
         Ok(())
     } else {

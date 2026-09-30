@@ -2,23 +2,27 @@
 //! wide, with its region, marks, playhead and planned slice edges.
 //!
 //! A click seeks, a shift-click marks, a drag sets the range to slice, and
-//! the mouse wheel zooms around the playhead, or the range with Fit range
-//! ticked. The arrow keys nudge the
+//! the mouse wheel zooms around the playhead, or the range with Fit on. A
+//! right-click opens a menu for the point under it. The arrow keys nudge the
 //! playhead, as in the terminal. The displays match the terminal's: RMS inside peak on a linear
 //! scale, the same on a dB scale, and the waveform's extremes around a centre
 //! line, which the terminal draws in Braille and `:display braille` names.
+//!
+//! Two rows of controls sit under the waveform. The Sampler menu holds every
+//! action; `docs/dev/ui-refactor.md` says which get a button.
 
 use std::time::Duration;
 
 use eframe::egui;
-use playr_app::action::{Action, Slicing, Zoom};
+use playr_app::action::{Action, Slicing, SlotOp, Zoom};
 use playr_app::dispatch::Frontend;
-use playr_app::model::Model;
+use playr_app::model::{Model, Snapshot};
 use playr_app::sampler::{self, Edge, Layout};
-use playr_app::Display;
-use playr_core::samples::Edges;
+use playr_app::{Display, View};
+use playr_core::samples::{Cut, Edges};
 
-use crate::controls;
+use crate::controls::{self, Control};
+use crate::keys;
 use crate::palette::Palette;
 
 /// Mouse wheel movement, in points, that makes one zoom step.
@@ -28,13 +32,51 @@ const WHEEL_STEP: f32 = 40.0;
 /// starting a new range.
 const EDGE_REACH: f32 = 8.0;
 
-/// Space, in points, between groups of rows under the waveform: the view's
-/// row, the rows setting the range, and the rows slicing it.
+/// Space, in points, between the two rows under the waveform.
 const GROUP_GAP: f32 = 10.0;
+
+/// The height, in points, of the lane of saved loops under the waveform.
+const LANE: f32 = 16.0;
 
 /// The most points a frame takes at the deepest zoom: 1,000 points show
 /// about 60 frames, far enough apart to pick one out.
 const POINTS_PER_FRAME: u64 = 16;
+
+/// How the slice row cuts.
+#[derive(Clone, Copy, PartialEq)]
+enum Method {
+    Region,
+    Marks,
+    Equal,
+    Onsets,
+}
+
+impl Method {
+    const ALL: [Method; 4] = [Method::Region, Method::Marks, Method::Equal, Method::Onsets];
+
+    /// The method that makes `cut`.
+    fn of(cut: Cut) -> Method {
+        match cut {
+            Cut::Region => Method::Region,
+            Cut::Marks => Method::Marks,
+            Cut::Equal(_) => Method::Equal,
+            Cut::Onsets(_) => Method::Onsets,
+        }
+    }
+
+    /// Its name in the drop-down, as `None` when there is no plan; a set
+    /// range is sliced in place of the region.
+    fn label(method: Option<Method>, ranged: bool) -> &'static str {
+        match method {
+            None => "None",
+            Some(Method::Region) if ranged => "Range",
+            Some(Method::Region) => "Region",
+            Some(Method::Marks) => "At marks",
+            Some(Method::Equal) => "Equal",
+            Some(Method::Onsets) => "At onsets",
+        }
+    }
+}
 
 /// What the view keeps between frames that the model does not.
 pub struct State {
@@ -50,12 +92,17 @@ pub struct State {
     held_start: Option<u64>,
     /// The mark a drag picked up, as the time it sat at when the drag began.
     mark_drag: Option<Duration>,
-    /// The count and sensitivity the equal and onset buttons slice with; the
+    /// The time a right-click landed on and the mark within reach of it, for
+    /// the menu it opened.
+    menu: Option<(Duration, Option<Duration>)>,
+    /// The method last chosen in the slice row, shown while its plan is being
+    /// made, and the count and sensitivity equal and onset slices take; the
     /// sensitivity starts from the settings.
+    method: Option<Method>,
     slices: usize,
     sensitivity: Option<f32>,
     /// The height the view took besides the waveform in the last frame: its
-    /// header, the detail line and the rows of controls.
+    /// header, the loops, the detail line and the rows of controls.
     around: Option<f32>,
     /// The spectrogram's pixels, replaced each frame it is drawn.
     spectrogram: Option<egui::TextureHandle>,
@@ -69,6 +116,8 @@ impl Default for State {
             edge_drag: None,
             held_start: None,
             mark_drag: None,
+            menu: None,
+            method: None,
             slices: 8,
             sensitivity: None,
             around: None,
@@ -98,10 +147,9 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         .unwrap_or_default();
 
     // The waveform takes the height the rest of the view left last frame;
-    // 186 points is a first guess, which the frame measures and corrects.
+    // 87 points is a first guess, which the frame measures and corrects.
     let top = ui.cursor().top();
-    let height =
-        (ui.available_height() - state.around.unwrap_or(186.0 + 2.0 * GROUP_GAP)).max(80.0);
+    let height = (ui.available_height() - state.around.unwrap_or(87.0 + GROUP_GAP)).max(80.0);
     let width = ui.available_width();
     let mut layout = Layout::new(
         peaks,
@@ -123,17 +171,52 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     model.set_zoom(layout.zoom);
     model.set_scale(layout.columns());
 
-    ui.horizontal(|ui| {
-        ui.strong(&name);
-        ui.weak(format!("{}  one column {}", layout.shown(), layout.scale()));
-        let read = layout
-            .detail
-            .as_ref()
-            .is_some_and(|d| d.covers(layout.start, layout.end()));
-        if layout.columns().needs_detail() && !read {
-            ui.weak("reading frames");
-        }
-    });
+    // The buttons go first, so the name gets what is left and truncates.
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| {
+            ui.strong(&name);
+            ui.weak(format!("{}  one column {}", layout.shown(), layout.scale()));
+            let read = layout
+                .detail
+                .as_ref()
+                .is_some_and(|d| d.covers(layout.start, layout.end()));
+            if layout.columns().needs_detail() && !read {
+                ui.weak("reading frames");
+            }
+        },
+        // Right to left.
+        |ui| {
+            let shown = Action::Display(Some(display));
+            let label = controls::DISPLAYS
+                .iter()
+                .find(|c| c.action == shown)
+                .map_or("", |c| c.label);
+            let combo = egui::ComboBox::from_id_salt("display")
+                .width(90.0)
+                .selected_text(label)
+                .show_ui(ui, |ui| {
+                    for control in controls::DISPLAYS {
+                        let chosen = control.action == shown;
+                        if ui.selectable_label(chosen, control.label).clicked() && !chosen {
+                            actions.push(control.action.clone());
+                        }
+                    }
+                });
+            name_combo(&combo.response, "Display", label);
+            for control in controls::SAMPLER_HEADER.iter().rev() {
+                let text = match control.action {
+                    Action::Zoom(Zoom::In) => "+",
+                    Action::Zoom(Zoom::Out) => "-",
+                    Action::Zoom(Zoom::All) => "\u{2194}",
+                    _ => "i",
+                };
+                if named(ui, model, text, control) {
+                    actions.push(control.action.clone());
+                }
+            }
+        },
+    );
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
     response
@@ -158,6 +241,21 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             (None, None) => None,
         }
     };
+    // The mark within reach of `p`, the nearest if several are, as its time.
+    let mark_at = |p: egui::Pos2| {
+        let reach = |mark: u64| {
+            layout
+                .column_of(mark)
+                .map(|c| ((rect.left() + c as f32) - p.x).abs())
+                .filter(|&d| d <= EDGE_REACH)
+        };
+        layout
+            .marks
+            .iter()
+            .filter_map(|&mark| reach(mark).map(|d| (mark, d)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(mark, _)| sampler::time_of(mark, layout.rate))
+    };
     if response.drag_started() {
         state.held_start = Some(layout.start);
         // A drag starts once the pointer has moved a little; it runs from the press.
@@ -170,22 +268,9 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             // As `[` or `]`: the keys that move an end go on with this one.
             actions.push(Action::PickEdge(edge));
         }
-        state.mark_drag = origin.filter(|_| state.edge_drag.is_none()).and_then(|p| {
-            layout
-                .marks
-                .iter()
-                .copied()
-                .filter(|&m| {
-                    layout
-                        .column_of(m)
-                        .is_some_and(|c| ((rect.left() + c as f32) - p.x).abs() <= EDGE_REACH)
-                })
-                .min_by_key(|&m| {
-                    let c = layout.column_of(m).unwrap_or(0);
-                    (((rect.left() + c as f32) - p.x).abs() * 100.0) as i64
-                })
-                .map(|m| sampler::time_of(m, layout.rate))
-        });
+        state.mark_drag = origin
+            .filter(|_| state.edge_drag.is_none())
+            .and_then(mark_at);
         state.drag = origin.filter(|_| state.mark_drag.is_none()).map(|p| {
             // From an edge it moves that edge, holding the other one.
             let time = |frame: u64| sampler::time_of(frame, layout.rate);
@@ -293,101 +378,206 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         }
     }
 
+    if response.secondary_clicked() {
+        state.menu = response.interact_pointer_pos().map(|p| (at(p), mark_at(p)));
+    }
+    response.context_menu(|ui| {
+        let Some((time, mark)) = state.menu else {
+            return;
+        };
+        let ends = |frame: Option<u64>| frame.map(|f| sampler::time_of(f, layout.rate));
+        let (start, end) = (ends(layout.range.0), ends(layout.range.1));
+        // The other end holds while it is on the right side of this one.
+        let end = end
+            .filter(|e| *e > time)
+            .or(snapshot.status.duration)
+            .unwrap_or_default();
+        let start = start.filter(|s| *s < time).unwrap_or_default();
+        let mut chosen = Vec::new();
+        if ui.button("Mark here").clicked() {
+            chosen.push(Action::MarkAt(time));
+        }
+        if ui
+            .add_enabled(time < end, egui::Button::new("Range starts here"))
+            .clicked()
+        {
+            chosen.push(Action::SetRange(Some((time, end))));
+        }
+        if ui
+            .add_enabled(start < time, egui::Button::new("Range ends here"))
+            .clicked()
+        {
+            chosen.push(Action::SetRange(Some((start, time))));
+        }
+        let clear = egui::Button::new("Clear range");
+        if ui
+            .add_enabled(layout.range != (None, None), clear)
+            .clicked()
+        {
+            chosen.push(Action::SetRange(None));
+        }
+        if let Some(mark) = mark {
+            ui.separator();
+            for control in controls::MARK_ROW {
+                if ui.button(control.label).clicked() {
+                    // The cursor picks the mark, then the action edits it.
+                    chosen.push(Action::SetCursor(Some(mark)));
+                    chosen.push(control.action.clone());
+                }
+            }
+        }
+        if !chosen.is_empty() {
+            actions.append(&mut chosen);
+            ui.close();
+        }
+    });
+
+    let sampler = model.sampler();
+    let range = sampler.range(current.as_ref());
+    let ranged = range.is_some();
+    if snapshot.loops.iter().any(Option::is_some) {
+        loop_lane(ui, &layout, &snapshot, range, &mut actions);
+    }
     ui.horizontal(|ui| {
-        let plan = sampler::plan_text(model.sampler());
+        let plan = sampler::plan_text(sampler);
         if !plan.is_empty() {
             ui.colored_label(Palette::of(ui.visuals()).edge, plan);
         }
         ui.weak(layout.region_text());
     });
-    let sampler = model.sampler();
-    let ranged = sampler.range(current.as_ref()).is_some();
-    let range_ends = sampler.range_ends(current.as_ref());
-    let enabled = |action: &Action| match action {
-        Action::WriteSlices | Action::DiscardSlices | Action::AuditionSlice(_) => {
-            sampler.pending.is_some()
-        }
-        Action::ClearLoops => snapshot.loops.iter().any(Option::is_some),
-        Action::Display(Some(d)) => *d != display,
-        Action::SetRange(None) => range_ends != (None, None),
-        Action::MoveEdge(_) => match sampler.edge {
-            Edge::Start => range_ends.0.is_some(),
-            Edge::End => range_ends.1.is_some(),
-        },
-        _ => true,
-    };
-    let buttons = |ui: &mut egui::Ui, table: &[controls::Control], actions: &mut Vec<Action>| {
-        for control in table {
-            let label = match control.action {
-                Action::Slice(Slicing::Region) if ranged => "Slice range",
-                _ => control.label,
+    ui.horizontal(|ui| {
+        for control in controls::SAMPLER_BAR {
+            let enabled = match control.action {
+                Action::SetRange(None) => layout.range != (None, None),
+                _ => true,
             };
-            // A chosen end shows as chosen.
-            let clicked = match control.action {
-                Action::PickEdge(edge) => {
-                    ui.selectable_label(sampler.edge == edge, label).clicked()
-                }
-                _ => ui
-                    .add_enabled(enabled(&control.action), egui::Button::new(label))
-                    .clicked(),
-            };
-            if clicked {
+            let button = ui.add_enabled(enabled, egui::Button::new(control.label));
+            if button.on_hover_text(tip(model, control)).clicked() {
                 actions.push(control.action.clone());
             }
         }
-    };
-    ui.horizontal(|ui| {
-        buttons(ui, controls::SAMPLER_BAR, &mut actions);
+        // With no range, Loop loops the region around the playhead.
+        let mut looping = snapshot.status.looping.is_some();
+        if toggle(
+            ui,
+            model,
+            &mut looping,
+            "Loop",
+            "Loop range",
+            Action::Loop(None),
+        ) {
+            actions.push(Action::Loop(Some(looping)));
+        }
+        let empty = snapshot.loops.iter().position(Option::is_none);
+        let save = ui
+            .add_enabled(ranged && empty.is_some(), egui::Button::new("Save loop"))
+            .on_hover_text("Save the range as a loop, in the first empty slot")
+            .on_disabled_hover_text(match ranged {
+                true => "Every loop is in use. Shift-click one to save the range over it.",
+                false => "Set a range to save it as a loop.",
+            });
+        if let (true, Some(slot)) = (save.clicked(), empty) {
+            actions.push(Action::LoopSlot(slot as u8 + 1, SlotOp::Save));
+        }
         ui.separator();
         let mut snap = sampler.snap;
-        if ui.checkbox(&mut snap, "Snap to zero").changed() {
+        if toggle(
+            ui,
+            model,
+            &mut snap,
+            "Snap",
+            "Snap to zero",
+            Action::Snap(None),
+        ) {
             actions.push(Action::Snap(Some(snap)));
         }
-    });
-    ui.add_space(GROUP_GAP);
-    ui.horizontal(|ui| {
-        buttons(ui, controls::RANGE_BAR, &mut actions);
-        ui.separator();
-        let looping = snapshot.status.looping.is_some();
-        let mut on = looping;
         let mut fit = sampler.fit;
-        if ui.checkbox(&mut fit, "Fit range").changed() {
+        if toggle(ui, model, &mut fit, "Fit", "Fit range", Action::Fit(None)) {
             actions.push(Action::Fit(Some(fit)));
         }
-        let loop_box = egui::Checkbox::new(&mut on, "Loop range");
-        if ui.add_enabled(ranged || looping, loop_box).changed() {
-            actions.push(Action::Loop(Some(on)));
-        }
-    });
-    ui.horizontal(|ui| {
-        buttons(ui, controls::EDGE_BAR, &mut actions);
-        ui.separator();
-        loop_slots(ui, &snapshot, sampler.range(current.as_ref()), &mut actions);
-        buttons(ui, controls::LOOP_BAR, &mut actions);
     });
     ui.add_space(GROUP_GAP);
     let sensitivity = state.sensitivity.get_or_insert(model.onset_sensitivity());
     ui.horizontal(|ui| {
-        buttons(ui, controls::SLICE_BAR, &mut actions);
-        ui.separator();
-        ui.add(egui::DragValue::new(&mut state.slices).range(2..=playr_core::samples::MAX_SLICES));
-        if ui.button("Equal slices").clicked() {
-            actions.push(Action::Slice(Slicing::Equal(state.slices)));
+        ui.spacing_mut().slider_width = 90.0;
+        ui.label("Slice");
+        // The drop-down shows the plan that waits, however it was made, and
+        // takes its count or sensitivity once the plan has landed.
+        let planning = sampler.planning.is_some();
+        let cut = sampler.pending.as_ref().map(|p| p.job.cut);
+        match cut.filter(|_| !planning) {
+            Some(Cut::Equal(count)) => state.slices = count,
+            Some(Cut::Onsets(s)) => *sensitivity = s,
+            _ => {}
+        }
+        let method = cut.map(Method::of).or(state.method.filter(|_| planning));
+        // Choosing a method plans with it, again if it is the one shown;
+        // choosing None discards the plan.
+        let mut chosen = None;
+        let combo = egui::ComboBox::from_id_salt("slice method")
+            .width(80.0)
+            .selected_text(Method::label(method, ranged))
+            .show_ui(ui, |ui| {
+                for choice in std::iter::once(None).chain(Method::ALL.map(Some)) {
+                    let label = Method::label(choice, ranged);
+                    if ui.selectable_label(method == choice, label).clicked() {
+                        chosen = Some(choice);
+                    }
+                }
+            });
+        name_combo(
+            &combo.response,
+            "Slice method",
+            Method::label(method, ranged),
+        );
+        combo.response.on_hover_text(
+            "Draws the cuts on the waveform; no file is written yet. \
+             Choose the method again to plan again.",
+        );
+        // A changed count or sensitivity plans again, so the edges follow it.
+        let changed = match method {
+            Some(Method::Equal) => {
+                let count = egui::DragValue::new(&mut state.slices)
+                    .range(2..=playr_core::samples::MAX_SLICES);
+                ui.add(count).on_hover_text("Slices").changed()
+            }
+            Some(Method::Onsets) => ui
+                .add(egui::Slider::new(sensitivity, 0.0..=1.0).text("Sensitivity"))
+                .changed(),
+            _ => false,
+        };
+        match chosen.unwrap_or(method.filter(|_| changed)) {
+            Some(method) => {
+                state.method = Some(method);
+                actions.push(Action::Slice(match method {
+                    Method::Region => Slicing::Region,
+                    Method::Marks => Slicing::Marks,
+                    Method::Equal => Slicing::Equal(state.slices),
+                    Method::Onsets => Slicing::Onsets(Some(*sensitivity)),
+                }));
+            }
+            None if chosen.is_some() => {
+                state.method = None;
+                if cut.is_some() {
+                    actions.push(Action::DiscardSlices);
+                }
+            }
+            None => {}
+        }
+        // A plan waits: hear its slices, choose their edges, write or discard.
+        if sampler.pending.is_none() {
+            return;
         }
         ui.separator();
-        // Moving the slider plans onsets at once, so the edges follow it.
-        let moved = ui
-            .add(egui::Slider::new(sensitivity, 0.0..=1.0).text("Sensitivity"))
-            .changed();
-        if ui.button("Slice at onsets").clicked() || moved {
-            actions.push(Action::Slice(Slicing::Onsets(Some(*sensitivity))));
+        let (audition, write) = controls::PLAN_BAR.split_at(2);
+        for (control, text) in audition.iter().zip(["<", ">"]) {
+            if named(ui, model, text, control) {
+                actions.push(control.action.clone());
+            }
         }
-    });
-    ui.horizontal(|ui| {
-        buttons(ui, controls::PLAN_BAR, &mut actions);
-        ui.separator();
         let edges = model.session().slice_edges();
-        egui::ComboBox::from_label("Edges")
+        let combo = egui::ComboBox::from_label("Edges")
+            .width(60.0)
             .selected_text(edges.name())
             .show_ui(ui, |ui| {
                 for (_, choice) in Edges::NAMES {
@@ -403,14 +593,17 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         if edges == Edges::Fade {
             let fades = model.session().fades();
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-            ui.weak(format!(
+            combo.response.on_hover_text(format!(
                 "{} ms in, {} ms out",
                 ms(fades.fade_in),
                 ms(fades.fade_out)
             ));
         }
-        ui.separator();
-        buttons(ui, controls::WRITE_BAR, &mut actions);
+        for (control, text) in write.iter().zip(["Write", "Discard"]) {
+            if named(ui, model, text, control) {
+                actions.push(control.action.clone());
+            }
+        }
     });
     let around = ui.cursor().top() - top - height;
     if state.around.is_none_or(|a| (a - around).abs() > 0.5) {
@@ -420,37 +613,110 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     actions
 }
 
-/// A button for each loop slot: a click recalls a saved loop, or saves the
-/// range into an empty slot; shift-click saves over it; its menu clears it.
-fn loop_slots(
+/// `label`, with the key that performs `action` in the sampler view.
+fn with_key(model: &Model, label: &str, action: &Action) -> String {
+    match keys::key_for(model, action, View::Sampler) {
+        Some(key) => format!("{label} ({key})"),
+        None => label.to_string(),
+    }
+}
+
+/// A control's hover text: its name and its key.
+fn tip(model: &Model, control: &Control) -> String {
+    with_key(model, control.label, &control.action)
+}
+
+/// A button showing `text` that keeps the control's name, for a symbol or a
+/// shorter word. Returns whether it was clicked.
+fn named(ui: &mut egui::Ui, model: &Model, text: &str, control: &Control) -> bool {
+    let response = ui.button(text);
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, control.label));
+    response.on_hover_text(tip(model, control)).clicked()
+}
+
+/// A button that stays pressed while `on`; `name` and the key of `action`,
+/// which toggles it, are its hover text. Returns whether it changed.
+fn toggle(
     ui: &mut egui::Ui,
-    snapshot: &playr_app::model::Snapshot,
+    model: &Model,
+    on: &mut bool,
+    label: &str,
+    name: &str,
+    action: Action,
+) -> bool {
+    // Framed, unlike `toggle_value`, so it reads as a button while off.
+    let clicked = ui
+        .add(egui::Button::new(label).selected(*on))
+        .on_hover_text(with_key(model, name, &action))
+        .clicked();
+    *on ^= clicked;
+    clicked
+}
+
+/// Names a drop-down that shows no label, for a screen reader and the tests.
+fn name_combo(response: &egui::Response, name: &str, chosen: &str) {
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, name);
+        info.current_text_value = Some(chosen.to_string());
+        info
+    });
+}
+
+/// The saved loops, each a band under the stretch of waveform it spans: a
+/// click loops it, a shift-click saves the range over it, and its menu saves
+/// or clears it. A loop outside the frames shown is not drawn.
+fn loop_lane(
+    ui: &mut egui::Ui,
+    layout: &Layout,
+    snapshot: &Snapshot,
     range: Option<(u64, u64)>,
     actions: &mut Vec<Action>,
 ) {
-    use playr_app::action::SlotOp;
-    ui.label("Loops");
+    let (lane, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), LANE), egui::Sense::hover());
+    let x_of = |frame: u64| {
+        let x = frame.saturating_sub(layout.start) as f32 * layout.per_frame as f32
+            / layout.per_column as f32;
+        lane.left() + x.min(lane.width())
+    };
     let rate = snapshot.status.source.map_or(1, |s| s.rate);
     for (i, saved) in snapshot.loops.iter().enumerate() {
+        let Some((a, b)) = *saved else {
+            continue;
+        };
+        if b < layout.start || a > layout.end() {
+            continue;
+        }
         let slot = i as u8 + 1;
-        let text = egui::RichText::new(slot.to_string());
-        let text = if saved.is_some() {
-            text.strong()
-        } else {
-            text.weak()
-        };
-        let playing = saved.is_some() && *saved == range;
-        let response = ui.add(egui::Button::new(text).selected(playing));
-        let response = match saved {
-            Some((a, b)) => response.on_hover_text(format!(
-                "Loop {slot}: {}-{}. Click to loop it; shift-click to save the range over it.",
-                sampler::fmt_frames(*a, rate),
-                sampler::fmt_frames(*b, rate)
-            )),
-            None => {
-                response.on_hover_text(format!("Loop {slot} is empty. Click to save the range."))
-            }
-        };
+        // Wide enough for its number, however short the loop.
+        let left = x_of(a).min(lane.right() - LANE);
+        let band = egui::Rect::from_x_y_ranges(left..=x_of(b).max(left + LANE), lane.y_range());
+        let playing = *saved == range;
+        let response = ui.interact(band, ui.id().with(("loop", slot)), egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Button,
+                true,
+                playing,
+                format!("Loop {slot}"),
+            )
+        });
+        let visuals = ui.style().interact_selectable(&response, playing);
+        ui.painter()
+            .rect_filled(band.shrink(1.0), 2.0, visuals.weak_bg_fill);
+        ui.painter().text(
+            band.left_center() + egui::vec2(4.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            slot,
+            egui::TextStyle::Small.resolve(ui.style()),
+            visuals.text_color(),
+        );
+        let response = response.on_hover_text(format!(
+            "Loop {slot}: {}-{}. Click to loop it; shift-click to save the range over it.",
+            sampler::fmt_frames(a, rate),
+            sampler::fmt_frames(b, rate)
+        ));
         if response.clicked() {
             let shift = ui.input(|i| i.modifiers.shift);
             actions.push(Action::LoopSlot(
@@ -461,15 +727,154 @@ fn loop_slots(
         response.context_menu(|ui| {
             if ui.button("Save the range here").clicked() {
                 actions.push(Action::LoopSlot(slot, SlotOp::Save));
+                ui.close();
             }
-            if ui
-                .add_enabled(saved.is_some(), egui::Button::new("Clear"))
-                .clicked()
-            {
+            if ui.button("Clear").clicked() {
                 actions.push(Action::LoopSlot(slot, SlotOp::Clear));
+                ui.close();
             }
         });
     }
+}
+
+/// An entry of the Sampler menu, with its key. Returns whether it was chosen.
+fn item(ui: &mut egui::Ui, model: &Model, control: &Control, enabled: bool, on: bool) -> bool {
+    let mut button = egui::Button::selectable(on, control.label);
+    if let Some(key) = keys::key_for(model, &control.action, View::Sampler) {
+        button = button.shortcut_text(key.to_string());
+    }
+    let response = ui.add_enabled(enabled, button);
+    // Without the key, which the button's own name would include.
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, control.label)
+    });
+    response.clicked()
+}
+
+/// The Sampler menu: every action of the view, with the key that performs it
+/// there. Slicing works in every view; the rest needs the sampler showing.
+pub fn menu(model: &Model, ui: &mut egui::Ui) -> Option<Action> {
+    let snapshot = model.snapshot();
+    let sampler = model.sampler();
+    let here = model.view() == View::Sampler;
+    let pending = sampler.pending.is_some();
+    let ranged = sampler.range_ends(snapshot.status.current()) != (None, None);
+    let mut chosen = None;
+    let mut items = |ui: &mut egui::Ui, table: &[Control]| {
+        for control in table {
+            let enabled = match control.action {
+                Action::Slice(_) => true,
+                Action::AuditionSlice(_) | Action::WriteSlices | Action::DiscardSlices => {
+                    here && pending
+                }
+                Action::SetRange(None) => here && ranged,
+                Action::ClearLoops => here && snapshot.loops.iter().any(Option::is_some),
+                _ => here,
+            };
+            let on = match control.action {
+                Action::Display(Some(display)) => display == sampler.display,
+                Action::PickEdge(edge) => edge == sampler.edge,
+                _ => false,
+            };
+            if item(ui, model, control, enabled, on) {
+                chosen = Some(control.action.clone());
+                ui.close();
+            }
+        }
+    };
+    items(ui, controls::SAMPLER_HEADER);
+    ui.menu_button("Display", |ui| items(ui, controls::DISPLAYS));
+    ui.separator();
+    items(ui, controls::SAMPLER_BAR);
+    ui.menu_button("Range", |ui| items(ui, controls::RANGE_MENU));
+    ui.menu_button("Marks", |ui| items(ui, controls::MARK_MENU));
+    // Chosen outside `items`: the slices' edges, a loop's entry, or a toggle.
+    let mut other = None;
+    ui.menu_button("Slice", |ui| {
+        items(ui, controls::SLICE_MENU);
+        // Set here too: outside the sampler view a slice is written at once.
+        let edges = model.session().slice_edges();
+        ui.menu_button("Edges", |ui| {
+            for (_, choice) in Edges::NAMES {
+                if ui.radio(edges == choice, choice.name()).clicked() {
+                    other = Some(Action::SetSliceEdges(choice));
+                    ui.close();
+                }
+            }
+        });
+        ui.separator();
+        items(ui, controls::PLAN_BAR);
+        // An extension, shown once enabled in the settings: the slices last
+        // written, by ConvertWithMoss, into a directory beside them named
+        // after the format.
+        let Some(program) = model.session().convertwithmoss() else {
+            return;
+        };
+        ui.separator();
+        if program.is_file() {
+            ui.menu_button("Convert to", |ui| {
+                for format in playr_core::convertwithmoss::FORMATS {
+                    if ui.button(format).clicked() {
+                        other = Some(Action::Convert(format.to_string()));
+                        ui.close();
+                    }
+                }
+            });
+        } else {
+            ui.add_enabled(false, egui::Button::new("Convert to"))
+                .on_disabled_hover_text(playr_core::convertwithmoss::not_installed(program));
+        }
+    });
+    ui.add_enabled_ui(here, |ui| {
+        ui.menu_button("Loops", |ui| {
+            let rate = snapshot.status.source.map_or(1, |s| s.rate);
+            for (i, saved) in snapshot.loops.iter().enumerate() {
+                let slot = i as u8 + 1;
+                let title = match saved {
+                    Some((a, b)) => format!(
+                        "Loop {slot}  {}-{}",
+                        sampler::fmt_frames(*a, rate),
+                        sampler::fmt_frames(*b, rate)
+                    ),
+                    None => format!("Loop {slot}  empty"),
+                };
+                ui.menu_button(title, |ui| {
+                    let ops = [
+                        ("Loop it", SlotOp::Use, saved.is_some()),
+                        ("Save the range here", SlotOp::Save, true),
+                        ("Clear", SlotOp::Clear, saved.is_some()),
+                    ];
+                    for (label, op, enabled) in ops {
+                        let action = Action::LoopSlot(slot, op);
+                        if item(ui, model, &Control { label, action }, enabled, false) {
+                            other = Some(Action::LoopSlot(slot, op));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            ui.separator();
+            items(ui, controls::LOOP_MENU);
+        });
+    });
+    ui.separator();
+    let toggles = [
+        ("Snap to zero", Action::Snap(None), sampler.snap),
+        ("Fit range", Action::Fit(None), sampler.fit),
+        (
+            "Loop range",
+            Action::Loop(None),
+            snapshot.status.looping.is_some(),
+        ),
+    ];
+    for (label, action, on) in toggles {
+        let control = Control { label, action };
+        if item(ui, model, &control, here, on) {
+            other = Some(control.action);
+            ui.close();
+        }
+    }
+    chosen.or(other)
 }
 
 /// Paints the waveform of `layout` into `rect`, one column a point wide.

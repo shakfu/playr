@@ -218,12 +218,79 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         assert_eq!(line(&action, Some(View::Sampler)), text);
     }
     assert_eq!(
-        completions("snap o", View::Sampler, &[]),
+        completions("snap o", View::Sampler, &[], true),
         ["snap on", "snap off"]
     );
     assert_eq!(
-        completions("fit o", View::Sampler, &[]),
+        completions("fit o", View::Sampler, &[], true),
         ["fit on", "fit off"]
+    );
+}
+
+#[test]
+fn convert_takes_a_format_name_in_any_view() {
+    assert_eq!(lib("convert sf2"), Ok(Action::Convert("sf2".into())));
+    // Any name ConvertWithMoss may know, not only the ones offered.
+    assert_eq!(
+        parse("convert opxy", View::Sampler),
+        Ok(Action::Convert("opxy".into()))
+    );
+    // It names a directory, so nothing that could leave the export's.
+    for text in [
+        "convert",
+        "convert ../up",
+        "convert a/b",
+        "convert SF2",
+        "convert sf2 x",
+    ] {
+        let error = lib(text).unwrap_err();
+        assert!(error.contains("1010music, ableton"), "{text}: {error}");
+    }
+    assert_eq!(
+        line(&Action::Convert("bento".into()), None),
+        "convert bento"
+    );
+    // Typed while the extension is off, it is found by its full name only,
+    // which the session answers with how to enable it; no prefix finds it
+    // and no error names it.
+    let typed = |line, extensions| playr_app::command::parse_typed(line, View::Library, extensions);
+    assert_eq!(
+        typed("convert sf2", false),
+        Ok(Action::Convert("sf2".into()))
+    );
+    assert_eq!(
+        typed("conv sf2", false),
+        Err("unknown command: conv".into())
+    );
+    assert_eq!(typed("conv sf2", true), Ok(Action::Convert("sf2".into())));
+    // Off, `co` still means columns; on, it could be either.
+    assert_eq!(typed("co", false), Err("usage: :columns NAME...".into()));
+    assert_eq!(
+        typed("co", true),
+        Err("ambiguous command co: columns, convert".into())
+    );
+
+    // An extension's command is completed only once it is enabled.
+    assert!(completions("convert ", View::Library, &[], false).is_empty());
+    assert!(completions("conv", View::Library, &[], false).is_empty());
+    assert_eq!(completions("conv", View::Library, &[], true), ["convert"]);
+    let listed = |extensions| {
+        playr_app::command::command_rows(extensions)
+            .iter()
+            .any(|(usage, _)| usage == ":convert FORMAT")
+    };
+    assert!(listed(true) && !listed(false));
+    assert_eq!(
+        completions("convert ", View::Library, &[], true),
+        [
+            "convert 1010music",
+            "convert ableton",
+            "convert bento",
+            "convert distingex",
+            "convert mc707",
+            "convert renoise",
+            "convert sf2"
+        ]
     );
 }
 
@@ -245,7 +312,7 @@ fn slice_edges_takes_a_choice_or_its_prefix_in_any_view() {
         "slice-edges exact"
     );
     assert_eq!(
-        completions("slice-edges ", View::Library, &[]),
+        completions("slice-edges ", View::Library, &[], true),
         ["slice-edges exact", "slice-edges zero", "slice-edges fade"]
     );
 }
@@ -270,19 +337,25 @@ fn loop_takes_a_slot_to_recall_save_or_clear() {
     for text in ["loop", "loop on"] {
         assert!(lib(text).unwrap_err().contains("sampler view"), "{text}");
     }
-    assert_eq!(completions("loop ", View::Library, &[]), ["loop off"]);
+    assert_eq!(completions("loop ", View::Library, &[], true), ["loop off"]);
     assert_eq!(
-        completions("loop ", View::Sampler, &[]),
+        completions("loop ", View::Sampler, &[], true),
         ["loop on", "loop off"]
     );
-    assert_eq!(completions("loo", View::Sampler, &[]), ["loop", "loops"]);
+    assert_eq!(
+        completions("loo", View::Sampler, &[], true),
+        ["loop", "loops"]
+    );
     assert_eq!(s("loops clear"), Ok(Action::ClearLoops));
     assert!(s("loops").is_err() && s("loops 1").is_err());
     assert_eq!(
         line(&Action::ClearLoops, Some(View::Sampler)),
         "loops clear"
     );
-    assert_eq!(completions("loops ", View::Sampler, &[]), ["loops clear"]);
+    assert_eq!(
+        completions("loops ", View::Sampler, &[], true),
+        ["loops clear"]
+    );
 }
 
 #[test]
@@ -421,7 +494,7 @@ fn replaygain_takes_a_setting_or_its_prefix() {
     );
     assert!(lib("replaygain").is_err());
     assert_eq!(
-        completions("replaygain a", Library, &[]),
+        completions("replaygain a", Library, &[], true),
         vec![
             "replaygain album".to_string(),
             "replaygain auto".to_string()
@@ -488,28 +561,31 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
             .count()
     };
     assert_eq!(
-        completions("p", Library, &playlists),
+        completions("p", Library, &playlists, true),
         ["play", "playlist", "prune", "pause", "prev",]
     );
-    assert_eq!(completions("", Library, &playlists).len(), usable(Library));
     assert_eq!(
-        completions("re", Selection, &playlists),
+        completions("", Library, &playlists, true).len(),
+        usable(Library)
+    );
+    assert_eq!(
+        completions("re", Selection, &playlists, true),
         ["rescan", "restart", "replaygain", "remove"]
     );
     assert_eq!(
-        completions("re", Playlists, &playlists),
+        completions("re", Playlists, &playlists, true),
         ["rescan", "restart", "replaygain", "rename"]
     );
     assert_eq!(
-        completions("re", Library, &playlists),
+        completions("re", Library, &playlists, true),
         ["rescan", "restart", "replaygain"]
     );
     assert_eq!(
-        completions("mode r", Library, &playlists),
+        completions("mode r", Library, &playlists, true),
         ["mode repeat", "mode repeat-one"]
     );
     assert_eq!(
-        completions("vi ", Library, &playlists),
+        completions("vi ", Library, &playlists, true),
         [
             "view library",
             "view queue",
@@ -522,51 +598,51 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     );
     // Playlist names match without regard to case.
     assert_eq!(
-        completions("playlist la", Library, &playlists),
+        completions("playlist la", Library, &playlists, true),
         ["playlist Late Night"]
     );
     assert_eq!(
-        completions("rename ", Playlists, &playlists),
+        completions("rename ", Playlists, &playlists, true),
         ["rename Late Night", "rename dawn"]
     );
-    assert!(completions("rename ", Library, &playlists).is_empty());
+    assert!(completions("rename ", Library, &playlists, true).is_empty());
     assert_eq!(
-        completions("theme ", Playlists, &playlists),
+        completions("theme ", Playlists, &playlists, true),
         ["theme system", "theme light", "theme dark"]
     );
-    assert!(completions("seek ", Library, &playlists).is_empty());
-    assert!(completions("zz ", Library, &playlists).is_empty());
+    assert!(completions("seek ", Library, &playlists, true).is_empty());
+    assert!(completions("zz ", Library, &playlists, true).is_empty());
 }
 
 #[test]
 fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     let mut line = CommandLine::default();
     line.push('p');
-    line.complete(true, Library, &[]);
+    line.complete(true, Library, &[], true);
     assert_eq!(line.text, "play");
-    line.complete(true, Library, &[]);
+    line.complete(true, Library, &[], true);
     assert_eq!(line.text, "playlist");
     for _ in 0..4 {
-        line.complete(true, Library, &[]);
+        line.complete(true, Library, &[], true);
     }
     assert_eq!(line.text, "play", "the cycle does not wrap");
-    line.complete(false, Library, &[]);
+    line.complete(false, Library, &[], true);
     assert_eq!(line.text, "prev");
 
     // Typing ends the cycle, so Tab now completes the new text.
     line.text.clear();
     "playlist ".chars().for_each(|c| line.push(c));
-    line.complete(true, Library, &["late".into()]);
+    line.complete(true, Library, &["late".into()], true);
     assert_eq!(line.text, "playlist late");
 
     let mut back = CommandLine::default();
     back.push('p');
-    back.complete(false, Library, &[]);
+    back.complete(false, Library, &[], true);
     assert_eq!(back.text, "prev", "shift-tab does not start from the last");
 
     let mut none = CommandLine::default();
     none.push('z');
-    none.complete(true, Library, &[]);
+    none.complete(true, Library, &[], true);
     assert_eq!(none.text, "z");
 }
 
@@ -871,6 +947,7 @@ fn the_cheatsheet_lists_every_command_under_its_view() {
     };
     for c in COMMANDS {
         let heading = match c.view {
+            None if c.extension => "Extensions",
             None => "Every view",
             Some(Library) => "Library",
             Some(Selection) => "Selection",

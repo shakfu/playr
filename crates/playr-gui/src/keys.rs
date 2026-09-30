@@ -1,7 +1,18 @@
 //! Keyboard events as the keys bindings name.
 
 use eframe::egui;
-use playr_app::action::{Key, KeyCode, Modifiers};
+use playr_app::action::{Action, Key, KeyCode, Modifiers};
+use playr_app::model::Model;
+use playr_app::View;
+
+/// The key that performs `action` in `view`, if one does.
+pub fn key_for(model: &Model, action: &Action, view: View) -> Option<Key> {
+    let keys = model.keymap();
+    keys.bindings()
+        .iter()
+        .map(|b| b.key)
+        .find(|key| keys.lookup(*key, view) == Some(action))
+}
 
 /// The key an egui event names, or `None` for an event no binding can name.
 ///

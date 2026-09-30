@@ -99,6 +99,12 @@ pub struct Session {
     loops_for: Option<PathBuf>,
     /// Where exported slices are written.
     samples: PathBuf,
+    /// The directory of the last export, which a conversion reads.
+    exported: Option<PathBuf>,
+    /// ConvertWithMoss's command line, or `None` while the extension is off.
+    convertwithmoss: Option<PathBuf>,
+    /// Whether an export writes an Octatrack `.ot` file.
+    ot_file: bool,
     /// What an export does at slice edges, and how long a fade takes.
     edges: Edges,
     fades: Fades,
@@ -151,6 +157,9 @@ impl Session {
             loops: [None; LOOP_SLOTS as usize],
             loops_for: None,
             samples: PathBuf::new(),
+            exported: None,
+            convertwithmoss: None,
+            ot_file: false,
             edges: Edges::Exact,
             fades: Fades::default(),
             onset_audio: Arc::default(),
@@ -173,6 +182,36 @@ impl Session {
         self.samples = dir;
     }
 
+    /// Turns the `convert-with-moss` extension on, with ConvertWithMoss's
+    /// command line at `program`, or off with `None`, as it starts.
+    pub fn set_convertwithmoss(&mut self, program: Option<PathBuf>) {
+        self.convertwithmoss = program;
+    }
+
+    /// Whether the `convert-with-moss` extension is on, so that its command
+    /// is offered.
+    pub fn convert_enabled(&self) -> bool {
+        self.convertwithmoss.is_some()
+    }
+
+    /// Whether the extension is on and ConvertWithMoss is where the settings
+    /// say, looked up each time, so installing it takes effect without a
+    /// restart.
+    pub fn can_convert(&self) -> bool {
+        self.convertwithmoss.as_deref().is_some_and(Path::is_file)
+    }
+
+    /// Where ConvertWithMoss is expected, while the extension is on.
+    pub fn convertwithmoss(&self) -> Option<&Path> {
+        self.convertwithmoss.as_deref()
+    }
+
+    /// Records the directory an export wrote, which the frontend tells the
+    /// session of once [`Event::Exported`] arrives, for [`Session::convert`].
+    pub fn exported(&mut self, dir: PathBuf) {
+        self.exported = Some(dir);
+    }
+
     /// Chooses what later exports do at slice edges.
     pub fn set_slice_edges(&mut self, edges: Edges) -> Notice {
         self.edges = edges;
@@ -184,6 +223,11 @@ impl Session {
     }
 
     /// Sets how long [`Edges::Fade`] fades each end of a slice.
+    /// Sets whether an export writes an Octatrack `.ot` file.
+    pub fn set_ot_file(&mut self, on: bool) {
+        self.ot_file = on;
+    }
+
     pub fn set_fades(&mut self, fades: Fades) {
         self.fades = fades;
     }
@@ -1574,6 +1618,22 @@ impl Session {
         }))
     }
 
+    /// Converts the last export to `format` with ConvertWithMoss, into a
+    /// directory of that name inside the export's. Finishes with
+    /// [`Event::Converted`].
+    pub fn convert(&mut self, format: String) -> Result<JobId, Refusal> {
+        let program = self.convertwithmoss.clone().ok_or(Refusal::ConvertOff)?;
+        if !program.is_file() {
+            return Err(Refusal::NoConvertWithMoss(program));
+        }
+        let dir = self.exported.clone().ok_or(Refusal::NothingExported)?;
+        Ok(self.spawn(move |job| {
+            let result =
+                crate::convertwithmoss::convert(&program, &samples::kit_path(&dir), &format);
+            Some(Event::Converted { job, result })
+        }))
+    }
+
     /// Scans `dir` into the library file, creating it if there is none.
     /// Sends [`Event::ScanProgress`] as it goes and finishes with
     /// [`Event::Scanned`], after which the frontend calls [`Session::scanned`].
@@ -1864,6 +1924,7 @@ impl Session {
             edges: self.edges,
             fades: self.fades,
             loops,
+            ot_file: self.ot_file,
         })
     }
 }

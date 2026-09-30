@@ -830,6 +830,10 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             }
             None => f.notify(Message::NoSlicesPlanned),
         },
+        Action::Convert(format) => match f.session_mut().convert(format.clone()) {
+            Ok(_) => f.notify(Outcome::ConvertStarted { format }.into()),
+            Err(refusal) => f.notify(refusal.into()),
+        },
         // Escape backs out a step: planned slices first, then the range.
         Action::DiscardSlices => match f.take_plan() {
             Some(_) => f.notify(Message::SlicesDiscarded),

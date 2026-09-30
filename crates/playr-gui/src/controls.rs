@@ -28,6 +28,7 @@ pub const TRANSPORT: &[Control] = &[
     control("Next", Action::Next),
 ];
 
+/// Playback, after ReplayGain.
 pub const MARKS: &[Control] = &[
     control("Mark", Action::Mark),
     control("Undo mark", Action::UndoMark),
@@ -74,7 +75,8 @@ pub const PLAYBACK_MENU: &[Control] = &[
 /// In the EQ dialog, under its sliders.
 pub const EQ: &[Control] = &[control("Flat", Action::FlatEq)];
 
-/// Slicing the playing track; in the sampler view these plan instead of write.
+/// Sampler, Slice: slicing the playing track; in the sampler view these plan
+/// instead of write.
 pub const SLICE_MENU: &[Control] = &[
     control("Slice the region", Action::Slice(Slicing::Region)),
     control("Slice at every mark", Action::Slice(Slicing::Marks)),
@@ -153,67 +155,71 @@ pub const PLAYLIST_ROW: &[Control] = &[
     control("Delete", Action::DeletePlaylist),
 ];
 
-/// Buttons under the waveform.
-pub const SAMPLER_BAR: &[Control] = &[
+/// Buttons right of the sampler's header, drawn as `+`, `-`, U+2194 and `i`.
+pub const SAMPLER_HEADER: &[Control] = &[
     control("Zoom in", Action::Zoom(Zoom::In)),
     control("Zoom out", Action::Zoom(Zoom::Out)),
     control("Whole track", Action::Zoom(Zoom::All)),
-    control("Envelope", Action::Display(Some(Display::Envelope))),
-    control("dB", Action::Display(Some(Display::Decibels))),
-    control("Spectrogram", Action::Display(Some(Display::Spectrogram))),
-    control("Waveform", Action::Display(Some(Display::Braille))),
     // The sampler lists no tracks, so this describes the playing one.
     control("Track info", Action::ShowInfo),
 ];
 
-/// Buttons setting the range to slice, under the waveform.
-pub const RANGE_BAR: &[Control] = &[
-    control("Range in", Action::RangeIn),
-    control("Range out", Action::RangeOut),
-    control("Clear range", Action::SetRange(None)),
-    control("Audition", Action::Audition),
+/// The header's drop-down: how the waveform is drawn.
+pub const DISPLAYS: &[Control] = &[
+    control("Envelope", Action::Display(Some(Display::Envelope))),
+    control("dB", Action::Display(Some(Display::Decibels))),
+    control("Spectrogram", Action::Display(Some(Display::Spectrogram))),
+    control("Waveform", Action::Display(Some(Display::Braille))),
 ];
 
-/// Choosing a range end and moving it a column, under the waveform.
-pub const EDGE_BAR: &[Control] = &[
+/// Buttons under the waveform; Loop, Save loop, Snap and Fit follow them.
+pub const SAMPLER_BAR: &[Control] = &[
+    control("Mark", Action::Mark),
+    control("Audition", Action::Audition),
+    control("Clear range", Action::SetRange(None)),
+];
+
+/// Sampler, Range: its ends at the playhead, then choosing an end and moving
+/// it a column. A drag across the waveform does both by pointer.
+pub const RANGE_MENU: &[Control] = &[
+    control("Range in", Action::RangeIn),
+    control("Range out", Action::RangeOut),
     control("Move start", Action::PickEdge(Edge::Start)),
     control("Move end", Action::PickEdge(Edge::End)),
     control("Earlier", Action::MoveEdge(Nudge::Columns(-1))),
     control("Later", Action::MoveEdge(Nudge::Columns(1))),
 ];
 
-/// Moving the cursor and editing the mark under it, under the waveform.
-pub const MARK_BAR: &[Control] = &[
-    control("Previous mark", Action::PickMark(false)),
-    control("Next mark", Action::PickMark(true)),
+/// Sampler, Marks: moving the cursor and editing the mark under it.
+pub const MARK_MENU: &[Control] = &[
+    control("Select previous mark", Action::PickMark(false)),
+    control("Select next mark", Action::PickMark(true)),
     control("Mark earlier", Action::MoveMark(Nudge::Columns(-1))),
     control("Mark later", Action::MoveMark(Nudge::Columns(1))),
     control("Snap to rise", Action::SnapMark),
     control("Delete mark", Action::DeleteMark),
+    control("Cursor earlier", Action::MoveCursor(Nudge::Columns(-1))),
+    control("Cursor later", Action::MoveCursor(Nudge::Columns(1))),
     control("Cursor to playhead", Action::SetCursor(None)),
 ];
 
-/// Buttons slicing the region or range, under the waveform; beside them, a
-/// count and a sensitivity choose equal and onset slices.
-pub const SLICE_BAR: &[Control] = &[
-    control("Slice region", Action::Slice(Slicing::Region)),
-    control("Slice at marks", Action::Slice(Slicing::Marks)),
+/// A mark's entries in the waveform's menu; the cursor moves to it first.
+pub const MARK_ROW: &[Control] = &[
+    control("Snap to rise", Action::SnapMark),
+    control("Delete mark", Action::DeleteMark),
 ];
 
-/// Hearing planned slices, then writing them, under the slice buttons; the
-/// Edges menu sits between the two.
+/// Hearing planned slices, then writing them: in the slice row while a plan
+/// waits, drawn as `<`, `>`, Write and Discard, and under Sampler, Slice.
 pub const PLAN_BAR: &[Control] = &[
     control("Previous slice", Action::AuditionSlice(false)),
     control("Next slice", Action::AuditionSlice(true)),
-];
-
-/// After the numbered loop buttons.
-pub const LOOP_BAR: &[Control] = &[control("Clear loops", Action::ClearLoops)];
-
-pub const WRITE_BAR: &[Control] = &[
     control("Write slices", Action::WriteSlices),
     control("Discard slices", Action::DiscardSlices),
 ];
+
+/// Sampler, Loops, after the numbered loops.
+pub const LOOP_MENU: &[Control] = &[control("Clear loops", Action::ClearLoops)];
 
 /// Every table above.
 pub const TABLES: &[&[Control]] = &[
@@ -234,14 +240,14 @@ pub const TABLES: &[&[Control]] = &[
     RESULTS_BAR,
     PLAYLIST_ROW,
     SEARCH_ROW,
+    SAMPLER_HEADER,
+    DISPLAYS,
     SAMPLER_BAR,
-    MARK_BAR,
-    RANGE_BAR,
-    EDGE_BAR,
-    SLICE_BAR,
+    RANGE_MENU,
+    MARK_MENU,
+    MARK_ROW,
     PLAN_BAR,
-    LOOP_BAR,
-    WRITE_BAR,
+    LOOP_MENU,
 ];
 
 /// Actions whose value comes from how a control is used, by name: a slider's
@@ -252,29 +258,33 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("SetEq", "the sliders in the EQ dialog"),
     ("SetMode", "the mode menu"),
     ("SetReplayGain", "Playback, ReplayGain"),
-    ("SetSliceEdges", "the sampler's Edges menu"),
+    (
+        "SetSliceEdges",
+        "Sampler, Slice, Edges, and the sampler's Edges drop-down",
+    ),
+    ("Convert", "Sampler, Slice, Convert to"),
     ("SetColumns", "View, Columns"),
     ("SetSort", "a click on a column heading"),
     ("SeekTo", "a click on the progress bar or the waveform"),
     (
         "MarkAt",
-        "a shift-click on the progress bar or the waveform",
+        "a shift-click on the progress bar or the waveform, and the waveform's menu",
     ),
     ("Zoom", "the mouse wheel over the waveform"),
-    ("SetRange", "a drag across the waveform"),
-    ("Snap", "the sampler's Snap to zero tick box"),
-    ("Fit", "the sampler's Fit range tick box"),
-    ("Loop", "the sampler's Loop range tick box"),
-    ("LoopSlot", "the sampler's numbered loop buttons"),
+    ("SetRange", "a drag across the waveform, and its menu"),
+    ("Slice", "the sampler's Slice drop-down"),
+    ("Snap", "the sampler's Snap button"),
+    ("Fit", "the sampler's Fit button"),
+    ("Loop", "the sampler's Loop button"),
+    (
+        "LoopSlot",
+        "a loop under the waveform, Save loop, and Sampler, Loops",
+    ),
     ("MoveTrack", "a selection row dragged to another place"),
     ("Add", "a library row's tick box"),
     ("Activate", "a double click on a row"),
     ("Open", "File, Open files and Open folder"),
     ("Scan", "File, Add folder to library"),
-    (
-        "MoveCursor",
-        "the sampler's Cursor earlier and later buttons",
-    ),
     ("MoveMarkTo", "a mark dragged along the waveform"),
     ("Rescan", "File, Rescan library"),
     ("Analyze", "File, Analyze library and Analyze folder"),

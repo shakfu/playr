@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use playr_core::samples::{
-    equal_spans, export, nearest_onset, onsets, plan, plan_with, region, spans_at, Cut, Edges,
-    Exported, Fades, Job, OnsetAudio, MAX_SLICES,
+    equal_spans, export, kit_path, nearest_onset, onsets, plan, plan_with, region, sliced_dir,
+    spans_at, Cut, Edges, Exported, Fades, Job, OnsetAudio, FIRST_KEY, MAX_SLICES,
 };
 use playr_core::wave::{snap_reach, Peaks};
 
@@ -49,6 +49,7 @@ fn job(path: &Path, rate: u32, marks: &[u64], at: u64, cut: Cut, samples: &Path)
         edges: Edges::Exact,
         fades: Fades::default(),
         loops: false,
+        ot_file: false,
     }
 }
 
@@ -408,6 +409,168 @@ fn samples_json_names_each_slot_as_its_file_does() {
 }
 
 #[test]
+fn the_sfz_file_puts_each_slice_on_its_own_key_from_c1() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("amen break.wav");
+    source(&file, 44_100, 2, 16, 20_000);
+    let job = job(&file, 44_100, &[5_000, 9_000], 0, Cut::Marks, dir.path());
+    let first = export(&job).unwrap();
+    let kit = kit_path(&first.dir);
+    assert_eq!(kit, first.dir.join("amen break.sfz"));
+    assert_eq!(
+        std::fs::read_to_string(kit).unwrap(),
+        "<region> sample=000-amen break_S00.wav key=36\n\
+         <region> sample=001-amen break_S01.wav key=37\n\
+         <region> sample=002-amen break_S02.wav key=38\n"
+    );
+    // Every region names a file the export wrote.
+    let names: Vec<String> = files(&first.dir)
+        .iter()
+        .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "000-amen break_S00.wav",
+            "001-amen break_S01.wav",
+            "002-amen break_S02.wav"
+        ]
+    );
+    // A second export's kit takes its directory's name, so both can sit on a device.
+    let second = export(&job).unwrap();
+    assert_eq!(kit_path(&second.dir), second.dir.join("amen break-2.sfz"));
+    assert!(kit_path(&second.dir).is_file());
+}
+
+/// The `cue ` chunk's points in the WAV file at `path`, as frames, and the
+/// file's samples.
+fn cue_points(path: &Path) -> (Vec<u32>, Vec<i32>) {
+    let bytes = std::fs::read(path).unwrap();
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    assert_eq!(word(4) as usize + 8, bytes.len(), "the header's length");
+    let mut at = 12;
+    let mut points = None;
+    while at < bytes.len() {
+        let size = word(at + 4) as usize;
+        if &bytes[at..at + 4] == b"cue " {
+            let count = word(at + 8) as usize;
+            assert_eq!(size, 4 + 24 * count);
+            points = Some((0..count).map(|i| word(at + 12 + 24 * i + 20)).collect());
+        }
+        at += 8 + size + size % 2;
+    }
+    let samples = hound::WavReader::open(path)
+        .unwrap()
+        .samples::<i32>()
+        .map(Result::unwrap)
+        .collect();
+    (points.expect("no cue chunk"), samples)
+}
+
+#[test]
+fn an_export_holds_its_audio_once_more_as_one_file_with_a_cue_a_slice() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("amen.wav");
+    source(&file, 44_100, 2, 16, 20_000);
+    // The range, cut at the marks in it: the file starts where the range does.
+    let job = Job {
+        range: Some((3_000, 18_000)),
+        ot_file: true,
+        ..job(&file, 44_100, &[5_000, 9_000], 0, Cut::Marks, dir.path())
+    };
+    let out = export(&job).unwrap();
+    assert_eq!(
+        out.slices,
+        [(3_000, 5_000), (5_000, 9_000), (9_000, 18_000)]
+    );
+    // The slice files are still the only files in the export's own directory.
+    assert_exact(&out, 2, 16);
+
+    let sliced = sliced_dir(&out.dir);
+    assert_eq!(sliced, out.dir.join("sliced"));
+    let mut names: Vec<String> = std::fs::read_dir(&sliced)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["amen.ot", "amen.wav"]);
+
+    let (points, samples) = cue_points(&sliced.join("amen.wav"));
+    assert_eq!(points, [0, 2_000, 6_000], "frames from the range's start");
+    let want: Vec<i32> = (3_000..18_000)
+        .flat_map(|f| (0..2).map(move |c| value(f, c, 16) << 8))
+        .collect();
+    assert!(samples == want, "not the source's frames 3,000 to 18,000");
+
+    let ot = std::fs::read(sliced.join("amen.ot")).unwrap();
+    assert_eq!(
+        ot,
+        playr_core::sliced::ot_file(
+            44_100,
+            15_000,
+            &[(0, 2_000), (2_000, 6_000), (6_000, 15_000)]
+        )
+    );
+
+    // A second export's file takes its directory's name, as its kit does.
+    let second = export(&job).unwrap();
+    assert!(sliced_dir(&second.dir).join("amen-2.wav").is_file());
+    assert!(sliced_dir(&second.dir).join("amen-2.ot").is_file());
+}
+
+#[test]
+fn the_one_file_is_exact_whatever_the_slice_edges_and_has_no_ot_past_64_slices() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    source(&file, 8_000, 1, 24, 10_001);
+    // Faded slices; mono 24-bit with an odd frame count ends on an odd byte.
+    let faded = Job {
+        edges: Edges::Fade,
+        ot_file: true,
+        ..job(&file, 8_000, &[], 0, Cut::Equal(65), dir.path())
+    };
+    let out = export(&faded).unwrap();
+    assert_eq!(out.slices.len(), 65);
+    let sliced = sliced_dir(&out.dir);
+    let (points, samples) = cue_points(&sliced.join("long.wav"));
+    let starts: Vec<u32> = out.slices.iter().map(|s| s.0 as u32).collect();
+    assert_eq!(points, starts);
+    let want: Vec<i32> = (0..10_001).map(|f| value(f, 0, 24)).collect();
+    assert!(samples == want, "the fades reached the one file");
+    // The Octatrack holds 64 slices.
+    assert!(!sliced.join("long.ot").exists());
+
+    let at_most = Job {
+        ot_file: true,
+        ..job(&file, 8_000, &[], 0, Cut::Equal(64), dir.path())
+    };
+    let out = export(&at_most).unwrap();
+    assert!(sliced_dir(&out.dir).join("long-2.ot").is_file());
+    // Off, as shipped: the WAV and its cue points, and no `.ot` file.
+    let out = export(&job(&file, 8_000, &[], 0, Cut::Equal(4), dir.path())).unwrap();
+    let names: Vec<String> = std::fs::read_dir(sliced_dir(&out.dir))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["long-3.wav"]);
+}
+
+#[test]
+fn the_sfz_file_stops_at_key_127() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    source(&file, 8_000, 1, 16, 10_000);
+    let out = export(&job(&file, 8_000, &[], 0, Cut::Equal(100), dir.path())).unwrap();
+    assert_eq!(out.slices.len(), 100);
+    let sfz = std::fs::read_to_string(kit_path(&out.dir)).unwrap();
+    assert_eq!(sfz.lines().count(), 128 - FIRST_KEY);
+    assert!(
+        sfz.trim_end().ends_with("sample=091-long_S91.wav key=127"),
+        "{sfz}"
+    );
+}
+
+#[test]
 fn a_second_export_of_a_track_gets_its_own_directory() {
     let dir = tempfile::tempdir().unwrap();
     let samples = dir.path().join("does/not/exist/yet");
@@ -657,6 +820,11 @@ fn a_looped_range_is_written_to_loop_whole_with_its_edges_as_set() {
         assert!(
             json.contains(r#""loop_enabled": true, "loop_start": 0, "loop_end": 39996"#),
             "{json}"
+        );
+        // SFZ names the last frame played, not the frame after it.
+        assert_eq!(
+            std::fs::read_to_string(kit_path(&out.dir)).unwrap(),
+            "<region> sample=000-src_S00.wav key=36 loop_mode=loop_continuous loop_start=0 loop_end=39995\n"
         );
     }
     let out = export(&job(&file, 48_000, &[5_000], 0, Cut::Region, dir.path())).unwrap();

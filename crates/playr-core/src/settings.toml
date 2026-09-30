@@ -23,6 +23,9 @@ slice_edges = "exact"
 # half the slice. Short in, to keep a hit's attack.
 slice_fade_in = 1
 slice_fade_out = 5
+# Also write an Elektron Octatrack .ot file beside each export's sliced/*.wav,
+# for up to 64 slices.
+slice_ot_file = false
 # After a scan, remove tracks whose files are gone, without asking.
 auto_prune = false
 # After a scan, analyse what it added or found changed, in the background.
@@ -59,6 +62,15 @@ draft = "ask"
 # and sort are remembered for each program. Nothing is remembered without a
 # library.
 persist = []
+
+# An extension runs a program that is not part of playr, so each is off until
+# enabled here, and its commands are left out of the help until then.
+[extensions]
+# :convert, which runs ConvertWithMoss on the slices last written. path is its
+# command line; "" is where its installer puts it, which on Linux is
+# /opt/convertwithmoss/bin/ConvertWithMoss.
+convert-with-moss.enable = false
+convert-with-moss.path = ""
 
 # The window has room for the title first, and the page's columns are fixed
 # for now. A program's table wins over the keys above.

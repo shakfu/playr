@@ -4,13 +4,23 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.15.0]
+
+### Added
+
+- `:convert FORMAT` turns the slices last written into another sampler's format, by running [ConvertWithMoss](https://github.com/git-moss/ConvertWithMoss): `:convert sf2` writes `amen/sf2` inside the export. Each export now holds an `.sfz` file that puts its slices on keys from C1, which samplers that read SFZ load as it is and ConvertWithMoss takes as its source. playr writes SFZ and leaves the other formats to ConvertWithMoss, which already keeps over 40 current, over writing each itself. It is an extension, the first: it runs a program that is not playr's, so it is off until `convert-with-moss.enable = true` under `[extensions]` in `settings.toml`, and until then `:convert` is left out of `:help`, Tab completion, the window's menu and the command line's errors, and no prefix finds it. ConvertWithMoss is run from its installer's path or `convert-with-moss.path`, never from `PATH`; while it is not there, `:convert` is refused with that path and the window's entry is disabled. The window has it under Sampler, Slice, Convert to; the server's page may not run it. Library API: `convertwithmoss::convert`, `convertwithmoss::FORMATS`, `samples::kit_path`, `Session::convert`, `Session::convert_enabled`, `Session::can_convert`, `Session::exported`, `settings::ConvertWithMoss`, `Command::extension`, `command::parse_typed`, `Event::Converted`, `Action::Convert`. `docs/dev/hardware_samplers.md` has the formats tried.
+
+- Each export also holds its audio as one file with the slice points in it, for samplers that slice a file instead of loading a kit: `sliced/amen.wav`, with a cue point at each slice's start in a `cue ` chunk, and, with `slice_ot_file = true` in `settings.toml`, `sliced/amen.ot` beside it for the Octatrack, for up to 64 slices. The `.ot` file is off by default, as few users have an Octatrack. The `.ot` file is byte for byte what ot_utils 0.1.5 writes for the same slices, and ffprobe, sox and Python's `wave` read the WAV; neither has been loaded on a device. A cue point holds a frame, as common writers store it; one reference says bytes, and `docs/dev/hardware_samplers.md` records the question. Library API: `sliced::cue_chunk`, `sliced::append_cue`, `sliced::ot_file`, `samples::sliced_dir`.
+
 ### Changed
 
-- playr-gui opens 800 points wide, down from 1100. The sampler's controls already crowd the window. They will be redesigned to fit this width rather than given more room; `docs/dev/ui-refactor.md` has the plan.
+- playr-gui opens 800 points wide, down from 1100, and the sampler's controls take two rows under the waveform instead of five: they were redesigned to fit this width rather than given more room. At 800 x 480 the waveform is 210 points high, up from 116. Zoom, Track info and a display drop-down sit right of the file name. Snap, Fit and Loop are buttons that stay pressed while on. A Slice drop-down replaces the four slice buttons: choosing a method plans with it, None discards, and it shows a plan made with `:slice` too. The controls that review a plan show only while one waits. Saved loops show as bands under the waveform, where a click loops one; Save loop fills the first empty slot. A right-click on the waveform marks or sets a range end there, and snaps or deletes a mark under it. The transport's row of mark buttons is gone; Playback already listed them. A Sampler menu replaces the Slice menu and lists every sampler action with its key. `docs/dev/ui-refactor.md` has the design.
 
 - `l` and `:loop` with no range set the range to the region around the playhead and loop it, as `:audition` plays the region; they refused before. A range with one end set still refuses.
 
 ### Fixed
+
+- The window had no control that selects, moves, snaps or deletes a mark, or moves the cursor; only keys did. `controls::MARK_BAR` listed them for the parity test, which reads the tables, but no view drew it. They are under Sampler, Marks.
 
 - A loop kept playing after leaving the sampler, where `:loop` was refused, so only a stop or a new track ended it. `:loop off` now works in every view; starting a loop stays in the sampler, where the marks are shown.
 

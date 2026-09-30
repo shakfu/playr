@@ -1,29 +1,25 @@
 # Sampler controls in 800 points
 
-Design, written 2026-09-30 against playr 0.14.0, before any of it was built. The window now opens at its minimum width, 800 points. The sampler's controls do not fit it well: they take more height than the waveform at the minimum size. This plan cuts them to two rows without dropping an action. `docs/dev/gui.md` holds the parity rule and the GUI's earlier design.
+Design, written 2026-09-30 against playr 0.14.0. The window opens at its minimum width, 800 points, and the sampler's controls took more height than the waveform at the minimum size. This plan cut them to two rows without dropping an action. It was built the same day; "Built" at the end records where it differs. `docs/dev/gui.md` holds the parity rule and the GUI's earlier design.
 
 ## Constraints
 
 - **The parity rule holds.** Every `Action` stays reachable through a control, a key, or a named way in `controls::WITH_VALUES`. Moving an action from a button to a menu is allowed; dropping it is not.
 
-- **Keys do not change.** `keys.toml` and the terminal are untouched. No phase adds an `Action`, except where an open decision says so.
+- **Keys do not change.** `keys.toml` and the terminal are untouched, and no `Action` is added.
 
-- **800 x 480 is the design size.** Every phase must pass `every_control_fits_the_smallest_window_without_overlap` there. Widening the window is not an option.
+- **800 x 480 is the design size.** `every_control_fits_the_smallest_window_without_overlap` must pass there. Widening the window is not an option.
 
 - **The vertical budget is the real limit.** egui wraps a row that runs out of width, so a width limit alone turns extra controls into extra rows.
 
-## Measured
+## Before
 
-`crates/playr-gui/tests/window.rs`, `sized`, sampler view, text transport off:
+Measured in `crates/playr-gui/tests/window.rs`, `sized`, sampler view, text transport off. One control row is 21 points; a group gap is 10.
 
 | window | waveform height | under the waveform | transport and bar |
 |-|-|-|-|
 | 800 x 480 | 116 (24%) | 146: status line, 5 rows, 2 gaps | 116: 4 rows |
 | 800 x 720 | 356 (49%) | 146 | 116 |
-
-One control row is 21 points; a group gap is 10.
-
-## What exists
 
 Under the waveform, in `sampler::show`:
 
@@ -35,109 +31,102 @@ Under the waveform, in `sampler::show`:
 | 4 | `SLICE_BAR`, count, Equal slices, Sensitivity, Slice at onsets | 6 |
 | 5 | `PLAN_BAR`, Edges, fade text, `WRITE_BAR` | 5 |
 
-The transport adds `MARKS` as its own row, on every view.
+The transport drew `MARKS` as its own row, on every view, though Playback already listed them.
 
-Problems, from the code and the screenshot of 2026-09-30:
+Problems:
 
-- **Disabled is used for selected.** The four display buttons disable the current display. Envelope looks unavailable while it is showing.
+- **Disabled was used for selected.** The four display buttons disabled the current display, so Envelope looked unavailable while it was showing.
 
-- **10 of 38 items are disabled with no range, plan or loop:** the current display, Clear range, Earlier, Later, Loop range, Clear loops, Previous slice, Next slice, Write slices, Discard slices. The 8 empty loop slots are enabled but show nothing.
+- **10 of 38 items were disabled with no range, plan or loop.** The 8 empty loop slots were enabled but showed nothing.
 
-- **Mouse and key controls duplicate each other.** A drag already sets the range, moves either end and moves a mark (`EDGE_REACH`). The wheel zooms. Move start, Move end, Earlier and Later repeat the drag for key users.
+- **Mouse and key controls duplicated each other.** A drag already set the range, moved either end and moved a mark. The wheel zoomed. Move start, Move end, Earlier and Later repeated the drag for key users.
 
-- **`MARK_BAR` is never drawn.** `61e214f` added it to `controls::TABLES` but no view draws it. `tests/parity.rs` reads the tables, so it counts `PickMark`, `MoveMark`, `SnapMark`, `DeleteMark` and `SetCursor` as reachable by a control. In the window they are reachable only by key. `WITH_VALUES` names "Cursor earlier and later buttons" for `MoveCursor`; they do not exist either.
+- **`MARK_BAR` was never drawn.** `61e214f` added it to `controls::TABLES` but no view drew it. `tests/parity.rs` reads the tables, so it counted `PickMark`, `MoveMark`, `SnapMark`, `DeleteMark` and `SetCursor` as reachable by a control. In the window only keys reached them. `WITH_VALUES` named "Cursor earlier and later buttons" for `MoveCursor`, which did not exist either.
 
-- **Two actions share one label.** `MARKS` has Previous mark for `PrevMark`, which moves the playhead. `MARK_BAR` has Previous mark for `PickMark(false)`, which moves the cursor.
+- **Two actions shared one label.** `MARKS` had Previous mark for `PrevMark`, which moves the playhead. `MARK_BAR` had Previous mark for `PickMark(false)`, which moves the cursor.
 
-- **The Slice menu repeats three slice buttons.**
+## Decisions
 
-## Approach
+The choice between a button and a menu entry is made per group, not once for the view. The Sampler menu, which replaces the Slice menu, lists every action with its key, so a group can lose its buttons and stay reachable.
 
-Menus make every action reachable, with its key shown. Buttons are then kept only for actions used often. The waveform takes the edits it can do by pointer.
+| group | placement |
+|-|-|
+| Zoom in, Zoom out, Whole track | `[+] [-] [<->]`, right of the header row; `<->` is drawn as U+2194, a left-right arrow |
+| Track info | `[i]`, beside the zoom buttons |
+| Envelope, dB, Spectrogram, Waveform | one drop-down, right of the header row |
+| Mark | button under the waveform |
+| Audition, Clear range | buttons under the waveform |
+| Range in, Range out | Sampler, Range; a drag sets the range by pointer |
+| Move start, Move end, Earlier, Later | Sampler, Range; a drag on either end moves it |
+| Snap to zero, Fit range, Loop range | Snap, Fit and Loop: buttons that stay pressed while on |
+| Loops 1-8 | a lane under the waveform that draws saved loops only, and a Save loop button |
+| Clear loops | Sampler, Loops |
+| Slice region, Slice at marks, Equal slices, Slice at onsets | one method drop-down, which plans when chosen, and its parameter |
+| Previous slice, Next slice, Edges, Write slices, Discard slices | the slice row, only while a plan waits |
+| Select previous and next mark, Mark earlier and later, Snap to rise, Delete mark, the cursor | Sampler, Marks; Snap to rise and Delete mark also on a mark's right-click |
+| Undo mark, Previous mark, Next mark, Clear marks | Playback, as before; the transport's row is gone |
 
-Target, at 800 points:
+Other decisions:
 
-```
-Coldcut - Rubaiyat.mp3  0:00-5:55  one column 454 ms        [-] [+] [All] [Envelope v]
-+------------------------------------------------------------------------------------+
-|                                    waveform                                          |
-+------------------------------------------------------------------------------------+
- [1 0:12-0:20] [3 1:02-1:10]                                 loop lane, when any saved
-region 0:00.000-5:55.578 (355.579 s)  marks 0  peak 1.3 dBFS  -10.1 LUFS  corr +0.92
-[Mark] [Audition] [Loop] [Save loop] [Clear range]  |  [Snap] [Fit]
-Slice [Onsets v] ---o--- 0.50 [Plan]  |  [<] [>] Edges [exact v] [Write] [Discard]
-```
+- **Save loop** picks the first empty slot in the window. Adding `loop save` with no slot to `playr-app` would give the terminal the same; it is not done.
 
-- **Header row:** zoom and a display combo box move to its right side, in space it already has. Track info moves to the Sampler menu.
-
-- **Toggles:** Snap, Fit and Loop become `toggle_value` buttons, as EQ is in the transport. They show state without a check box's label width.
-
-- **Loop lane:** saved loops show as labelled bands under the waveform. A click recalls one; its context menu saves the range over it or clears it. Empty slots draw nothing. Save loop saves the range to the first empty slot.
-
-- **Waveform context menu**, at the pointer: Mark here, Range starts here, Range ends here, Clear range. On a mark: Delete mark, Snap to rise.
-
-- **Slice row:** one method combo box (region or range, marks, equal, onsets), its parameter (count or sensitivity), and Plan. Sensitivity still replans as it moves. The review controls on the right appear only while a plan is pending. The left side does not move when they do.
-
-- **Fade times** move from a label into the Edges combo box's hover text. The label would overflow the slice row.
-
-- **Transport:** the `MARKS` row moves to Playback, Marks. Shift-click on the progress bar still marks.
-
-- **Sampler menu**, replacing the Slice menu, drawn from tables with `items()`: Display, Zoom, Range, Edges, Marks and cursor, Loops 1-8 (use, save, clear), Slice, Snap, Fit, Loop, Track info. Each item shows its key.
-
-Expected height at 800 x 480: 3 control rows and 1 gap removed (73 points), the marks row removed (21), and the loop lane added (14). The waveform grows from 116 to about 196. This is an estimate; phase 0 records the real value.
-
-## Open decisions
-
-Recommendation first.
-
-- **Where parity lives:** in the Sampler menu, with buttons only for common actions. The alternative is a button for every action, which is today's design and the cause of the crowding.
-
-- **Loop slots:** a lane that draws saved loops only; or one "Loop [3 v]" combo box; or keep 8 buttons. The lane costs 14 points of height when any loop is saved, and nothing otherwise.
-
-- **Save loop:** the window picks the first empty slot; or add `loop save` with no slot to `playr-app`, so the terminal gets it too. The second follows the parity rule more closely.
-
-- **Review controls:** shown only while a plan is pending, in a fixed place; or always shown and disabled, as now.
-
-- **Marks row:** to Playback, Marks; or kept in the transport for views other than the sampler.
-
-- **Labels:** "Select previous mark" and "Select next mark" for `PickMark`; or rename `PrevMark` and `NextMark` to "Seek to previous mark" and "Seek to next mark".
+- **`PickMark` is labelled "Select previous mark" and "Select next mark".** `PrevMark` and `NextMark` keep their labels.
 
 ## Alternative considered
 
-Split the sampler into Listen and Slice modes, each with its own one or two rows. Each mode would be simpler. Range, loops and audition belong to both modes, though, so they would be repeated or would need a switch. Rejected for now; it could be revisited if two rows prove too tight.
+Split the sampler into Listen and Slice modes, each with its own one or two rows. Each mode would be simpler. Range, loops and audition belong to both modes, though, so they would be repeated or would need a switch. Rejected; it could be revisited if two rows prove too tight.
 
-## Phases
+## Built
 
-Each phase ends with `make test` and a screenshot at 800 x 480 and 800 x 720.
+```
+name.wav  0:00.000-0:12.000  one column 12 ms              [+] [-] [<->] [i] [Envelope v]
++------------------------------------------------------------------------------------+
+|                                    waveform                                        |
++------------------------------------------------------------------------------------+
+              [1              ]                                  saved loops, if any
+range 0:03.072-0:06.144 (3.072 s)  marks 0  peak 0.0 dBFS  rms 0.0 dBFS  corr +1.00
+[Mark] [Audition] [Clear range] [Loop] [Save loop]  |  [Snap] [Fit]
 
-0. **Guard.** Add a window test: at 800 x 480 the sampler's waveform is at least 116 points tall. Raise the number with each phase. Add a test that every label in every table in `TABLES` is drawn in some view or menu. It fails on `MARK_BAR` today.
+Slice [At onsets v] ---o--- 0.50 Sensitivity  |  [<] [>] [exact v] Edges [Write] [Discard]
+```
 
-1. **Sampler menu.** Replace the Slice menu. Draw every sampler table in it, `MARK_BAR` included. Fix the duplicate labels. The test from phase 0 now passes.
+| window | waveform height | under the waveform | transport and bar |
+|-|-|-|-|
+| 800 x 480 | 210 (44%) | 73: status line, 2 rows, 1 gap | 95: 3 rows |
+| 800 x 720 | 450 (63%) | 73 | 95 |
 
-2. **Header and toggles.** Zoom and a display combo box go to the header row. Snap, Fit and Loop become toggles. Track info goes to the menu.
+A saved loop adds the lane's 16 points.
 
-3. **Waveform.** Add the context menu and the loop lane. Remove `EDGE_BAR`, the loop slot buttons and `LOOP_BAR` from under the waveform.
+Where it differs from the decisions, or adds to them:
 
-4. **Slice row.** Put the method combo box, parameter and Plan with the review controls in one row.
+- **The loop lane draws a loop only where it is in view.** A loop outside the frames shown has no band; Sampler, Loops and the F keys still reach it. A band is at least 16 points wide, so two short loops close together can overlap.
 
-5. **Transport.** Move `MARKS` to Playback, Marks.
+- **Range starts here and Range ends here** keep the other end while it is on the right side of the pointer. Otherwise they use the track's end or its start.
 
-Phases 1 and 5 each stand alone. Phases 2 to 4 depend on 1.
+- **The Slice drop-down shows the plan that waits,** or None. It reads the plan's cut from the model, so a plan made with `:slice` shows too, with its count or sensitivity. Choosing a method plans with it, again if it is the one shown; choosing None discards. A changed count or sensitivity plans again. A first build had a Plan button beside the drop-down; it was dropped because a second step added nothing, and its hover text had to explain a Write button not yet shown. Region shows as Range while a range is set.
 
-## Tests to update
+- **Edges is also under Sampler, Slice.** Outside the sampler view a slice is written at once, with no plan to show the drop-down. The fade times are the drop-down's hover text.
 
-- `the_waveform_takes_the_height_the_controls_leave` finds the bottom through "Discard slices", which phase 4 hides with no plan pending.
+- **Outside the sampler view, the Sampler menu enables only slicing and Edges.**
 
-- `a_drag_sets_the_range_and_the_bar_slices_it` and `slices_planned_in_the_sampler_are_written_with_a_button` click slice buttons by label.
+- **Loop is enabled with no range,** as `l` then loops the region around the playhead. The old tick box was disabled.
 
-- `the_spectrogram_button_paints_one_texture_the_size_of_the_waveform` clicks the Spectrogram button, which becomes a combo box entry.
+- **Only the Sampler menu shows keys.** The other menus are unchanged.
 
-- `tests/parity.rs` should check that controls are drawn, not only that they are listed in `TABLES`.
+- **A long file name keeps its full width in the header;** the times and the scale beside it truncate first.
 
-## Risks
+## Tests
 
-- **Right-click is hard to discover.** The waveform's hover text should name it, and the menu repeats each action.
+- `the_sampler_s_controls_leave_the_waveform_200_points_of_the_smallest_window` is the budget: at 800 x 480, with the slice row at its widest, nothing overlaps and the waveform is at least 200 points high.
 
-- **Combo boxes take two clicks where buttons take one.** This affects display and slice method, which are chosen less often than they are used.
+- `a_saved_loop_shows_under_the_stretch_it_spans_and_a_click_loops_it` and `the_waveform_s_menu_acts_on_the_point_right_clicked` cover the lane and the waveform's menu.
 
-- **egui does not wrap before a slider or combo box.** The slice row holds two combo boxes and a slider. It fits by estimate only; phase 4 must measure it with a plan pending and fades on.
+- `the_sampler_menu_holds_every_table_no_button_draws` finds every label of `RANGE_MENU`, `MARK_MENU` and `LOOP_MENU` in the menu.
+
+## Not done
+
+- **`tests/parity.rs` still reads `controls::TABLES`,** not what is drawn. A table that no view draws would pass again, as `MARK_BAR` did. The menu test above covers three tables only.
+
+- **The tab and the menu are both named Sampler.** A screen reader hears two controls with one name, and tests pick the higher one.
+
+- **Right-click is hard to discover.** Nothing in the view names the waveform's menu; the Sampler menu repeats most of it.

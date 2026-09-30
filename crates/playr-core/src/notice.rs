@@ -129,6 +129,13 @@ pub enum Outcome {
         dir: PathBuf,
         slices: usize,
     },
+    ConvertStarted {
+        format: String,
+    },
+    /// The last export, converted into `dir`.
+    Converted {
+        dir: PathBuf,
+    },
     ScanStarted {
         /// The directory being scanned, or `None` when every recorded root is.
         dir: Option<PathBuf>,
@@ -182,6 +189,12 @@ pub enum Refusal {
     NoLibraryFile,
     NameEmpty,
     NameUnchanged,
+    /// No slices were written in this run, so there are none to convert.
+    NothingExported,
+    /// ConvertWithMoss is not installed at this path.
+    NoConvertWithMoss(PathBuf),
+    /// The `convert-with-moss` extension is not enabled in the settings.
+    ConvertOff,
     /// No search results are shown, so there is nothing to save.
     NoSearch,
     /// A `:sql` statement was refused or failed, in SQLite's words or a
@@ -235,6 +248,7 @@ pub enum Task {
     ClearMarks,
     Slice,
     Export,
+    Convert,
     Scan,
     Analyze,
     Prune,

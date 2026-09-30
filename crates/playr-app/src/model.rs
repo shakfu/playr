@@ -242,8 +242,11 @@ impl Model {
             }
         }
         session.set_samples_dir(config.settings.samples);
+        let moss = config.settings.convert_with_moss;
+        session.set_convertwithmoss(moss.enable.then_some(moss.path));
         session.set_slice_edges(config.settings.slice_edges);
         session.set_fades(config.settings.slice_fades);
+        session.set_ot_file(config.settings.slice_ot_file);
         session.keep_queue(config.settings.keep_queue);
         session.set_draft(config.settings.draft);
         let mut model = Model {
@@ -389,7 +392,8 @@ impl Model {
             return;
         }
         self.history.push(line);
-        match command::parse(line, self.view) {
+        let extensions = self.session.convert_enabled();
+        match command::parse_typed(line, self.view, extensions) {
             Ok(action) => self.perform(action),
             Err(e) => self.notify(Message::Command(e)),
         }
@@ -1011,12 +1015,22 @@ impl Model {
                     self.notify(Outcome::Opened { tracks, skipped });
                 }
                 Event::Exported { result, .. } => match result {
-                    Ok(out) => self.notify(Outcome::Exported {
-                        slices: out.slices.len(),
-                        dir: out.dir,
-                    }),
+                    Ok(out) => {
+                        self.session.exported(out.dir.clone());
+                        self.notify(Outcome::Exported {
+                            slices: out.slices.len(),
+                            dir: out.dir,
+                        })
+                    }
                     Err(error) => self.notify(Notice::Failed {
                         task: Task::Export,
+                        error,
+                    }),
+                },
+                Event::Converted { result, .. } => match result {
+                    Ok(dir) => self.notify(Outcome::Converted { dir }),
+                    Err(error) => self.notify(Notice::Failed {
+                        task: Task::Convert,
                         error,
                     }),
                 },

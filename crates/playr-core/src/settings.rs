@@ -1,6 +1,6 @@
 //! Settings: `settings.toml`, read at startup on top of the defaults.
 //!
-//! The core owns the file's top-level keys. A frontend owns the tables it
+//! The core owns the file's top-level keys and `[extensions]`. A frontend owns the tables it
 //! names, such as `[keys]`: [`Settings::apply`] hands those back unread, and
 //! reports every other name it does not know. The defaults are a settings file
 //! too, `settings.toml` beside this module, read by the same code.
@@ -30,6 +30,15 @@ pub const DEFAULT_SETTINGS: &str = include_str!("settings.toml");
 /// not by the terminal.
 pub const FRONTEND_TABLES: &[&str] = &["keys", "theme", "terminal", "gui", "server"];
 
+/// `convert-with-moss` under `[extensions]`: `:convert`, which runs
+/// ConvertWithMoss.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConvertWithMoss {
+    pub enable: bool,
+    /// Its command line.
+    pub path: PathBuf,
+}
+
 /// What the settings file sets for the core.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -42,11 +51,14 @@ pub struct Settings {
     pub speed: i32,
     /// Where exported slices are written.
     pub samples: PathBuf,
+    pub convert_with_moss: ConvertWithMoss,
     /// The onset sensitivity `:slice onsets` uses when given none, 0 to 1.
     pub onset_sensitivity: f32,
     /// What an export does at slice edges, and how long a fade takes.
     pub slice_edges: crate::samples::Edges,
     pub slice_fades: crate::samples::Fades,
+    /// Write an Octatrack `.ot` file with each export.
+    pub slice_ot_file: bool,
     /// After a scan, remove tracks whose files are gone, without asking.
     pub auto_prune: bool,
     /// Store the queue, to offer with the track playing at the next start.
@@ -134,9 +146,14 @@ impl Default for Settings {
             after_queue: AfterQueue::Resume,
             speed: 0,
             samples: PathBuf::new(),
+            convert_with_moss: ConvertWithMoss {
+                enable: false,
+                path: PathBuf::new(),
+            },
             onset_sensitivity: 0.5,
             slice_edges: crate::samples::Edges::Exact,
             slice_fades: crate::samples::Fades::default(),
+            slice_ot_file: false,
             auto_prune: false,
             keep_queue: true,
             draft: Draft::Ask,
@@ -185,6 +202,52 @@ impl Errors<'_> {
             .into_iter()
             .map(|(offset, message)| format!("line {}: {message}", line(offset)))
             .collect())
+    }
+}
+
+impl Settings {
+    /// Applies the `[extensions]` table.
+    fn extensions(&mut self, table: &DeTable, errors: &mut Errors) {
+        for (name, value) in table {
+            let at = value.span().start;
+            match (name.get_ref().as_ref(), value.get_ref()) {
+                ("convert-with-moss", DeValue::Table(keys)) => {
+                    for (key, value) in keys {
+                        self.convert_with_moss_key(key.get_ref(), value, errors);
+                    }
+                }
+                ("convert-with-moss", v) => {
+                    errors.add(at, format!("convert-with-moss is a table, not {}", kind(v)))
+                }
+                (other, _) => errors.add(name.span().start, format!("unknown extension: {other}")),
+            }
+        }
+    }
+
+    fn convert_with_moss_key(&mut self, key: &str, value: &Spanned<DeValue>, errors: &mut Errors) {
+        let at = value.span().start;
+        let moss = &mut self.convert_with_moss;
+        match (key, value.get_ref()) {
+            ("enable", DeValue::Boolean(b)) => moss.enable = *b,
+            ("enable", v) => errors.add(
+                at,
+                format!("convert-with-moss.enable is true or false, not {}", kind(v)),
+            ),
+            // Checked when it is run: it may be installed later.
+            ("path", DeValue::String(s)) if s.is_empty() => {
+                moss.path = crate::convertwithmoss::default_program()
+            }
+            ("path", DeValue::String(s)) => match expand_home(s) {
+                Some(path) => moss.path = path,
+                // A bare name would be looked up on PATH.
+                None => errors.add(
+                    at,
+                    "convert-with-moss.path must be an absolute path or start with ~/",
+                ),
+            },
+            ("path", v) => errors.add(at, format!("convert-with-moss.path cannot be {}", kind(v))),
+            (other, _) => errors.add(at, format!("unknown convert-with-moss setting: {other}")),
+        }
     }
 }
 
@@ -323,6 +386,7 @@ impl Settings {
                     }
                 }
                 ("analyze_on_scan", DeValue::Boolean(b)) => self.analyze_on_scan = *b,
+                ("slice_ot_file", DeValue::Boolean(b)) => self.slice_ot_file = *b,
                 // A control character is a backslash read as an escape: `\n`
                 // in "C:\new". No path means one.
                 ("samples", DeValue::String(s)) if s.chars().any(char::is_control) => errors.add(
@@ -333,6 +397,7 @@ impl Settings {
                     Some(path) => self.samples = path,
                     None => errors.add(at, "samples must be an absolute path or start with ~/"),
                 },
+                ("extensions", DeValue::Table(table)) => self.extensions(table, &mut errors),
                 // Checked when the device opens, since a settings file may be
                 // read on a machine without that device.
                 ("device", DeValue::String(s)) => {
@@ -385,8 +450,9 @@ impl Settings {
                     }
                 }
                 (
-                    "mode" | "samples" | "slice_edges" | "auto_prune" | "analyze_on_scan"
-                    | "device" | "replaygain" | "persist" | "after_queue" | "keep_queue" | "draft",
+                    "mode" | "samples" | "extensions" | "slice_edges" | "auto_prune"
+                    | "analyze_on_scan" | "slice_ot_file" | "device" | "replaygain" | "persist"
+                    | "after_queue" | "keep_queue" | "draft",
                     v,
                 ) => errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v))),
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),

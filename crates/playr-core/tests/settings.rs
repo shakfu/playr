@@ -104,6 +104,82 @@ fn a_syntax_error_is_the_only_error() {
 }
 
 #[test]
+fn an_ot_file_is_written_only_when_asked_for() {
+    assert!(!Settings::default().slice_ot_file);
+    assert!(parse("slice_ot_file = true").unwrap().slice_ot_file);
+    assert_eq!(
+        parse("slice_ot_file = 1").unwrap_err(),
+        ["line 1: slice_ot_file cannot be an integer"]
+    );
+}
+
+#[test]
+fn the_convert_with_moss_extension_is_off_until_enabled() {
+    let installed = playr_core::convertwithmoss::default_program();
+    let moss = Settings::default().convert_with_moss;
+    assert!(
+        !moss.enable,
+        "an extension runs another program: off as shipped"
+    );
+    assert_eq!(moss.path, installed);
+    assert!(installed.is_absolute());
+
+    // Enabling it keeps the installer's path.
+    let moss = parse("[extensions]\nconvert-with-moss.enable = true")
+        .unwrap()
+        .convert_with_moss;
+    assert!(moss.enable);
+    assert_eq!(moss.path, installed);
+
+    let home = std::env::home_dir().unwrap();
+    let moss = parse("[extensions.convert-with-moss]\nenable = true\npath = \"~/bin/convert-wm\"")
+        .unwrap()
+        .convert_with_moss;
+    assert_eq!(
+        (moss.enable, moss.path),
+        (true, home.join("bin/convert-wm"))
+    );
+    let moss = parse("[extensions]\nconvert-with-moss.path = \"\"")
+        .unwrap()
+        .convert_with_moss;
+    assert_eq!((moss.enable, moss.path), (false, installed));
+
+    for (text, error) in [
+        // A bare name would be looked up on PATH, which playr does not do.
+        (
+            "[extensions]\nconvert-with-moss.path = \"convert-wm\"",
+            "line 2: convert-with-moss.path must be an absolute path or start with ~/",
+        ),
+        (
+            "[extensions]\nconvert-with-moss.enable = \"yes\"",
+            "line 2: convert-with-moss.enable is true or false, not a string",
+        ),
+        (
+            "[extensions]\nconvert-with-moss.path = 3",
+            "line 2: convert-with-moss.path cannot be an integer",
+        ),
+        (
+            "[extensions]\nconvert-with-moss.enabled = true",
+            "line 2: unknown convert-with-moss setting: enabled",
+        ),
+        (
+            "[extensions]\nconvert-with-moss = true",
+            "line 2: convert-with-moss is a table, not a boolean",
+        ),
+        (
+            "[extensions]\nffmpeg.enable = true",
+            "line 2: unknown extension: ffmpeg",
+        ),
+        (
+            "extensions = true",
+            "line 1: extensions cannot be a boolean",
+        ),
+    ] {
+        assert_eq!(parse(text).unwrap_err(), [error], "{text}");
+    }
+}
+
+#[test]
 fn the_samples_directory_defaults_to_music_and_expands_home() {
     let home = std::env::home_dir().unwrap();
     assert_eq!(

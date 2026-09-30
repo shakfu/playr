@@ -1439,6 +1439,168 @@ fn audition_hears_the_same_span_each_time_it_is_pressed() {
 }
 
 #[test]
+fn convert_is_refused_at_once_while_off_or_convertwithmoss_is_not_installed() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("ConvertWithMoss");
+    // Off as shipped: an extension runs a program that is not playr's.
+    let mut off = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        Config::default(),
+    );
+    assert!(!off.session().convert_enabled());
+    off.perform(Action::Convert("sf2".into()));
+    assert_eq!(
+        off.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::ConvertOff)))
+    );
+    assert_eq!(
+        off.message_text(),
+        Some(":convert is off; set convert-with-moss.enable = true under [extensions] in settings.toml")
+    );
+    // A prefix does not find the command while it is off.
+    off.run_command("conv sf2");
+    assert_eq!(off.message_text(), Some("unknown command: conv"));
+    off.run_command("convert sf2");
+    assert_eq!(
+        off.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::ConvertOff)))
+    );
+
+    let config = Config::parse(&format!(
+        "[extensions]\nconvert-with-moss.enable = true\nconvert-with-moss.path = '{}'",
+        program.display()
+    ))
+    .unwrap();
+    let mut model = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        config,
+    );
+    assert!(model.session().convert_enabled());
+    assert!(!model.session().can_convert());
+    model.perform(Action::Convert("sf2".into()));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NoConvertWithMoss(
+            program.clone()
+        ))))
+    );
+    let text = model.message_text().unwrap().to_string();
+    assert!(
+        text.starts_with("ConvertWithMoss is not at ")
+            && text.contains("set convert-with-moss.path"),
+        "{text}"
+    );
+    // Looked up each time: installed since, it is found without a restart.
+    std::fs::write(&program, "").unwrap();
+    assert!(model.session().can_convert());
+    model.perform(Action::Convert("sf2".into()));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NothingExported)))
+    );
+}
+
+/// ConvertWithMoss is stood in for by a script that writes one file.
+#[cfg(unix)]
+#[test]
+fn the_slices_last_written_are_converted_into_a_directory_beside_them() {
+    use playr_app::action::Slicing;
+    use playr_app::message::Message;
+    use playr_core::notice::{Notice, Outcome, Refusal};
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("amen.wav");
+    common::levels(&file, 8000, &[(1.0, 0.25), (1.0, -0.25)]);
+    let out = dir.path().join("out");
+    let program = dir.path().join("ConvertWithMoss");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\nfor last; do :; done\necho \"$@\" > \"$last/args\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = Config::parse(&format!(
+        "samples = '{}'\n[extensions]\nconvert-with-moss.enable = true\nconvert-with-moss.path = '{}'",
+        out.display(),
+        program.display()
+    ))
+    .unwrap();
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        config,
+    );
+    // Steps until a message other than `while_` shows.
+    let after = |model: &mut Model, while_: Outcome| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            model.refresh();
+            match model.message() {
+                Some(Message::Core(Notice::Done(o))) if *o == while_ => {}
+                Some(message) => return message.clone(),
+                None => {}
+            }
+            assert!(Instant::now() < deadline, "still {while_:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+
+    model.perform(Action::Convert("sf2".into()));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NothingExported)))
+    );
+
+    // The player takes a moment to report the track as playing.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.snapshot().status.current().is_none() {
+        assert!(Instant::now() < deadline, "nothing playing");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Outside the sampler view a slicing is written at once.
+    model.perform(Action::Slice(Slicing::Equal(2)));
+    let exported = after(&mut model, Outcome::ExportStarted);
+    let export = out.join("amen");
+    assert_eq!(
+        exported,
+        Message::Core(Notice::Done(Outcome::Exported {
+            dir: export.clone(),
+            slices: 2
+        }))
+    );
+
+    model.perform(Action::Convert("sf2".into()));
+    let started = Outcome::ConvertStarted {
+        format: "sf2".into(),
+    };
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(started.clone())))
+    );
+    let converted = after(&mut model, started);
+    let dest = export.join("sf2");
+    assert_eq!(
+        converted,
+        Message::Core(Notice::Done(Outcome::Converted { dir: dest.clone() }))
+    );
+    assert_eq!(
+        std::fs::read_to_string(dest.join("args")).unwrap().trim(),
+        format!(
+            "-s sfz -d sf2 {} {}",
+            export.join("amen.sfz").display(),
+            dest.display()
+        )
+    );
+}
+
+#[test]
 fn slice_edges_chosen_after_planning_replan_what_is_written() {
     use playr_app::action::Slicing;
     use playr_app::sampler::Wave;

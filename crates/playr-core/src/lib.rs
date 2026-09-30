@@ -7,6 +7,7 @@
 pub mod analysis;
 pub mod audio;
 pub mod columns;
+pub mod convertwithmoss;
 pub mod db;
 pub mod event;
 pub mod gain;
@@ -16,5 +17,6 @@ pub mod samples;
 pub mod scan;
 pub mod session;
 pub mod settings;
+pub mod sliced;
 pub mod spectrum;
 pub mod wave;

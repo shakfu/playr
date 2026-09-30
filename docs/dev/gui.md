@@ -258,6 +258,10 @@ Fine movement, snapping, a range and looping it, in both frontends.
 
 - **Zoom goes past the peaks.** Below 64 frames a column, `Model` reads the frames in view and 2 s either side through `Session::read_detail`, and reads again once the view leaves them; columns draw from peaks until then. The terminal stops at a frame a cell. The window goes on to 16 points a frame, where the line display draws each frame's channels' mean, the signal snaps use, around a zero line. Decoding on demand was chosen over finer peak buckets, 4 to 32 times the memory for every track, and over a mono copy of each track, about 21 MB for 4 minutes.
 
+### Sampler controls, after 0.14.0
+
+The sampler's buttons were cut from five rows to two, and a Sampler menu replaced the Slice menu. `docs/dev/ui-refactor.md` has the design; where the sections here name a tick box or a button under the waveform, it says where that control is now.
+
 ### Where step 6 differs from the sketch
 
 - **The layout is shared.** `playr_app::sampler::Layout` holds one frame's geometry: which frames each column shows, the playhead's column, the marks, the region, each column's levels for a display, and the time under a point. It also words the scale, the times shown and the region line, and `peaks_of` and `plan_text` word the waiting and planning states. The terminal's sampler view draws from it too, so both show the same region and numbers; its render tests pass unchanged.

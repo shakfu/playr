@@ -19,6 +19,9 @@ pub struct Command {
     pub args: &'static str,
     pub help: &'static str,
     pub view: Option<View>,
+    /// An extension's command: left out of the help and of completion until
+    /// the extension is enabled in the settings.
+    pub extension: bool,
 }
 
 const fn any(name: &'static str, args: &'static str, help: &'static str) -> Command {
@@ -27,6 +30,18 @@ const fn any(name: &'static str, args: &'static str, help: &'static str) -> Comm
         args,
         help,
         view: None,
+        extension: false,
+    }
+}
+
+/// A command of an extension, which works in every view.
+const fn extension(name: &'static str, args: &'static str, help: &'static str) -> Command {
+    Command {
+        name,
+        args,
+        help,
+        view: None,
+        extension: true,
     }
 }
 
@@ -36,6 +51,7 @@ const fn only(view: View, name: &'static str, args: &'static str, help: &'static
         args,
         help,
         view: Some(view),
+        extension: false,
     }
 }
 
@@ -143,6 +159,11 @@ pub const COMMANDS: &[Command] = &[
         "slice-edges",
         "exact|zero|fade",
         "slice edges: exact, at zeros, or faded",
+    ),
+    extension(
+        "convert",
+        "FORMAT",
+        "last slices to a ConvertWithMoss format",
     ),
     any("mark", "[TIME]", "mark the playing position, or a time"),
     any("mark-undo", "", "undo the last mark"),
@@ -366,8 +387,16 @@ fn usable_named(name: &str, view: Option<View>) -> Option<&'static Command> {
 /// The command `word` names in `view`.
 ///
 /// A command from another view is an error naming that view, whether typed in
-/// full or as a prefix that matches nothing here.
-fn resolve_command(word: &str, view: Option<View>) -> Result<&'static Command, String> {
+/// full or as a prefix that matches nothing here. Without `extensions`, an
+/// extension's command is named only in full: no prefix finds it and no
+/// error lists it, as the help does not.
+fn resolve_command(
+    word: &str,
+    view: Option<View>,
+    extensions: bool,
+) -> Result<&'static Command, String> {
+    let offered =
+        |name: &&str| extensions || !COMMANDS.iter().any(|c| c.extension && c.name == *name);
     // A name may work in more than one view, as `:clear` does.
     let elsewhere = |c: &Command| {
         let there: Vec<&str> = (COMMANDS.iter().filter(|o| o.name == c.name))
@@ -382,10 +411,15 @@ fn resolve_command(word: &str, view: Option<View>) -> Result<&'static Command, S
         return usable_named(word, view).ok_or_else(|| elsewhere(c));
     }
     let find = |name: &str| COMMANDS.iter().find(|c| c.name == name).expect("resolved");
-    match resolve(word, usable_names(view).into_iter(), "command") {
+    match resolve(
+        word,
+        usable_names(view).into_iter().filter(offered),
+        "command",
+    ) {
         Ok(name) => Ok(usable_named(name, view).expect("resolved")),
         Err(e) if e.starts_with("unknown") => {
-            let mut names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
+            let names = COMMANDS.iter().map(|c| c.name).filter(offered);
+            let mut names: Vec<&str> = names.collect();
             names.sort_unstable();
             names.dedup();
             match resolve(word, names.into_iter(), "command") {
@@ -541,6 +575,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         SetRange(Some((a, b))) => format!("range {} {}", time(a), time(b)),
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
+        Convert(format) => format!("convert {format}"),
         Theme(t) => format!("theme {}", t.name()),
         SetColumns(columns) => {
             let names: Vec<&str> = columns.iter().map(|c| c.name()).collect();
@@ -667,7 +702,14 @@ fn unquote(text: &str) -> &str {
 ///
 /// A leading `+` or `-` makes a number relative, for every command that takes one.
 pub fn parse(line: &str, view: View) -> Result<Action, String> {
-    parse_in(line, Some(view))
+    parse_in(line, Some(view), true)
+}
+
+/// As [`parse`], for a line someone typed: without `extensions`, the
+/// extensions enabled in the settings, a prefix does not find an extension's
+/// command and no error names it.
+pub fn parse_typed(line: &str, view: View, extensions: bool) -> Result<Action, String> {
+    parse_in(line, Some(view), extensions)
 }
 
 /// What a key bound to `target` in `view` does: `nop` is nothing, `command`
@@ -678,7 +720,7 @@ pub fn key_target(target: &str, view: Option<View>) -> Result<Option<Action>, St
         "nop" => Ok(None),
         // Opening the prompt only makes sense as a key.
         "command" => Ok(Some(Action::StartCommand)),
-        target => match parse_in(target, view)? {
+        target => match parse_in(target, view, true)? {
             Action::Map { .. } | Action::Unmap { .. } => {
                 Err("a key cannot run :map or :unmap".into())
             }
@@ -689,10 +731,11 @@ pub fn key_target(target: &str, view: Option<View>) -> Result<Option<Action>, St
 
 /// The one view `target` works in, when it does not work in every view.
 pub fn only_view(target: &str) -> Option<View> {
-    if parse_in(target, None).is_ok() {
+    if parse_in(target, None, true).is_ok() {
         return None;
     }
-    let mut views = (VIEWS.iter().map(|v| v.1)).filter(|v| parse_in(target, Some(*v)).is_ok());
+    let mut views =
+        (VIEWS.iter().map(|v| v.1)).filter(|v| parse_in(target, Some(*v), true).is_ok());
     views.next().filter(|_| views.next().is_none())
 }
 
@@ -736,7 +779,7 @@ pub fn scope(view: Option<View>) -> String {
 }
 
 /// `line` parsed in `view`, or with only every-view commands when `None`.
-fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
+fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, String> {
     let line = line.trim();
     let (word, rest) = match line.split_once(char::is_whitespace) {
         Some((word, rest)) => (word, rest.trim()),
@@ -746,9 +789,9 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
         return Err("no command".into());
     }
     if let Some((_, new)) = ALIASES.iter().find(|a| a.0 == word) {
-        return parse_in(&format!("{new} {rest}"), view);
+        return parse_in(&format!("{new} {rest}"), view, extensions);
     }
-    let command = resolve_command(word, view)?;
+    let command = resolve_command(word, view, extensions)?;
     let name = command.name;
     let usage = || format!("usage: :{} {}", name, command.args);
     let nothing = |action: Action| {
@@ -1015,6 +1058,13 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
             }
             _ => Err(usage()),
         },
+        "convert" if playr_core::convertwithmoss::is_format_name(rest) => {
+            Ok(Action::Convert(rest.to_string()))
+        }
+        "convert" => Err(format!(
+            "convert takes a ConvertWithMoss format: {}",
+            playr_core::convertwithmoss::FORMATS.join(", ")
+        )),
         "write" => nothing(Action::WriteSlices),
         "discard" => nothing(Action::DiscardSlices),
         "slice" => match first_word(rest) {
@@ -1077,18 +1127,24 @@ fn parse_in(line: &str, view: Option<View>) -> Result<Action, String> {
 ///
 /// The first word completes to the names of commands that work in `view`.
 /// After `edge`, `fit`, `loop`, `mode`, `snap`, `theme` or `view` the argument completes to its choices, and after
-/// `playlist` or `rename` to the names in `playlists`.
-pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> {
+/// `playlist` or `rename` to the names in `playlists`. An extension's command
+/// is completed only with `extensions`: when it is enabled in the settings.
+pub fn completions(text: &str, view: View, playlists: &[String], extensions: bool) -> Vec<String> {
+    let offered =
+        |name: &str| extensions || !COMMANDS.iter().any(|c| c.extension && c.name == name);
     let Some((word, rest)) = text.split_once(' ') else {
         return usable_names(Some(view))
             .into_iter()
-            .filter(|n| n.starts_with(text))
+            .filter(|n| n.starts_with(text) && offered(n))
             .map(String::from)
             .collect();
     };
-    let Ok(command) = resolve_command(word, Some(view)) else {
+    let Ok(command) = resolve_command(word, Some(view), extensions) else {
         return Vec::new();
     };
+    if !offered(command.name) {
+        return Vec::new();
+    }
     let rest = rest.trim_start();
     let choices: Vec<String> = match command.name {
         "mode" => MODES.iter().map(|m| m.0.to_string()).collect(),
@@ -1096,6 +1152,9 @@ pub fn completions(text: &str, view: View, playlists: &[String]) -> Vec<String> 
         "columns" | "sort" => Column::NAMES.iter().map(|c| c.0.to_string()).collect(),
         "replaygain" => REPLAYGAINS.iter().map(|r| r.0.to_string()).collect(),
         "slice-edges" => EDGES.iter().map(|e| e.0.to_string()).collect(),
+        "convert" => playr_core::convertwithmoss::FORMATS
+            .map(String::from)
+            .to_vec(),
         "loop" if command.view.is_none() => vec!["off".into()],
         "snap" | "fit" | "loop" => vec!["on".into(), "off".into()],
         "edge" => vec!["start".into(), "end".into()],
@@ -1189,7 +1248,7 @@ impl CommandLine {
     }
 
     /// Shows the next completion, or the previous one when `forward` is false.
-    pub fn complete(&mut self, forward: bool, view: View, playlists: &[String]) {
+    pub fn complete(&mut self, forward: bool, view: View, playlists: &[String], extensions: bool) {
         self.recall = None;
         let (choices, at) = match self.tab.take() {
             Some((choices, at)) => {
@@ -1202,7 +1261,7 @@ impl CommandLine {
                 (choices, at)
             }
             None => {
-                let choices = completions(&self.text, view, playlists);
+                let choices = completions(&self.text, view, playlists, extensions);
                 if choices.is_empty() {
                     return;
                 }
@@ -1287,11 +1346,12 @@ pub fn key_rows(keys: &Keymap, view: View) -> Vec<(String, String)> {
 }
 
 /// Every command and what it does, grouped by the view it works in, those
-/// for every view first. A heading row has no description.
-pub fn command_rows() -> Vec<(String, String)> {
+/// for every view first. A heading row has no description. An extension's
+/// command is listed only with `extensions`.
+pub fn command_rows(extensions: bool) -> Vec<(String, String)> {
     let mut rows = Vec::new();
     let mut group = None;
-    for c in COMMANDS {
+    for c in COMMANDS.iter().filter(|c| extensions || !c.extension) {
         if rows.is_empty() || c.view != group {
             group = c.view;
             let heading = c.view.map_or("in every view", view_name);

@@ -67,7 +67,15 @@ Each export makes a new directory under `samples` in `settings.toml`, `~/Music/p
   001-amen_S01.wav
   002-amen_S02.wav
   samples.json
+  amen.sfz
+  sliced/
+    amen.wav
+    amen.ot
 ```
+
+`amen.sfz` maps each slice to a key, from C1 (36), for samplers that read SFZ and for `:convert`, which the README's Samples section describes. It is named after the directory, so a second export's kit is `amen-2.sfz`. A looped range is written with `loop_mode=loop_continuous`.
+
+`sliced/amen.wav` is the span from the first slice's start to the last one's end as one file, with a `cue ` chunk holding a point at each slice's start, in frames from the file's start. With `slice_ot_file = true`, `sliced/amen.ot` gives an Octatrack the same slices, each with its start and end, when there are 64 or fewer. Both take the directory's name. They sit in their own directory so that the export's own holds only what rtrack loads.
 
 `samples.json` records where each slice came from, in source frames, end exclusive:
 

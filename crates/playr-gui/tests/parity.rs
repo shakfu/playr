@@ -106,6 +106,7 @@ fn every_action() -> Vec<Action> {
         Action::MoveEdge(playr_app::action::Nudge::Columns(1)),
         Action::WriteSlices,
         Action::DiscardSlices,
+        Action::Convert("sf2".into()),
         Action::Theme(Theme::System),
         Action::SetColumns(vec![playr_core::columns::Column::Title]),
         Action::SetSort(Vec::new()),
@@ -210,6 +211,7 @@ fn every_action() -> Vec<Action> {
             | Action::MoveEdge(_)
             | Action::WriteSlices
             | Action::DiscardSlices
+            | Action::Convert(_)
             | Action::Theme(_)
             | Action::SetColumns(_)
             | Action::SetSort(_)

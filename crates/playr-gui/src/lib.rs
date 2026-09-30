@@ -319,7 +319,11 @@ impl Gui {
                 ui.separator();
                 items(ui, controls::MARKS, &mut chosen);
             });
-            ui.menu_button("Slice", |ui| items(ui, controls::SLICE_MENU, &mut chosen));
+            ui.menu_button("Sampler", |ui| {
+                if let Some(action) = sampler::menu(&self.model, ui) {
+                    chosen = Some(action);
+                }
+            });
             ui.menu_button("Help", |ui| items(ui, controls::HELP_MENU, &mut chosen));
         });
         if let Some(action) = chosen {
@@ -401,6 +405,7 @@ impl Gui {
         };
         let id = egui::Id::new(COMMAND);
         let view = self.model.view();
+        let extensions = self.model.session().convert_enabled();
         let names: Vec<String> = self
             .model
             .session()
@@ -423,8 +428,8 @@ impl Gui {
             [false; 4]
         };
         match keys {
-            [true, ..] => line.complete(true, view, &names),
-            [_, true, ..] => line.complete(false, view, &names),
+            [true, ..] => line.complete(true, view, &names, extensions),
+            [_, true, ..] => line.complete(false, view, &names, extensions),
             [_, _, true, _] => line.recall(true, self.model.history()),
             [.., true] => line.recall(false, self.model.history()),
             _ => {}
@@ -434,7 +439,7 @@ impl Gui {
             cursor_to_end(ui.ctx(), id, self.command.chars().count());
         }
 
-        let matches = command::completions(&self.command, view, &names);
+        let matches = command::completions(&self.command, view, &names, extensions);
         if !self.command.is_empty() && matches.len() > 1 {
             ui.weak(
                 matches
@@ -544,7 +549,10 @@ impl Gui {
                 let title = format!("Keys in the {} view", view_name(self.model.view()));
                 self.list(ctx, &title, &rows);
             }
-            Input::CommandHelp => self.list(ctx, "Commands", &command::command_rows()),
+            Input::CommandHelp => {
+                let extensions = self.model.session().convert_enabled();
+                self.list(ctx, "Commands", &command::command_rows(extensions))
+            }
             Input::Roots(roots) => self.roots_dialog(ctx, &roots),
             Input::Info(info) => self.info_dialog(ctx, &info),
             _ => {}

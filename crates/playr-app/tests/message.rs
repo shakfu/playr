@@ -143,6 +143,18 @@ fn outcomes_are_worded() {
             },
             "exported 8 slices to /tmp/cuts",
         ),
+        (
+            Outcome::ConvertStarted {
+                format: "sf2".into(),
+            },
+            "converting to sf2",
+        ),
+        (
+            Outcome::Converted {
+                dir: home.join("Music/playr/samples/amen/sf2"),
+            },
+            "converted to ~/Music/playr/samples/amen/sf2",
+        ),
     ] {
         assert_eq!(text(&outcome.into()), words);
     }

@@ -184,6 +184,8 @@ pub enum Action {
     /// Write the slices planned in the sampler view.
     WriteSlices,
     DiscardSlices,
+    /// Converts the slices last written to this ConvertWithMoss format.
+    Convert(String),
     /// Draw in these colours.
     Theme(crate::Theme),
     /// Show these columns, in this order, until playr exits.

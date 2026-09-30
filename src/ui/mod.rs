@@ -127,6 +127,9 @@ pub struct Screen<'a> {
     /// Whether to draw in colour. Without it the cursor row is reversed.
     pub colour: bool,
     pub theme: Theme,
+    /// Whether the command help lists the commands of extensions: those
+    /// enabled in the settings.
+    pub extensions: bool,
 }
 
 impl<'a> Screen<'a> {
@@ -162,6 +165,7 @@ impl<'a> Screen<'a> {
             lists: Lists::default(),
             colour: true,
             theme: Theme::Dark,
+            extensions: false,
         }
     }
 
@@ -248,6 +252,7 @@ impl App {
             help_scroll: self.help_scroll,
             colour: self.colour,
             theme: m.theme(),
+            extensions: m.session().convert_enabled(),
             message: m.message_text(),
             bpm: m.bpm(),
             columns: m.columns(),
@@ -414,7 +419,13 @@ impl App {
                     .iter()
                     .map(|p| p.name.clone())
                     .collect();
-                line.complete(key.code == KeyCode::Tab, self.model.view(), &names);
+                let extensions = self.model.session().convert_enabled();
+                line.complete(
+                    key.code == KeyCode::Tab,
+                    self.model.view(),
+                    &names,
+                    extensions,
+                );
             }
             KeyCode::Up => line.recall(true, self.model.history()),
             KeyCode::Down => line.recall(false, self.model.history()),

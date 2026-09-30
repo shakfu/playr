@@ -63,6 +63,11 @@ pub enum Event {
         job: JobId,
         result: Result<Exported, String>,
     },
+    /// The last export was converted, into the directory given.
+    Converted {
+        job: JobId,
+        result: Result<PathBuf, String>,
+    },
     /// A scan has seen `seen` files so far, `added` of them new or changed.
     /// Sent every [`SCAN_PROGRESS_EVERY`] files.
     ScanProgress {

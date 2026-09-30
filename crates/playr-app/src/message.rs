@@ -138,6 +138,7 @@ pub fn text(message: &Message) -> String {
                 Task::ClearMarks => "could not clear marks",
                 Task::Slice => "slicing failed",
                 Task::Export => "export failed",
+                Task::Convert => "conversion failed",
                 Task::Scan => "scan failed",
                 Task::Analyze => "analysis failed",
                 Task::Prune => "prune failed",
@@ -307,6 +308,8 @@ fn outcome_text(outcome: &Outcome) -> String {
         Outcome::Exported { dir, slices: n } => {
             format!("exported {} to {}", slices(*n), home_as_tilde(dir))
         }
+        Outcome::ConvertStarted { format } => format!("converting to {format}"),
+        Outcome::Converted { dir } => format!("converted to {}", home_as_tilde(dir)),
         Outcome::ScanStarted { dir: Some(dir) } => format!("scanning {}", home_as_tilde(dir)),
         Outcome::ScanStarted { dir: None } => "rescanning library".into(),
         Outcome::Scanning { seen, added } => format!("scanning: {seen} files, {added} added"),
@@ -381,6 +384,12 @@ fn outcome_text(outcome: &Outcome) -> String {
 fn refusal_text(refusal: &Refusal) -> String {
     match refusal {
         Refusal::NothingPlaying => "nothing is playing".into(),
+        Refusal::NothingExported => "no slices written yet to convert; :slice first".into(),
+        Refusal::ConvertOff => {
+            ":convert is off; set convert-with-moss.enable = true under [extensions] in settings.toml"
+                .into()
+        }
+        Refusal::NoConvertWithMoss(program) => playr_core::convertwithmoss::not_installed(program),
         Refusal::SelectionEmpty => "selection is empty".into(),
         Refusal::NoSearch => "no search results to save; search first".into(),
         Refusal::Sql(error) => format!("sql: {error}"),

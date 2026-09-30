@@ -149,6 +149,14 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 
 In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; `[` or `]` picks an end, shown reversed, for `{` and `}` to move while it loops. `esc` clears the range once no slices are planned.
 
+## Extensions
+
+An extension runs a program that is not part of playr. Each is off, and its command left out of `:help` and of Tab completion, until enabled under `[extensions]` in [`settings.toml`](../README.md#configuration).
+
+| command           | enable with                        | does                                    |
+|-------------------|------------------------------------|-----------------------------------------|
+| `:convert FORMAT` | `convert-with-moss.enable = true`  | last slices to a ConvertWithMoss format |
+
 ## Typing commands
 
 - A command, mode or view can be shortened to a prefix that names only one of those usable in the current view: `:vol 60`, `:mode shuf`.

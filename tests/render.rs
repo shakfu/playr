@@ -47,6 +47,8 @@ struct Case<'a> {
     colour: bool,
     theme: Theme,
     bpm: Option<f32>,
+    /// Whether an extension is enabled, which lists its commands in the help.
+    extensions: bool,
 }
 
 impl<'a> Case<'a> {
@@ -72,6 +74,7 @@ impl<'a> Case<'a> {
             colour: true,
             theme: Theme::Dark,
             bpm: None,
+            extensions: false,
         }
     }
 
@@ -133,6 +136,11 @@ impl<'a> Case<'a> {
 
     fn keys(mut self, keys: &'a Keymap) -> Self {
         self.keys = Some(keys);
+        self
+    }
+
+    fn extensions(mut self, on: bool) -> Self {
+        self.extensions = on;
         self
     }
 
@@ -204,6 +212,7 @@ impl<'a> Case<'a> {
             message: self.message,
             colour: self.colour,
             theme: self.theme,
+            extensions: self.extensions,
             lists: Lists {
                 library: at(self.all.is_empty(), cursor),
                 selection: at(self.selection.is_empty(), cursor),
@@ -798,12 +807,23 @@ fn help_command_lists_every_command_with_its_arguments_by_view() {
         .text();
     for c in playr_app::command::COMMANDS {
         let usage = format!(":{} {}", c.name, c.args);
-        assert!(
+        // An extension's command is listed only once it is enabled.
+        assert_eq!(
             joined.contains(usage.trim_end()) && joined.contains(c.help),
-            ":{} missing from command help:\n{joined}",
+            !c.extension,
+            ":{} in command help:\n{joined}",
             c.name
         );
     }
+    let enabled = Case::new(View::Library, &stopped())
+        .input(&input)
+        .extensions(true)
+        .size(80, 100)
+        .text();
+    assert!(
+        enabled.contains(":convert FORMAT"),
+        ":convert missing once enabled:\n{enabled}"
+    );
     // Row numbers, by a row's text inside the border.
     let row = |text: &str| {
         joined
@@ -1512,6 +1532,7 @@ fn planned_slices_are_drawn_before_they_are_written() {
             edges: Default::default(),
             fades: Default::default(),
             loops: false,
+            ot_file: false,
         },
         spans: vec![(1600, Some(2880)), (2880, Some(4000))],
     });

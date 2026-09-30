@@ -4,7 +4,10 @@
 //! carries no volume, varispeed or resampling. Positions are source frames,
 //! as marks are. Each export writes one directory in the layout rtrack's
 //! sample loader reads: `000-name_S00.wav`, `001-name_S01.wav`, and a
-//! `samples.json` recording where each slice came from.
+//! `samples.json` recording where each slice came from. An `.sfz` file beside
+//! them maps each slice to a key, for other samplers and [`crate::convertwithmoss`].
+//! A `sliced` directory inside holds the same audio as one file with the
+//! slice points in it, for samplers that slice a file; see [`crate::sliced`].
 //!
 //! Files are 24-bit integer WAV at the source's rate and channel count. The
 //! decoder divides 16- and 24-bit samples by 2^15 and 2^23 on the way to f32,
@@ -103,6 +106,8 @@ pub struct Job {
     /// The range is being looped and cut as one slice: `samples.json` marks
     /// that slice to loop whole, and its edges are left as they are.
     pub loops: bool,
+    /// Write an Octatrack `.ot` file beside the sliced file.
+    pub ot_file: bool,
 }
 
 /// What an export wrote.
@@ -117,6 +122,17 @@ const EMPTY: &str = "nothing to export: the region is empty";
 
 /// Most slices in one export: rtrack's sample bank has 256 slots.
 pub const MAX_SLICES: usize = 256;
+
+/// The key the `.sfz` file puts the first slice on, C1, where drum kits
+/// conventionally start. Each later slice takes the next key, up to 127.
+pub const FIRST_KEY: usize = 36;
+
+/// The `.sfz` file of the export in `dir`, named after the directory so two
+/// exports of one track convert to two names.
+pub fn kit_path(dir: &Path) -> PathBuf {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    dir.join(format!("{name}.sfz"))
+}
 
 /// Most frames read into memory to find onsets: about 23 minutes at 48 kHz.
 pub const MAX_ONSET_FRAMES: usize = 1 << 26;
@@ -479,26 +495,72 @@ pub fn write(job: &Job, spans: &[Span]) -> Result<Exported, String> {
         (frames(job.fades.fade_in), frames(job.fades.fade_out))
     });
     let dir = unused_dir(&job.samples, &stem)?;
-    let written = reader.write(&spans, &dir, &stem, fades);
-    let slices = match written {
-        Ok(slices) if slices.is_empty() => Err(EMPTY.into()),
-        other => other,
-    };
-    let slices = match slices {
-        Ok(slices) => slices,
+    let written =
+        reader
+            .write(&spans, &dir, &stem, fades)
+            .and_then(|slices| match slices.is_empty() {
+                true => Err(EMPTY.into()),
+                false => Ok(slices),
+            });
+    let finished = written.and_then(|slices| {
+        let looped = job.loops && slices.len() == 1;
+        fs::write(
+            dir.join("samples.json"),
+            metadata(&job.path, job.rate, &slices, looped),
+        )
+        .map_err(|e| format!("cannot write samples.json: {e}"))?;
+        fs::write(kit_path(&dir), sfz(&stem, &slices, looped))
+            .map_err(|e| format!("cannot write the .sfz file: {e}"))?;
+        write_sliced(job, &dir, &slices)?;
+        Ok(slices)
+    });
+    match finished {
+        Ok(slices) => Ok(Exported { dir, slices }),
         Err(e) => {
             // A partial export would load into rtrack as if it were whole.
             let _ = fs::remove_dir_all(&dir);
-            return Err(e);
+            Err(e)
         }
+    }
+}
+
+/// The directory inside the export in `dir` that holds its audio as one file.
+pub fn sliced_dir(dir: &Path) -> PathBuf {
+    dir.join("sliced")
+}
+
+/// Writes `slices` of `job`'s track once more as one WAV file, from the first
+/// slice's start to the last one's end, with a cue point at each slice's
+/// start, and, with `job.ot_file`, an `.ot` file beside it when the
+/// Octatrack can hold that many slices. Both are named after the export's directory, as its kit is. The
+/// audio is as in the source, whatever `job.edges` did to the slice files.
+fn write_sliced(job: &Job, dir: &Path, slices: &[(u64, u64)]) -> Result<(), String> {
+    let (Some(&(first, _)), Some(&(_, end))) = (slices.first(), slices.last()) else {
+        return Ok(());
     };
-    let looped = job.loops && slices.len() == 1;
-    fs::write(
-        dir.join("samples.json"),
-        metadata(&job.path, job.rate, &slices, looped),
-    )
-    .map_err(|e| format!("cannot write samples.json: {e}"))?;
-    Ok(Exported { dir, slices })
+    let out = sliced_dir(dir);
+    let fail = |e: std::io::Error| format!("cannot write {}: {e}", out.display());
+    fs::create_dir(&out).map_err(fail)?;
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    let wav = out.join(format!("{name}.wav"));
+    Reader::open(&job.path, job.rate, first)?.write(&[(first, Some(end))], &out, &name, None)?;
+    fs::rename(out.join(file_name(&name, 0)), &wav).map_err(fail)?;
+
+    // Frames from the file's start. A WAV file cannot hold more than u32 counts.
+    let within = |frame: u64| {
+        u32::try_from(frame - first).map_err(|_| "too long for one WAV file".to_string())
+    };
+    let points: Vec<(u32, u32)> = slices
+        .iter()
+        .map(|&(a, b)| Ok((within(a)?, within(b)?)))
+        .collect::<Result<_, String>>()?;
+    let starts: Vec<u32> = points.iter().map(|p| p.0).collect();
+    crate::sliced::append_cue(&wav, &starts).map_err(fail)?;
+    if job.ot_file && points.len() <= crate::sliced::OT_SLICES {
+        let ot = crate::sliced::ot_file(job.rate, within(end)?, &points);
+        fs::write(out.join(format!("{name}.ot")), ot).map_err(fail)?;
+    }
+    Ok(())
 }
 
 /// A decoder positioned at a source frame, handing out frames in order.
@@ -635,7 +697,7 @@ impl Reader {
                 let take = end.map_or(frames, |end| frames.min(end - at));
                 if open.is_none() {
                     let slot = written.len();
-                    let file = dir.join(format!("{slot:03}-{stem}_S{slot:02}.wav"));
+                    let file = dir.join(file_name(stem, slot));
                     let spec = hound::WavSpec {
                         channels: channels as u16,
                         sample_rate: rate,
@@ -692,6 +754,31 @@ pub(crate) fn fade_gain(i: u64, len: u64, (fade_in, fade_out): (u64, u64)) -> f3
         }
     };
     ramp(i, fade_in).min(ramp(len.saturating_sub(1 + i), fade_out))
+}
+
+/// The file slice `slot` of the track named `stem` is written to.
+fn file_name(stem: &str, slot: usize) -> String {
+    format!("{slot:03}-{stem}_S{slot:02}.wav")
+}
+
+/// The `.sfz` file: a region a slice, each on its own key from [`FIRST_KEY`],
+/// at its own pitch there. Slices past key 127 get no region. With `looped`,
+/// each slice loops whole; SFZ's `loop_end` is the last frame played.
+fn sfz(stem: &str, slices: &[(u64, u64)], looped: bool) -> String {
+    let regions = slices.iter().enumerate().take(128 - FIRST_KEY);
+    regions
+        .map(|(slot, (start, end))| {
+            let lp = match looped {
+                true => format!(
+                    " loop_mode=loop_continuous loop_start=0 loop_end={}",
+                    (end - start).saturating_sub(1)
+                ),
+                false => String::new(),
+            };
+            let key = FIRST_KEY + slot;
+            format!("<region> sample={} key={key}{lp}\n", file_name(stem, slot))
+        })
+        .collect()
 }
 
 /// The track's file name without its extension, safe as part of a file name.

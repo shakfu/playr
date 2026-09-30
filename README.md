@@ -453,6 +453,16 @@ Each export writes a new directory, named after the track, under `samples` in [`
 
 - `samples.json`, with the source file and each slice's start and end frame. A range cut whole while it loops (`l`) is marked to loop over the whole slice, so rtrack loads it looping.
 
+- `amen.sfz`, an [SFZ](https://sfzformat.com/) file that puts each slice on its own key, the first on C1 (36) and up to key 127, which is 92 slices. Samplers that read SFZ load the slices as a kit.
+
+- `sliced/amen.wav`, the same audio as one file, from the first slice's start to the last one's end, with a cue point at each slice's start in a `cue ` chunk. Samplers that slice a file at its cue points are reported to include the Dirtywave M8 and the 1010music blackbox. It is cut exactly, whatever `slice_edges` did to the slice files.
+
+- `sliced/amen.ot`, with `slice_ot_file = true` in `settings.toml`: the slices for an Elektron Octatrack, which reads it beside the WAV of the same name. It is written for up to 64 slices, the most the file holds.
+
+The `sliced` files follow published layouts and match what other tools write; none has been loaded on a device. [docs/dev/hardware_samplers.md](docs/dev/hardware_samplers.md) has the layouts and what is unchecked.
+
+`:convert FORMAT`, or Sampler, Slice, Convert to in the window, turns the slices last written into another sampler's format with [ConvertWithMoss](https://github.com/git-moss/ConvertWithMoss), which must be installed. It is an extension: it runs a program that is not part of playr, so it is off, and left out of `:help`, Tab completion and the window's menu, until `convert-with-moss.enable = true` is set under `[extensions]` in `settings.toml`. The result goes into a directory named after the format inside the export's: `amen/sf2`. Tab completes `1010music`, `ableton`, `bento`, `distingex`, `mc707`, `renoise` and `sf2`; any other name ConvertWithMoss takes for `-d` works too. It resamples where a device needs it. A format already converted is refused, since the slices have not changed. playr runs ConvertWithMoss from where its installer puts it, or from `convert-with-moss.path`; it does not search `PATH`. Until it is there, `:convert` says where it looked and the window's Convert to is disabled.
+
 Slices are read from the source file, so volume and speed do not apply. They are 24-bit WAV at the source's sample rate and channel count; 16- and 24-bit sources are copied bit for bit. Without `S`, `:slice onsets` uses `onset_sensitivity` from `settings.toml`, 0.5 by default. Onset detection is rtrack's: a hit within 50 ms of the region's start stays in the first slice, and each slice starts up to 10 ms before its hit. It reads the region into memory, up to about 23 minutes at 48 kHz, and keeps it: finding onsets again in the same region at another sensitivity reads nothing, which is what lets the window's Sensitivity slider replan the slices as it moves, a few milliseconds a step (60 s of audio, one machine). Export runs in the background, and the bottom line reports when it is done.
 
 An edge that falls where the signal is far from zero clicks when the slice plays. `slice_edges` in `settings.toml`, `:slice-edges`, or the sampler window's Edges menu chooses what an export does about it:
@@ -525,7 +535,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Range.** `<` and `>` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge, within 8 points of it, moves that edge and picks it for `{` and `}`; the pointer turns to a left-right arrow over an edge that can be dragged.
 
-- **Fit.** `f`, or the window's Fit range tick box, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `{` and `}` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
+- **Fit.** `f`, or the window's Fit button, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `{` and `}` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
 
 - **Loop.** `l` plays the range over and over, or with no range sets it to the region and loops that, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `<` or `>`, with `{` or `}` after `[` or `]` picks it, with `:range` or a drag, moves the loop at once; clearing the range, a new track, `l` again or `:loop off` in any view ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
 
@@ -583,6 +593,7 @@ samples = "~/Music/playr/samples"  # where :slice writes; on Windows, 'C:\Music'
 slice_edges = "zero"               # exact, zero or fade; see Samples
 slice_fade_in = 1                  # ms, for slice_edges = "fade", 0 to 100
 slice_fade_out = 5
+slice_ot_file = true               # an Octatrack .ot file with each export; see Samples
 auto_prune = true                  # after a scan, prune missing tracks without asking
 analyze_on_scan = true             # after a scan, analyse what it added or changed
 columns = ["artist", "album", "title", "time"]   # what a track list shows
@@ -593,6 +604,10 @@ theme = "light"                    # system, light or dark
 keep_queue = false                 # forget the queue on exit
 draft = "append"                   # continue the draft; or ask, overwrite, off
 persist = ["eq", "volume"]         # session values to remember; see below
+
+[extensions]                       # programs that are not playr's; each off until enabled
+convert-with-moss.enable = true    # :convert; see Samples
+convert-with-moss.path = "~/apps/ConvertWithMoss"  # if not where its installer puts it
 
 [terminal]                         # or [gui] or [server]: that program only
 columns = ["artist", "title", "tempo"]

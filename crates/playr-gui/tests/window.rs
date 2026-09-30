@@ -143,6 +143,8 @@ fn the_search_field_filters_as_typed_and_esc_clears_it() {
 fn buttons_do_what_their_keys_do_and_the_message_shows() {
     let (mut harness, _dir) = window();
     harness.run_steps(2);
+    harness.get_by_label("Playback").click();
+    harness.run_steps(2);
     harness.get_by_label("Mark").click();
     harness.run_steps(2);
     assert_eq!(
@@ -407,6 +409,39 @@ fn wait(harness: &mut Harness<'_, Gui>, done: impl Fn(&Model) -> bool) {
     }
 }
 
+/// Chooses `method` in the slice row's drop-down, which plans with it.
+fn plan(harness: &mut Harness<'_, Gui>, method: &str) {
+    harness.get_by_label("Slice method").click();
+    harness.run_steps(2);
+    harness.get_by_label(method).click();
+    harness.run_steps(2);
+}
+
+/// What the slice row's drop-down shows.
+fn slice_method(harness: &Harness<'_, Gui>) -> String {
+    let node = harness.get_by_label("Slice method");
+    node.accesskit_node().value().unwrap_or_default()
+}
+
+/// The highest widget whose name contains `word`: a menu, which opens above
+/// the tab and the rows that share its word.
+fn topmost<'h>(harness: &'h Harness<'_, Gui>, word: &'h str) -> egui_kittest::Node<'h> {
+    harness
+        .query_all(egui_kittest::kittest::by().label_contains(word))
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap()
+}
+
+/// Clicks `item` under `submenu` of the Sampler menu.
+fn sampler_menu(harness: &mut Harness<'_, Gui>, submenu: &str, item: &str) {
+    topmost(harness, "Sampler").click();
+    harness.run_steps(2);
+    topmost(harness, submenu).hover();
+    harness.run_steps(2);
+    harness.get_by_label(item).click();
+    harness.run_steps(2);
+}
+
 #[test]
 fn the_waveform_seeks_marks_and_zooms_under_the_mouse() {
     let samples = tempfile::tempdir().unwrap();
@@ -515,7 +550,7 @@ fn the_wheel_zooms_past_the_peaks_and_the_frames_are_read() {
 fn a_drag_sets_the_range_and_the_bar_slices_it() {
     let samples = tempfile::tempdir().unwrap();
     let (mut harness, _dir) = sampling(samples.path());
-    harness.get_by_label("Snap to zero").click();
+    harness.get_by_label("Snap").click();
     harness.run_steps(2);
     assert!(model(&harness).sampler().snap);
 
@@ -548,8 +583,7 @@ fn a_drag_sets_the_range_and_the_bar_slices_it() {
         frame(0.5)
     );
 
-    harness.get_by_label("Equal slices").click();
-    harness.run_steps(2);
+    plan(&mut harness, "Equal");
     wait(&mut harness, |m| m.sampler().pending.is_some());
     let spans = model(&harness)
         .sampler()
@@ -565,7 +599,7 @@ fn a_drag_sets_the_range_and_the_bar_slices_it() {
     harness.run_steps(2);
 
     // Loop it, then drag its end back to three eighths along: the loop follows.
-    harness.get_by_label("Loop range").click();
+    harness.get_by_label("Loop").click();
     harness.run_steps(2);
     wait(&mut harness, |m| {
         m.snapshot().status.looping == Some((a, b))
@@ -616,10 +650,8 @@ fn a_drag_sets_the_range_and_the_bar_slices_it() {
     });
 
     // Move end, then Earlier: the end moves back a column.
-    harness.get_by_label("Move end").click();
-    harness.run_steps(2);
-    harness.get_by_label("Earlier").click();
-    harness.run_steps(2);
+    sampler_menu(&mut harness, "Range", "Move end");
+    sampler_menu(&mut harness, "Range", "Earlier");
     let moved = model(&harness).sampler().range(current.as_ref());
     assert_eq!(moved, Some((a, end - per_column as u64)));
 
@@ -630,8 +662,7 @@ fn a_drag_sets_the_range_and_the_bar_slices_it() {
     wait(&mut harness, |m| m.snapshot().status.looping.is_none());
 
     // The sensitivity starts from the settings, 0.5 by default.
-    harness.get_by_label("Slice at onsets").click();
-    harness.run_steps(2);
+    plan(&mut harness, "At onsets");
     wait(&mut harness, |m| m.sampler().pending.is_some());
     let cut = model(&harness).sampler().pending.as_ref().unwrap().job.cut;
     assert_eq!(cut, playr_core::samples::Cut::Onsets(0.5));
@@ -641,14 +672,9 @@ fn a_drag_sets_the_range_and_the_bar_slices_it() {
 fn slices_planned_in_the_sampler_are_written_with_a_button() {
     let samples = tempfile::tempdir().unwrap();
     let (mut harness, _dir) = sampling(samples.path());
-    // With nothing planned the button is disabled, so a click does nothing.
-    harness.get_by_label("Write slices").click();
-    harness.run_steps(2);
-    assert_ne!(model(&harness).message(), Some(&Message::NoSlicesPlanned));
-    harness.get_by_label("Slice").click();
-    harness.run_steps(2);
-    harness.get_by_label("Slice the region").click();
-    harness.run_steps(2);
+    // With nothing planned there is nothing to write.
+    assert!(harness.query_by_label("Write slices").is_none());
+    sampler_menu(&mut harness, "Slice", "Slice the region");
     wait(&mut harness, |m| m.sampler().pending.is_some());
     harness.run_steps(2);
     let planned = model(&harness)
@@ -688,6 +714,8 @@ fn the_spectrogram_button_paints_one_texture_the_size_of_the_waveform() {
             .collect()
     };
     assert!(spectrograms(&harness).is_empty());
+    harness.get_by_label("Display").click();
+    harness.run_steps(2);
     harness.get_by_label("Spectrogram").click();
     harness.run_steps(3);
     assert_eq!(
@@ -733,7 +761,7 @@ fn with_fit_on_dragging_one_end_then_the_other_moves_only_that_end() {
     };
 
     drag(&mut harness, along(0.25), along(0.5));
-    harness.get_by_label("Fit range").click();
+    harness.get_by_label("Fit").click();
     harness.run_steps(3);
     let (a, b) = range(&harness);
 
@@ -753,6 +781,231 @@ fn with_fit_on_dragging_one_end_then_the_other_moves_only_that_end() {
         b2 == b1 && a1 < a2 && a2 < b1,
         "{a1}..{b1} became {a2}..{b2}"
     );
+}
+
+/// Drags across the waveform from `from` to `to`, each a fraction of its width.
+fn drag_range(harness: &mut Harness<'_, Gui>, from: f32, to: f32) {
+    let rect = harness.get_by_label("Track waveform").rect();
+    let along = |x: f32| egui::pos2(rect.left() + rect.width() * x, rect.center().y);
+    harness.hover_at(along(from));
+    harness.run_steps(1);
+    harness.drag_at(along(from));
+    harness.run_steps(1);
+    for k in 1..=4 {
+        harness.hover_at(along(from + (to - from) * k as f32 / 4.0));
+        harness.run_steps(1);
+    }
+    harness.drop_at(along(to));
+    harness.run_steps(2);
+}
+
+#[test]
+fn a_saved_loop_shows_under_the_stretch_it_spans_and_a_click_loops_it() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    assert!(harness.query_by_label("Loop 1").is_none(), "no loop yet");
+    let before = harness.get_by_label("Track waveform").rect();
+
+    drag_range(&mut harness, 0.25, 0.5);
+    let current = model(&harness).snapshot().status.current().cloned();
+    let range = model(&harness).sampler().range(current.as_ref());
+    assert!(range.is_some(), "no range");
+    harness.get_by_label("Save loop").click();
+    harness.run_steps(3);
+    assert_eq!(model(&harness).snapshot().loops[0], range);
+
+    // The band sits under the range, and the waveform gave it the height.
+    let wave = harness.get_by_label("Track waveform").rect();
+    let band = harness.get_by_label("Loop 1").rect();
+    let along = |x: f32| wave.left() + wave.width() * x;
+    assert!(
+        (band.left() - along(0.25)).abs() <= 2.0 && (band.right() - along(0.5)).abs() <= 2.0,
+        "{band:?} under {wave:?}"
+    );
+    assert!(band.top() >= wave.bottom() && wave.height() < before.height());
+
+    // Escape clears the range; the loop brings it back and plays it.
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(2);
+    assert_eq!(model(&harness).sampler().range(current.as_ref()), None);
+    harness.get_by_label("Loop 1").click();
+    harness.run_steps(2);
+    wait(&mut harness, |m| m.snapshot().status.looping == range);
+    assert_eq!(model(&harness).sampler().range(current.as_ref()), range);
+}
+
+#[test]
+fn the_slice_drop_down_shows_the_plan_and_plans_or_discards_when_chosen() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    let spans = |harness: &Harness<'_, Gui>| {
+        let pending = model(harness).sampler().pending.as_ref();
+        pending.map(|p| p.spans.clone()).unwrap_or_default()
+    };
+    let landed = |m: &Model| m.sampler().planning.is_none() && m.sampler().pending.is_some();
+    assert_eq!(slice_method(&harness), "None");
+
+    plan(&mut harness, "Equal");
+    wait(&mut harness, landed);
+    harness.run_steps(2);
+    assert_eq!(slice_method(&harness), "Equal");
+    assert_eq!(spans(&harness).len(), 8);
+    let whole = spans(&harness)[0].0;
+
+    // Chosen again, it plans again: now the range, not the region.
+    drag_range(&mut harness, 0.25, 0.5);
+    assert_eq!(spans(&harness)[0].0, whole, "the plan held");
+    plan(&mut harness, "Equal");
+    wait(&mut harness, |m| {
+        let current = m.snapshot().status.current().cloned();
+        let range = m.sampler().range(current.as_ref());
+        let first = m.sampler().pending.as_ref().map(|p| p.spans[0].0);
+        landed(m) && first == range.map(|r| r.0)
+    });
+
+    // A plan made elsewhere shows too, with its sensitivity.
+    typing(&mut harness, ":");
+    harness.run_steps(2);
+    let bar = harness.get(
+        egui_kittest::kittest::by()
+            .role(egui::accesskit::Role::TextInput)
+            .label(":"),
+    );
+    bar.type_text("slice onsets 0.3");
+    harness.run_steps(1);
+    harness.key_press(egui::Key::Enter);
+    harness.run_steps(2);
+    wait(&mut harness, |m| {
+        let cut = m.sampler().pending.as_ref().map(|p| p.job.cut);
+        landed(m) && cut == Some(playr_core::samples::Cut::Onsets(0.3))
+    });
+    harness.run_steps(2);
+    assert_eq!(slice_method(&harness), "At onsets");
+    let slider = harness
+        .query_all_by_label("Sensitivity")
+        .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Slider)
+        .unwrap();
+    assert_eq!(slider.accesskit_node().numeric_value(), Some(0.3f32 as f64));
+
+    plan(&mut harness, "None");
+    assert!(model(&harness).sampler().pending.is_none());
+    assert_eq!(slice_method(&harness), "None");
+    assert!(harness.query_by_label("Discard slices").is_none());
+}
+
+#[test]
+fn the_waveform_s_menu_acts_on_the_point_right_clicked() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    let menu = |harness: &mut Harness<'_, Gui>, item: &str| {
+        harness.get_by_label("Track waveform").click_secondary();
+        harness.run_steps(2);
+        harness.get_by_label(item).click();
+        harness.run_steps(2);
+    };
+    // No mark is under the pointer yet, so the menu offers none to edit.
+    harness.get_by_label("Track waveform").click_secondary();
+    harness.run_steps(2);
+    assert!(harness.query_by_label("Delete mark").is_none());
+    harness.get_by_label("Mark here").click();
+    harness.run_steps(2);
+    // The frame under the waveform's middle, at 8 kHz.
+    let wave = harness.get_by_label("Track waveform").rect();
+    let per_column = model(&harness).sampler().scale.unwrap().per_column;
+    let middle = (wave.width() / 2.0) as u64 * per_column;
+    let marks = model(&harness).snapshot().marks.clone();
+    let marked = (marks[0].as_secs_f64() * 8000.0) as u64;
+    assert!(
+        marks.len() == 1 && marked.abs_diff(middle) <= 96,
+        "{marks:?}"
+    );
+
+    menu(&mut harness, "Range starts here");
+    let current = model(&harness).snapshot().status.current().cloned();
+    let (a, b) = model(&harness)
+        .sampler()
+        .range(current.as_ref())
+        .expect("no range");
+    // From there to the track's end.
+    assert!(a.abs_diff(middle) <= 96 && b == 96_000, "{a}..{b}");
+
+    menu(&mut harness, "Delete mark");
+    wait(&mut harness, |m| m.snapshot().marks.is_empty());
+}
+
+#[test]
+fn convert_to_shows_once_enabled_and_is_disabled_until_convertwithmoss_is_installed() {
+    // Off as shipped: the Slice menu has no Convert to.
+    let (mut off, _dir) = window();
+    off.run_steps(2);
+    topmost(&off, "Sampler").click();
+    off.run_steps(2);
+    topmost(&off, "Slice").hover();
+    off.run_steps(2);
+    off.get_by_label("Slice the region");
+    assert!(off
+        .query(egui_kittest::kittest::by().label_contains("Convert to"))
+        .is_none());
+
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("ConvertWithMoss");
+    let config = Config::parse(&format!(
+        "[extensions]\nconvert-with-moss.enable = true\nconvert-with-moss.path = '{}'",
+        program.display()
+    ))
+    .unwrap();
+    let model = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        config,
+    );
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(800.0, 480.0))
+        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
+    harness.run_steps(2);
+    let open = |harness: &mut Harness<'_, Gui>| {
+        topmost(harness, "Sampler").click();
+        harness.run_steps(2);
+        topmost(harness, "Slice").hover();
+        harness.run_steps(2);
+    };
+    open(&mut harness);
+    let entry = harness.get(egui_kittest::kittest::by().label_contains("Convert to"));
+    assert!(entry.accesskit_node().is_disabled());
+
+    std::fs::write(&program, "").unwrap();
+    harness.run_steps(2);
+    let entry = harness.get(egui_kittest::kittest::by().label_contains("Convert to"));
+    assert!(!entry.accesskit_node().is_disabled());
+    entry.hover();
+    harness.run_steps(2);
+    harness.get_by_label("sf2").click();
+    harness.run_steps(2);
+    // Installed, so it gets as far as finding nothing to convert.
+    assert_eq!(
+        harness.state().model().message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NothingExported)))
+    );
+}
+
+#[test]
+fn the_sampler_menu_holds_every_table_no_button_draws() {
+    for (submenu, table) in [
+        ("Range", playr_gui::controls::RANGE_MENU),
+        ("Marks", playr_gui::controls::MARK_MENU),
+        ("Loops", playr_gui::controls::LOOP_MENU),
+    ] {
+        let samples = tempfile::tempdir().unwrap();
+        let (mut harness, _dir) = sampling(samples.path());
+        topmost(&harness, "Sampler").click();
+        harness.run_steps(2);
+        topmost(&harness, submenu).hover();
+        harness.run_steps(2);
+        for control in table {
+            harness.get_by_label(control.label);
+        }
+    }
 }
 
 /// A window at its minimum size, as `with_min_inner_size` in main.rs, playing a track with a long title, in `view`,
@@ -795,38 +1048,56 @@ fn sized(dir: &std::path::Path, view: &str, text: bool, height: f32) -> Harness<
     harness
 }
 
+/// Fails unless every widget of `harness` is inside `window` and none
+/// overlaps another.
+fn assert_fits(harness: &Harness<'_, Gui>, window: egui::Rect, what: &str) {
+    let leaves: Vec<(egui::Rect, String)> = harness
+        .query_all(egui_kittest::kittest::by())
+        .filter(|n| n.accesskit_node().children().next().is_none())
+        .map(|n| {
+            let a = n.accesskit_node();
+            let name = a.label().or_else(|| a.value()).unwrap_or_default();
+            (n.rect(), format!("{:?} {name:?}", a.role()))
+        })
+        .filter(|(r, _)| r.area() > 0.0)
+        .collect();
+    for (rect, name) in &leaves {
+        assert!(window.contains_rect(*rect), "{what}: {name} at {rect:?}");
+    }
+    for (i, (a, an)) in leaves.iter().enumerate() {
+        for (b, bn) in &leaves[i + 1..] {
+            assert!(
+                a.intersect(*b).area() <= 0.0,
+                "{what}: {an} at {a:?} overlaps {bn} at {b:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn every_control_fits_the_smallest_window_without_overlap() {
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 480.0));
     for (view, text) in [("1", false), ("5", false), ("1", true)] {
         let dir = tempfile::tempdir().unwrap();
         let harness = smallest(dir.path(), view, text);
         harness.get_by_label("Level");
-        let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 480.0));
-        let leaves: Vec<(egui::Rect, String)> = harness
-            .query_all(egui_kittest::kittest::by())
-            .filter(|n| n.accesskit_node().children().next().is_none())
-            .map(|n| {
-                let a = n.accesskit_node();
-                let name = a.label().or_else(|| a.value()).unwrap_or_default();
-                (n.rect(), format!("{:?} {name:?}", a.role()))
-            })
-            .filter(|(r, _)| r.area() > 0.0)
-            .collect();
-        for (rect, name) in &leaves {
-            assert!(
-                window.contains_rect(*rect),
-                "view {view}: {name} at {rect:?}"
-            );
-        }
-        for (i, (a, an)) in leaves.iter().enumerate() {
-            for (b, bn) in &leaves[i + 1..] {
-                assert!(
-                    a.intersect(*b).area() <= 0.0,
-                    "view {view}: {an} at {a:?} overlaps {bn} at {b:?}"
-                );
-            }
-        }
+        assert_fits(&harness, window, &format!("view {view}"));
     }
+}
+
+#[test]
+fn the_sampler_s_controls_leave_the_waveform_200_points_of_the_smallest_window() {
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 480.0));
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = smallest(dir.path(), "5", false);
+    // The slice row at its widest: a slider, and a plan to review.
+    plan(&mut harness, "At onsets");
+    wait(&mut harness, |m| m.sampler().pending.is_some());
+    harness.run_steps(4);
+    harness.get_by_label("Discard slices");
+    assert_fits(&harness, window, "a plan waiting");
+    let height = harness.get_by_label("Track waveform").rect().height();
+    assert!(height >= 200.0, "the waveform is {height} points high");
 }
 
 #[test]
@@ -881,7 +1152,7 @@ fn the_waveform_takes_the_height_the_controls_leave() {
         let dir = tempfile::tempdir().unwrap();
         let harness = sized(dir.path(), "5", false, height);
         let rect = |label: &str| harness.get_by_label(label).rect();
-        let gap = rect("Prev").top() - rect("Discard slices").bottom();
+        let gap = rect("Prev").top() - rect("Slice method").bottom();
         assert!(
             gap < 30.0,
             "at {height} points, {gap} points below the controls"

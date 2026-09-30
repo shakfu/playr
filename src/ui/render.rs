@@ -56,7 +56,7 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
             draw_help(app.palette(), f, f.area(), &name, &rows, app.help_scroll)
         }
         Input::CommandHelp => {
-            let rows = command::command_rows();
+            let rows = command::command_rows(app.extensions);
             let rows: Vec<(&str, &str)> =
                 rows.iter().map(|(k, h)| (k.as_str(), h.as_str())).collect();
             draw_help(
