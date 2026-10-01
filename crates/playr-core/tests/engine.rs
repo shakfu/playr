@@ -934,8 +934,10 @@ fn a_one_shot_with_fades_ramps_in_and_out_as_a_written_slice_does() {
     wait_for(&player, |s| s.state == State::Playing);
     wait_for(&player, |s| s.state == State::Paused);
     std::thread::sleep(Duration::from_millis(100));
-    let played = control.played.lock().unwrap();
-    let left: Vec<f32> = played[from..].chunks(2).map(|f| f[0]).collect();
+    // Copied out: `report` below locks `played` too, and a failing assert
+    // holding it deadlocks rather than failing.
+    let played = control.played.lock().unwrap()[from..].to_vec();
+    let left: Vec<f32> = played.chunks(2).map(|f| f[0]).collect();
     let run: Vec<f32> = left.into_iter().skip_while(|&v| v == 0.0).collect();
     let run: Vec<f32> = run[..run.iter().rposition(|&v| v != 0.0).unwrap() + 1].to_vec();
     // Its first and last frames are 0, so 398 frames sound.

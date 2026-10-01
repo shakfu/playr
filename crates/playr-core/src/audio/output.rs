@@ -597,11 +597,10 @@ pub fn render<T>(
     }
     let peak = meter.take_peak();
     // The reader resets it to zero, so a plain store could undo a higher peak.
-    let _ = shared
+    // A peak is never negative or NaN, and such floats order as their bits.
+    shared
         .peak_bits
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
-            (peak > f32::from_bits(bits)).then_some(peak.to_bits())
-        });
+        .fetch_max(peak.to_bits(), Ordering::Relaxed);
     shared
         .frames_out
         .fetch_add(filled as u64 / channels, Ordering::Relaxed);
