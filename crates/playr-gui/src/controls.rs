@@ -262,7 +262,10 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
         "SetSliceEdges",
         "Sampler, Slice, Edges, and the sampler's Edges drop-down",
     ),
-    ("Convert", "Sampler, Slice, Convert to"),
+    (
+        "Convert",
+        "Sampler, Slice, Convert to and Convert an export to",
+    ),
     ("SetColumns", "View, Columns"),
     ("SetSort", "a click on a column heading"),
     ("SeekTo", "a click on the progress bar or the waveform"),

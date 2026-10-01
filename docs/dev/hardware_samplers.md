@@ -33,7 +33,7 @@ A chain is several sounds joined into one file, with a slice point at each join.
 
 - **It has a command line.** Any argument after the executable runs it without the window ([`documentation/README.md`](https://github.com/git-moss/ConvertWithMoss/blob/main/documentation/README.md), "Usage via the command line interface"):
 
-  ```
+  ```sh
   ConvertWithMoss -s sfz -d 1010music SOURCE_FOLDER DESTINATION_FOLDER
   ```
 
@@ -51,6 +51,71 @@ A chain is several sounds joined into one file, with a slice point at each join.
 
 - **Format names for `-s` and `-d`,** as the program lists them: `sfz`, `ableton`, `renoise`, `mc707`, `1010music`, `bento`, `sf2`, `distingex`, and `wav`, `polyendtracker`, `opxy`, `sp404mk2`, `mpc` among the rest.
 
+- **The formats ConvertWithMoss reads or writes.** `[x]` marks a format playr supports: SFZ, which playr writes, and the 16 names in `convertwithmoss::FORMATS`, which `:convert` and Convert to offer and "Test conversion" below wrote. `:convert` also takes any other `-d` name below when typed, untested. A read-only format cannot be a destination. The `-d` names are each writer's prefix in lower case, read from `CLIBackend.java` at commit 31b0f8a (2026-09-27).
+
+  1. [x] 1010music Bento (`preset.xml`) - `-d bento`
+  2. [x] 1010music blackbox, tangerine, bitbox (`preset.xml`) - `-d 1010music`
+  3. [x] Ableton Sampler (`*.adv`, `*.adg`) - `-d ableton`
+  4. [ ] Akai MESA (`*.s3p`) - read only
+  5. [x] Akai MPC Keygroups (`*.xpm`) - `-d mpc`
+  6. [ ] Akai MPC Projects (`*.xpj`) and Tracks (`*.xty`) - read only
+  7. [ ] Akai MPC60 Sets (`*.hfe`, `*.img`, `*.set`) - read only
+  8. [ ] Akai MPC500/MPC1000/MPC2500 (`*.PGM`) - read only
+  9. [ ] Akai MPC2000/MPC2000XL/MPC3000 programs (`*.hfe`, `*.img`, `*.iso`, `*.PGM`, `*.SND`) - read only
+  10. [ ] Akai S900/S950 programs (`*.img`, `*.akai`) - read only
+  11. [ ] Akai S1000/S3000 ISO images (`*.iso`) - read only
+  12. [ ] Akai S5000/S6000/Z4/Z8/MPC4000 (`*.akp`, `*.akm`) - read only
+  13. [ ] Arturia Synclavier V (`*.synx`) - `-d synclavierv`
+  14. [ ] Audiomodern Soundbox format (`*.sbpack`) - `-d soundbox`
+  15. [ ] Casio FZ-1/FZ-10M/FZ-20M format (`*.img`, `*.hfe`, `*.fzf`, `*.fzv`, `*.fzb`) - `-d casiofz`
+  16. [ ] CWITEC TX16Wx (`*.txprog`, `*.txbank`, `*.txperf`) - `-d tx16wx`
+  17. [ ] DecentSampler (`*.dspreset`, `*.dslibrary`) - `-d decentsampler`
+  18. [ ] disoDSP Bliss (`*.zbp`, `*.zbb`) - `-d zbp`
+  19. [ ] Downloadable Sound format (DLS) - read only
+  20. [ ] E-mu Emulator II (`*.img`, `*.emuiifd`, `*.hfe`) - `-d eii`; the list says read only, the source has a writer
+  21. [ ] E-mu Emulator III/IIIX/ESI (`*.e3b`, `*.e3x`, `*.esi`) - `-d eiii`
+  22. [ ] E-mu Emulator IV bank (`*.e4b`, `*.iso`, `*.img`, `*.hda`) - `-d e4b`
+  23. [ ] E-mu Emulator X (`*.exb`) - `-d exb`
+  24. [x] Elektron Tonverk (`*.emulti`) - `-d emulti`
+  25. [ ] Elektron Tonverk preset (`*.tvpst`) - `-d tonverk`
+  26. [ ] Ensoniq EPS/EPS16+/ASR-10 (`*.hfe`, `*.img`, `*.gkh`, `*.ede`, `*.eda`, `*.efe`) - read only
+  27. [ ] Ensoniq Mirage (`*.hfe`, `*.img`, `*.edm`) - read only
+  28. [x] Expert Sleepers disting EX (`*.dexpreset`) - `-d distingex`
+  29. [ ] Fairlight CMI (`*.vc`, `*.imd`, `*.img`, `*.hfe`) - `-d cmi3`
+  30. [ ] FL Studio DirectWave format (`*.dwp`) - `-d directwave`
+  31. [x] ISLA Instruments S2400 (`*.kit`) - `-d s2400`
+  32. [ ] Korg KMP/KSF (`*.KMP`) - `-d kmp`
+  33. [ ] Korg wavestate/modwave (`*.korgmultisample`) - `-d korgmultisample`
+  34. [ ] Kurzweil K2000/K2500/K2600 (`*.krz`, `*.k25`, `*.k26`) - `-d kurzweil`
+  35. [x] Logic EXS24 (`*.exs`) - `-d exs24`
+  36. [ ] Multisample Format - Bitwig Studio, Presonus Studio One (`*.multisample`) - `-d bitwig`
+  37. [x] Native Instruments Kontakt 1-8 (`*.nki`) - `-d nki`; writes Kontakt 1 only
+  38. [ ] Native Instruments Maschine 1 Sound (`*.msnd`) - `-d maschine`; which of the two it writes is open
+  39. [ ] Native Instruments Maschine 2-3 Sound (`*.mxsnd`) - `-d maschine`; fails without `-pMaschineOutputFormat`, see "Third test conversion"
+  40. [ ] Polyend Tracker (PTI) instrument format - `-d polyendtracker`; keeps only the first slice of a kit, see "Second test conversion"
+  41. [x] Propellerhead Reason NN-XT (`*.sxt`) - `-d sxt`
+  42. [x] Renoise instrument (XRNI) - `-d renoise`
+  43. [x] Roland MC-707/MC-101 project (`*.mpj`) - `-d mc707`
+  44. [ ] Roland MV-8000/MV-8800 patch (`*.mv0`) - `-d mv8000`
+  45. [ ] Roland S-10/S-220/MKS-100 (`*.syx`) - read only
+  46. [ ] Roland S-50, S-330, S-550, W-30 (`*.img`, `*.iso`, `*.out`, `*.sdk`) - read only
+  47. [ ] Roland S-750, S-770, S-760, DJ-70, DJ-70 MkII, and SP-700 (`*.img`, `*.iso`, `*.out`) - read only
+  48. [x] Roland SP-404MK2 (`*.smp`) - `-d sp404mk2`
+  49. [ ] Roland ZEN-Core sound format (`*.svz`) - `-d zencore`
+  50. [ ] Sample Files: AIFF, FLAC, OGG, NCW, WAV files - `-d wav`
+  51. [ ] Sequential Prophet X - `-d prophetx`
+  52. [ ] Spectrasonics Omnisphere 3 (`*.prt_omn`, `*.zmap`) - `-d omnisphere`
+  53. [x] SFZ (`*.sfz`) - written by playr itself, as the source of every conversion
+  54. [x] SoundFont 2 (`*.sf2`) - `-d sf2`
+  55. [ ] Synclavier Regen timbre/library (`*.sflc`) - `-d synclavierregen`
+  56. [x] Synthstrom Deluge instrument (`*.xml`) - `-d deluge`
+  57. [ ] TAL Sampler (`*.talsmpl`) - `-d talsampler`
+  58. [x] Teenage Engineering OP-XY multi-sample preset format (`*.preset`) - `-d opxy`
+  59. [ ] Waldorf Quantum MkI, MkII / Iridium / Iridium Core (`*.qpat`) - `-d qpat`
+  60. [ ] Yamaha YSFC format (read/write: Montage, MODX/MODX+; read, waveforms only: Motif XS, Motif XF, MOXF, Montage M) (`*.ysfc`) - `-d ysfc`
+
+  The source also has four writers this list lacks: E-mu Emax (`-d emax`), E-mu Emulator (`-d ei`), Kurzweil PC3/Forte (`-d pc3`) and Groove Synthesis 3rd Wave (`-d thirdwave`).
+
 ### Where playr finds it
 
 The manual says only "locate the ConvertWithMoss executable on your system", and that on Windows the command line is `ConvertWithMossCLI.exe`, in the same folder as `ConvertWithMoss.exe`. Decided 2026-09-30: playr uses the installer's own path by default, with `convert-with-moss.path` under `[extensions]` to override it, and does not search `PATH`. A link such as `convert-wm` is the user's own and playr must not rely on it. When the file is missing, playr names the path it tried.
@@ -58,7 +123,7 @@ The manual says only "locate the ConvertWithMoss executable on your system", and
 | platform | default path | status |
 |-|-|-|
 | Linux | `/opt/convertwithmoss/bin/ConvertWithMoss` | read: where the `.deb` installs |
-| macOS | `/Applications/ConvertWithMoss.app/Contents/MacOS/ConvertWithMoss` | open: a guess from how `.dmg` installers work |
+| macOS | `/Applications/ConvertWithMoss.app/Contents/MacOS/ConvertWithMoss` | read: the path inside the `.app`, checked with 20.3.0. The `.app` sits wherever it was dragged, so another folder needs `convert-with-moss.path` |
 | Windows | `ConvertWithMossCLI.exe` in the install folder | open: the folder is not stated |
 
 ### Test conversion
@@ -87,6 +152,57 @@ Each run was `ConvertWithMoss -s sfz -d NAME SOURCE_FOLDER DESTINATION_FOLDER`, 
 - **ConvertWithMoss resamples where a device needs it,** so playr can go on writing 24-bit at the source's rate.
 - **The name `break` made it choose a drum envelope.** It guesses a category from the name.
 - **None of the results was loaded** in the software or on the device it is for.
+
+### Second test conversion
+
+Run on 2026-10-01 with version 20.3.0 on macOS, for the formats added to `FORMATS` that day. The kit was laid out as playr writes one: three 24-bit 44.1 kHz stereo WAV files named as `samples::file_name` names them, and `break.sfz` with one region a slice on keys 36 to 38. A second kit added playr's loop opcodes, `loop_mode=loop_continuous loop_start=0 loop_end=21999`, to each region. Each run exited 0; ConvertWithMoss does whether or not it fails, so each result was read.
+
+| `-d` | files written | slices | loop | audio |
+|-|-|-|-|-|
+| `mpc` | `break/break.xpm`, `break/*.WAV` | keys 36-38 | written, but the instrument is one-shot; see below | unchanged |
+| `sp404mk2` | `break/PADCONF.BIN`, `break/SMPL/BANK1-0N.SMP` | pads 1-3 | open: binary | 16-bit 48 kHz, per its log |
+| `opxy` | `break.preset/patch.json`, `break.preset/*.wav` | keys 36-38; the lowest reaches down to 0 | kept | made 16-bit |
+| `deluge` | `SYNTHS/break.xml`, `SAMPLES/break/*.wav` | a range a key, transposed to play at pitch | kept | unchanged |
+| `emulti` | `break/break.elmulti`, `break/break-000-036-c1.wav` and so on | keys 36-38 | kept, its end scaled to 48 kHz | resampled to 48 kHz |
+| `s2400` | `break/break.kit`, `break/*.wav` | pads, by name | in each WAV's `smpl` chunk | made 16-bit |
+| `polyendtracker` | `break.pti` | **the first only** | | made 16-bit |
+
+- **The OP-XY takes 24 zones.** A 40-slice kit, converted on 2026-10-01, kept slices 1-24 on keys 36-59. ConvertWithMoss says so on its output, unmarked among the progress: "The preset has 40 regions but the device plays at most 24, the rest is dropped." It exits 0. `:convert` shows such lines in its message since that day; before, a conversion that dropped slices said only "converted to". ConvertWithMoss's source, `OpXyCreator.java`, holds the limit as `MAX_REGIONS`.
+- **Polyend Tracker is not offered.** Its log says an instrument holds one sample and the others are ignored, so a kit loses every slice but the first. "Decided" below counted it as covered; it is not. A `.pti` with slice points would need the sliced WAV as its source, not the kit.
+- **The MPC's root note is one above each key:** `RootNote` 37 on key 36. It is the format's convention: ConvertWithMoss's reader subtracts 1, with a comment that the root note is "strangely one more" (`MPCModernDetector.java`).
+- **An MPC loop is lost to one-shot.** The writer stores the loop (`SliceLoop` 1, `SliceEnd` at its end) but sets `TriggerMode` 0, one-shot, for a zone on one key with no sustain (`MPCKeygroupCreator.java`), which every playr slice is. Its own reader then ignores the loop. That the device plays it through is inference.
+- **This settles the loop question in "Built" for the other five:** a looped slice's loop reaches the preset. The SP-404MK2's was read back through ConvertWithMoss, below.
+- **None of the results was loaded** on its device.
+
+### Third test conversion
+
+Run on 2026-10-01 with version 20.3.0 on macOS, for software samplers. A host that loads SFZ itself gains nothing from a conversion, so each was looked up first. These are reported, from search results and forum posts, not read in each product's manual:
+
+| host | reads SFZ | `-d` |
+|-|-|-|
+| Logic's Sampler | no ([Logic Pro Help](https://www.logicprohelp.com/forums/topic/140255-sfz-libraries-in-logic-pro/)) | `exs24` |
+| Reason's NN-XT | no; Reason 12 also dropped SF2 ([ReasonTalk](https://forum.reasontalk.com/viewtopic.php?t=7524502)) | `sxt` |
+| Kontakt 6 and later | no; Kontakt 5 did ([vi-control](https://vi-control.net/community/threads/is-there-a-good-way-to-port-a-sforzando-sample-set-to-kontakt.163662/)) | `nki` |
+| Maschine 2 | no import found | `maschine` |
+| Bitwig's Sampler | yes ([Bitwig user guide](https://www.bitwig.com/userguide/latest/browsers/)) | not offered |
+| DecentSampler | yes, basic mappings ([Decent Sampler Q&A](https://www.decentsamples.com/qa/11/is-there-an-sfz-to-decent-sampler-format-converter)) | not offered |
+| TX16Wx | yes ([KVR](https://www.kvraudio.com/product/tx16wx-software-sampler-by-cwitec)) | not offered |
+| TAL-Sampler | yes, with loops ([TAL](https://tal-software.com/products/tal-sampler)) | not offered |
+| FL Studio DirectWave | yes ([manual](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/plugins/DirectWave.htm)) | not offered |
+
+The four that do not were converted from the kits of "Second test conversion". Their files are binary, so each was converted back to SFZ by ConvertWithMoss and read.
+
+| `-d` | files written | slices | loop | audio |
+|-|-|-|-|-|
+| `exs24` | `break/break.exs`, `break/*.wav` | keys 36-38 | kept | unchanged |
+| `sxt` | `break/break.sxt`, `break/*.wav` | keys 36-38 | kept | unchanged |
+| `nki` | `break.nki`, `break Samples/*.wav` | keys 36-38 | kept | unchanged |
+| `maschine` | nothing | | | |
+
+- **Maschine is not offered.** Without options it says "Version 1 is not supported as an output format" and writes nothing. `-pMaschineOutputFormat=0` or `2` writes `.mxsnd`, and `1` writes `.msnd`; what 0 and 2 differ in is open. Offering it needs `:convert` to pass `-p`.
+- **`nki` writes Kontakt 1.** Whether Kontakt 7 or 8 opens it is open.
+- **The SP-404MK2's loop survives:** read back, it ends at 23999, its end of 21999 scaled to 48 kHz.
+- **A read-back shows what ConvertWithMoss reads,** not what the host does.
 
 ### It converts key-mapped kits, not slice points
 
@@ -204,10 +320,12 @@ An instrument file holding the audio and its slices. [polyend/tracker-lib](https
 
 ## Open questions
 
+`docs/dev/device_tests.md` has tests on the Dirtywave M8 and OP-XY for the first, third, fourth and fifth.
+
 - **Frame index or byte offset in a cue point's sample start.** Check what the M8 and the Blackbox expect.
 - **Which devices read `smpl` loops.** `TODO.md`, "Loop points in the WAV", depends on it.
 - **Bit depth and rate each device accepts.** playr writes 24-bit at the source's rate; ot_utils assumes 16-bit 44.1 kHz mono.
-- **Slice limits.** 64 on the Octatrack, 24 on the OP-1, 32 reported for the M8. An export must refuse or split past the limit.
+- **Slice limits.** 64 on the Octatrack, 24 on the OP-1, 32 reported for the M8, 24 zones on the OP-XY. An export must refuse or split past the limit. ConvertWithMoss drops the OP-XY's extra zones itself, and `:convert` reports it; see "Second test conversion".
 - **Whether the converted kits load.** Each was written without error; none was opened in Live, Renoise or on a device.
 
 - **ConvertWithMoss's install paths on macOS and Windows.**
@@ -235,7 +353,7 @@ The kit export, on 2026-09-30:
 - **It is an extension, off as shipped.** `:convert` runs a program that is not playr's, so it needs `convert-with-moss.enable = true` under `[extensions]` in `settings.toml`. Until then the command is left out of `:help` and Tab completion, the window's Slice menu has no Convert to, and `:convert` typed anyway says how to enable it. The cheatsheet lists it under Extensions.
 - **Enabled, it still needs ConvertWithMoss installed.** Without it the command is refused at once, naming the path tried, and the window's Convert to is disabled with that text as its hover. The path is looked up at each use, so installing takes effect without a restart.
 - **While it is off, only the full name finds the command.** A prefix such as `:conv` is an unknown command, and `:co` means `:columns` as it did before; no error lists `convert`. Enabled, `:co` is ambiguous between `columns` and `convert`. A key bound to `convert sf2` in `settings.toml` is accepted either way.
-- **Not built:** progress from `-P`, and a way to convert an export from an earlier run.
+- **Not built:** progress from `-P`. Converting an export from an earlier run was added on 2026-10-01: `:convert FORMAT EXPORT`.
 
 The sliced file, on 2026-09-30:
 

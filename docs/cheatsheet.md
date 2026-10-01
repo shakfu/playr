@@ -156,7 +156,7 @@ An extension runs a program that is not part of playr. Each is off, and its comm
 
 | command           | enable with                        | does                                    |
 |-------------------|------------------------------------|-----------------------------------------|
-| `:convert FORMAT` | `convert-with-moss.enable = true`  | last slices to a ConvertWithMoss format |
+| `:convert FORMAT [EXPORT]` | `convert-with-moss.enable = true`  | last export, or EXPORT, via ConvertWithMoss |
 
 ## Typing commands
 

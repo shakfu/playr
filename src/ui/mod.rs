@@ -420,10 +420,12 @@ impl App {
                     .map(|p| p.name.clone())
                     .collect();
                 let extensions = self.model.session().convert_enabled();
+                let exports = self.model.session().exports();
                 line.complete(
                     key.code == KeyCode::Tab,
                     self.model.view(),
                     &names,
+                    &|| exports.clone(),
                     extensions,
                 );
             }

@@ -218,51 +218,92 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         assert_eq!(line(&action, Some(View::Sampler)), text);
     }
     assert_eq!(
-        completions("snap o", View::Sampler, &[], true),
+        completions("snap o", View::Sampler, &[], &Vec::new, true),
         ["snap on", "snap off"]
     );
     assert_eq!(
-        completions("fit o", View::Sampler, &[], true),
+        completions("fit o", View::Sampler, &[], &Vec::new, true),
         ["fit on", "fit off"]
     );
 }
 
 #[test]
+fn convert_completes_an_export_name_after_the_format() {
+    let exports = || vec!["Amen Break".to_string(), "amen".into(), "think".into()];
+    assert_eq!(
+        completions("convert sf2 ", View::Library, &[], &exports, true),
+        [
+            "convert sf2 Amen Break",
+            "convert sf2 amen",
+            "convert sf2 think"
+        ]
+    );
+    // Any case, and a name with a space completes whole.
+    assert_eq!(
+        completions("convert sf2 AM", View::Sampler, &[], &exports, true),
+        ["convert sf2 Amen Break", "convert sf2 amen"]
+    );
+    assert!(completions("convert sf2 x", View::Library, &[], &exports, true).is_empty());
+    // The format first, with no directory read for it.
+    let unread = || -> Vec<String> { panic!("exports read before a format") };
+    assert_eq!(
+        completions("convert s", View::Library, &[], &unread, true),
+        [
+            "convert s2400",
+            "convert sf2",
+            "convert sp404mk2",
+            "convert sxt"
+        ]
+    );
+    assert!(completions("convert sf2 ", View::Library, &[], &exports, false).is_empty());
+}
+
+#[test]
 fn convert_takes_a_format_name_in_any_view() {
-    assert_eq!(lib("convert sf2"), Ok(Action::Convert("sf2".into())));
+    assert_eq!(lib("convert sf2"), Ok(Action::Convert("sf2".into(), None)));
     // Any name ConvertWithMoss may know, not only the ones offered.
     assert_eq!(
         parse("convert opxy", View::Sampler),
-        Ok(Action::Convert("opxy".into()))
+        Ok(Action::Convert("opxy".into(), None))
     );
     // It names a directory, so nothing that could leave the export's.
-    for text in [
-        "convert",
-        "convert ../up",
-        "convert a/b",
-        "convert SF2",
-        "convert sf2 x",
-    ] {
+    for text in ["convert", "convert ../up", "convert a/b", "convert SF2"] {
         let error = lib(text).unwrap_err();
         assert!(error.contains("1010music, ableton"), "{text}: {error}");
     }
     assert_eq!(
-        line(&Action::Convert("bento".into()), None),
+        line(&Action::Convert("bento".into(), None), None),
         "convert bento"
     );
+    // Then an earlier export: a name under the samples directory, or a path,
+    // which may hold spaces.
+    for (text, export) in [
+        ("convert sf2 amen", "amen"),
+        (
+            "convert sf2 /music/my samples/amen",
+            "/music/my samples/amen",
+        ),
+    ] {
+        let action = Action::Convert("sf2".into(), Some(export.into()));
+        assert_eq!(lib(text), Ok(action.clone()), "{text}");
+        assert_eq!(line(&action, None), text);
+    }
     // Typed while the extension is off, it is found by its full name only,
     // which the session answers with how to enable it; no prefix finds it
     // and no error names it.
     let typed = |line, extensions| playr_app::command::parse_typed(line, View::Library, extensions);
     assert_eq!(
         typed("convert sf2", false),
-        Ok(Action::Convert("sf2".into()))
+        Ok(Action::Convert("sf2".into(), None))
     );
     assert_eq!(
         typed("conv sf2", false),
         Err("unknown command: conv".into())
     );
-    assert_eq!(typed("conv sf2", true), Ok(Action::Convert("sf2".into())));
+    assert_eq!(
+        typed("conv sf2", true),
+        Ok(Action::Convert("sf2".into(), None))
+    );
     // Off, `co` still means columns; on, it could be either.
     assert_eq!(typed("co", false), Err("usage: :columns NAME...".into()));
     assert_eq!(
@@ -271,25 +312,37 @@ fn convert_takes_a_format_name_in_any_view() {
     );
 
     // An extension's command is completed only once it is enabled.
-    assert!(completions("convert ", View::Library, &[], false).is_empty());
-    assert!(completions("conv", View::Library, &[], false).is_empty());
-    assert_eq!(completions("conv", View::Library, &[], true), ["convert"]);
+    assert!(completions("convert ", View::Library, &[], &Vec::new, false).is_empty());
+    assert!(completions("conv", View::Library, &[], &Vec::new, false).is_empty());
+    assert_eq!(
+        completions("conv", View::Library, &[], &Vec::new, true),
+        ["convert"]
+    );
     let listed = |extensions| {
         playr_app::command::command_rows(extensions)
             .iter()
-            .any(|(usage, _)| usage == ":convert FORMAT")
+            .any(|(usage, _)| usage == ":convert FORMAT [EXPORT]")
     };
     assert!(listed(true) && !listed(false));
     assert_eq!(
-        completions("convert ", View::Library, &[], true),
+        completions("convert ", View::Library, &[], &Vec::new, true),
         [
             "convert 1010music",
             "convert ableton",
             "convert bento",
+            "convert deluge",
             "convert distingex",
+            "convert emulti",
+            "convert exs24",
             "convert mc707",
+            "convert mpc",
+            "convert nki",
+            "convert opxy",
             "convert renoise",
-            "convert sf2"
+            "convert s2400",
+            "convert sf2",
+            "convert sp404mk2",
+            "convert sxt"
         ]
     );
 }
@@ -312,7 +365,7 @@ fn slice_edges_takes_a_choice_or_its_prefix_in_any_view() {
         "slice-edges exact"
     );
     assert_eq!(
-        completions("slice-edges ", View::Library, &[], true),
+        completions("slice-edges ", View::Library, &[], &Vec::new, true),
         ["slice-edges exact", "slice-edges zero", "slice-edges fade"]
     );
 }
@@ -337,13 +390,16 @@ fn loop_takes_a_slot_to_recall_save_or_clear() {
     for text in ["loop", "loop on"] {
         assert!(lib(text).unwrap_err().contains("sampler view"), "{text}");
     }
-    assert_eq!(completions("loop ", View::Library, &[], true), ["loop off"]);
     assert_eq!(
-        completions("loop ", View::Sampler, &[], true),
+        completions("loop ", View::Library, &[], &Vec::new, true),
+        ["loop off"]
+    );
+    assert_eq!(
+        completions("loop ", View::Sampler, &[], &Vec::new, true),
         ["loop on", "loop off"]
     );
     assert_eq!(
-        completions("loo", View::Sampler, &[], true),
+        completions("loo", View::Sampler, &[], &Vec::new, true),
         ["loop", "loops"]
     );
     assert_eq!(s("loops clear"), Ok(Action::ClearLoops));
@@ -353,7 +409,7 @@ fn loop_takes_a_slot_to_recall_save_or_clear() {
         "loops clear"
     );
     assert_eq!(
-        completions("loops ", View::Sampler, &[], true),
+        completions("loops ", View::Sampler, &[], &Vec::new, true),
         ["loops clear"]
     );
 }
@@ -494,7 +550,7 @@ fn replaygain_takes_a_setting_or_its_prefix() {
     );
     assert!(lib("replaygain").is_err());
     assert_eq!(
-        completions("replaygain a", Library, &[], true),
+        completions("replaygain a", Library, &[], &Vec::new, true),
         vec![
             "replaygain album".to_string(),
             "replaygain auto".to_string()
@@ -561,31 +617,31 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
             .count()
     };
     assert_eq!(
-        completions("p", Library, &playlists, true),
+        completions("p", Library, &playlists, &Vec::new, true),
         ["play", "playlist", "prune", "pause", "prev",]
     );
     assert_eq!(
-        completions("", Library, &playlists, true).len(),
+        completions("", Library, &playlists, &Vec::new, true).len(),
         usable(Library)
     );
     assert_eq!(
-        completions("re", Selection, &playlists, true),
+        completions("re", Selection, &playlists, &Vec::new, true),
         ["rescan", "restart", "replaygain", "remove"]
     );
     assert_eq!(
-        completions("re", Playlists, &playlists, true),
+        completions("re", Playlists, &playlists, &Vec::new, true),
         ["rescan", "restart", "replaygain", "rename"]
     );
     assert_eq!(
-        completions("re", Library, &playlists, true),
+        completions("re", Library, &playlists, &Vec::new, true),
         ["rescan", "restart", "replaygain"]
     );
     assert_eq!(
-        completions("mode r", Library, &playlists, true),
+        completions("mode r", Library, &playlists, &Vec::new, true),
         ["mode repeat", "mode repeat-one"]
     );
     assert_eq!(
-        completions("vi ", Library, &playlists, true),
+        completions("vi ", Library, &playlists, &Vec::new, true),
         [
             "view library",
             "view queue",
@@ -598,51 +654,51 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     );
     // Playlist names match without regard to case.
     assert_eq!(
-        completions("playlist la", Library, &playlists, true),
+        completions("playlist la", Library, &playlists, &Vec::new, true),
         ["playlist Late Night"]
     );
     assert_eq!(
-        completions("rename ", Playlists, &playlists, true),
+        completions("rename ", Playlists, &playlists, &Vec::new, true),
         ["rename Late Night", "rename dawn"]
     );
-    assert!(completions("rename ", Library, &playlists, true).is_empty());
+    assert!(completions("rename ", Library, &playlists, &Vec::new, true).is_empty());
     assert_eq!(
-        completions("theme ", Playlists, &playlists, true),
+        completions("theme ", Playlists, &playlists, &Vec::new, true),
         ["theme system", "theme light", "theme dark"]
     );
-    assert!(completions("seek ", Library, &playlists, true).is_empty());
-    assert!(completions("zz ", Library, &playlists, true).is_empty());
+    assert!(completions("seek ", Library, &playlists, &Vec::new, true).is_empty());
+    assert!(completions("zz ", Library, &playlists, &Vec::new, true).is_empty());
 }
 
 #[test]
 fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     let mut line = CommandLine::default();
     line.push('p');
-    line.complete(true, Library, &[], true);
+    line.complete(true, Library, &[], &Vec::new, true);
     assert_eq!(line.text, "play");
-    line.complete(true, Library, &[], true);
+    line.complete(true, Library, &[], &Vec::new, true);
     assert_eq!(line.text, "playlist");
     for _ in 0..4 {
-        line.complete(true, Library, &[], true);
+        line.complete(true, Library, &[], &Vec::new, true);
     }
     assert_eq!(line.text, "play", "the cycle does not wrap");
-    line.complete(false, Library, &[], true);
+    line.complete(false, Library, &[], &Vec::new, true);
     assert_eq!(line.text, "prev");
 
     // Typing ends the cycle, so Tab now completes the new text.
     line.text.clear();
     "playlist ".chars().for_each(|c| line.push(c));
-    line.complete(true, Library, &["late".into()], true);
+    line.complete(true, Library, &["late".into()], &Vec::new, true);
     assert_eq!(line.text, "playlist late");
 
     let mut back = CommandLine::default();
     back.push('p');
-    back.complete(false, Library, &[], true);
+    back.complete(false, Library, &[], &Vec::new, true);
     assert_eq!(back.text, "prev", "shift-tab does not start from the last");
 
     let mut none = CommandLine::default();
     none.push('z');
-    none.complete(true, Library, &[], true);
+    none.complete(true, Library, &[], &Vec::new, true);
     assert_eq!(none.text, "z");
 }
 

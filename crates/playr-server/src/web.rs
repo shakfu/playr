@@ -71,7 +71,7 @@ pub fn allowed(action: &Action) -> bool {
         | MoveEdge(_)
         | WriteSlices
         | DiscardSlices
-        | Convert(_) => false,
+        | Convert(..) => false,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection
@@ -393,7 +393,8 @@ pub fn completions(model: &Model, text: &str) -> Value {
         .map(|p| p.name.clone())
         .collect();
     json!({
-        "completions": command::completions(text, model.view(), &names, false),
+        // `:convert`, whose exports are listed, is not offered here.
+        "completions": command::completions(text, model.view(), &names, &Vec::new, false),
         "history": model.history().lines(),
     })
 }

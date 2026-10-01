@@ -187,7 +187,8 @@ pub enum Action {
     WriteSlices,
     DiscardSlices,
     /// Converts the slices last written to this ConvertWithMoss format.
-    Convert(String),
+    /// With a directory, converts that export instead of the last.
+    Convert(String, Option<PathBuf>),
     /// Draw in these colours.
     Theme(crate::Theme),
     /// Show these columns, in this order, until playr exits.

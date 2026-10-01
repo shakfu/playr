@@ -1027,6 +1027,9 @@ fn convert_to_shows_once_enabled_and_is_disabled_until_convertwithmoss_is_instal
     assert!(off
         .query(egui_kittest::kittest::by().label_contains("Convert to"))
         .is_none());
+    assert!(off
+        .query(egui_kittest::kittest::by().label_contains("Convert an export to"))
+        .is_none());
 
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join("ConvertWithMoss");
@@ -1054,9 +1057,13 @@ fn convert_to_shows_once_enabled_and_is_disabled_until_convertwithmoss_is_instal
     open(&mut harness);
     let entry = harness.get(egui_kittest::kittest::by().label_contains("Convert to"));
     assert!(entry.accesskit_node().is_disabled());
+    let export = harness.get(egui_kittest::kittest::by().label_contains("Convert an export to"));
+    assert!(export.accesskit_node().is_disabled());
 
     std::fs::write(&program, "").unwrap();
     harness.run_steps(2);
+    let export = harness.get(egui_kittest::kittest::by().label_contains("Convert an export to"));
+    assert!(!export.accesskit_node().is_disabled());
     let entry = harness.get(egui_kittest::kittest::by().label_contains("Convert to"));
     assert!(!entry.accesskit_node().is_disabled());
     entry.hover();

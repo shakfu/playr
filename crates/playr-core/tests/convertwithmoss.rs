@@ -42,7 +42,9 @@ fn a_kit_is_converted_into_a_directory_named_after_the_format() {
         r#"for last; do :; done; echo "$@" > "$last/args""#,
     );
     let kit = kit(dir.path());
-    let dest = convert(&program, &kit, "sf2").unwrap();
+    let converted = convert(&program, &kit, "sf2").unwrap();
+    assert!(converted.warnings.is_empty());
+    let dest = converted.dir;
     assert_eq!(dest, dir.path().join("amen/sf2"));
     let args = std::fs::read_to_string(dest.join("args")).unwrap();
     assert_eq!(
@@ -53,6 +55,33 @@ fn a_kit_is_converted_into_a_directory_named_after_the_format() {
     let again = convert(&program, &kit, "sf2").unwrap_err();
     assert!(again.ends_with("sf2 exists already"), "{again}");
     assert!(dest.join("args").is_file(), "the first conversion is kept");
+}
+
+#[test]
+fn what_a_conversion_left_out_is_reported_with_its_result() {
+    let _alone = alone();
+    let dir = tempfile::tempdir().unwrap();
+    // ConvertWithMoss 20.3.0's output for 40 slices to opxy, shortened: the
+    // loss is a plain line among the progress, and the exit is 0.
+    let program = program(
+        dir.path(),
+        r#"for last; do :; done; touch "$last/patch.json"
+echo "ConvertWithMoss 20.3.0"
+echo "Analyzing: amen.sfz"
+echo "Using default volume envelope for category 'Unknown'."
+echo "The preset has 40 regions but the device plays at most 24, the rest is dropped."
+echo "Re-sampling from 24 bit / 44100 Hz to 16 bit / 44100 Hz as required by the destination format..."
+echo "Done"
+echo "Could not read the loop of 003.wav" >&2"#,
+    );
+    let converted = convert(&program, &kit(dir.path()), "opxy").unwrap();
+    assert_eq!(
+        converted.warnings,
+        [
+            "The preset has 40 regions but the device plays at most 24, the rest is dropped.",
+            "Could not read the loop of 003.wav",
+        ]
+    );
 }
 
 #[test]

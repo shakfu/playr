@@ -413,6 +413,8 @@ impl Gui {
             .iter()
             .map(|p| p.name.clone())
             .collect();
+        // Read only once a line reaches `convert FORMAT `.
+        let exports = || self.model.session().exports();
         // Taken before the field sees them, or Tab would move focus away.
         let keys = if ui.memory(|m| m.has_focus(id)) {
             ui.input_mut(|i| {
@@ -428,8 +430,8 @@ impl Gui {
             [false; 4]
         };
         match keys {
-            [true, ..] => line.complete(true, view, &names, extensions),
-            [_, true, ..] => line.complete(false, view, &names, extensions),
+            [true, ..] => line.complete(true, view, &names, &exports, extensions),
+            [_, true, ..] => line.complete(false, view, &names, &exports, extensions),
             [_, _, true, _] => line.recall(true, self.model.history()),
             [.., true] => line.recall(false, self.model.history()),
             _ => {}
@@ -439,7 +441,7 @@ impl Gui {
             cursor_to_end(ui.ctx(), id, self.command.chars().count());
         }
 
-        let matches = command::completions(&self.command, view, &names, extensions);
+        let matches = command::completions(&self.command, view, &names, &exports, extensions);
         if !self.command.is_empty() && matches.len() > 1 {
             ui.weak(
                 matches

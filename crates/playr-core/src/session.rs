@@ -182,6 +182,26 @@ impl Session {
         self.samples = dir;
     }
 
+    /// The directory exported slices are written under.
+    pub fn samples_dir(&self) -> &Path {
+        &self.samples
+    }
+
+    /// The exports under the samples directory that hold a kit, by directory
+    /// name, sorted: what `:convert FORMAT EXPORT` takes.
+    pub fn exports(&self) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(&self.samples) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter(|e| samples::kit_path(&e.path()).is_file())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Turns the `convert-with-moss` extension on, with ConvertWithMoss's
     /// command line at `program`, or off with `None`, as it starts.
     pub fn set_convertwithmoss(&mut self, program: Option<PathBuf>) {
@@ -1618,15 +1638,22 @@ impl Session {
         }))
     }
 
-    /// Converts the last export to `format` with ConvertWithMoss, into a
-    /// directory of that name inside the export's. Finishes with
+    /// Converts `export`, or the last export, to `format` with
+    /// ConvertWithMoss, into a directory of that name inside the export's.
+    /// A relative `export` is under the samples directory. Finishes with
     /// [`Event::Converted`].
-    pub fn convert(&mut self, format: String) -> Result<JobId, Refusal> {
+    pub fn convert(&mut self, format: String, export: Option<PathBuf>) -> Result<JobId, Refusal> {
         let program = self.convertwithmoss.clone().ok_or(Refusal::ConvertOff)?;
         if !program.is_file() {
             return Err(Refusal::NoConvertWithMoss(program));
         }
-        let dir = self.exported.clone().ok_or(Refusal::NothingExported)?;
+        let dir = match export {
+            Some(dir) => self.samples.join(dir),
+            None => self.exported.clone().ok_or(Refusal::NothingExported)?,
+        };
+        if !samples::kit_path(&dir).is_file() {
+            return Err(Refusal::NoKit(dir));
+        }
         Ok(self.spawn(move |job| {
             let result =
                 crate::convertwithmoss::convert(&program, &samples::kit_path(&dir), &format);

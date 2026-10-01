@@ -309,7 +309,17 @@ fn outcome_text(outcome: &Outcome) -> String {
             format!("exported {} to {}", slices(*n), home_as_tilde(dir))
         }
         Outcome::ConvertStarted { format } => format!("converting to {format}"),
-        Outcome::Converted { dir } => format!("converted to {}", home_as_tilde(dir)),
+        Outcome::Converted { dir, warnings } => {
+            // The loss first: a narrow status line cuts the end.
+            let done = format!("converted to {}", home_as_tilde(dir));
+            match warnings.as_slice() {
+                [] => done,
+                [one] => format!("ConvertWithMoss: {one} {done}"),
+                [first, rest @ ..] => {
+                    format!("ConvertWithMoss: {first} ({} more) {done}", rest.len())
+                }
+            }
+        }
         Outcome::ScanStarted { dir: Some(dir) } => format!("scanning {}", home_as_tilde(dir)),
         Outcome::ScanStarted { dir: None } => "rescanning library".into(),
         Outcome::Scanning { seen, added } => format!("scanning: {seen} files, {added} added"),
@@ -390,6 +400,10 @@ fn refusal_text(refusal: &Refusal) -> String {
                 .into()
         }
         Refusal::NoConvertWithMoss(program) => playr_core::convertwithmoss::not_installed(program),
+        Refusal::NoKit(dir) => format!(
+            "no kit in {}; exports have one since playr 0.15",
+            home_as_tilde(dir)
+        ),
         Refusal::SelectionEmpty => "selection is empty".into(),
         Refusal::NoSearch => "no search results to save; search first".into(),
         Refusal::Sql(error) => format!("sql: {error}"),

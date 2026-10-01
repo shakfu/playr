@@ -8,11 +8,17 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - The window's sampler shows the whole track in a strip above the waveform, with the stretch in view framed; a click or drag there seeks, and the view follows. A zoom slider sits between the `-` and `+` buttons, and a time axis runs along the waveform's top.
 
+- `:convert FORMAT EXPORT` converts an earlier export, named by its directory under `samples`, which Tab completes, or by a path; without EXPORT it converts the last one written, as before, which a restart forgets. The window has Sampler, Slice, Convert an export to, which picks the directory in a dialog. A directory with no `.sfz` kit, such as an export from before 0.15.0, is refused before ConvertWithMoss runs; it used to fail only once the job ran. Library API: `Action::Convert` takes the export, `Session::convert` too, `Session::samples_dir`, `Session::exports`, `Refusal::NoKit`; `command::completions` and `CommandLine::complete` take a function listing the exports.
+
+- `:convert` offers nine more formats in Tab completion and the window's Convert to. For hardware: `mpc` (MPC keygroups), `sp404mk2`, `opxy`, `deluge`, `emulti` (Elektron Tonverk) and `s2400`. For software samplers reported not to load SFZ: `exs24` (Logic's Sampler), `sxt` (Reason's NN-XT) and `nki` (Kontakt 1, for Kontakt 6 and later). Each was converted from a kit laid out as playr writes one and keeps every slice and its loop, except the MPC's: ConvertWithMoss makes each slice one-shot, which ignores the loop. Polyend Tracker is left out, as it keeps only a kit's first slice, and Maschine, which fails without an option `:convert` cannot pass. `docs/dev/hardware_samplers.md` has the results.
+
 - A Scrub button in the sampler: while it is on, a drag across the waveform plays 40 ms from wherever the pointer moves, a grain at a time, the last one even if the pointer then holds still, then loops the range on release. Loop alone already looped a dragged range, but only on release and silently during the drag. Each moment is a seek, so it may stutter on formats slow to seek (untested). `:scrub TIME` plays one moment. Library API: `Action::Scrub`, `sampler::SCRUB`, `sampler::tick_step`, `sampler::fmt_tick`.
 
 - `playr --print-settings` prints the default settings and keys as one `settings.toml`. Before, the defaults were only in the source tree, which an installed binary lacks. It prints even when the user's settings file is broken.
 
 ### Changed
+
+- `:convert` names what ConvertWithMoss left out. Converting 40 slices to `opxy` keeps 24, the most the OP-XY plays; the message said only "converted to", and the loss was in ConvertWithMoss's output, which playr read only on failure. It reports a loss as a plain line among its progress and exits 0, so playr takes the lines that say something was dropped, skipped, ignored, truncated or discarded, the words its messages use, and any error output, and shows them first: `ConvertWithMoss: The preset has 40 regions but the device plays at most 24, the rest is dropped. converted to ~/Music/playr/samples/tones-2/opxy`. Library API: `convertwithmoss::convert` returns `Converted`, with the warnings; `Outcome::Converted` carries them.
 
 - playr-gui's minimum height is 504 points, up from 480, so the waveform keeps 200 points with the overview above it. The sampler's Track info button reads `info`; `i` looked like `|`.
 

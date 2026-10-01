@@ -886,8 +886,8 @@ pub fn menu(model: &Model, ui: &mut egui::Ui) -> Option<Action> {
         ui.separator();
         items(ui, controls::PLAN_BAR);
         // An extension, shown once enabled in the settings: the slices last
-        // written, by ConvertWithMoss, into a directory beside them named
-        // after the format.
+        // written, or an export chosen in a dialog, by ConvertWithMoss, into
+        // a directory inside the export named after the format.
         let Some(program) = model.session().convertwithmoss() else {
             return;
         };
@@ -896,14 +896,28 @@ pub fn menu(model: &Model, ui: &mut egui::Ui) -> Option<Action> {
             ui.menu_button("Convert to", |ui| {
                 for format in playr_core::convertwithmoss::FORMATS {
                     if ui.button(format).clicked() {
-                        other = Some(Action::Convert(format.to_string()));
+                        other = Some(Action::Convert(format.to_string(), None));
                         ui.close();
                     }
                 }
             });
+            ui.menu_button("Convert an export to", |ui| {
+                for format in playr_core::convertwithmoss::FORMATS {
+                    if ui.button(format).clicked() {
+                        ui.close();
+                        other = rfd::FileDialog::new()
+                            .set_title("Choose an export")
+                            .set_directory(model.session().samples_dir())
+                            .pick_folder()
+                            .map(|dir| Action::Convert(format.to_string(), Some(dir)));
+                    }
+                }
+            });
         } else {
-            ui.add_enabled(false, egui::Button::new("Convert to"))
-                .on_disabled_hover_text(playr_core::convertwithmoss::not_installed(program));
+            for label in ["Convert to", "Convert an export to"] {
+                ui.add_enabled(false, egui::Button::new(label))
+                    .on_disabled_hover_text(playr_core::convertwithmoss::not_installed(program));
+            }
         }
     });
     ui.add_enabled_ui(here, |ui| {

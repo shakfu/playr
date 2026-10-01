@@ -152,6 +152,7 @@ fn outcomes_are_worded() {
         (
             Outcome::Converted {
                 dir: home.join("Music/playr/samples/amen/sf2"),
+                warnings: Vec::new(),
             },
             "converted to ~/Music/playr/samples/amen/sf2",
         ),
@@ -467,4 +468,28 @@ fn times_are_minutes_and_seconds_then_hours() {
     assert_eq!(fmt_time(Duration::from_millis(59_999)), "0:59");
     assert_eq!(fmt_time(secs(754)), "12:34");
     assert_eq!(fmt_time(secs(3723)), "1:02:03");
+}
+
+#[test]
+fn a_conversion_names_what_convertwithmoss_left_out_first() {
+    let dir = std::path::PathBuf::from("/x/amen/opxy");
+    let converted = |warnings: &[&str]| {
+        text(
+            &Outcome::Converted {
+                dir: dir.clone(),
+                warnings: warnings.iter().map(|w| w.to_string()).collect(),
+            }
+            .into(),
+        )
+    };
+    assert_eq!(converted(&[]), "converted to /x/amen/opxy");
+    let dropped = "The preset has 40 regions but the device plays at most 24, the rest is dropped.";
+    assert_eq!(
+        converted(&[dropped]),
+        format!("ConvertWithMoss: {dropped} converted to /x/amen/opxy")
+    );
+    assert_eq!(
+        converted(&[dropped, "a", "b"]),
+        format!("ConvertWithMoss: {dropped} (2 more) converted to /x/amen/opxy")
+    );
 }

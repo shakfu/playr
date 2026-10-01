@@ -1484,7 +1484,7 @@ fn convert_is_refused_at_once_while_off_or_convertwithmoss_is_not_installed() {
         Config::default(),
     );
     assert!(!off.session().convert_enabled());
-    off.perform(Action::Convert("sf2".into()));
+    off.perform(Action::Convert("sf2".into(), None));
     assert_eq!(
         off.message(),
         Some(&Message::Core(Notice::Refused(Refusal::ConvertOff)))
@@ -1515,7 +1515,7 @@ fn convert_is_refused_at_once_while_off_or_convertwithmoss_is_not_installed() {
     );
     assert!(model.session().convert_enabled());
     assert!(!model.session().can_convert());
-    model.perform(Action::Convert("sf2".into()));
+    model.perform(Action::Convert("sf2".into(), None));
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Refused(Refusal::NoConvertWithMoss(
@@ -1531,7 +1531,7 @@ fn convert_is_refused_at_once_while_off_or_convertwithmoss_is_not_installed() {
     // Looked up each time: installed since, it is found without a restart.
     std::fs::write(&program, "").unwrap();
     assert!(model.session().can_convert());
-    model.perform(Action::Convert("sf2".into()));
+    model.perform(Action::Convert("sf2".into(), None));
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Refused(Refusal::NothingExported)))
@@ -1585,7 +1585,7 @@ fn the_slices_last_written_are_converted_into_a_directory_beside_them() {
         }
     };
 
-    model.perform(Action::Convert("sf2".into()));
+    model.perform(Action::Convert("sf2".into(), None));
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Refused(Refusal::NothingExported)))
@@ -1610,7 +1610,7 @@ fn the_slices_last_written_are_converted_into_a_directory_beside_them() {
         }))
     );
 
-    model.perform(Action::Convert("sf2".into()));
+    model.perform(Action::Convert("sf2".into(), None));
     let started = Outcome::ConvertStarted {
         format: "sf2".into(),
     };
@@ -1622,7 +1622,10 @@ fn the_slices_last_written_are_converted_into_a_directory_beside_them() {
     let dest = export.join("sf2");
     assert_eq!(
         converted,
-        Message::Core(Notice::Done(Outcome::Converted { dir: dest.clone() }))
+        Message::Core(Notice::Done(Outcome::Converted {
+            dir: dest.clone(),
+            warnings: Vec::new()
+        }))
     );
     assert_eq!(
         std::fs::read_to_string(dest.join("args")).unwrap().trim(),
@@ -1631,6 +1634,92 @@ fn the_slices_last_written_are_converted_into_a_directory_beside_them() {
             export.join("amen.sfz").display(),
             dest.display()
         )
+    );
+}
+
+/// An export from an earlier run, named or by path; a directory with no kit
+/// is refused before anything runs.
+#[cfg(unix)]
+#[test]
+fn an_earlier_export_is_converted_by_name_or_path() {
+    use playr_app::message::Message;
+    use playr_core::notice::{Notice, Outcome, Refusal};
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let samples = dir.path().join("samples");
+    let export = samples.join("amen");
+    std::fs::create_dir_all(&export).unwrap();
+    std::fs::write(export.join("amen.sfz"), "<region> sample=a.wav key=36\n").unwrap();
+    let old = samples.join("old");
+    std::fs::create_dir_all(&old).unwrap();
+    let program = dir.path().join("ConvertWithMoss");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\nfor last; do :; done\necho \"$@\" > \"$last/args\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = Config::parse(&format!(
+        "samples = '{}'\n[extensions]\nconvert-with-moss.enable = true\nconvert-with-moss.path = '{}'",
+        samples.display(),
+        program.display()
+    ))
+    .unwrap();
+    let mut model = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        config,
+    );
+    let converted = |model: &mut Model, format: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            model.refresh();
+            if let Some(Message::Core(Notice::Done(Outcome::Converted { dir, .. }))) =
+                model.message()
+            {
+                return dir.clone();
+            }
+            assert!(Instant::now() < deadline, "not converted to {format}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+
+    // Listed for Tab: only a directory holding a kit is an export.
+    assert_eq!(model.session().exports(), ["amen"]);
+
+    // Nothing written in this run, yet an export by name converts.
+    model.perform(Action::Convert("sf2".into(), Some("amen".into())));
+    assert_eq!(converted(&mut model, "sf2"), export.join("sf2"));
+    assert_eq!(
+        std::fs::read_to_string(export.join("sf2/args"))
+            .unwrap()
+            .trim(),
+        format!(
+            "-s sfz -d sf2 {} {}",
+            export.join("amen.sfz").display(),
+            export.join("sf2").display()
+        )
+    );
+    // By its full path, the same.
+    model.perform(Action::Convert("mpc".into(), Some(export.clone())));
+    assert_eq!(converted(&mut model, "mpc"), export.join("mpc"));
+
+    // An export from before kits, and a name that is not there.
+    for name in ["old", "missing"] {
+        model.perform(Action::Convert("sf2".into(), Some(name.into())));
+        assert_eq!(
+            model.message(),
+            Some(&Message::Core(Notice::Refused(Refusal::NoKit(
+                samples.join(name)
+            ))))
+        );
+    }
+    assert!(!old.join("sf2").exists());
+    assert_eq!(
+        model.message_text().map(|t| t.starts_with("no kit in ")),
+        Some(true)
     );
 }
 

@@ -831,7 +831,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             }
             None => f.notify(Message::NoSlicesPlanned),
         },
-        Action::Convert(format) => match f.session_mut().convert(format.clone()) {
+        Action::Convert(format, export) => match f.session_mut().convert(format.clone(), export) {
             Ok(_) => f.notify(Outcome::ConvertStarted { format }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },

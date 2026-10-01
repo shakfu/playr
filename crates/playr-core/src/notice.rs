@@ -132,9 +132,10 @@ pub enum Outcome {
     ConvertStarted {
         format: String,
     },
-    /// The last export, converted into `dir`.
+    /// An export, converted into `dir`, with what ConvertWithMoss left out.
     Converted {
         dir: PathBuf,
+        warnings: Vec<String>,
     },
     ScanStarted {
         /// The directory being scanned, or `None` when every recorded root is.
@@ -193,6 +194,9 @@ pub enum Refusal {
     NothingExported,
     /// ConvertWithMoss is not installed at this path.
     NoConvertWithMoss(PathBuf),
+    /// This directory holds no `.sfz` kit named after it: not an export, or
+    /// one written before exports had kits.
+    NoKit(PathBuf),
     /// The `convert-with-moss` extension is not enabled in the settings.
     ConvertOff,
     /// No search results are shown, so there is nothing to save.

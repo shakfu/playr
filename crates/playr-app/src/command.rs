@@ -162,8 +162,8 @@ pub const COMMANDS: &[Command] = &[
     ),
     extension(
         "convert",
-        "FORMAT",
-        "last slices to a ConvertWithMoss format",
+        "FORMAT [EXPORT]",
+        "last export, or EXPORT, via ConvertWithMoss",
     ),
     any("mark", "[TIME]", "mark the playing position, or a time"),
     any("mark-undo", "", "undo the last mark"),
@@ -577,7 +577,8 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         SetRange(Some((a, b))) => format!("range {} {}", time(a), time(b)),
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
-        Convert(format) => format!("convert {format}"),
+        Convert(format, None) => format!("convert {format}"),
+        Convert(format, Some(dir)) => format!("convert {format} {}", dir.display()),
         Theme(t) => format!("theme {}", t.name()),
         SetColumns(columns) => {
             let names: Vec<&str> = columns.iter().map(|c| c.name()).collect();
@@ -1062,8 +1063,10 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             }
             _ => Err(usage()),
         },
-        "convert" if playr_core::convertwithmoss::is_format_name(rest) => {
-            Ok(Action::Convert(rest.to_string()))
+        "convert" if playr_core::convertwithmoss::is_format_name(first_word(rest).0) => {
+            let (format, export) = first_word(rest);
+            let export = (!export.is_empty()).then(|| path(export));
+            Ok(Action::Convert(format.to_string(), export))
         }
         "convert" => Err(format!(
             "convert takes a ConvertWithMoss format: {}",
@@ -1131,9 +1134,17 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
 ///
 /// The first word completes to the names of commands that work in `view`.
 /// After `edge`, `fit`, `loop`, `mode`, `snap`, `theme` or `view` the argument completes to its choices, and after
-/// `playlist` or `rename` to the names in `playlists`. An extension's command
-/// is completed only with `extensions`: when it is enabled in the settings.
-pub fn completions(text: &str, view: View, playlists: &[String], extensions: bool) -> Vec<String> {
+/// `playlist` or `rename` to the names in `playlists`, and after `convert
+/// FORMAT` to the names `exports` lists, called only then since it reads a
+/// directory. An extension's command is completed only with `extensions`:
+/// when it is enabled in the settings.
+pub fn completions(
+    text: &str,
+    view: View,
+    playlists: &[String],
+    exports: &dyn Fn() -> Vec<String>,
+    extensions: bool,
+) -> Vec<String> {
     let offered =
         |name: &str| extensions || !COMMANDS.iter().any(|c| c.extension && c.name == name);
     let Some((word, rest)) = text.split_once(' ') else {
@@ -1150,6 +1161,14 @@ pub fn completions(text: &str, view: View, playlists: &[String], extensions: boo
         return Vec::new();
     }
     let rest = rest.trim_start();
+    if let ("convert", Some((format, export))) = (command.name, rest.split_once(' ')) {
+        let lower = export.trim_start().to_lowercase();
+        return exports()
+            .into_iter()
+            .filter(|n| n.to_lowercase().starts_with(&lower))
+            .map(|n| format!("convert {format} {n}"))
+            .collect();
+    }
     let choices: Vec<String> = match command.name {
         "mode" => MODES.iter().map(|m| m.0.to_string()).collect(),
         "theme" => THEMES.iter().map(|t| t.0.to_string()).collect(),
@@ -1252,7 +1271,14 @@ impl CommandLine {
     }
 
     /// Shows the next completion, or the previous one when `forward` is false.
-    pub fn complete(&mut self, forward: bool, view: View, playlists: &[String], extensions: bool) {
+    pub fn complete(
+        &mut self,
+        forward: bool,
+        view: View,
+        playlists: &[String],
+        exports: &dyn Fn() -> Vec<String>,
+        extensions: bool,
+    ) {
         self.recall = None;
         let (choices, at) = match self.tab.take() {
             Some((choices, at)) => {
@@ -1265,7 +1291,7 @@ impl CommandLine {
                 (choices, at)
             }
             None => {
-                let choices = completions(&self.text, view, playlists, extensions);
+                let choices = completions(&self.text, view, playlists, exports, extensions);
                 if choices.is_empty() {
                     return;
                 }

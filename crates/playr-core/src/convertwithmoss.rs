@@ -15,14 +15,23 @@ use std::process::Command;
 
 /// The formats offered by name, as ConvertWithMoss's `-d` takes them. Any
 /// other name it knows works too.
-pub const FORMATS: [&str; 7] = [
+pub const FORMATS: [&str; 16] = [
     "1010music",
     "ableton",
     "bento",
+    "deluge",
     "distingex",
+    "emulti",
+    "exs24",
     "mc707",
+    "mpc",
+    "nki",
+    "opxy",
     "renoise",
+    "s2400",
     "sf2",
+    "sp404mk2",
+    "sxt",
 ];
 
 /// Where ConvertWithMoss's installer puts its command line. Only the Linux
@@ -54,10 +63,42 @@ pub fn is_format_name(format: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
+/// A conversion that wrote its directory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Converted {
+    pub dir: PathBuf,
+    /// What ConvertWithMoss said it left out, a line each, such as zones
+    /// past a device's limit.
+    pub warnings: Vec<String>,
+}
+
+/// Words ConvertWithMoss's messages use for content it did not convert, read
+/// from its `Strings.properties`, its only language. Its progress lines use
+/// none of them.
+const LOSS: [&str; 5] = ["dropped", "skipped", "ignored", "truncated", "discarded"];
+
+/// The lines of a run that succeeded which report lost content: those on the
+/// error output, and those on the output that name a loss. It reports both
+/// kinds on the output, unmarked, so the words are all that tell them apart.
+fn warnings(stdout: &str, stderr: &str) -> Vec<String> {
+    let lost = |line: &str| {
+        let lower = line.to_lowercase();
+        LOSS.iter().any(|w| lower.contains(w))
+    };
+    stdout
+        .lines()
+        .filter(|l| lost(l))
+        .chain(stderr.lines())
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect()
+}
+
 /// Converts the kit at `kit` to `format` with the ConvertWithMoss at
-/// `program`, into a new directory named `format` beside the kit, which it
-/// returns. A conversion that fails leaves no directory.
-pub fn convert(program: &Path, kit: &Path, format: &str) -> Result<PathBuf, String> {
+/// `program`, into a new directory named `format` beside the kit. A
+/// conversion that fails leaves no directory.
+pub fn convert(program: &Path, kit: &Path, format: &str) -> Result<Converted, String> {
     if !is_format_name(format) {
         return Err(format!("{format} is not a format name"));
     }
@@ -89,7 +130,14 @@ pub fn convert(program: &Path, kit: &Path, format: &str) -> Result<PathBuf, Stri
     };
     let wrote = fs::read_dir(&dest).is_ok_and(|mut entries| entries.next().is_some());
     if output.status.success() && wrote {
-        return Ok(dest);
+        let warnings = warnings(
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        );
+        return Ok(Converted {
+            dir: dest,
+            warnings,
+        });
     }
     // It exits 0 whatever happened, having written nothing, and says why on
     // its error output, first line first.

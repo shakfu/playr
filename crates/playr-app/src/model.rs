@@ -1028,7 +1028,10 @@ impl Model {
                     }),
                 },
                 Event::Converted { result, .. } => match result {
-                    Ok(dir) => self.notify(Outcome::Converted { dir }),
+                    Ok(c) => self.notify(Outcome::Converted {
+                        dir: c.dir,
+                        warnings: c.warnings,
+                    }),
                     Err(error) => self.notify(Notice::Failed {
                         task: Task::Convert,
                         error,
