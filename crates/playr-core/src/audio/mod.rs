@@ -173,6 +173,10 @@ pub enum Cmd {
     /// Play the queued track at `index`, keeping the queue.
     Jump(usize),
     TogglePause,
+    /// Play if paused, or start the current track if stopped; playing,
+    /// nothing. A frontend that wants playback sends this, not a toggle
+    /// chosen from a status the commands just before it may not show yet.
+    Resume,
     Next,
     Prev,
     Stop,
@@ -745,13 +749,14 @@ impl Engine {
             | Cmd::Move(..)
             | Cmd::Unqueue(_) => {}
             Cmd::Jump(index) => self.jump(index),
-            Cmd::TogglePause => match self.state {
-                State::Playing => {
-                    if let Some(o) = &self.out {
-                        o.pause();
-                    }
-                    self.state = State::Paused;
+            Cmd::TogglePause if self.state == State::Playing => {
+                if let Some(o) = &self.out {
+                    o.pause();
                 }
+                self.state = State::Paused;
+            }
+            Cmd::TogglePause | Cmd::Resume => match self.state {
+                State::Playing => {}
                 State::Paused => {
                     if let Some(o) = &self.out {
                         o.play();

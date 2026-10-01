@@ -832,6 +832,31 @@ fn a_one_shot_range_plays_through_once_and_pauses_at_its_end() {
 }
 
 #[test]
+fn resume_plays_from_any_state_and_never_pauses() {
+    let (player, _control) = fake_player();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("loud.wav");
+    levels(&file, 8000, &[(20.0, 0.5)]);
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+
+    // Playing, it does nothing, where a toggle would pause.
+    player.send(Cmd::Resume);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(player.status().state, State::Playing);
+
+    player.send(Cmd::TogglePause);
+    wait_for(&player, |s| s.state == State::Paused);
+    player.send(Cmd::Resume);
+    wait_for(&player, |s| s.state == State::Playing);
+
+    player.send(Cmd::Stop);
+    wait_for(&player, |s| s.state == State::Stopped);
+    player.send(Cmd::Resume);
+    wait_for(&player, |s| s.state == State::Playing);
+}
+
+#[test]
 fn a_seek_while_stopped_cues_the_track_paused_and_silent() {
     let (player, control) = fake_player();
     let dir = tempfile::tempdir().unwrap();

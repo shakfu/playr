@@ -94,7 +94,7 @@ For the loop test, make a looped export: in the sampler view, drag a range over 
 | X3 | Keys below the first slice | Play keys below note 36. | Reported in `patch.json`: the first zone reaches down to note 0, so these play slice 1 transposed. Confirm. |
 | X4 | A looped slice loops | Load the looped preset: one 4 s slice of all 8 tones, on note 36. Hold that key for 6 s. | The 8 tones play, then start again from 220 Hz at 4 s. Without the loop it stops at 4 s. |
 | X5 | Many slices | Convert and load the 40-slice export: `:convert opxy tones-2`. | ConvertWithMoss keeps 24 zones, on notes 36-59, and `:convert` names the 16 it dropped. Check all 24 load and play, and that note 60 up plays nothing new. |
-| X6 | 96 kHz source | Convert and load the `tones96` export. | Record whether ConvertWithMoss resampled it, and whether it plays at pitch. |
+| X6 | 96 kHz source | Load `tones96`, converted with `:convert opxy tones96`. ConvertWithMoss made each slice 44.1 kHz, 22,050 frames, but `patch.json` gives `sample.end` 48,000, the count before resampling. | Record whether each key plays its whole 0.5 s tone at pitch and stops cleanly, or plays past the end, clicks, or is refused. |
 
 **What each result changes in playr:**
 

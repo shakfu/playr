@@ -495,9 +495,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
                 .map_or(Duration::ZERO, |(s, p)| sampler::time_of(s, p.rate));
             // Stopped, the seek cues the track paused; either way it then plays.
             f.session().send(Cmd::Seek(at));
-            if status.state != playr_core::audio::State::Playing {
-                f.session().send(Cmd::TogglePause);
-            }
+            f.session().send(Cmd::Resume);
         }
         Action::SeekBy(seconds) => f.session().send(Cmd::SeekBy(seconds)),
         Action::SeekTo(at) => {
@@ -705,9 +703,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             };
             f.session().send(Cmd::Loop(Some(range)));
             // Looping is for hearing the range, so a paused or stopped track plays.
-            if status.state != playr_core::audio::State::Playing {
-                f.session().send(Cmd::TogglePause);
-            }
+            f.session().send(Cmd::Resume);
             f.notify(Message::Loop(true));
         }
         Action::LoopSlot(slot, op) => loop_slot(f, slot, op),

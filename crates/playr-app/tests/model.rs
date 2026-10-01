@@ -1399,6 +1399,53 @@ fn scrub_plays_a_moment_from_the_time_then_pauses() {
     assert_eq!(model.session().player().status().looping, None);
 }
 
+/// Loop started right after a command that plays, before the engine has
+/// published that it plays: it must not read the state it left behind and
+/// pause what that command started.
+#[test]
+fn loop_right_after_audition_plays_the_loop() {
+    use playr_app::sampler::Wave;
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = |model: &Model| model.session().player().status();
+    model.perform(Action::TogglePause);
+    while status(&model).state != State::Paused {
+        assert!(Instant::now() < deadline, "never paused");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let ms = Duration::from_millis;
+    model.perform(Action::SetRange(Some((ms(2_000), ms(3_000)))));
+    let range = model.sampler().range(status(&model).current());
+
+    model.perform(Action::Audition);
+    model.perform(Action::Loop(Some(true)));
+    // Settled: the engine has taken both, and a loop of 1 s has had time to
+    // pass its end, which would show a one-shot's pause.
+    std::thread::sleep(ms(1_500));
+    let settled = status(&model);
+    assert_eq!(
+        (settled.state, settled.looping),
+        (State::Playing, range),
+        "the loop was paused"
+    );
+}
+
 #[test]
 fn audition_hears_the_same_span_each_time_it_is_pressed() {
     use playr_app::sampler::Wave;

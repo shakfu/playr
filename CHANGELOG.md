@@ -4,6 +4,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.16.0]
+
 ### Added
 
 - The window's sampler shows the whole track in a strip above the waveform, with the stretch in view framed; a click or drag there seeks, and the view follows. A zoom slider sits between the `-` and `+` buttons, and a time axis runs along the waveform's top.
@@ -23,6 +25,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 - playr-gui's minimum height is 504 points, up from 480, so the waveform keeps 200 points with the overview above it. The sampler's Track info button reads `info`; `i` looked like `|`.
 
 ### Fixed
+
+- Loop could pause the audio it was meant to play. `l` started from a pause sent a toggle when the published status said paused, but a command sent just before it, such as `:audition` or a scrub's moment, could already have started playback in the engine; the toggle then paused it, leaving the loop set and silent. Loop and From start now send `Cmd::Resume`, which plays from any state and never pauses, so the engine decides from its own state. Library API: `Cmd::Resume`.
 
 - The README said `settings.toml` and `keys.toml` joined in file order make a valid settings file. The window refused it with `unknown setting: theme`: `keys.toml`'s top-level `theme` fell under `settings.toml`'s `[gui]` table. `--print-settings` puts `theme` first.
 

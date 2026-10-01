@@ -332,12 +332,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         drag.1 = at(p);
     }
     // A scrub a grain apart, from wherever the pointer moved to since the last.
-    // None on release: the loop that follows decides to unpause from a status
-    // the engine has not yet updated for the grain, so it would pause it.
-    if let Some((_, to)) = state
-        .drag
-        .filter(|_| state.scrub && !response.drag_stopped())
-    {
+    if let Some((_, to)) = state.drag.filter(|_| state.scrub) {
         let now = ui.input(|i| i.time);
         let grain = sampler::SCRUB.as_secs_f64();
         match state.grain {

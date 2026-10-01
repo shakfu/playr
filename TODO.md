@@ -36,7 +36,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Sampler
 
-- [ ] **Loop can pause what it means to play.** `Action::Loop` sends `TogglePause` when the published status is not Playing. A command sent just before it, such as `:audition` or a scrub, may already have started playback in the engine, which has not yet published it, so the toggle pauses. The scrub drag avoids it by sending no grain on release. Fix: a `Cmd` that plays without toggling, so the engine decides from its own state, as `Cmd::PlayOnce` does.
+- [ ] **Add undo in slicing**
 
 - [ ] **Waveform cache.** The sampler keeps one track's `Peaks` and decodes the whole file again on each return to a track. Time `Peaks::read` on a few tracks first; skip this if a read is short. Otherwise keep recent `Arc<Peaks>` in memory, capped at 100 MB and evicting the least recently used. Cap by bytes, not tracks: a 4-minute track is about 17 MB, a 60-minute mix about 250 MB. Check modification time and size on a hit. Optionally read the selection's tracks ahead, so a first visit is fast too. A file cache survives restarts but needs a format, invalidation and cleanup; not worth it for 4 or 5 working tracks.
 
@@ -53,6 +53,10 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 - [ ] **Loop points in the WAV.** A range cut whole while it loops is marked to loop only in `samples.json`, playr's own format, which other samplers are unlikely to read (decision 3; inference). The WAV itself carries no loop. A `smpl` chunk with the loop's start and end is the usual place for one, and many samplers read it (inference, not checked per sampler). Slice points are now written, in a `cue ` chunk of `sliced/NAME.wav`; the loop is not, and marks are not. `docs/dev/hardware_samplers.md` collects the formats and which devices read them.
 
 - [ ] **Mark labels and export.** `marks` has `path`, `frame` and `rate`, and no text. A label column would allow notes such as "solo" or "break". Export as an Audacity label file or a cue sheet; `docs/sampler.md` already designs a `marks.jsonl` line. Since slices serve any sampler (decision 3), SFZ output may reach the most samplers (inference, not researched).
+
+- [ ] **OP-XY frame counts at other rates.** ConvertWithMoss 20.3.0 resamples a 48 or 96 kHz slice to 44.1 kHz for the OP-XY, but `patch.json` keeps the old counts: `framecount`, `sample.end` and `loop.end` say 24,000 or 48,000 for a file of 22,050 frames. Every playr export keeps its source's rate, so a 48 kHz track hits it. What the device does with an end past the file is X6 in `docs/dev/device_tests.md`. Fix upstream: the report is drafted in `docs/dev/issues/convertwithmoss-issue.md`. Until then `:convert opxy` could resample to 44.1 kHz first, or warn. Found 2026-10-01.
+
+- [ ] **Refuse or split past a format's limit.** ConvertWithMoss keeps 24 zones for the OP-XY and drops the rest; `:convert` now says so, after the fact. A table of limits per format would let `:convert` refuse first, or write one preset per 24 slices, as AudioHit splits `.ot` files. The OP-XY's is the only limit known; `docs/dev/hardware_samplers.md` lists the devices' slice limits.
 
 ### Library
 
@@ -79,6 +83,8 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 - [ ] **Platform directories.** Both interfaces keep the library in `~/.local/share/playr` and settings in `~/.config/playr` on every platform, which is unusual on macOS and Windows. Moving to each platform's directories must move existing libraries.
 
 - [ ] **README as manual.** It is 57 KB and 619 lines; install starts at line 140 and the first command at line 205. Keep the description, install and a ten-line first session. Move the rest to `docs/manual.md`.
+
+- [ ] **Long messages cut off in the terminal.** The bottom line shares its width with the mode and volume. At 100 columns about 58 characters are free, so a ConvertWithMoss warning showed "The preset has 40 regions but the device" and lost "at most 24". The window shows more. Options: wrap onto a second line, or keep the last messages for a `:messages` list.
 
 ### Output
 
@@ -127,6 +133,14 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 ### Sampler
 
 - [ ] **Live marks for sampling tools.** Slices can be exported as files. Handing a marked passage to a running tool, such as SuperCollider, is not done: `docs/sampler.md` weighs a JSON Lines file against OSC.
+
+- [ ] **ConvertWithMoss options per format.** `:convert` passes none. Maschine writes nothing without `-pMaschineOutputFormat`; 0 and 2 write `.mxsnd`, and what they differ in is open. A fixed table in `convertwithmoss.rs`, not options typed by the user, who would have to learn ConvertWithMoss's names.
+
+- [ ] **Polyend Tracker slices.** ConvertWithMoss keeps only a kit's first slice: a `.pti` instrument holds one sample. The sliced WAV is the right source, as one sample with slice points, which needs a `.pti` writer. [pti-tools](https://github.com/jaap3/pti-tools) builds one (reported).
+
+- [ ] **MPC loops.** ConvertWithMoss writes a looped slice's loop but sets `TriggerMode` 0, one-shot, for any zone on one key without sustain, which every playr slice is, so the loop is ignored (inference from its reader). Only a range sliced whole while it loops is affected. **Upstream** unless ConvertWithMoss has an option for it; not checked.
+
+- [ ] **Kits for exports before 0.15.0.** Those exports have no `.sfz`, so `:convert` refuses them. Their `samples.json` records each slice's frames and loop, enough to write one.
 
 ### Interface
 

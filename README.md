@@ -29,6 +29,10 @@ None of the three contact external services or download any metadata and images.
 
 - Sampler view: zoom to single frames, nudge the playhead and snap it to zero crossings, and set a range to slice or loop, with its ends moved while it loops and the view held on the range or either end
 
+- In the window, the sampler adds the whole track in a strip above the waveform with the stretch in view framed, a zoom slider, a time axis, and Scrub: a drag plays a moment wherever the pointer moves, then loops the range it set
+
+- Each export also holds an `.sfz` kit and one WAV with a cue point at each slice; with the ConvertWithMoss extension, `:convert` turns an export, the last or any earlier one, into 16 sampler formats, among them MPC, SP-404MK2, OP-XY, Deluge, Logic's Sampler and Kontakt
+
 - Spectrogram of the playing track in the sampler view, read with its waveform, in the terminal and the window
 
 - The sampler's region shows its peak, loudness in LUFS and stereo correlation
@@ -127,6 +131,8 @@ Only one runs at a time: while one is running, the others, `playr scan` and `pla
 | playback modes, varispeed, volume, level meter | yes | yes | yes |
 | ReplayGain | yes | yes | yes |
 | sampler view and `:slice` | yes | yes | no |
+| sampler overview, zoom slider and Scrub | no | yes | no |
+| `:convert`, an extension | yes | yes | no |
 | mouse | no | yes | yes, and touch |
 | media keys and the now-playing panel | yes* | yes | no |
 | opens, scans or prunes a path it is given | yes | yes | no |
