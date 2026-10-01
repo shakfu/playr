@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use playr_app::action::Nudge;
 use playr_app::sampler::{
-    db_height, fmt_frames, nudge, peaks_of, plan_text, snap, window, zoom_to_fit, DetailRead,
-    Layout, Sampler, Scale, Wave, DB_FLOOR, DETAIL_BELOW,
+    db_height, fmt_frames, fmt_tick, nudge, peaks_of, plan_text, snap, tick_step, window,
+    zoom_to_fit, DetailRead, Layout, Sampler, Scale, Wave, DB_FLOOR, DETAIL_BELOW,
 };
 use playr_app::Display;
 use playr_core::wave::{Detail, Peaks, BUCKET};
@@ -469,4 +469,25 @@ fn a_playhead_out_of_view_says_which_side_it_is_on() {
     assert_eq!(at(500).playhead_off(), Some(Ordering::Less));
     assert_eq!(at(2_000).playhead_off(), Some(Ordering::Greater));
     assert_eq!(layout(2, Duration::ZERO, &[]).playhead_off(), None);
+}
+
+#[test]
+fn the_time_axis_steps_are_round_and_far_enough_apart() {
+    // 12 s across 1,000 points: 0.96 s for 80 points rounds up to 1 s.
+    assert_eq!(tick_step(0.012, 80.0), 1.0);
+    // 80 s for 80 points: 60 s is too close, so 120 s.
+    assert_eq!(tick_step(1.0, 80.0), 120.0);
+    // At the deepest zoom, the shortest step.
+    assert_eq!(tick_step(1e-6, 80.0), 0.001);
+    // Past the longest step, the longest.
+    assert_eq!(tick_step(100.0, 80.0), 3600.0);
+}
+
+#[test]
+fn a_tick_shows_the_decimals_its_step_needs() {
+    assert_eq!(fmt_tick(83.5, 1.0), "1:23");
+    assert_eq!(fmt_tick(83.5, 0.5), "1:23.5");
+    assert_eq!(fmt_tick(83.25, 0.05), "1:23.25");
+    assert_eq!(fmt_tick(0.0123, 0.005), "0:00.012");
+    assert_eq!(fmt_tick(4500.0, 900.0), "75:00");
 }

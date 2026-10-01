@@ -283,6 +283,7 @@ pub const COMMANDS: &[Command] = &[
         "[next|prev]",
         "play a slice, the range or region once",
     ),
+    only(Sampler, "scrub", "TIME", "play a moment from a time"),
     only(
         Sampler,
         "edge",
@@ -554,6 +555,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Audition => "audition".into(),
         AuditionSlice(true) => "audition next".into(),
         AuditionSlice(false) => "audition prev".into(),
+        Scrub(d) => format!("scrub {}", time(d)),
         MoveCursor(crate::action::Nudge::Columns(n)) => format!("cursor {n:+}"),
         MoveCursor(crate::action::Nudge::Percent(n)) => format!("cursor {n:+}%"),
         SetCursor(None) => "cursor off".into(),
@@ -1029,6 +1031,8 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             "prev" => Ok(Action::AuditionSlice(false)),
             _ => Err(usage()),
         },
+        "scrub" if rest.is_empty() => Err(usage()),
+        "scrub" => Ok(Action::Scrub(parse_time(rest)?)),
         "cursor" if rest == "off" => Ok(Action::SetCursor(None)),
         "cursor" if rest.starts_with(['+', '-']) => {
             nudge(rest).map(Action::MoveCursor).ok_or_else(usage)

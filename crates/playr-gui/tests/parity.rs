@@ -95,6 +95,7 @@ fn every_action() -> Vec<Action> {
         Action::ClearLoops,
         Action::Audition,
         Action::AuditionSlice(true),
+        Action::Scrub(Duration::ZERO),
         Action::MoveCursor(playr_app::action::Nudge::Columns(1)),
         Action::SetCursor(None),
         Action::PickMark(true),
@@ -200,6 +201,7 @@ fn every_action() -> Vec<Action> {
             | Action::ClearLoops
             | Action::Audition
             | Action::AuditionSlice(_)
+            | Action::Scrub(_)
             | Action::MoveCursor(_)
             | Action::SetCursor(_)
             | Action::PickMark(_)

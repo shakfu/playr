@@ -36,6 +36,8 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Sampler
 
+- [ ] **Loop can pause what it means to play.** `Action::Loop` sends `TogglePause` when the published status is not Playing. A command sent just before it, such as `:audition` or a scrub, may already have started playback in the engine, which has not yet published it, so the toggle pauses. The scrub drag avoids it by sending no grain on release. Fix: a `Cmd` that plays without toggling, so the engine decides from its own state, as `Cmd::PlayOnce` does.
+
 - [ ] **Waveform cache.** The sampler keeps one track's `Peaks` and decodes the whole file again on each return to a track. Time `Peaks::read` on a few tracks first; skip this if a read is short. Otherwise keep recent `Arc<Peaks>` in memory, capped at 100 MB and evicting the least recently used. Cap by bytes, not tracks: a 4-minute track is about 17 MB, a 60-minute mix about 250 MB. Check modification time and size on a hit. Optionally read the selection's tracks ahead, so a first visit is fast too. A file cache survives restarts but needs a format, invalidation and cleanup; not worth it for 4 or 5 working tracks.
 
 - [ ] **Preview in the sampler.** Show the waveform of the track highlighted in a list without playing it. The range, marks, `:in`, `:out` and loop all assume the playing track, so decide what each does on a track not playing.

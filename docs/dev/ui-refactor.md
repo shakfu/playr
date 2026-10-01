@@ -130,3 +130,7 @@ Where it differs from the decisions, or adds to them:
 - **The tab and the menu are both named Sampler.** A screen reader hears two controls with one name, and tests pick the higher one.
 
 - **Right-click is hard to discover.** Nothing in the view names the waveform's menu; the Sampler menu repeats most of it.
+
+## Later: overview, 2026-10-01
+
+The overview strip above the waveform takes 21 points. At 800 x 480 that left the waveform 189 points, under the 200-point budget. The minimum height rose to 504 rather than hiding the strip at whole-track zoom, which would resize the waveform on the first zoom step. The design size is now 800 x 504; the tests above check it there.

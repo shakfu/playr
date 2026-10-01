@@ -8,6 +8,11 @@
 //! scale, the same on a dB scale, and the waveform's extremes around a centre
 //! line, which the terminal draws in Braille and `:display braille` names.
 //!
+//! Above the waveform, the whole track shows with the stretch in view framed;
+//! a click or drag there seeks, which the view follows. A time axis runs
+//! along the waveform's top. With Scrub on, a drag across the waveform plays
+//! a moment wherever the pointer is, then loops the range it set.
+//!
 //! Two rows of controls sit under the waveform. The Sampler menu holds every
 //! action; `docs/dev/ui-refactor.md` says which get a button.
 
@@ -37,6 +42,12 @@ const GROUP_GAP: f32 = 10.0;
 
 /// The height, in points, of the lane of saved loops under the waveform.
 const LANE: f32 = 16.0;
+
+/// The height, in points, of the whole track above the waveform.
+const OVERVIEW: f32 = 18.0;
+
+/// The fewest points between the time axis's labelled ticks.
+const TICK_GAP: f64 = 80.0;
 
 /// The most points a frame takes at the deepest zoom: 1,000 points show
 /// about 60 frames, far enough apart to pick one out.
@@ -106,6 +117,14 @@ pub struct State {
     around: Option<f32>,
     /// The spectrogram's pixels, replaced each frame it is drawn.
     spectrogram: Option<egui::TextureHandle>,
+    /// Whether a drag across the waveform scrubs, then loops its range. The
+    /// window's alone: only a pointer drags.
+    scrub: bool,
+    /// When the last scrub was sent, in egui's seconds, and from where.
+    grain: Option<(f64, Duration)>,
+    /// Where a click or drag on the overview last sought, in points, so a
+    /// pointer held still does not seek again each frame.
+    sought: Option<f32>,
 }
 
 impl Default for State {
@@ -122,6 +141,9 @@ impl Default for State {
             sensitivity: None,
             around: None,
             spectrogram: None,
+            scrub: false,
+            grain: None,
+            sought: None,
         }
     }
 }
@@ -149,7 +171,8 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     // The waveform takes the height the rest of the view left last frame;
     // 87 points is a first guess, which the frame measures and corrects.
     let top = ui.cursor().top();
-    let height = (ui.available_height() - state.around.unwrap_or(87.0 + GROUP_GAP)).max(80.0);
+    let guess = 87.0 + GROUP_GAP + OVERVIEW;
+    let height = (ui.available_height() - state.around.unwrap_or(guess)).max(80.0);
     let width = ui.available_width();
     let mut layout = Layout::new(
         peaks,
@@ -171,6 +194,16 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     model.set_zoom(layout.zoom);
     model.set_scale(layout.columns());
 
+    // The deepest zoom this track and width allow, for the zoom slider.
+    let deepest = sampler::window(
+        layout.peaks.frames,
+        layout.columns,
+        u32::MAX,
+        0,
+        POINTS_PER_FRAME,
+    )
+    .3;
+    let mut zoom = layout.zoom;
     // The buttons go first, so the name gets what is left and truncates.
     egui::Sides::new().shrink_left().truncate().show(
         ui,
@@ -209,14 +242,26 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                     Action::Zoom(Zoom::In) => "+",
                     Action::Zoom(Zoom::Out) => "-",
                     Action::Zoom(Zoom::All) => "\u{2194}",
-                    _ => "i",
+                    _ => "info",
                 };
+                // Right to left, so between `-` and `+`.
+                if control.action == Action::Zoom(Zoom::Out) {
+                    ui.spacing_mut().slider_width = 80.0;
+                    let slider = egui::Slider::new(&mut zoom, 0..=deepest).show_value(false);
+                    ui.add(slider)
+                        .widget_info(|| egui::WidgetInfo::slider(true, f64::from(zoom), "Zoom"));
+                }
                 if named(ui, model, text, control) {
                     actions.push(control.action.clone());
                 }
             }
         },
     );
+    // Takes effect next frame, as the zoom buttons' does.
+    if zoom != layout.zoom {
+        model.set_zoom(zoom);
+    }
+    overview(ui, &layout, &mut state.sought, &mut actions);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
     response
@@ -286,6 +331,28 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     if let (Some(drag), Some(p)) = (state.drag.as_mut(), pointer) {
         drag.1 = at(p);
     }
+    // A scrub a grain apart, from wherever the pointer moved to since the last.
+    // None on release: the loop that follows decides to unpause from a status
+    // the engine has not yet updated for the grain, so it would pause it.
+    if let Some((_, to)) = state
+        .drag
+        .filter(|_| state.scrub && !response.drag_stopped())
+    {
+        let now = ui.input(|i| i.time);
+        let grain = sampler::SCRUB.as_secs_f64();
+        match state.grain {
+            Some((_, from)) if from == to => {}
+            // A frame when this grain ends, so the pointer's last move is
+            // heard even if it then holds still.
+            Some((sent, _)) if now - sent < grain => ui
+                .ctx()
+                .request_repaint_after(Duration::from_secs_f64(grain - (now - sent))),
+            _ => {
+                actions.push(Action::Scrub(to));
+                state.grain = Some((now, to));
+            }
+        }
+    }
     // An edge that can be dragged shows it, before and while it is.
     let over_edge = response
         .hover_pos()
@@ -298,8 +365,13 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     let dragging_mark = state.mark_drag.zip(pointer.map(at));
     if response.drag_stopped() {
         state.edge_drag = None;
+        state.grain = None;
         if let Some((from, to)) = state.drag.take().filter(|(from, to)| from != to) {
             actions.push(Action::SetRange(Some((from.min(to), from.max(to)))));
+            // A scrub leaves no loop running, so the release starts one.
+            if state.scrub {
+                actions.push(Action::Loop(Some(true)));
+            }
         }
         // The cursor picks the mark up, then it moves: `MoveMarkTo` acts on
         // whatever the cursor is on, as the keys do.
@@ -319,6 +391,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         model,
         &mut state.spectrogram,
     );
+    axis(&ui.painter_at(rect), ui.visuals(), rect, &layout);
     // The mark follows the pointer while it is held, so the drop is not a guess.
     if let Some((_, to)) = dragging_mark.filter(|_| response.dragged()) {
         let frame = sampler::frame_of(to, layout.rate);
@@ -467,6 +540,14 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             Action::Loop(None),
         ) {
             actions.push(Action::Loop(Some(looping)));
+        }
+        let scrub = egui::Button::new("Scrub").selected(state.scrub);
+        if ui
+            .add(scrub)
+            .on_hover_text("Drag across the waveform to hear it, then loop the range")
+            .clicked()
+        {
+            state.scrub ^= true;
         }
         let empty = snapshot.loops.iter().position(Option::is_none);
         let save = ui
@@ -1023,6 +1104,121 @@ fn paint(
             visuals.strong_text_color(),
             egui::Stroke::NONE,
         ));
+    }
+}
+
+/// The whole track in a strip, the stretch the waveform shows framed, with
+/// the range, marks and playhead. A click or drag seeks.
+fn overview(
+    ui: &mut egui::Ui,
+    layout: &Layout,
+    sought: &mut Option<f32>,
+    actions: &mut Vec<Action>,
+) {
+    let size = egui::vec2(ui.available_width(), OVERVIEW);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Track overview"));
+    let frames = layout.peaks.frames.max(1);
+    let x_of = |f: u64| rect.left() + f.min(frames) as f32 / frames as f32 * rect.width();
+    match response.interact_pointer_pos() {
+        Some(p) if (response.clicked() || response.dragged()) && *sought != Some(p.x) => {
+            *sought = Some(p.x);
+            let along = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            let frame = (along as f64 * frames as f64) as u64;
+            actions.push(Action::SeekTo(sampler::time_of(frame, layout.rate)));
+        }
+        Some(_) => {}
+        None => *sought = None,
+    }
+
+    let visuals = ui.visuals();
+    let colours = Palette::of(visuals);
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, visuals.extreme_bg_color);
+    let shown = egui::Rect::from_x_y_ranges(
+        x_of(layout.start)..=x_of(layout.end()).max(x_of(layout.start) + 2.0),
+        rect.y_range(),
+    );
+    painter.rect_filled(shown, 0.0, colours.region);
+    if let (Some(a), Some(b)) = layout.range {
+        let span = egui::Rect::from_x_y_ranges(x_of(a)..=x_of(b), rect.y_range());
+        painter.rect_filled(span, 0.0, visuals.selection.bg_fill.gamma_multiply(0.4));
+    }
+    // A peak a point, mirrored about the middle.
+    let whole = Layout::new(
+        layout.peaks.clone(),
+        rect.width() as u64,
+        0,
+        Duration::ZERO,
+        &[],
+        1,
+    );
+    for c in 0..(whole.columns as usize).min(rect.width() as usize) {
+        let (_, peak) = whole.heights(Display::Envelope, c);
+        let half = peak.clamp(0.0, 1.0) * rect.height() / 2.0;
+        if half > 0.0 {
+            let x = rect.left() + c as f32 + 0.5;
+            painter.vline(
+                x,
+                rect.center().y - half..=rect.center().y + half,
+                egui::Stroke::new(1.0, colours.outside_rms),
+            );
+        }
+    }
+    let line = |frame: u64, colour, width| {
+        painter.vline(
+            x_of(frame),
+            rect.y_range(),
+            egui::Stroke::new(width, colour),
+        );
+    };
+    for &mark in &layout.marks {
+        line(mark, colours.yellow, 1.0);
+    }
+    line(layout.at, visuals.strong_text_color(), 1.5);
+    painter.rect_stroke(
+        shown,
+        2.0,
+        egui::Stroke::new(1.5, visuals.selection.stroke.color),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// Ticks down from the top of `rect` at times a round step apart, labelled.
+fn axis(painter: &egui::Painter, visuals: &egui::Visuals, rect: egui::Rect, layout: &Layout) {
+    let rate = f64::from(layout.rate);
+    let per_point = layout.per_column as f64 / layout.per_frame as f64 / rate;
+    let step = sampler::tick_step(per_point, TICK_GAP);
+    let start = layout.start as f64 / rate;
+    let x = |t: f64| rect.left() + ((t - start) / per_point) as f32;
+    let stroke = egui::Stroke::new(1.0, visuals.weak_text_color());
+    // Halves between the labelled ticks, shorter.
+    let first = (start / step * 2.0).ceil() as u64;
+    for k in first.. {
+        let t = k as f64 * step / 2.0;
+        let at = x(t);
+        if at > rect.right() {
+            break;
+        }
+        if k % 2 == 1 {
+            painter.vline(at, rect.top()..=rect.top() + 3.0, stroke);
+            continue;
+        }
+        painter.vline(at, rect.top()..=rect.top() + 6.0, stroke);
+        let galley = painter.layout_no_wrap(
+            sampler::fmt_tick(t, step),
+            egui::FontId::proportional(10.0),
+            visuals.text_color(),
+        );
+        let pos = egui::pos2(at + 3.0, rect.top() + 1.0);
+        if pos.x + galley.size().x > rect.right() {
+            continue;
+        }
+        // On a panel of the ground colour, so it reads over the spectrogram.
+        let panel = egui::Rect::from_min_size(pos, galley.size()).expand2(egui::vec2(2.0, 0.0));
+        painter.rect_filled(panel, 2.0, visuals.extreme_bg_color.gamma_multiply(0.8));
+        painter.galley(pos, galley, visuals.text_color());
     }
 }
 

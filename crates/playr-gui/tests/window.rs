@@ -783,6 +783,87 @@ fn with_fit_on_dragging_one_end_then_the_other_moves_only_that_end() {
     );
 }
 
+#[test]
+fn a_click_on_the_overview_seeks_and_the_slider_shows_the_zoom() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    harness.get_by_label("Track overview");
+    let rect = harness.get_by_label("Track waveform").rect();
+    harness.hover_at(rect.center());
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 100.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(3);
+    let zoom = model(&harness).sampler().zoom;
+    assert!(zoom > 0, "the wheel did not zoom");
+    let slider = harness
+        .get_by_label("Zoom")
+        .accesskit_node()
+        .numeric_value();
+    assert_eq!(slider, Some(f64::from(zoom)));
+
+    // Three quarters along the 12 s track seeks near 9 s.
+    let overview = harness.get_by_label("Track overview").rect();
+    let at = egui::pos2(
+        overview.left() + overview.width() * 0.75,
+        overview.center().y,
+    );
+    harness.hover_at(at);
+    harness.run_steps(1);
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    harness.run_steps(2);
+    wait(&mut harness, |m| {
+        (8.5..10.0).contains(&m.snapshot().position.as_secs_f64())
+    });
+}
+
+#[test]
+fn with_scrub_on_a_drag_plays_under_the_pointer_then_loops_the_range() {
+    use playr_core::audio::State;
+
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    harness.get_by_label("Scrub").click();
+    harness.run_steps(2);
+    let rect = harness.get_by_label("Track waveform").rect();
+    let along = |x: f32| egui::pos2(rect.left() + rect.width() * x, rect.center().y);
+    harness.hover_at(along(0.25));
+    harness.run_steps(1);
+    harness.drag_at(along(0.25));
+    harness.run_steps(1);
+    harness.hover_at(along(0.4));
+    harness.run_steps(1);
+    // Held still, a moment from under the pointer plays, then pauses at its
+    // end. The whole track shows, so a point is a column of 8 kHz frames.
+    let per_column = model(&harness).sampler().scale.unwrap().per_column as f64;
+    let pointer = f64::from(rect.width() * 0.4) * per_column / 8000.0;
+    let end = pointer + playr_app::sampler::SCRUB.as_secs_f64();
+    wait(&mut harness, |m| {
+        let status = m.session().player().status();
+        let secs = m.session().player().position().as_secs_f64();
+        status.state == State::Paused && (secs - end).abs() < 0.01
+    });
+    harness.drop_at(along(0.5));
+    harness.run_steps(2);
+    let current = model(&harness).snapshot().status.current().cloned();
+    let range = model(&harness).sampler().range(current.as_ref());
+    assert!(range.is_some(), "no range");
+    wait(&mut harness, |m| {
+        let status = m.session().player().status();
+        status.looping == range && status.state == State::Playing
+    });
+}
+
 /// Drags across the waveform from `from` to `to`, each a fraction of its width.
 fn drag_range(harness: &mut Harness<'_, Gui>, from: f32, to: f32) {
     let rect = harness.get_by_label("Track waveform").rect();
@@ -961,7 +1042,7 @@ fn convert_to_shows_once_enabled_and_is_disabled_until_convertwithmoss_is_instal
         config,
     );
     let mut harness = Harness::builder()
-        .with_size(egui::vec2(800.0, 480.0))
+        .with_size(egui::vec2(800.0, 504.0))
         .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
     harness.run_steps(2);
     let open = |harness: &mut Harness<'_, Gui>| {
@@ -1011,7 +1092,7 @@ fn the_sampler_menu_holds_every_table_no_button_draws() {
 /// A window at its minimum size, as `with_min_inner_size` in main.rs, playing a track with a long title, in `view`,
 /// with the transport's buttons as words when `text`.
 fn smallest(dir: &std::path::Path, view: &str, text: bool) -> Harness<'static, Gui> {
-    sized(dir, view, text, 480.0)
+    sized(dir, view, text, 504.0)
 }
 
 /// The same, 800 points wide and `height` high.
@@ -1076,7 +1157,7 @@ fn assert_fits(harness: &Harness<'_, Gui>, window: egui::Rect, what: &str) {
 
 #[test]
 fn every_control_fits_the_smallest_window_without_overlap() {
-    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 480.0));
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 504.0));
     for (view, text) in [("1", false), ("5", false), ("1", true)] {
         let dir = tempfile::tempdir().unwrap();
         let harness = smallest(dir.path(), view, text);
@@ -1087,7 +1168,7 @@ fn every_control_fits_the_smallest_window_without_overlap() {
 
 #[test]
 fn the_sampler_s_controls_leave_the_waveform_200_points_of_the_smallest_window() {
-    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 480.0));
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 504.0));
     let dir = tempfile::tempdir().unwrap();
     let mut harness = smallest(dir.path(), "5", false);
     // The slice row at its widest: a slider, and a plan to review.
@@ -1148,7 +1229,7 @@ fn transport_text_buttons_show_words() {
 
 #[test]
 fn the_waveform_takes_the_height_the_controls_leave() {
-    for height in [480.0, 720.0] {
+    for height in [504.0, 720.0] {
         let dir = tempfile::tempdir().unwrap();
         let harness = sized(dir.path(), "5", false, height);
         let rect = |label: &str| harness.get_by_label(label).rect();

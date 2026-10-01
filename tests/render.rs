@@ -858,11 +858,12 @@ fn a_long_help_list_scrolls_and_stops_at_its_end() {
             .size(80, 24)
     };
     let top = case().text();
-    assert!(top.contains(":help") && !top.contains(":rename"), "{top}");
+    // `:discard` is the list's last command.
+    assert!(top.contains(":help") && !top.contains(":discard"), "{top}");
     assert!(top.contains("j k scroll"), "no scroll hint:\n{top}");
     let bottom = case().help_scroll(1000).text();
     assert!(
-        bottom.contains(":rename") && !bottom.contains(":help"),
+        bottom.contains(":discard") && !bottom.contains(":help"),
         "{bottom}"
     );
     // Drawing returns the last scroll that changes the list, and no further.

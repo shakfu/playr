@@ -1366,6 +1366,40 @@ fn info_refuses_when_there_is_no_track_to_describe() {
 }
 
 #[test]
+fn scrub_plays_a_moment_from_the_time_then_pauses() {
+    use playr_app::sampler::{Wave, SCRUB};
+    use playr_core::audio::State;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&file.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let state = |model: &Model| model.session().player().status().state;
+    let at = Duration::from_secs(4);
+    model.perform(Action::Scrub(at));
+    // Paused at the moment's end, having played it: from a stop, a pause
+    // could only come from the scrub.
+    while state(&model) != State::Paused || model.session().player().position() < at {
+        assert!(Instant::now() < deadline, "never paused after it");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(model.session().player().position(), at + SCRUB);
+    assert_eq!(model.session().player().status().looping, None);
+}
+
+#[test]
 fn audition_hears_the_same_span_each_time_it_is_pressed() {
     use playr_app::sampler::Wave;
     use playr_core::audio::State;

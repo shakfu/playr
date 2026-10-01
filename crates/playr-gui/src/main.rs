@@ -55,7 +55,7 @@ fn main() -> eframe::Result {
         .with_app_id("playr")
         .with_inner_size([800.0, 720.0])
         // Every control row fits at this width; `tests/window.rs` checks it.
-        .with_min_inner_size([800.0, 480.0]);
+        .with_min_inner_size([800.0, 504.0]);
     // The window's own icon; the platforms' bundles carry theirs.
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/playr.png")) {
         viewport = viewport.with_icon(icon);

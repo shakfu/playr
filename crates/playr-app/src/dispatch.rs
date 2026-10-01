@@ -588,6 +588,7 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         },
         Action::Audition => audition(f),
         Action::AuditionSlice(forward) => audition_slice(f, forward),
+        Action::Scrub(at) => scrub(f, at),
         Action::MoveCursor(nudge) => match (peaks(f), f.sampler().scale) {
             (Some(peaks), Some(scale)) => {
                 let at = cursor_frame(f, peaks.rate);
@@ -1348,6 +1349,23 @@ fn play_once(f: &mut impl Frontend, path: std::path::PathBuf, (start, end): (u64
     f.session().send(Cmd::PlayOnce(start, end, fades));
     f.sampler_mut().auditioned = Some((path, start, end));
     f.notify(Message::Auditioning);
+}
+
+/// Plays [`sampler::SCRUB`] from `at` once, faded so grains do not click.
+/// No message: a drag sends one a frame, which would hide the range's.
+fn scrub(f: &mut impl Frontend, at: Duration) {
+    let rate = match f.session().playing_track() {
+        Ok((_, rate)) => rate,
+        Err(refusal) => return f.notify(refusal.into()),
+    };
+    let frames = |d: Duration| sampler::frame_of(d, rate);
+    let start = frames(at);
+    let fade = frames(sampler::SCRUB_FADE);
+    f.session().send(Cmd::PlayOnce(
+        start,
+        start + frames(sampler::SCRUB),
+        (fade, fade),
+    ));
 }
 
 /// `at`, moved to the nearest zero crossing when the sampler view shows with

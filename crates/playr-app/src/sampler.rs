@@ -413,6 +413,38 @@ pub fn zoom_to_fit(frames: u64, width: u64, len: u64) -> u32 {
     }
 }
 
+/// How much a scrub plays, and the fade at either end of it.
+pub const SCRUB: Duration = Duration::from_millis(40);
+pub const SCRUB_FADE: Duration = Duration::from_millis(4);
+
+/// Seconds between a time axis's labelled ticks, shortest first.
+const TICKS: [f64; 22] = [
+    0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0,
+    120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0,
+];
+
+/// The seconds between labelled ticks on an axis of `per_point` seconds a
+/// point: the shortest step that leaves `gap` points between ticks.
+pub fn tick_step(per_point: f64, gap: f64) -> f64 {
+    let last = TICKS[TICKS.len() - 1];
+    TICKS
+        .into_iter()
+        .find(|s| s / per_point >= gap)
+        .unwrap_or(last)
+}
+
+/// `secs` as `m:ss`, with the decimals ticks `step` apart need.
+pub fn fmt_tick(secs: f64, step: f64) -> String {
+    let ms = (secs * 1000.0).round() as u64;
+    let clock = format!("{}:{:02}", ms / 60_000, ms / 1000 % 60);
+    match step {
+        s if s >= 1.0 => clock,
+        s if s >= 0.1 => format!("{clock}.{}", ms % 1000 / 100),
+        s if s >= 0.01 => format!("{clock}.{:02}", ms % 1000 / 10),
+        _ => format!("{clock}.{:03}", ms % 1000),
+    }
+}
+
 /// `frames` at `rate` as `m:ss.mmm`.
 pub fn fmt_frames(frames: u64, rate: u32) -> String {
     let ms = frames * 1000 / rate.max(1) as u64;

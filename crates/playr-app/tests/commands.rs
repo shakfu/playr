@@ -1044,6 +1044,11 @@ fn the_cursor_and_mark_commands_parse_in_the_sampler_only() {
         Ok(Action::MoveMarkTo(Duration::from_secs(2)))
     );
     assert_eq!(sampler("mark-move"), Err("usage: :mark-move TIME".into()));
+    assert_eq!(
+        sampler("scrub 0:02"),
+        Ok(Action::Scrub(Duration::from_secs(2)))
+    );
+    assert_eq!(sampler("scrub"), Err("usage: :scrub TIME".into()));
     assert_eq!(sampler("mark-snap"), Ok(Action::SnapMark));
     assert_eq!(sampler("mark-rm"), Ok(Action::DeleteMark));
 

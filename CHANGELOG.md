@@ -6,7 +6,15 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
+- The window's sampler shows the whole track in a strip above the waveform, with the stretch in view framed; a click or drag there seeks, and the view follows. A zoom slider sits between the `-` and `+` buttons, and a time axis runs along the waveform's top.
+
+- A Scrub button in the sampler: while it is on, a drag across the waveform plays 40 ms from wherever the pointer moves, a grain at a time, the last one even if the pointer then holds still, then loops the range on release. Loop alone already looped a dragged range, but only on release and silently during the drag. Each moment is a seek, so it may stutter on formats slow to seek (untested). `:scrub TIME` plays one moment. Library API: `Action::Scrub`, `sampler::SCRUB`, `sampler::tick_step`, `sampler::fmt_tick`.
+
 - `playr --print-settings` prints the default settings and keys as one `settings.toml`. Before, the defaults were only in the source tree, which an installed binary lacks. It prints even when the user's settings file is broken.
+
+### Changed
+
+- playr-gui's minimum height is 504 points, up from 480, so the waveform keeps 200 points with the overview above it. The sampler's Track info button reads `info`; `i` looked like `|`.
 
 ### Fixed
 

@@ -177,6 +177,8 @@ pub enum Action {
     Audition,
     /// Play the next planned slice once, or the previous one.
     AuditionSlice(bool),
+    /// Play a moment from this time once; what a drag does with Scrub on.
+    Scrub(Duration),
     /// Choose which end of the range edge moves shift.
     PickEdge(crate::sampler::Edge),
     /// Move the chosen end of the range, as a nudge moves the playhead.

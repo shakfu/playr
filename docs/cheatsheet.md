@@ -137,6 +137,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:loop [on\|off] \| N [save\|clear]` | `l`; F1-F8, with shift  | loop the range or region, or recall or save |
 | `:loops clear`                    |                         | clear this track's loops; asks y/n     |
 | `:audition [next\|prev]`          | `a`, `n` `p`            | play a slice, the range or region once; step slices |
+| `:scrub TIME`                     | drag, with Scrub on     | play a moment from a time              |
 | `:cursor TIME\|+N\|-N\|N%\|off`     | `;` `'` `h`             | move the cursor; `h` returns it to the playhead |
 | `:mark-pick next\|prev`            | `u` `i`                 | move the cursor to a mark              |
 | `:mark-nudge +N\|-N\|N%`           | `y` `o`                 | move the mark under the cursor         |

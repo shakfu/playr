@@ -47,6 +47,7 @@ pub fn allowed(action: &Action) -> bool {
         | Slice(_)
         | Audition
         | AuditionSlice(_)
+        | Scrub(_)
         | MoveCursor(_)
         | SetCursor(_)
         | PickMark(_)

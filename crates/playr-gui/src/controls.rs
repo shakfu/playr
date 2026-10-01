@@ -155,7 +155,7 @@ pub const PLAYLIST_ROW: &[Control] = &[
     control("Delete", Action::DeletePlaylist),
 ];
 
-/// Buttons right of the sampler's header, drawn as `+`, `-`, U+2194 and `i`.
+/// Buttons right of the sampler's header, drawn as `+`, `-`, U+2194 and `info`.
 pub const SAMPLER_HEADER: &[Control] = &[
     control("Zoom in", Action::Zoom(Zoom::In)),
     control("Zoom out", Action::Zoom(Zoom::Out)),
@@ -272,6 +272,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ),
     ("Zoom", "the mouse wheel over the waveform"),
     ("SetRange", "a drag across the waveform, and its menu"),
+    ("Scrub", "a drag across the waveform with Scrub on"),
     ("Slice", "the sampler's Slice drop-down"),
     ("Snap", "the sampler's Snap button"),
     ("Fit", "the sampler's Fit button"),
