@@ -84,6 +84,13 @@ fn the_default_files_are_valid_user_files() {
 }
 
 #[test]
+fn the_defaults_join_the_same_from_a_windows_checkout() {
+    let crlf = |text: &str| text.replace('\n', "\r\n");
+    let joined = playr_app::config::join(&crlf(DEFAULT_KEYS), &crlf(DEFAULT_SETTINGS));
+    assert_eq!(joined, default_text());
+}
+
+#[test]
 fn the_file_changes_keys_and_sets_how_playback_starts() {
     let text = r#"
         # comments and blank lines are skipped

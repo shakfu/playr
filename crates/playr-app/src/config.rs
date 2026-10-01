@@ -25,11 +25,19 @@ pub const DEFAULT_KEYS: &str = include_str!("keys.toml");
 /// Both defaults files as one `settings.toml`. `keys.toml`'s top-level `theme`
 /// comes first, since after `settings.toml` it would fall under `[gui]`.
 pub fn default_text() -> String {
+    join(DEFAULT_KEYS, settings::DEFAULT_SETTINGS)
+}
+
+/// `keys` and `settings` as one file, `settings` before `keys`'s first table.
+/// Line ends become `\n`: a Windows checkout embeds the files with `\r\n`,
+/// where a search for a blank line found none and put `theme` last.
+pub fn join(keys: &str, settings: &str) -> String {
+    let keys = keys.replace("\r\n", "\n");
     // Split before the paragraph holding the first table, to keep its comment.
-    let first = DEFAULT_KEYS.find("\n[").unwrap_or(DEFAULT_KEYS.len());
-    let at = DEFAULT_KEYS[..first].rfind("\n\n").map_or(0, |i| i + 2);
-    let (top, tables) = DEFAULT_KEYS.split_at(at);
-    format!("{top}{}\n{tables}", settings::DEFAULT_SETTINGS)
+    let first = keys.find("\n[").unwrap_or(keys.len());
+    let at = keys[..first].rfind("\n\n").map_or(0, |i| i + 2);
+    let (top, tables) = keys.split_at(at);
+    format!("{top}{}\n{tables}", settings.replace("\r\n", "\n"))
 }
 
 /// What the settings file sets.
