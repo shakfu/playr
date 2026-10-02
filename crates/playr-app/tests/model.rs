@@ -2122,12 +2122,19 @@ fn the_slices_last_written_are_converted_into_a_directory_beside_them() {
         Some(&Message::Core(Notice::Refused(Refusal::NothingExported)))
     );
 
-    // The player takes a moment to report the track as playing.
+    // The player takes a moment to report the track as playing. Paused, so
+    // the 2 s track cannot end before the slicing, as it could on a loaded
+    // machine.
     let deadline = Instant::now() + Duration::from_secs(5);
     while model.snapshot().status.current().is_none() {
         assert!(Instant::now() < deadline, "nothing playing");
         model.refresh();
         std::thread::sleep(Duration::from_millis(10));
+    }
+    model.perform(Action::TogglePause);
+    while model.session().player().status().state != playr_core::audio::State::Paused {
+        assert!(Instant::now() < deadline, "never paused");
+        std::thread::sleep(Duration::from_millis(5));
     }
     // Outside the sampler view a slicing is written at once.
     model.perform(Action::Slice(Slicing::Equal(2)));

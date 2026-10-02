@@ -23,7 +23,7 @@ None of the three contact external services or download any metadata and images.
 
 - Seek by 5 seconds in either direction, or 30 with shift, resuming on the exact sample
 
-- Marks: `b` marks a moment in a track, `B` undoes the last mark, `{` and `}` seek between marks, and marks are kept in the library
+- Marks: `b` marks a moment in a track, `B` undoes the last mark, `{` and `}`, or `,` and `.`, seek between marks, and marks are kept in the library
 
 - Samples: `:slice` writes regions between marks, equal parts or onset slices as lossless WAV files that rtrack loads as a sample bank; planned slices can be heard one by one before they are written, onset slices follow the sensitivity as it changes, and edges can be cut exact, at zero crossings, or faded
 
@@ -392,7 +392,7 @@ These keys are the same in the terminal, the window and the web page, and any of
 | left/right               | seek back or forward 5 seconds              |
 | shift left/right         | seek back or forward 30 seconds             |
 | `b`                      | mark the playing position                   |
-| `{` `}`                  | seek to the previous or next mark           |
+| `{` `}`, `,` `.`         | seek to the previous or next mark           |
 | `B`                      | undo the last mark                          |
 | `C`                      | clear all marks in this track; asks y/n     |
 | `(` `)`                  | varispeed down or up, one semitone a press  |

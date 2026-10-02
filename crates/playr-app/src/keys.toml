@@ -58,6 +58,9 @@ C = "mark-clear"
 # In the sampler view these also select the mark and play it to the next.
 "}" = "mark-next"
 "{" = "mark-prev"
+# The sampler takes these for slices.
+"." = "mark-next"
+"," = "mark-prev"
 
 # Keys for one view, which win there over the keys above.
 [keys.library]

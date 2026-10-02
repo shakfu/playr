@@ -820,7 +820,7 @@ fn default_keys_map_to_actions_by_view() {
     assert_eq!(default_key("o", View::Sampler), Some(Action::RangeOut));
     assert_eq!(default_key("{", View::Sampler), Some(Action::PrevMark));
     assert_eq!(default_key("}", Library), Some(Action::NextMark));
-    assert_eq!(default_key(",", Library), None);
+    assert_eq!(default_key(",", Library), Some(Action::PrevMark));
     assert_eq!(
         default_key(",", View::Sampler),
         Some(Action::AuditionSlice(false))

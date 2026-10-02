@@ -84,7 +84,7 @@ Sampler view unless marked global.
 
 - **Stepping.** `{` `}` and `,` `.` step from the selected item of their kind, else from the playhead. An audition leaves the playhead at the next mark or slice, so stepping from the playhead would skip one.
 
-- **Outside the sampler**, `{` `}` seek to the previous or next mark. No other view edits marks, so they do not select. `,` `.` have no global binding.
+- **Outside the sampler**, `{` `}` seek to the previous or next mark, and so do `,` `.`, as before: slices are edited more than marks, so the sampler gives `,` `.` to slices and the other views keep them for marks. No other view edits marks, so they do not select.
 
 - **With nothing selected**, `backspace` clears the range and `a` hears what it did before. The other action keys refuse with a message.
 
@@ -94,7 +94,7 @@ Sampler view unless marked global.
 
 - **`esc` stays `:discard`**, paired with `enter`, which writes the plan. It does not deselect: a selected slice belongs to the plan, so a second `esc` would drop the plan and its hand edits.
 
-- **`D` deselects, on trial.** A selection does nothing until an action key is pressed, so deselect may go unused.
+- **`D` deselects.** It was on trial, since a selection does nothing until an action key is pressed; it stays.
 
 - **Out of view**, the selection shows as an arrow at that edge, as the playhead does: reversed in the terminal, a cell inside the playhead's arrow when both are past the same edge; above the playhead's in the window. Refusing edits until the selection is visible was the alternative; it would block a move of a mark just past the edge.
 
@@ -148,13 +148,15 @@ Editing a slice of a `:slice marks` plan moves the plan's start, not the mark. M
 
 - **Marks and slices sound the same after `:slice marks`.** `{` and `,` then play the same audio, and `>` moves the mark or the plan's start by which was pressed last. Only the drawing tells them apart: a reversed `|` for a mark, a reversed `+` for a slice.
 
+## Settled after use
+
+- **Select keys stay.** Slices are edited more than marks, so slices keep the unshifted `,` `.` in the sampler. Swapping would have put marks on `,` `.`, select and move on one key.
+
+- **`backspace` with nothing selected clears the range.** A second `backspace` after removing a mark can clear it, but `u` brings it back. It leaves a plan cut from the range: `esc` discards that.
+
+- **`D` stays** as deselect.
+
 ## Open questions
-
-- **Select keys for marks and slices.** Marks are the most edited kind, but both their select keys (`{` `}`) and move keys (`<` `>`) need shift, while slices get `,` `.`. Swapping them puts marks on `,` `.`, whose shifted forms on a US layout are `<` `>`: select and move on one key.
-
-- **`backspace` with nothing selected.** Removing a mark clears the selection, so a second `backspace` clears the range; `u` brings it back. Alternative: refuse it, and clear the range by selecting an end first.
-
-- **`D`.** Dropped if it goes unused.
 
 - **Hearing a range end.** A pre-roll, playing about 2 s up to the selected end, would let an end edit be heard. Probably not needed.
 

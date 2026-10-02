@@ -4,30 +4,32 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.17.0]
+
 ### Added
 
-- `u` in the sampler, or `:undo` in any view, undoes the last change to the playing track's marks or range, and again for the one before: a mark added, moved, snapped, removed or cleared, a range end set or moved, the range cleared. It keeps the last 100, until the track changes. `r`, or `:redo`, puts back what undo took, until the next change. Library API: `Action::Undo`, `Action::Redo`, `Sampler::future`, `Message::Redone`, `NothingToRedo`, `Sampler::history`, `sampler::UNDO_DEPTH`, `sampler::Before`, `dispatch::before`, `dispatch::settle`.
+- Undo and redo for the sampler: `u` and `r`, or `:undo` and `:redo` in any view. They cover the playing track's marks, range and planned slices, keep the last 100 changes, and restore what was selected. Without them a stray key lost an edit, and a mark's place had to be found by ear again. Library API: `Action::Undo`, `Action::Redo`.
 
-- Planned slices can be edited before they are written. `,` `.` select a slice as they play it; `<` `>` and `#` move its start, which moves the end of the slice before, and backspace joins it to the slice before. In the window a click on a slice's start selects it and a drag moves it, with the pointer a left-right arrow over it and while dragging, as over a range end; marks show the arrow too; on a mark, the slice takes the click while the plan is shown, since the plan is what is being reviewed. `:mark-move` is now `:move-to`, which moves any selection to a time; the old name still works. The plan shows `edited`. The starts are kept on the job (`Job::cuts`), so `:slice-edges` planning it again keeps them; storing the moves instead would lose them, since zero edges move every edge on a new plan. Editing a plan cut at marks leaves the marks where they are. Undo covers plan edits and now selects what was selected before the change. Library API: `Job::cuts`, `samples::extent`, `samples::spans_from`, `Selected::Slice`, `Sampler::selected_slice`, `Before::plan`, `Before::selected`, `dispatch::move_slice`, `Action::SelectSliceAt`, `Action::MoveSelectedTo` replaces `MoveMarkTo`, `Message::SliceMoved`, `SlicesJoined`, `FirstSlice`, `NoSliceHere`.
+- Planned slices can be edited before they are written: select one with `,` `.` or a click on its start, move its start with `<` `>`, `#` or a drag, and join it to the slice before with backspace. An onset or equal cut rarely puts every edge where it belongs, and before, the only fix was another cut. Edits survive `:slice-edges`. Library API: `Job::cuts`.
 
 ### Changed
 
-- The sampler edits a selected mark or range end instead of the mark under a cursor. The cursor was a second, silent position apart from the playhead, and it went stale: removing its mark or changing track left it in place, so the mark keys could act on another track's mark near the old frame. A selection is tied to its track and goes with its mark. `docs/dev/mark-selection.md` has the design.
+- The sampler edits a selected mark, range end or slice instead of the mark under a cursor. The cursor was a second, silent position that went stale: after its mark was removed or the track changed, the mark keys could act on another track's mark. A selection belongs to its track and goes with its item. `docs/dev/mark-selection.md` has the design.
 
   | key | does |
   |-|-|
-  | `{` `}` | select the previous or next mark and play it to the next; outside the sampler, seek to it, as `,` `.` did |
+  | `{` `}` | select the previous or next mark and play it; outside the sampler, seek to it |
+  | `,` `.` | in the sampler, select and play the previous or next planned slice, as `n` `p` did; elsewhere, seek to a mark, as before |
   | `[` `]` | select a range end |
-  | `<` `>` | move the selection a column |
+  | `<` `>` | move the selection |
   | `#` | move the selection to the nearest rise |
-  | backspace | remove the selected mark, or clear the range |
+  | backspace | remove the selection; with nothing selected, clear the range |
   | `D` | select nothing |
   | `i` `o` | set the range's start or end, as `<` `>` did |
-  | `,` `.` | play the previous or next planned slice, as `n` `p` did; `n` `p` skip tracks again |
 
-  `b` and a click on a mark select it too. A selection out of view shows as an arrow at that edge of the waveform, as the playhead does. `esc` discards planned slices only; it no longer clears the range. `:cursor`, `:mark-pick`, `:mark-nudge`, `:mark-snap`, `:mark-rm` and `:edge +N` are gone, with their aliases, as is the window's Marks menu; `:move`, `:onset`, `:remove`, `:select` and `:deselect` replace them, and Sampler, Edit holds them in the window. Library API: `Action::SelectMarkAt`, `Deselect`, `MoveSelected`, `SnapSelected`, `RemoveSelected` replace `MoveCursor`, `SetCursor`, `PickMark`, `MoveMark`, `SnapMark`, `DeleteMark` and `MoveEdge`; `Sampler::selected`, `Sampler::snapping` and `sampler::Selected` replace `Sampler::cursor`; `Message::NothingSelected`, `Deselected`, `Undone`, `NothingToUndo`.
+  `esc` only discards planned slices now; backspace clears the range. `n` `p` skip tracks in the sampler again. The cursor's commands are gone; `:move`, `:move-to`, `:onset`, `:remove`, `:select` and `:deselect` replace them. Library API: `Action::SelectMarkAt`, `SelectSliceAt`, `Deselect`, `MoveSelected`, `MoveSelectedTo`, `SnapSelected` and `RemoveSelected` replace the cursor and mark actions; `Sampler::selected` replaces `Sampler::cursor`.
 
-- The window's Save loop button reads Save range while nothing loops. It stores the range's ends in a loop slot, not audio, so the old name suggested an export and a running loop it does not need.
+- The window's Save loop button reads Save range while nothing loops. It saves the range's ends, not audio, and needs no loop running.
 
 ## [0.16.0]
 
