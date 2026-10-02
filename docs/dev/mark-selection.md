@@ -49,7 +49,9 @@ The selected mark is drawn distinct from the others: thicker in the window, a di
 ### Removed
 
 - `Sampler::cursor`, `Action::MoveCursor`, `SetCursor`, `PickMark`.
+
 - `:cursor` and `:mark-pick`, and the keys `;` `'` `h` `u` `i`. `left` and `right` already move the playhead a column.
+
 - Sampler, Marks: Cursor earlier, Cursor later, Cursor to playhead.
 
 Five keys come free. Renamed commands kept their old names as working aliases (`CHANGELOG.md:123`). These have no equivalent to alias, so they either refuse with a message naming the replacement or are dropped.
@@ -59,6 +61,7 @@ Five keys come free. Renamed commands kept their old names as working aliases (`
 Seeking after a move or snap lets the result be heard at once. Two cases need a rule:
 
 - **Loop on.** Seeking to a mark outside the looped range leaves the loop. Proposed: do not seek while a loop is on.
+
 - **Playing.** Each press restarts playback from the mark. Several presses in a row stutter. This is the same as pressing `,` repeatedly now.
 
 Alternative: seek only when paused, and audition from the mark when playing. That changes what `a` hears, so it is not proposed here.
@@ -89,6 +92,7 @@ Proposed: a new `Cut::At(Vec<u64>)`, slicing at the given frames. The first edit
 `:slice marks` cuts at the marks. Its edges and the marks are then the same frames. Two choices:
 
 1. **Edit the plan only.** Marks stay where they were; the plan diverges from them. Simple, and consistent with equal and onset plans.
+
 2. **Edit the mark, then replan.** The plan stays a cut at marks. The edit is kept with the track, as marks are.
 
 Proposed: 1. Choice 2 makes a slice edit behave differently by how the plan was made.
@@ -113,15 +117,23 @@ The B risk is the mode error from a modal design, reduced to one rule: the last 
 ## Questions
 
 - Should editing a mark while a loop plays elsewhere stay possible? A drops it unless seeks are skipped while looping.
+
 - In B, does `delete` on a slice remove its start or end edge? Start is proposed, matching `y` `o`.
+
 - Should `:mark-pick` and `:cursor` stay as refusing aliases, or go?
+
 - Is design C, folding the range ends into the selection, wanted now or later?
 
 ## Tests
 
 - Selection follows `,` `.` `b` and a click; clears on removal by `delete`, `B`, `C`, and on a track change.
+
 - `y` `o` `#` act on the selected mark after the playhead has moved on.
+
 - No selection: edit keys refuse with a message.
+
 - B: `n` `p` select a slice; `y` moves the shared edge of two slices; `delete` merges; the first slice's start is refused.
+
 - B: an edited plan survives `:slice-edges`.
+
 - Parity: `crates/playr-gui/tests/parity.rs` still finds every action reachable in the window.

@@ -70,7 +70,9 @@ Copy each `sliced/*.wav` to the SD card, in a folder near the root to keep the p
 **What each result changes in playr:**
 
 - **M1 or M2 fails as a byte reading:** `sliced::cue_chunk` must write bytes for the M8. Other readers may expect frames, so check the 1010music blackbox before changing the default. Record it per device.
+
 - **M5 shows no markers or an error:** an export past 32 slices should warn, or write a second sliced file, as AudioHit does for the Octatrack.
+
 - **M4 is refused:** note it under "Bit depth and rate each device accepts".
 
 ## Teenage Engineering OP-XY
@@ -99,7 +101,9 @@ For the loop test, make a looped export: in the sampler view, drag a range over 
 **What each result changes in playr:**
 
 - **X2 shows slices off by an octave or more:** `samples::FIRST_KEY` is 36 for C1. Note how the OP-XY names that key, and whether a different first key suits it better.
+
 - **X5 refuses or truncates:** `:convert opxy` should refuse or warn past the limit, as the `.ot` file does past 64.
+
 - **X4 does not loop:** compare `patch.json`'s `loop.enabled` and `loop.end` with the source's `loop_end`.
 
 ## Results
@@ -123,7 +127,11 @@ For the loop test, make a looped export: in the sampler view, drag a range over 
 ## Sources
 
 - [DirtyWave-M8-Tips](https://github.com/pauley-unsaturated/DirtyWave-M8-Tips): slice markers since 2.5.0, at most 32, SLICE `01 FILE`, notes from C-1.
+
 - [M8 operation manual 6.0.0](https://images.equipboard.com/uploads/item/manual/136211/dirtywave-m8-tracker-model-02-manual.pdf): sample formats and path length, as quoted in a search result; not read here.
+
 - [DigiChain 1.4.6](https://brian3kb.itch.io/digichain/devlog/870054/v146-dirtywave-m8-slice-support): a writer of M8 slice points.
+
 - [OP-XY guide](https://teenage.engineering/guides/op-xy/how-to), section 22.11: disk mode, folders, WAV and AIFF; read.
+
 - [OP Forums](https://op-forums.com/t/op-xy-how-to-load-samples-from-computer/28305): one level of nested folders.
