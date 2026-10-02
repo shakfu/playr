@@ -1109,11 +1109,12 @@ fn sampler_model(dir: &Path, file: &Path) -> Model {
     model
 }
 
-/// Seeks to `at`, and waits for the player to get there.
+/// Seeks to `at`, and waits for the player to get there. Playing, the
+/// playhead moves on at once, so a poll can miss `at` itself.
 fn seek(model: &mut Model, at: Duration) {
     model.perform(Action::SeekTo(at));
     let deadline = Instant::now() + Duration::from_secs(5);
-    while model.session().player().position() != at {
+    while !(at..at + Duration::from_millis(500)).contains(&model.session().player().position()) {
         assert!(Instant::now() < deadline, "never sought to {at:?}");
         std::thread::sleep(Duration::from_millis(5));
     }
