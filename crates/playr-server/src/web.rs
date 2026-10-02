@@ -79,7 +79,7 @@ pub fn allowed(action: &Action) -> bool {
         | TogglePause | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | StopAfter
         | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | SetEq(..)
         | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
-        | UndoMark | Undo | ClearMarks | NextMark | PrevMark | Theme(_) => true,
+        | UndoMark | Undo | Redo | ClearMarks | NextMark | PrevMark | Theme(_) => true,
     }
 }
 

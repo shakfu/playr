@@ -76,6 +76,8 @@ pub enum Message {
     Deselected,
     Undone,
     NothingToUndo,
+    Redone,
+    NothingToRedo,
     /// A `map` command took effect; holds the `Action::Map`.
     Mapped(Action),
     Unmapped(Key),
@@ -231,6 +233,8 @@ pub fn text(message: &Message) -> String {
         Message::Deselected => "selected nothing".into(),
         Message::Undone => "undone".into(),
         Message::NothingToUndo => "nothing to undo".into(),
+        Message::Redone => "redone".into(),
+        Message::NothingToRedo => "nothing to redo".into(),
         Message::Mapped(map) => command::line(map, None),
         Message::Unmapped(key) => format!("unmapped {key}"),
         Message::NotBound { key, view } => {

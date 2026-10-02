@@ -405,6 +405,8 @@ fn terminal_messages_are_worded() {
         (Message::Deselected, "selected nothing"),
         (Message::Undone, "undone"),
         (Message::NothingToUndo, "nothing to undo"),
+        (Message::Redone, "redone"),
+        (Message::NothingToRedo, "nothing to redo"),
         (
             Message::Range {
                 start: Some(8_000),

@@ -638,15 +638,15 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     );
     assert_eq!(
         completions("re", Selection, &playlists, &Vec::new, true),
-        ["rescan", "restart", "replaygain", "remove"]
+        ["rescan", "restart", "replaygain", "redo", "remove"]
     );
     assert_eq!(
         completions("re", Playlists, &playlists, &Vec::new, true),
-        ["rescan", "restart", "replaygain", "rename"]
+        ["rescan", "restart", "replaygain", "redo", "rename"]
     );
     assert_eq!(
         completions("re", Library, &playlists, &Vec::new, true),
-        ["rescan", "restart", "replaygain"]
+        ["rescan", "restart", "replaygain", "redo"]
     );
     assert_eq!(
         completions("mode r", Library, &playlists, &Vec::new, true),
@@ -838,6 +838,8 @@ fn default_keys_map_to_actions_by_view() {
     );
     assert_eq!(default_key("D", View::Sampler), Some(Action::Deselect));
     assert_eq!(default_key("u", View::Sampler), Some(Action::Undo));
+    assert_eq!(default_key("r", View::Sampler), Some(Action::Redo));
+    assert_eq!(default_key("r", Playlists), Some(Action::StartRename));
     // n and p skip tracks in the sampler as everywhere else.
     assert_eq!(default_key("n", View::Sampler), Some(Action::Next));
     assert_eq!(default_key("<", Library), None);
@@ -1133,6 +1135,7 @@ fn the_selection_commands_parse_in_the_sampler_only() {
     assert_eq!(sampler("edge +1"), Err("usage: :edge start|end".into()));
     // Undo works in every view.
     assert_eq!(library("undo"), Ok(Action::Undo));
+    assert_eq!(library("redo"), Ok(Action::Redo));
     // The cursor is gone.
     assert!(sampler("cursor off").is_err());
     assert!(sampler("mark-pick next").is_err());

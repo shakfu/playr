@@ -1106,6 +1106,7 @@ impl Model {
             self.sampler.selected = None;
         }
         self.sampler.history.retain(|b| Some(&b.path) == current);
+        self.sampler.future.retain(|b| Some(&b.path) == current);
         if self
             .sampler
             .range

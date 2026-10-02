@@ -83,6 +83,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:mark-next`                          | `}`                     | next mark: seek, or select in the sampler   |
 | `:mark-prev`                          | `{`                     | prev mark: seek, or select in the sampler   |
 | `:undo`                               | `u` in the sampler      | undo the last edit to marks or the range    |
+| `:redo`                               | `r` in the sampler      | put back the last edit undone               |
 | `:slice region\|marks\|N\|onsets [S]` |                         | write samples from the region or the track  |
 | `:loop off`                           |                         | stop looping                                |
 | `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |
@@ -151,7 +152,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 
 In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; a selected end moves the loop with it.
 
-The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a click, or a range end, selected by `[` `]`. A selected end is shown reversed. `{` `}` play from the mark to the next, and step from the selected mark rather than the playhead. With nothing selected, `backspace` clears the range and the other edit keys refuse. `u` undoes the last change to the marks or the range, as far back as the track started playing.
+The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a click, or a range end, selected by `[` `]`. A selected end is shown reversed, and a selection out of view as a reversed `<` or `>` at that edge. `{` `}` play from the mark to the next, and step from the selected mark rather than the playhead. With nothing selected, `backspace` clears the range and the other edit keys refuse. `u` undoes the last change to the marks or the range, up to 100 back, until the track changes; `r` puts back what `u` took, until the next change.
 
 ## Extensions
 

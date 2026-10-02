@@ -377,19 +377,36 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
         axis[c] = ('^', bold);
     }
     // A playhead out of view, as while fitting a range, points the way to it.
-    let arrow = match layout.playhead_off() {
-        Some(std::cmp::Ordering::Less) => axis.first_mut().map(|a| (a, '<')),
-        Some(_) => axis.last_mut().map(|a| (a, '>')),
-        None => None,
+    let edge = |side| match side {
+        std::cmp::Ordering::Less => (0, '<'),
+        _ => (width.saturating_sub(1), '>'),
     };
-    if let Some((cell, glyph)) = arrow {
-        *cell = (glyph, bold);
+    let playhead_off = layout.playhead_off().map(edge);
+    if let Some((c, glyph)) = playhead_off {
+        axis[c] = (glyph, bold);
     }
     // Last, so the selected mark is always visible: it is what the edit keys
     // act on, and it may sit on the playhead or a range end.
+    let reversed = bold.add_modifier(Modifier::REVERSED);
     let selected = app.sampler.selected_mark(current);
     if let Some(c) = selected.and_then(|f| layout.column_of(f)) {
-        axis[c] = ('|', bold.add_modifier(Modifier::REVERSED));
+        axis[c] = ('|', reversed);
+    }
+    // A selection out of view points the way to it, reversed, a cell inside
+    // the playhead's arrow when both are past the same side.
+    let off = app
+        .sampler
+        .selected_frame(current)
+        .and_then(|f| layout.off(f));
+    if let Some((c, glyph)) = off.map(edge) {
+        let c = match playhead_off {
+            Some((p, _)) if p == c && c == 0 => 1,
+            Some((p, _)) if p == c => c.saturating_sub(1),
+            _ => c,
+        };
+        if let Some(cell) = axis.get_mut(c) {
+            *cell = (glyph, reversed);
+        }
     }
     lines.push(runs(axis.into_iter()));
 

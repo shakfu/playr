@@ -134,6 +134,8 @@ pub enum Action {
     PrevMark,
     /// Undo the last edit to the playing track's marks or range.
     Undo,
+    /// Put back the last edit undone.
+    Redo,
 
     /// Write slices of the playing track to the samples directory, or in the
     /// sampler view, plan them to be written.

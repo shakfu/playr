@@ -279,8 +279,8 @@ pub fn sql_done(f: &mut impl Frontend, then: SqlThen, result: Result<Vec<PathBuf
 
 /// Does `action`, keeping what it changes in the marks or range for undo.
 pub fn dispatch(action: Action, f: &mut impl Frontend) {
-    if action == Action::Undo {
-        return undo(f);
+    if matches!(action, Action::Undo | Action::Redo) {
+        return undo(f, action == Action::Redo);
     }
     let before = before(f);
     act(action, f);
@@ -561,8 +561,8 @@ fn act(action: Action, f: &mut impl Frontend) {
             let notice = f.session_mut().seek_to_mark(action == Action::NextMark);
             f.notify(notice.into());
         }
-        // `dispatch` undoes before it gets here.
-        Action::Undo => {}
+        // `dispatch` undoes and redoes before it gets here.
+        Action::Undo | Action::Redo => {}
 
         Action::Slice(slicing) => slice(f, slicing),
         Action::Zoom(zoom) => f.present(Presentation::Zoom(zoom)),
@@ -1567,7 +1567,8 @@ pub fn settle(f: &mut impl Frontend, before: Option<Before>) {
     let after = self::before(f);
     if let (Some(before), Some(after)) = (before, &after) {
         if before.path == after.path && before != *after {
-            f.sampler_mut().history.push(before);
+            keep(&mut f.sampler_mut().history, before);
+            f.sampler_mut().future.clear();
         }
     }
     let gone = match (f.sampler().selected.clone(), &after) {
@@ -1589,37 +1590,72 @@ pub fn settle(f: &mut impl Frontend, before: Option<Before>) {
     }
 }
 
-/// Puts back the marks and range as they were before the last edit.
-fn undo(f: &mut impl Frontend) {
+/// Pushes `state` onto an undo or redo stack, dropping the oldest past
+/// [`sampler::UNDO_DEPTH`].
+fn keep(stack: &mut Vec<Before>, state: Before) {
+    stack.push(state);
+    let over = stack.len().saturating_sub(sampler::UNDO_DEPTH);
+    stack.drain(..over);
+}
+
+/// Puts back the marks and range as they were before the last edit, keeping
+/// the state now for redo; or, with `redo`, the other way round.
+fn undo(f: &mut impl Frontend, redo: bool) {
+    let (none, done) = match redo {
+        false => (Message::NothingToUndo, Message::Undone),
+        true => (Message::NothingToRedo, Message::Redone),
+    };
     let (path, rate) = match f.session().playing_track() {
         Ok(track) => track,
         Err(refusal) => return f.notify(refusal.into()),
     };
-    let Some(before) = f.sampler_mut().history.pop() else {
-        return f.notify(Message::NothingToUndo);
+    let Some(then) = stacks(f.sampler_mut(), redo).0.pop() else {
+        return f.notify(none);
     };
-    if before.path != path {
+    if then.path != path {
         f.sampler_mut().history.clear();
-        return f.notify(Message::NothingToUndo);
+        f.sampler_mut().future.clear();
+        return f.notify(none);
     }
-    let now = mark_frames(f, &path);
-    for &frame in now.iter().filter(|m| !before.marks.contains(m)) {
+    let now = before(f).expect("a track is playing");
+    if let Err(notice) = restore(f, &then, rate) {
+        // Kept, so the step can be tried again; marks put back so far stay.
+        stacks(f.sampler_mut(), redo).0.push(then);
+        return f.notify(notice.into());
+    }
+    keep(stacks(f.sampler_mut(), redo).1, now);
+    settle(f, None);
+    f.notify(done);
+}
+
+/// The stack an undo takes from and the one it keeps the state now on; the
+/// other way round for a redo.
+fn stacks(s: &mut Sampler, redo: bool) -> (&mut Vec<Before>, &mut Vec<Before>) {
+    match redo {
+        false => (&mut s.history, &mut s.future),
+        true => (&mut s.future, &mut s.history),
+    }
+}
+
+/// Makes the playing track's marks and range `state`'s.
+fn restore(f: &mut impl Frontend, state: &Before, rate: u32) -> Result<(), Notice> {
+    let now = mark_frames(f, &state.path);
+    for &frame in now.iter().filter(|m| !state.marks.contains(m)) {
         if let notice @ Notice::Failed { .. } = f.session_mut().remove_mark(frame) {
-            return f.notify(notice.into());
+            return Err(notice);
         }
     }
-    for &frame in before.marks.iter().filter(|m| !now.contains(m)) {
+    for &frame in state.marks.iter().filter(|m| !now.contains(m)) {
         let at = sampler::time_of(frame, rate);
         if let notice @ Notice::Failed { .. } =
             f.session_mut().add_mark_within(Some(at), Duration::ZERO)
         {
-            return f.notify(notice.into());
+            return Err(notice);
         }
     }
-    f.sampler_mut().range = before.range;
+    f.sampler_mut().range = state.range.clone();
     follow_loop(f);
-    settle(f, None);
-    f.notify(Message::Undone);
+    Ok(())
 }
 
 fn slice(f: &mut impl Frontend, slicing: Slicing) {

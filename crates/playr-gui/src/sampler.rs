@@ -1115,22 +1115,29 @@ fn paint(
     if let Some(c) = playhead {
         line(c, visuals.strong_text_color(), 2.0);
     }
-    // A playhead out of view, as while fitting a range, points the way to it.
-    if let Some(side) = layout.playhead_off() {
+    // A playhead out of view, as while fitting a range, points the way to it;
+    // so does the selection, higher up and in the selection's colour.
+    let arrow = |side, y: f32, colour| {
         let (x, dx) = match side {
             std::cmp::Ordering::Less => (rect.left() + 2.0, 10.0),
             _ => (rect.right() - 2.0, -10.0),
         };
-        let y = rect.center().y;
         painter.add(egui::Shape::convex_polygon(
             vec![
                 egui::pos2(x, y),
                 egui::pos2(x + dx, y - 8.0),
                 egui::pos2(x + dx, y + 8.0),
             ],
-            visuals.strong_text_color(),
+            colour,
             egui::Stroke::NONE,
         ));
+    };
+    if let Some(side) = layout.playhead_off() {
+        arrow(side, rect.center().y, visuals.strong_text_color());
+    }
+    let selected = model.sampler().selected_frame(current);
+    if let Some(side) = selected.and_then(|f| layout.off(f)) {
+        arrow(side, rect.top() + 12.0, visuals.selection.stroke.color);
     }
 }
 

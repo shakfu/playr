@@ -171,6 +171,7 @@ pub const COMMANDS: &[Command] = &[
     any("mark-next", "", "next mark: seek, or select in the sampler"),
     any("mark-prev", "", "prev mark: seek, or select in the sampler"),
     any("undo", "", "undo the last edit to marks or the range"),
+    any("redo", "", "put back the last edit undone"),
     any(
         "slice",
         "region|marks|N|onsets [S]",
@@ -535,6 +536,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         MarkAt(d) => format!("mark {}", time(d)),
         UndoMark => "mark-undo".into(),
         Undo => "undo".into(),
+        Redo => "redo".into(),
         ClearMarks => "mark-clear".into(),
         NextMark => "mark-next".into(),
         PrevMark => "mark-prev".into(),
@@ -1066,6 +1068,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             playr_core::convertwithmoss::FORMATS.join(", ")
         )),
         "undo" => nothing(Action::Undo),
+        "redo" => nothing(Action::Redo),
         "write" => nothing(Action::WriteSlices),
         "discard" => nothing(Action::DiscardSlices),
         "slice" => match first_word(rest) {

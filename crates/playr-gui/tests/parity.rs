@@ -82,6 +82,7 @@ fn every_action() -> Vec<Action> {
         Action::NextMark,
         Action::PrevMark,
         Action::Undo,
+        Action::Redo,
         Action::Slice(Slicing::Region),
         Action::Zoom(Zoom::In),
         Action::Display(None),
@@ -187,6 +188,7 @@ fn every_action() -> Vec<Action> {
             | Action::NextMark
             | Action::PrevMark
             | Action::Undo
+            | Action::Redo
             | Action::Slice(_)
             | Action::Zoom(_)
             | Action::Display(_)

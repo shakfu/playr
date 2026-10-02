@@ -196,6 +196,7 @@ pub const EDIT_MENU: &[Control] = &[
     control("Remove", Action::RemoveSelected),
     control("Deselect", Action::Deselect),
     control("Undo", Action::Undo),
+    control("Redo", Action::Redo),
 ];
 
 /// A mark's entries in the waveform's menu; the mark is selected first.

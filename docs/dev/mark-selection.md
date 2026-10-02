@@ -147,7 +147,7 @@ Renamed commands kept their old names as working aliases (`CHANGELOG.md:95`). Th
 
 ### Gaps
 
-- **Off-screen selection.** The selection can leave the view after `left`, `right`, a zoom or `f`. Options: keep it and draw an arrow at the axis edge, as for the playhead, or refuse edits until it is visible.
+- **Off-screen selection.** Resolved: the selection stays, and an arrow at the axis edge points to it, as for the playhead. Refusing edits until it is visible was the alternative; it would block a move of a mark just past the edge.
 
 - **Zoom-dependent step.** A column is `per_column` frames, so one `>` moves a mark 358 ms at whole-track zoom of a 4:40 track, or a few samples at full zoom.
 

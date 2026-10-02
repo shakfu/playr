@@ -6,7 +6,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
-- `u` in the sampler, or `:undo` in any view, undoes the last change to the playing track's marks or range, and again for the one before: a mark added, moved, snapped, removed or cleared, a range end set or moved, the range cleared. The history lasts until the track changes. Library API: `Action::Undo`, `Sampler::history`, `sampler::Before`, `dispatch::before`, `dispatch::settle`.
+- `u` in the sampler, or `:undo` in any view, undoes the last change to the playing track's marks or range, and again for the one before: a mark added, moved, snapped, removed or cleared, a range end set or moved, the range cleared. It keeps the last 100, until the track changes. `r`, or `:redo`, puts back what undo took, until the next change. Library API: `Action::Undo`, `Action::Redo`, `Sampler::future`, `Message::Redone`, `NothingToRedo`, `Sampler::history`, `sampler::UNDO_DEPTH`, `sampler::Before`, `dispatch::before`, `dispatch::settle`.
 
 ### Changed
 
@@ -23,7 +23,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
   | `i` `o` | set the range's start or end, as `<` `>` did |
   | `,` `.` | play the previous or next planned slice, as `n` `p` did; `n` `p` skip tracks again |
 
-  `b` and a click on a mark select it too. `esc` discards planned slices only; it no longer clears the range. `:cursor`, `:mark-pick`, `:mark-nudge`, `:mark-snap`, `:mark-rm` and `:edge +N` are gone, with their aliases, as is the window's Marks menu; `:move`, `:onset`, `:remove`, `:select` and `:deselect` replace them, and Sampler, Edit holds them in the window. Library API: `Action::SelectMarkAt`, `Deselect`, `MoveSelected`, `SnapSelected`, `RemoveSelected` replace `MoveCursor`, `SetCursor`, `PickMark`, `MoveMark`, `SnapMark`, `DeleteMark` and `MoveEdge`; `Sampler::selected`, `Sampler::snapping` and `sampler::Selected` replace `Sampler::cursor`; `Message::NothingSelected`, `Deselected`, `Undone`, `NothingToUndo`.
+  `b` and a click on a mark select it too. A selection out of view shows as an arrow at that edge of the waveform, as the playhead does. `esc` discards planned slices only; it no longer clears the range. `:cursor`, `:mark-pick`, `:mark-nudge`, `:mark-snap`, `:mark-rm` and `:edge +N` are gone, with their aliases, as is the window's Marks menu; `:move`, `:onset`, `:remove`, `:select` and `:deselect` replace them, and Sampler, Edit holds them in the window. Library API: `Action::SelectMarkAt`, `Deselect`, `MoveSelected`, `SnapSelected`, `RemoveSelected` replace `MoveCursor`, `SetCursor`, `PickMark`, `MoveMark`, `SnapMark`, `DeleteMark` and `MoveEdge`; `Sampler::selected`, `Sampler::snapping` and `sampler::Selected` replace `Sampler::cursor`; `Message::NothingSelected`, `Deselected`, `Undone`, `NothingToUndo`.
 
 - The window's Save loop button reads Save range while nothing loops. It stores the range's ends in a loop slot, not audio, so the old name suggested an export and a running loop it does not need.
 

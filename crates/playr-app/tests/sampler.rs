@@ -469,6 +469,15 @@ fn a_playhead_out_of_view_says_which_side_it_is_on() {
     assert_eq!(at(500).playhead_off(), Some(Ordering::Less));
     assert_eq!(at(2_000).playhead_off(), Some(Ordering::Greater));
     assert_eq!(layout(2, Duration::ZERO, &[]).playhead_off(), None);
+    // Any frame, as the playhead.
+    let l = at(1_250);
+    assert_eq!(l.off(5_184), None, "the first frame shown");
+    assert_eq!(l.off(5_183), Some(Ordering::Less));
+    assert_eq!(
+        l.off(14_784),
+        Some(Ordering::Greater),
+        "the end is exclusive"
+    );
 }
 
 #[test]

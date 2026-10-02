@@ -30,6 +30,9 @@ pub const DETAIL_BELOW: u64 = 2 * playr_core::wave::BUCKET;
 /// no new read.
 pub const DETAIL_MARGIN: Duration = Duration::from_secs(2);
 
+/// The most edits undo, and redo, keep for a track; the oldest go first.
+pub const UNDO_DEPTH: usize = 100;
+
 pub use playr_core::wave::SNAP_WITHIN;
 
 /// The level the dB display draws as empty, in dBFS.
@@ -117,6 +120,8 @@ pub struct Sampler {
     pub snapping: Option<(JobId, Selected)>,
     /// Marks and ranges before each edit to the playing track, latest last.
     pub history: Vec<Before>,
+    /// States undone, which redo puts back, latest last. A new edit empties it.
+    pub future: Vec<Before>,
 }
 
 /// What the edit keys act on.
@@ -241,6 +246,16 @@ impl Sampler {
         match self.selected(playing) {
             Some(Selected::Mark(frame)) => Some(frame),
             _ => None,
+        }
+    }
+
+    /// The frame of the selected mark or range end on `playing`.
+    pub fn selected_frame(&self, playing: Option<&PathBuf>) -> Option<u64> {
+        let (start, end) = self.range_ends(playing);
+        match self.selected(playing)? {
+            Selected::Mark(frame) => Some(frame),
+            Selected::Edge(Edge::Start) => start,
+            Selected::Edge(Edge::End) => end,
         }
     }
 
@@ -646,9 +661,14 @@ impl Layout {
     /// Which side of the view the playhead is past: `Less` before it,
     /// `Greater` after it, `None` in view.
     pub fn playhead_off(&self) -> Option<std::cmp::Ordering> {
-        if self.at < self.start {
+        self.off(self.at)
+    }
+
+    /// Which side of the view `frame` is past, as [`Layout::playhead_off`].
+    pub fn off(&self, frame: u64) -> Option<std::cmp::Ordering> {
+        if frame < self.start {
             Some(std::cmp::Ordering::Less)
-        } else if self.playhead().is_none() {
+        } else if self.column_of(frame).is_none() {
             Some(std::cmp::Ordering::Greater)
         } else {
             None

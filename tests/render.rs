@@ -1976,3 +1976,67 @@ fn eq_shows_in_the_status_bar_only_away_from_flat() {
     let joined = Case::new(View::Library, &snapshot).text();
     assert!(joined.contains("eq bass +3 treble -2.5"), "{joined}");
 }
+
+#[test]
+fn a_selection_out_of_view_points_the_way_reversed() {
+    use playr_app::sampler::{Display, Range, Selected};
+    use ratatui::style::Modifier;
+    let ms = Duration::from_millis;
+    // The 4 s track at 1,600 frames a second, a mark at 3 s.
+    let snapshot = sampling("/m/t.wav", ms(500), &[ms(3_000)]);
+    let selected = Some(("/m/t.wav".into(), Selected::Mark(4_800)));
+    let axis = |sampler: Sampler| {
+        let buf = Case::new(View::Sampler, &snapshot)
+            .sampler(sampler)
+            .size(42, 20)
+            .buffer();
+        (1..=40u16)
+            .map(|x| {
+                let cell = &buf[(x, 13)];
+                let reversed = cell.modifier.contains(Modifier::REVERSED);
+                (cell.symbol().chars().next().unwrap(), reversed)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Zoomed in on the playhead, the mark is past the right edge.
+    let zoomed = Sampler {
+        zoom: 2,
+        selected: selected.clone(),
+        ..sampler_with("/m/t.wav", Display::Envelope)
+    };
+    let cells = axis(zoomed.clone());
+    assert_eq!(cells[39], ('>', true), "{cells:?}");
+    let unselected = axis(Sampler {
+        selected: None,
+        ..zoomed
+    });
+    assert_eq!(unselected[39], (' ', false), "{unselected:?}");
+
+    // Fitted to a range at the start, the playhead is past the same edge:
+    // the selection's arrow sits a cell inside the playhead's.
+    let fitted = Sampler {
+        zoom: 2,
+        fit: true,
+        range: Some(Range {
+            path: "/m/t.wav".into(),
+            start: Some(0),
+            end: Some(400),
+        }),
+        selected,
+        ..sampler_with("/m/t.wav", Display::Envelope)
+    };
+    let snapshot = sampling("/m/t.wav", ms(2_500), &[ms(3_000)]);
+    let buf = Case::new(View::Sampler, &snapshot)
+        .sampler(fitted)
+        .size(42, 20)
+        .buffer();
+    let cell = |x: u16| {
+        let cell = &buf[(x, 13)];
+        (
+            cell.symbol().chars().next().unwrap(),
+            cell.modifier.contains(Modifier::REVERSED),
+        )
+    };
+    assert_eq!((cell(40), cell(39)), (('>', false), ('>', true)));
+}

@@ -510,6 +510,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | backspace | `:remove`             | remove the selected mark; with an end or nothing selected, clear the range |
 | `D`     | `:deselect`             | select nothing                                    |
 | `u`     | `:undo`                 | undo the last change to the marks or the range    |
+| `r`     | `:redo`                 | put back the last change undone                   |
 | `a`     | `:audition`             | play the selection, slice, range or region once, then pause |
 | `,` `.` | `:audition prev`, `:audition next` | play the previous or next planned slice once |
 | `enter` | `:write`                | write the slices planned                          |
@@ -525,11 +526,11 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Zoom.** Each step halves the time a column shows, down to one frame a cell; the window goes on to 16 points a frame. Down to 64 frames, 1.5 ms at 44.1 kHz, columns start on the 32-frame buckets the peaks are kept in, so a column never shows a neighbour's hit. Closer than that, the view reads the frames it shows, and 2 s either side, in the background; until they arrive, each column shows its bucket's peaks. At a frame a column the window's line display draws each frame's channels' mean around a zero line, with a dot per frame once frames are 4 points apart, so a crossing can be picked out by eye.
 
-- **The selection.** The edit keys act on one selected item, a mark or a range end, wherever the playhead has moved since. `{` and `}` select the mark before or after the selected one, or the playhead with none selected, and play from it to the next mark. `b` and a click on a mark in the window select it too, and `[` and `]` select a range end. The selection goes when its mark or end is removed, on `D`, and on a change of track. With nothing selected the edit keys say so.
+- **The selection.** The edit keys act on one selected item, a mark or a range end, wherever the playhead has moved since. `{` and `}` select the mark before or after the selected one, or the playhead with none selected, and play from it to the next mark. `b` and a click on a mark in the window select it too, and `[` and `]` select a range end. Out of view, it shows as an arrow at that edge: reversed in the terminal, and above the playhead's in the window. The selection goes when its mark or end is removed, on `D`, and on a change of track. With nothing selected the edit keys say so.
 
 - **Editing.** `<` and `>` move the selected mark or range end a column at a time, and `:mark-move TIME` puts a mark at a time. backspace removes the selected mark, wherever it sits in the chain `B` undoes; with a range end selected it clears the range. `#` moves the selection to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
 
-- **Undo.** `u` undoes the last change to the playing track's marks or range, by any key, command or drag, and again for the one before. The history lasts until the track changes.
+- **Undo.** `u` undoes the last change to the playing track's marks or range, by any key, command or drag, and again for the one before. It keeps the last 100 changes, until the track changes. `r` puts back what `u` took, until a new change.
 
 - **Audition.** `a` plays the selected mark up to the next, or the range when an end is selected; with nothing selected, the planned slice the playhead is in, or the range, or the region around it. It plays once, and pauses at the end rather than returning to the start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. With slices planned, `,` and `.`, or Previous slice and Next slice in the window, play the previous or next one, wrapping round at either end, so each can be checked before `enter` writes them. With `slice_edges = "fade"`, an audition fades as the written slice will. Playing on afterwards continues the track from there.
 

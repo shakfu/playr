@@ -1378,6 +1378,92 @@ fn undo_puts_back_marks_and_the_range() {
 }
 
 #[test]
+fn redo_puts_back_what_undo_took_until_a_new_edit() {
+    use playr_app::action::Nudge;
+    use playr_app::sampler::Scale;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+    let secs = |n| Duration::from_secs(n);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+    let current = model.snapshot().status.current().cloned();
+    let marks = |model: &mut Model| -> Vec<u64> {
+        (model.session_mut().marks_for(current.as_ref()).iter())
+            .map(|m| m.frame)
+            .collect()
+    };
+
+    model.perform(Action::Redo);
+    assert_eq!(model.message(), Some(&Message::NothingToRedo));
+
+    // A mark nudged three columns, and a range, undone one step too many.
+    model.perform(Action::MarkAt(secs(2)));
+    for _ in 0..3 {
+        model.perform(Action::MoveSelected(Nudge::Columns(1)));
+    }
+    model.perform(Action::SetRange(Some((secs(1), secs(3)))));
+    for _ in 0..3 {
+        model.perform(Action::Undo);
+    }
+    assert_eq!(marks(&mut model), vec![16_064]);
+    assert_eq!(model.sampler().range(current.as_ref()), None);
+
+    // Redo walks forward again, in order.
+    model.perform(Action::Redo);
+    assert_eq!(model.message(), Some(&Message::Redone));
+    assert_eq!(marks(&mut model), vec![16_128]);
+    model.perform(Action::Redo);
+    assert_eq!(marks(&mut model), vec![16_192]);
+    model.perform(Action::Redo);
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((8_000, 24_000))
+    );
+    model.perform(Action::Redo);
+    assert_eq!(model.message(), Some(&Message::NothingToRedo));
+
+    // Undo after a redo still works; a new edit then ends the redo.
+    model.perform(Action::Undo);
+    assert_eq!(model.sampler().range(current.as_ref()), None);
+    model.perform(Action::MarkAt(secs(6)));
+    model.perform(Action::Redo);
+    assert_eq!(model.message(), Some(&Message::NothingToRedo));
+    assert_eq!(marks(&mut model), vec![16_192, 48_000]);
+}
+
+#[test]
+fn undo_keeps_the_latest_edits_up_to_its_depth() {
+    use playr_app::sampler::UNDO_DEPTH;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+    let current = model.snapshot().status.current().cloned();
+    let ms = Duration::from_millis;
+
+    // Five more ranges than undo keeps, each 0 to n ms.
+    let edits = UNDO_DEPTH as u64 + 5;
+    for n in 1..=edits {
+        model.perform(Action::SetRange(Some((ms(0), ms(n)))));
+    }
+    assert_eq!(model.sampler().history.len(), UNDO_DEPTH);
+    for _ in 0..UNDO_DEPTH {
+        model.perform(Action::Undo);
+        assert_eq!(model.message(), Some(&Message::Undone));
+    }
+    // The five oldest were dropped: back to the fifth range, 5 ms, no further.
+    assert_eq!(model.sampler().range(current.as_ref()), Some((0, 40)));
+    model.perform(Action::Undo);
+    assert_eq!(model.message(), Some(&Message::NothingToUndo));
+}
+
+#[test]
 fn a_selected_range_end_snaps_to_the_nearest_rise() {
     use playr_app::sampler::Edge;
     let dir = tempfile::tempdir().unwrap();
