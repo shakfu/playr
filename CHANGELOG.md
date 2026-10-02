@@ -4,6 +4,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Fixed
+
+- The window's sampler draws the cursor, as a dashed line over the waveform. `u`, `i`, `;` and `'` moved it, but nothing showed where, so the keys looked dead. Dashed rather than solid, so a mark or range end under it stays visible.
+
 ## [0.16.0]
 
 ### Added

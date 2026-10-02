@@ -1,5 +1,5 @@
 //! The sampler view: the playing track's waveform, painted a column a point
-//! wide, with its region, marks, playhead and planned slice edges.
+//! wide, with its region, marks, playhead, cursor and planned slice edges.
 //!
 //! A click seeks, a shift-click marks, a drag sets the range to slice, and
 //! the mouse wheel zooms around the playhead, or the range with Fit on. A
@@ -1112,6 +1112,19 @@ fn paint(
             ],
             visuals.strong_text_color(),
             egui::Stroke::NONE,
+        ));
+    }
+    // Last, as in the terminal: the mark keys act on it. Dashed, so a mark or
+    // range end under it still shows.
+    if let Some(c) = model.sampler().cursor.and_then(|f| layout.column_of(f)) {
+        painter.extend(egui::Shape::dashed_line(
+            &[
+                egui::pos2(x(c), rect.top()),
+                egui::pos2(x(c), rect.bottom()),
+            ],
+            egui::Stroke::new(2.0, visuals.selection.stroke.color),
+            6.0,
+            4.0,
         ));
     }
 }
