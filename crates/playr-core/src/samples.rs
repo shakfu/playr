@@ -108,6 +108,9 @@ pub struct Job {
     pub loops: bool,
     /// Write an Octatrack `.ot` file beside the sliced file.
     pub ot_file: bool,
+    /// Slice starts set by hand, in frames, which replace the ones `cut`
+    /// finds. Kept on the job, so a plan made again keeps them.
+    pub cuts: Option<Vec<u64>>,
 }
 
 /// What an export wrote.
@@ -348,66 +351,81 @@ pub fn plan(job: &Job) -> Result<Vec<Span>, String> {
     plan_with(job, &OnsetAudio::default())
 }
 
-/// As [`plan`], finding onsets in `audio` when it holds the region already.
-pub fn plan_with(job: &Job, audio: &OnsetAudio) -> Result<Vec<Span>, String> {
-    let (start, end) = match job.range {
+/// The frames `job` cuts: its range, or the region around its playhead.
+pub fn extent(job: &Job) -> (u64, Option<u64>) {
+    match job.range {
         Some((a, b)) => (a, Some(b)),
         None => region(&job.marks, job.at),
-    };
-    let spans: Vec<Span> = match job.cut {
-        Cut::Region => vec![(start, end)],
-        Cut::Marks if job.range.is_some() => {
-            let mut points: Vec<u64> = job
-                .marks
-                .iter()
-                .copied()
-                .filter(|&m| m > start && end.is_none_or(|e| m < e))
-                .collect();
-            if points.is_empty() {
-                return Err("no marks in the range".into());
+    }
+}
+
+/// Slices starting at each of `starts`, each ending where the next starts,
+/// the last at `end`.
+pub fn spans_from(starts: &[u64], end: Option<u64>) -> Vec<Span> {
+    let ends = starts.iter().skip(1).map(|&e| Some(e)).chain([end]);
+    starts.iter().copied().zip(ends).collect()
+}
+
+/// As [`plan`], finding onsets in `audio` when it holds the region already.
+pub fn plan_with(job: &Job, audio: &OnsetAudio) -> Result<Vec<Span>, String> {
+    let (start, end) = extent(job);
+    let spans: Vec<Span> = match (&job.cuts, job.cut) {
+        (Some(starts), _) => spans_from(starts, end),
+        (None, cut) => match cut {
+            Cut::Region => vec![(start, end)],
+            Cut::Marks if job.range.is_some() => {
+                let mut points: Vec<u64> = job
+                    .marks
+                    .iter()
+                    .copied()
+                    .filter(|&m| m > start && end.is_none_or(|e| m < e))
+                    .collect();
+                if points.is_empty() {
+                    return Err("no marks in the range".into());
+                }
+                points.sort_unstable();
+                points.dedup();
+                points.insert(0, start);
+                let ends = points.iter().skip(1).map(|&e| Some(e)).chain([end]);
+                points.iter().copied().zip(ends).collect()
             }
-            points.sort_unstable();
-            points.dedup();
-            points.insert(0, start);
-            let ends = points.iter().skip(1).map(|&e| Some(e)).chain([end]);
-            points.iter().copied().zip(ends).collect()
-        }
-        Cut::Marks => {
-            let mut points: Vec<u64> = job.marks.iter().copied().filter(|&m| m > 0).collect();
-            if points.is_empty() {
-                return Err("no marks in this track".into());
+            Cut::Marks => {
+                let mut points: Vec<u64> = job.marks.iter().copied().filter(|&m| m > 0).collect();
+                if points.is_empty() {
+                    return Err("no marks in this track".into());
+                }
+                points.sort_unstable();
+                points.dedup();
+                points.insert(0, 0);
+                let ends = points.iter().skip(1).map(|&e| Some(e)).chain([None]);
+                points.iter().copied().zip(ends).collect()
             }
-            points.sort_unstable();
-            points.dedup();
-            points.insert(0, 0);
-            let ends = points.iter().skip(1).map(|&e| Some(e)).chain([None]);
-            points.iter().copied().zip(ends).collect()
-        }
-        Cut::Equal(n) => {
-            let len = match end {
-                Some(end) => end - start,
-                None => Reader::open(&job.path, job.rate, start)?.count_to(None)?,
-            };
-            let spans = equal_spans(len, n);
-            if spans.is_empty() {
-                return Err(format!("the region is too short for {n} slices"));
+            Cut::Equal(n) => {
+                let len = match end {
+                    Some(end) => end - start,
+                    None => Reader::open(&job.path, job.rate, start)?.count_to(None)?,
+                };
+                let spans = equal_spans(len, n);
+                if spans.is_empty() {
+                    return Err(format!("the region is too short for {n} slices"));
+                }
+                spans
+                    .into_iter()
+                    .map(|(s, e)| (start + s, Some(start + e)))
+                    .collect()
             }
-            spans
-                .into_iter()
-                .map(|(s, e)| (start + s, Some(start + e)))
-                .collect()
-        }
-        Cut::Onsets(sensitivity) => {
-            let mono = audio.mono(&job.path, job.rate, start, end)?;
-            let points: Vec<u64> = onsets(&mono, job.rate, sensitivity)
-                .into_iter()
-                .map(|p| p as u64)
-                .collect();
-            spans_at(&points, mono.len() as u64)
-                .into_iter()
-                .map(|(s, e)| (start + s, Some(start + e)))
-                .collect()
-        }
+            Cut::Onsets(sensitivity) => {
+                let mono = audio.mono(&job.path, job.rate, start, end)?;
+                let points: Vec<u64> = onsets(&mono, job.rate, sensitivity)
+                    .into_iter()
+                    .map(|p| p as u64)
+                    .collect();
+                spans_at(&points, mono.len() as u64)
+                    .into_iter()
+                    .map(|(s, e)| (start + s, Some(start + e)))
+                    .collect()
+            }
+        },
     };
     if spans.len() > MAX_SLICES {
         return Err(format!(

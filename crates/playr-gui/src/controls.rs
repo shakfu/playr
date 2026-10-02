@@ -285,7 +285,14 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("Activate", "a double click on a row"),
     ("Open", "File, Open files and Open folder"),
     ("Scan", "File, Add folder to library"),
-    ("MoveMarkTo", "a mark dragged along the waveform"),
+    (
+        "MoveSelectedTo",
+        "a mark or planned slice start dragged along the waveform",
+    ),
+    (
+        "SelectSliceAt",
+        "a click or drag on a planned slice's start",
+    ),
     (
         "SelectMarkAt",
         "a click on a mark, and the mark's entries in the waveform's menu",

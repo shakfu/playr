@@ -78,6 +78,20 @@ pub enum Message {
     NothingToUndo,
     Redone,
     NothingToRedo,
+    /// Planned slice `slice`, from 1, now starts at frame `at` of `rate`.
+    SliceMoved {
+        slice: usize,
+        at: u64,
+        rate: u32,
+    },
+    /// Planned slice `slice + 1` was joined to slice `slice`, from 1.
+    SlicesJoined {
+        slice: usize,
+    },
+    /// The first planned slice's start was asked to go.
+    FirstSlice,
+    /// No planned slice starts where one was asked for.
+    NoSliceHere,
     /// A `map` command took effect; holds the `Action::Map`.
     Mapped(Action),
     Unmapped(Key),
@@ -229,12 +243,22 @@ pub fn text(message: &Message) -> String {
         Message::Snapping => "looking for the nearest rise".into(),
         Message::Edge(edge) => format!("selected the range {}", edge.name()),
         Message::NoEdge(edge) => format!("no range {} to select: set it with i or o", edge.name()),
-        Message::NothingSelected => "nothing selected: { } select a mark, [ ] a range end".into(),
+        Message::NothingSelected => {
+            "nothing selected: select a mark with { }, a range end with [ ], a slice with , ."
+                .into()
+        }
         Message::Deselected => "selected nothing".into(),
         Message::Undone => "undone".into(),
         Message::NothingToUndo => "nothing to undo".into(),
         Message::Redone => "redone".into(),
         Message::NothingToRedo => "nothing to redo".into(),
+        Message::SliceMoved { slice, at, rate } => format!(
+            "slice {slice} starts at {}",
+            crate::sampler::fmt_frames(*at, *rate)
+        ),
+        Message::SlicesJoined { slice } => format!("joined slice {} to slice {slice}", slice + 1),
+        Message::FirstSlice => "the first slice has none before it to join".into(),
+        Message::NoSliceHere => "no planned slice starts here".into(),
         Message::Mapped(map) => command::line(map, None),
         Message::Unmapped(key) => format!("unmapped {key}"),
         Message::NotBound { key, view } => {

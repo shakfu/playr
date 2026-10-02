@@ -1217,7 +1217,7 @@ fn a_selected_mark_moves_and_is_removed() {
     seek(&mut model, secs(9));
     model.perform(Action::MoveSelected(Nudge::Columns(1)));
     assert_eq!(selected_mark(&model), Some(16_064));
-    model.perform(Action::MoveMarkTo(secs(3)));
+    model.perform(Action::MoveSelectedTo(secs(3)));
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Done(Outcome::MarkMoved {
@@ -1253,7 +1253,7 @@ fn a_mark_will_not_move_onto_another() {
     model.perform(Action::MarkAt(secs(6)));
 
     model.perform(Action::SelectMarkAt(secs(2)));
-    model.perform(Action::MoveMarkTo(secs(6)));
+    model.perform(Action::MoveSelectedTo(secs(6)));
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Refused(Refusal::MarkInTheWay {
@@ -1353,6 +1353,8 @@ fn undo_puts_back_marks_and_the_range() {
     assert_eq!(marks(&mut model), vec![48_064]);
     model.perform(Action::Undo);
     assert_eq!(marks(&mut model), vec![16_000, 48_064]);
+    // The mark removed comes back selected, as it was.
+    assert_eq!(selected_mark(&model), Some(16_000));
     model.perform(Action::Undo);
     assert_eq!(marks(&mut model), vec![16_000, 48_000]);
     model.perform(Action::Undo);
@@ -1437,6 +1439,167 @@ fn redo_puts_back_what_undo_took_until_a_new_edit() {
     assert_eq!(marks(&mut model), vec![16_192, 48_000]);
 }
 
+/// A sampler model on `file` with `n` equal slices of the track planned.
+fn planned(dir: &Path, file: &Path, n: usize) -> Model {
+    let mut model = sampler_model(dir, file);
+    model.perform(Action::Slice(playr_app::action::Slicing::Equal(n)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.sampler().pending.is_none() {
+        assert!(Instant::now() < deadline, "no plan");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model
+}
+
+/// The planned slices' starts.
+fn starts(model: &Model) -> Vec<u64> {
+    let plan = model.sampler().pending.as_ref().expect("a plan");
+    plan.spans.iter().map(|s| s.0).collect()
+}
+
+#[test]
+fn a_planned_slice_is_selected_moved_and_joined_to_the_one_before() {
+    use playr_app::action::Nudge;
+    use playr_app::sampler::{plan_text, Scale};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = planned(dir.path(), &file, 4);
+    let file = model.snapshot().status.current().cloned().unwrap();
+    let current = Some(file.clone());
+    let selected = |model: &Model| model.sampler().selected_slice(current.as_ref());
+    let scale = |per_column| Scale {
+        start: 0,
+        per_column,
+        per_frame: 1,
+        columns: 100,
+    };
+    model.set_scale(scale(64));
+    assert_eq!(starts(&model), [0, 20_000, 40_000, 60_000]);
+
+    // Stepping selects the slice it plays, and steps from the selection.
+    model.perform(Action::AuditionSlice(true));
+    assert_eq!(selected(&model), Some(20_000));
+    assert_eq!(model.message(), Some(&Message::Auditioning));
+
+    // A move takes the slice before's end with it, and marks the plan edited.
+    model.perform(Action::MoveSelected(Nudge::Columns(1)));
+    assert_eq!(starts(&model), [0, 20_064, 40_000, 60_000]);
+    let plan = model.sampler().pending.clone().unwrap();
+    assert_eq!(plan.spans[0], (0, Some(20_064)));
+    assert_eq!(plan.job.cuts, Some(vec![0, 20_064, 40_000, 60_000]));
+    assert!(plan_text(model.sampler()).contains("edited"));
+    assert_eq!(
+        model.message(),
+        Some(&Message::SliceMoved {
+            slice: 2,
+            at: 20_064,
+            rate: 8000
+        })
+    );
+    assert_eq!(selected(&model), Some(20_064));
+
+    // It stays a frame inside its neighbours.
+    model.set_scale(scale(20_000));
+    model.perform(Action::MoveSelected(Nudge::Columns(-5)));
+    assert_eq!(starts(&model), [0, 1, 40_000, 60_000]);
+    model.perform(Action::MoveSelected(Nudge::Columns(5)));
+    assert_eq!(starts(&model), [0, 39_999, 40_000, 60_000]);
+    model.set_scale(scale(64));
+
+    // The first slice keeps to the region, and has nothing before to join.
+    model.perform(Action::AuditionSlice(false));
+    assert_eq!(selected(&model), Some(0));
+    model.perform(Action::MoveSelected(Nudge::Columns(-1)));
+    assert_eq!(starts(&model), [0, 39_999, 40_000, 60_000]);
+    model.perform(Action::RemoveSelected);
+    assert_eq!(model.message(), Some(&Message::FirstSlice));
+
+    // Removing a start joins its slice to the one before.
+    model.perform(Action::AuditionSlice(true));
+    model.perform(Action::RemoveSelected);
+    assert_eq!(model.message(), Some(&Message::SlicesJoined { slice: 1 }));
+    assert_eq!(starts(&model), [0, 40_000, 60_000]);
+    assert_eq!(selected(&model), None);
+
+    // Undo puts the slice back, selected; redo joins it again.
+    model.perform(Action::Undo);
+    assert_eq!(starts(&model), [0, 39_999, 40_000, 60_000]);
+    assert_eq!(selected(&model), Some(39_999));
+    model.perform(Action::Redo);
+    assert_eq!(starts(&model), [0, 40_000, 60_000]);
+
+    // `a` hears the selected slice.
+    model.perform(Action::AuditionSlice(true));
+    assert_eq!(selected(&model), Some(40_000));
+    model.perform(Action::Audition);
+    assert_eq!(
+        model.sampler().auditioned,
+        Some((file.clone(), 40_000, 60_000))
+    );
+
+    // Planned again for other edges, the plan keeps the starts set by hand.
+    model.perform(Action::SetSliceEdges(playr_core::samples::Edges::Zero));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.sampler().pending.is_none() {
+        assert!(Instant::now() < deadline, "no plan");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(starts(&model), [0, 40_000, 60_000]);
+    assert_eq!(selected(&model), Some(40_000));
+
+    // Discarding is not an edit: undo does not bring the plan back.
+    model.perform(Action::DiscardSlices);
+    assert_eq!(selected(&model), None);
+    model.perform(Action::Undo);
+    assert!(model.sampler().pending.is_none());
+}
+
+#[test]
+fn a_slice_start_or_range_end_is_moved_to_a_time() {
+    use playr_app::sampler::{Edge, Scale};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = planned(dir.path(), &file, 4);
+    let current = model.snapshot().status.current().cloned();
+    let ms = Duration::from_millis;
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+
+    // A click picks the slice starting within a column; none there is said.
+    model.perform(Action::SelectSliceAt(ms(3_000)));
+    assert_eq!(model.message(), Some(&Message::NoSliceHere));
+    model.perform(Action::SelectSliceAt(ms(2_505)));
+    assert_eq!(
+        model.sampler().selected_slice(current.as_ref()),
+        Some(20_000)
+    );
+    // A drag moves it, kept a frame inside its neighbours.
+    model.perform(Action::MoveSelectedTo(ms(3_000)));
+    assert_eq!(starts(&model), [0, 24_000, 40_000, 60_000]);
+    model.perform(Action::MoveSelectedTo(ms(9_000)));
+    assert_eq!(starts(&model), [0, 39_999, 40_000, 60_000]);
+
+    // A range end moves to a time too.
+    model.perform(Action::SetRange(Some((ms(1_000), ms(2_000)))));
+    model.perform(Action::PickEdge(Edge::End));
+    model.perform(Action::MoveSelectedTo(ms(2_500)));
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((8_000, 20_000))
+    );
+    model.perform(Action::Deselect);
+    model.perform(Action::MoveSelectedTo(ms(2_500)));
+    assert_eq!(model.message(), Some(&Message::NothingSelected));
+}
+
 #[test]
 fn undo_keeps_the_latest_edits_up_to_its_depth() {
     use playr_app::sampler::UNDO_DEPTH;
@@ -1463,12 +1626,9 @@ fn undo_keeps_the_latest_edits_up_to_its_depth() {
     assert_eq!(model.message(), Some(&Message::NothingToUndo));
 }
 
-#[test]
-fn a_selected_range_end_snaps_to_the_nearest_rise() {
-    use playr_app::sampler::Edge;
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("hit.wav");
-    // Silence, a hit at 1 s, then silence to 4 s.
+/// Writes 4 s of silence at 8 kHz with a hit at 1 s, as `hit.wav` in `dir`.
+fn hit(dir: &Path) -> std::path::PathBuf {
+    let file = dir.join("hit.wav");
     let rate = 8000;
     let spec = hound::WavSpec {
         channels: 1,
@@ -1486,6 +1646,26 @@ fn a_selected_range_end_snaps_to_the_nearest_rise() {
         w.write_sample((v * 32_000.0) as i16).unwrap();
     }
     w.finalize().unwrap();
+    file
+}
+
+/// Waits for an onset snap to land.
+fn snapped(model: &mut Model) {
+    assert_eq!(model.message(), Some(&Message::Snapping));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.message() == Some(&Message::Snapping) {
+        assert!(Instant::now() < deadline, "no snap");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_selected_range_end_snaps_to_the_nearest_rise() {
+    use playr_app::sampler::Edge;
+    let dir = tempfile::tempdir().unwrap();
+    let file = hit(dir.path());
+    let rate = 8000;
     let mut model = sampler_model(dir.path(), &file);
     let current = model.snapshot().status.current().cloned();
 
@@ -1495,13 +1675,7 @@ fn a_selected_range_end_snaps_to_the_nearest_rise() {
     ))));
     model.perform(Action::PickEdge(Edge::Start));
     model.perform(Action::SnapSelected);
-    assert_eq!(model.message(), Some(&Message::Snapping));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while model.message() == Some(&Message::Snapping) {
-        assert!(Instant::now() < deadline, "no snap");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    snapped(&mut model);
     let (start, end) = model.sampler().range(current.as_ref()).unwrap();
     assert!(start.abs_diff(rate as u64) <= 100, "start at {start}");
     assert_eq!(end, 3 * rate as u64);
@@ -2817,4 +2991,30 @@ fn sql_lists_what_a_select_names_and_saves_as_a_search_to_edit_on_the_command_li
         Input::Command(line) => assert_eq!(line.text, format!("sql {statement}")),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_selected_slice_snaps_to_the_nearest_rise() {
+    use playr_app::action::Nudge;
+    use playr_app::sampler::Scale;
+    let dir = tempfile::tempdir().unwrap();
+    let file = hit(dir.path());
+    // Four slices of the 4 s track, the second starting at the hit, 1 s.
+    let mut model = planned(dir.path(), &file, 4);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 1600,
+        per_frame: 1,
+        columns: 100,
+    });
+    model.perform(Action::AuditionSlice(true));
+    model.perform(Action::MoveSelected(Nudge::Columns(1)));
+    assert_eq!(starts(&model), [0, 9_600, 16_000, 24_000]);
+
+    model.perform(Action::SnapSelected);
+    snapped(&mut model);
+    let back = starts(&model)[1];
+    assert!(back.abs_diff(8_000) <= 100, "slice 2 starts at {back}");
+    let current = model.snapshot().status.current().cloned();
+    assert_eq!(model.sampler().selected_slice(current.as_ref()), Some(back));
 }

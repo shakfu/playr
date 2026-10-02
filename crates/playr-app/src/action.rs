@@ -166,12 +166,15 @@ pub enum Action {
     ClearLoops,
     /// Select the mark nearest this time, within a column; what a click does.
     SelectMarkAt(Duration),
+    /// Select the planned slice starting nearest this time, within a column.
+    SelectSliceAt(Duration),
     /// Select nothing.
     Deselect,
     /// Move the selected mark or range end.
     MoveSelected(Nudge),
-    /// Move the selected mark to this time; what a drag does.
-    MoveMarkTo(Duration),
+    /// Move the selected mark, slice start or range end to this time; what a
+    /// drag does.
+    MoveSelectedTo(Duration),
     /// Move the selected mark or range end to the nearest rise in the sound.
     SnapSelected,
     /// Remove the selected mark, or clear the range; with nothing selected,

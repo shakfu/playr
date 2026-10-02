@@ -897,7 +897,9 @@ impl Model {
                         {
                             let mut job = plan.job;
                             if let Some(s) = self.sampler.onsets_wanted.take() {
+                                // A new cut, so starts set by hand in the old one go.
                                 job.cut = Cut::Onsets(s);
+                                job.cuts = None;
                             }
                             let id = self.session.replan(job);
                             self.sampler.planning = Some(id);
@@ -905,13 +907,24 @@ impl Model {
                         Ok(plan) => {
                             self.sampler.onsets_wanted = None;
                             let slices = plan.spans.len();
+                            // A slice selected in the plan replaced goes with it.
+                            if let Some((_, Selected::Slice(start))) = self.sampler.selected {
+                                if !plan.spans.iter().any(|s| s.0 == start) {
+                                    self.sampler.selected = None;
+                                }
+                            }
                             self.sampler.pending = Some(plan);
                             self.notify(Outcome::Planned { slices });
                         }
-                        Err(error) => self.notify(Notice::Failed {
-                            task: Task::Slice,
-                            error,
-                        }),
+                        Err(error) => {
+                            if let Some((_, Selected::Slice(_))) = self.sampler.selected {
+                                self.sampler.selected = None;
+                            }
+                            self.notify(Notice::Failed {
+                                task: Task::Slice,
+                                error,
+                            })
+                        }
                     }
                 }
                 Event::Snapped {
@@ -937,6 +950,9 @@ impl Model {
                                     if let Ok((_, rate)) = self.session.playing_track() {
                                         self.notify(Message::Range { start, end, rate });
                                     }
+                                }
+                                Some((_, Selected::Slice(start))) => {
+                                    dispatch::move_slice(self, start, to);
                                 }
                                 _ => {
                                     let notice = self.session.move_mark(from, to);

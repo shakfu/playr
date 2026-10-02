@@ -57,6 +57,8 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 - **Planning.** In this view `:slice` plans instead of writing. The planned edges draw as `+` under the waveform; enter writes exactly those slices and esc discards them. A change of track discards them too. Outside the view, `:slice` plans and writes in one step.
 
+- **Editing a plan.** `,` `.`, or a click on its start in the window, select a planned slice; `<` `>`, `#` and a drag move its start, and backspace joins it to the slice before. A slice start on a mark takes the click or drag while the plan is shown. The plan keeps the starts set by hand when `:slice-edges` plans it again, and zero edges still move them to crossings then. A new `:slice` replaces them. Editing a plan cut at marks does not move the marks.
+
 ## What an export writes
 
 Each export makes a new directory under `samples` in `settings.toml`, `~/Music/playr/samples` by default. It is named after the track's file; a second export of the same track gets `-2`, then `-3`.

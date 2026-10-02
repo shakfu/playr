@@ -89,6 +89,14 @@ impl Method {
     }
 }
 
+/// What a drag on the waveform picked up, besides a range end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Grab {
+    Mark,
+    /// A planned slice's start.
+    Slice,
+}
+
 /// What the view keeps between frames that the model does not.
 pub struct State {
     /// Wheel movement not yet turned into a zoom step.
@@ -101,8 +109,9 @@ pub struct State {
     /// moving under the pointer, as fitting a picked end or following the
     /// playhead moves it, would move what is dragged by as much.
     held_start: Option<u64>,
-    /// The mark a drag picked up, as the time it sat at when the drag began.
-    mark_drag: Option<Duration>,
+    /// The mark or planned slice start a drag picked up, as the time it sat
+    /// at when the drag began.
+    mark_drag: Option<(Grab, Duration)>,
     /// The time a right-click landed on and the mark within reach of it, for
     /// the menu it opened.
     menu: Option<(Duration, Option<Duration>)>,
@@ -301,13 +310,32 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(mark, _)| sampler::time_of(mark, layout.rate))
     };
+    // The planned slice start within reach of `p`, as its time.
+    let plan = (model.sampler().pending.as_ref()).filter(|p| Some(&p.job.path) == current.as_ref());
+    let slice_at = |p: egui::Pos2| {
+        let reach = |frame: u64| {
+            layout
+                .column_of(frame)
+                .map(|c| ((rect.left() + c as f32) - p.x).abs())
+                .filter(|&d| d <= EDGE_REACH)
+        };
+        (plan.iter().flat_map(|p| &p.spans))
+            .filter_map(|&(start, _)| reach(start).map(|d| (start, d)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(start, _)| sampler::time_of(start, layout.rate))
+    };
+    // While a plan is shown, a slice start wins over a mark under it: the
+    // plan is what is being reviewed. Discarding it frees the mark.
+    let grab_at = |p: egui::Pos2| {
+        (slice_at(p).map(|t| (Grab::Slice, t))).or_else(|| mark_at(p).map(|t| (Grab::Mark, t)))
+    };
     if response.drag_started() {
         state.held_start = Some(layout.start);
         // A drag starts once the pointer has moved a little; it runs from the press.
         let origin = ui.input(|i| i.pointer.press_origin()).or(pointer);
-        // A mark under the press is dragged rather than a range drawn. Checked
-        // after the range's edges, so an edge sitting on a mark still wins and
-        // the drag that was there before this behaves as it did.
+        // A mark or slice start under the press is dragged rather than a range
+        // drawn. Checked after the range's edges, so an edge sitting on one
+        // still wins and the drag that was there before this behaves as it did.
         state.edge_drag = origin.and_then(edge_at);
         if let Some(edge) = state.edge_drag {
             // As `[` or `]`: the keys that move an end go on with this one.
@@ -315,7 +343,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         }
         state.mark_drag = origin
             .filter(|_| state.edge_drag.is_none())
-            .and_then(mark_at);
+            .and_then(grab_at);
         state.drag = origin.filter(|_| state.mark_drag.is_none()).map(|p| {
             // From an edge it moves that edge, holding the other one.
             let time = |frame: u64| sampler::time_of(frame, layout.rate);
@@ -348,16 +376,17 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             }
         }
     }
-    // An edge that can be dragged shows it, before and while it is.
-    let over_edge = response
+    // A range end, slice start or mark that can be dragged shows it, before
+    // and while it is.
+    let over = response
         .hover_pos()
         .filter(|_| state.drag.is_none())
-        .and_then(edge_at);
-    if state.edge_drag.is_some() || over_edge.is_some() {
+        .filter(|&p| edge_at(p).is_some() || grab_at(p).is_some());
+    if state.edge_drag.is_some() || state.mark_drag.is_some() || over.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
     let dragged = state.drag;
-    let dragging_mark = state.mark_drag.zip(pointer.map(at));
+    let dragging_mark = (state.mark_drag.map(|(_, t)| t)).zip(pointer.map(at));
     if response.drag_stopped() {
         state.edge_drag = None;
         state.grain = None;
@@ -368,12 +397,15 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                 actions.push(Action::Loop(Some(true)));
             }
         }
-        // The mark is selected, then it moves: `MoveMarkTo` acts on the
-        // selected mark, as the keys do.
-        if let Some((from, to)) = state.mark_drag.take().zip(pointer.map(at)) {
+        // What was picked up is selected, then it moves: `MoveSelectedTo`
+        // acts on the selection, as the keys do.
+        if let Some(((grab, from), to)) = state.mark_drag.take().zip(pointer.map(at)) {
             if from != to {
-                actions.push(Action::SelectMarkAt(from));
-                actions.push(Action::MoveMarkTo(to));
+                actions.push(match grab {
+                    Grab::Mark => Action::SelectMarkAt(from),
+                    Grab::Slice => Action::SelectSliceAt(from),
+                });
+                actions.push(Action::MoveSelectedTo(to));
             }
         }
     }
@@ -443,8 +475,10 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             } else {
                 Action::SeekTo(at)
             });
-            if let Some(mark) = mark_at(pos).filter(|_| !shift) {
-                actions.push(Action::SelectMarkAt(mark));
+            match grab_at(pos).filter(|_| !shift) {
+                Some((Grab::Slice, start)) => actions.push(Action::SelectSliceAt(start)),
+                Some((Grab::Mark, mark)) => actions.push(Action::SelectMarkAt(mark)),
+                None => {}
             }
         }
     }
@@ -1087,13 +1121,16 @@ fn paint(
             egui::Stroke::new(width, colour),
         );
     };
+    // The selected slice's start, end and mark are drawn thicker.
+    let current = model.snapshot().status.current();
     if let Some(plan) = &model.sampler().pending {
-        for c in sampler::edges(plan).filter_map(|e| layout.column_of(e)) {
-            line(c, colours.edge, 1.0);
+        let selected = model.sampler().selected_slice(current);
+        for e in sampler::edges(plan) {
+            if let Some(c) = layout.column_of(e) {
+                line(c, colours.edge, if Some(e) == selected { 3.0 } else { 1.0 });
+            }
         }
     }
-    // The selected end and mark are drawn thicker.
-    let current = model.snapshot().status.current();
     let (start, end) = layout.range;
     let chosen = model.sampler().selected_edge(current);
     for (frame, edge) in [(start, Edge::Start), (end, Edge::End)] {

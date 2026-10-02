@@ -400,13 +400,29 @@ fn terminal_messages_are_worded() {
         ),
         (
             Message::NothingSelected,
-            "nothing selected: { } select a mark, [ ] a range end",
+            "nothing selected: select a mark with { }, a range end with [ ], a slice with , .",
         ),
         (Message::Deselected, "selected nothing"),
         (Message::Undone, "undone"),
         (Message::NothingToUndo, "nothing to undo"),
         (Message::Redone, "redone"),
         (Message::NothingToRedo, "nothing to redo"),
+        (
+            Message::SliceMoved {
+                slice: 2,
+                at: 12_000,
+                rate: 8000,
+            },
+            "slice 2 starts at 0:01.500",
+        ),
+        (
+            Message::SlicesJoined { slice: 1 },
+            "joined slice 2 to slice 1",
+        ),
+        (
+            Message::FirstSlice,
+            "the first slice has none before it to join",
+        ),
         (
             Message::Range {
                 start: Some(8_000),

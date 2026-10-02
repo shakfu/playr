@@ -141,15 +141,15 @@ fn a_unique_prefix_names_a_command_and_an_ambiguous_one_lists_the_choices() {
                 .into()
         )
     );
-    // Only the commands usable here count: here `mark-m` names a command
+    // Only the commands usable here count: here `move-t` names a command
     // usable elsewhere.
     assert_eq!(
-        lib("mark-m"),
-        Err(":mark-move works in the sampler view".into())
+        lib("move-t"),
+        Err(":move-to works in the sampler view".into())
     );
     assert_eq!(
-        parse("mark-m 0:02", Sampler),
-        Ok(Action::MoveMarkTo(std::time::Duration::from_secs(2)))
+        parse("move-t 0:02", Sampler),
+        Ok(Action::MoveSelectedTo(std::time::Duration::from_secs(2)))
     );
     assert_eq!(lib("frobnicate"), Err("unknown command: frobnicate".into()));
     assert!(lib("").is_err());
@@ -225,6 +225,8 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         "remove",
         "deselect",
         "select 90",
+        "select-slice 90",
+        "move-to 90",
     ] {
         let action = s(text).unwrap();
         assert_eq!(line(&action, Some(View::Sampler)), text);
@@ -1121,10 +1123,14 @@ fn the_selection_commands_parse_in_the_sampler_only() {
         Ok(Action::MoveSelected(Nudge::Percent(10)))
     );
     assert_eq!(
-        sampler("mark-move 0:02"),
-        Ok(Action::MoveMarkTo(Duration::from_secs(2)))
+        sampler("move-to 0:02"),
+        Ok(Action::MoveSelectedTo(Duration::from_secs(2)))
     );
-    assert_eq!(sampler("mark-move"), Err("usage: :mark-move TIME".into()));
+    assert_eq!(sampler("move-to"), Err("usage: :move-to TIME".into()));
+    assert_eq!(
+        sampler("select-slice 1"),
+        Ok(Action::SelectSliceAt(Duration::from_secs(1)))
+    );
     assert_eq!(
         sampler("scrub 0:02"),
         Ok(Action::Scrub(Duration::from_secs(2)))
@@ -1169,15 +1175,14 @@ fn renamed_commands_keep_their_old_names_as_aliases() {
         assert_eq!(lib(old), lib(new), "{old}");
         assert!(lib(new).is_ok(), "{new}");
     }
-    assert_eq!(
-        parse("move-mark 0:02", Sampler),
-        parse("mark-move 0:02", Sampler)
-    );
-    assert!(parse("mark-move 0:02", Sampler).is_ok());
+    for old in ["move-mark 0:02", "mark-move 0:02"] {
+        assert_eq!(parse(old, Sampler), parse("move-to 0:02", Sampler), "{old}");
+    }
+    assert!(parse("move-to 0:02", Sampler).is_ok());
     // An old name still says where it works, by its new name.
     assert_eq!(
-        parse("move-mark 0:02", Library),
-        Err(":mark-move works in the sampler view".into())
+        parse("mark-move 0:02", Library),
+        Err(":move-to works in the sampler view".into())
     );
     // Help and completion list only the new names.
     let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
@@ -1186,6 +1191,7 @@ fn renamed_commands_keep_their_old_names_as_aliases() {
         "unmark",
         "delmarks",
         "move-mark",
+        "mark-move",
         "clear-search",
         "next-view",
     ] {

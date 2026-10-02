@@ -50,6 +50,7 @@ fn job(path: &Path, rate: u32, marks: &[u64], at: u64, cut: Cut, samples: &Path)
         fades: Fades::default(),
         loops: false,
         ot_file: false,
+        cuts: None,
     }
 }
 
@@ -731,6 +732,38 @@ fn zero_edges_land_where_the_sampler_snap_puts_them() {
     assert_ne!(zero, exact, "no edge moved");
     // Neighbouring slices still meet.
     assert!(zero.windows(2).all(|w| w[0].1 == Some(w[1].0)));
+}
+
+#[test]
+fn starts_set_by_hand_replace_the_cut_and_still_snap() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    let rate = 8_000;
+    let read = tone(&file, rate, 37.0, 40_000);
+    let peaks = Peaks::from_interleaved(&read, 2, rate);
+    let reach = snap_reach(rate);
+    let hand = |edges| Job {
+        edges,
+        range: Some((2_000, 30_000)),
+        cuts: Some(vec![2_000, 9_001, 20_003]),
+        ..job(&file, rate, &[], 0, Cut::Equal(6), dir.path())
+    };
+
+    // The starts given, each slice ending where the next starts, the last at
+    // the range's end: the cut's own six slices are gone.
+    let exact = plan(&hand(Edges::Exact)).unwrap();
+    assert_eq!(
+        exact,
+        [
+            (2_000, Some(9_001)),
+            (9_001, Some(20_003)),
+            (20_003, Some(30_000))
+        ]
+    );
+    // Zero edges still move them, so a plan made again keeps both.
+    let snap = |e: u64| peaks.crossing(e - reach, e + reach, e).unwrap_or(e);
+    let want: Vec<_> = exact.iter().map(|&(s, e)| (snap(s), e.map(snap))).collect();
+    assert_eq!(plan(&hand(Edges::Zero)).unwrap(), want);
 }
 
 #[test]

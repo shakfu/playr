@@ -51,7 +51,8 @@ pub fn allowed(action: &Action) -> bool {
         | SelectMarkAt(_)
         | Deselect
         | MoveSelected(_)
-        | MoveMarkTo(_)
+        | MoveSelectedTo(_)
+        | SelectSliceAt(_)
         | SnapSelected
         | RemoveSelected
         | Zoom(_)

@@ -131,14 +131,19 @@ pub enum Selected {
     Mark(u64),
     /// This end of the range.
     Edge(Edge),
+    /// The planned slice starting at this frame.
+    Slice(u64),
 }
 
-/// A track's marks and range before an edit, which undo restores.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A track's marks, range and planned slices before an edit, which undo
+/// restores, with what was selected then.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Before {
     pub path: PathBuf,
     pub marks: Vec<u64>,
     pub range: Option<Range>,
+    pub plan: Option<Plan>,
+    pub selected: Option<Selected>,
 }
 
 /// Frames of the playing track decoded for a close view.
@@ -256,6 +261,15 @@ impl Sampler {
             Selected::Mark(frame) => Some(frame),
             Selected::Edge(Edge::Start) => start,
             Selected::Edge(Edge::End) => end,
+            Selected::Slice(start) => Some(start),
+        }
+    }
+
+    /// The start of the selected planned slice on `playing`.
+    pub fn selected_slice(&self, playing: Option<&PathBuf>) -> Option<u64> {
+        match self.selected(playing) {
+            Some(Selected::Slice(start)) => Some(start),
+            _ => None,
         }
     }
 
@@ -526,8 +540,9 @@ pub fn plan_text(sampler: &Sampler) -> String {
     match (&sampler.pending, sampler.planning) {
         (_, Some(_)) => "planning slices".into(),
         (Some(p), _) => format!(
-            "{} slices planned: enter writes, esc discards",
-            p.spans.len()
+            "{} slices planned{}: enter writes, esc discards",
+            p.spans.len(),
+            if p.job.cuts.is_some() { ", edited" } else { "" }
         ),
         (None, _) => String::new(),
     }

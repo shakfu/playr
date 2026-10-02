@@ -1348,3 +1348,82 @@ fn the_eq_button_opens_a_dialog_whose_sliders_set_bands() {
     harness.run_steps(2);
     assert_eq!(slider(&harness, "bass"), None);
 }
+
+#[test]
+fn a_planned_slice_start_is_clicked_and_dragged_over_a_mark() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    plan(&mut harness, "Equal");
+    wait(&mut harness, |m| m.sampler().pending.is_some());
+    harness.run_steps(2);
+    let starts = |harness: &Harness<'_, Gui>| -> Vec<u64> {
+        let plan = model(harness).sampler().pending.as_ref().unwrap();
+        plan.spans.iter().map(|s| s.0).collect()
+    };
+    // Eight slices of the 12 s track, 1.5 s apart at 8 kHz.
+    assert_eq!(starts(&harness)[..3], [0, 12_000, 24_000]);
+    let rect = harness.get_by_label("Track waveform").rect();
+    let scale = model(&harness).sampler().scale.unwrap();
+    let x = |frame: u64| {
+        let column = (frame - scale.start) as f32 / scale.per_column as f32;
+        egui::pos2(rect.left() + column + 0.5, rect.center().y)
+    };
+    let click = |harness: &mut Harness<'_, Gui>, pos, modifiers| {
+        harness.hover_at(pos);
+        harness.run_steps(1);
+        for pressed in [true, false] {
+            harness.event_modifiers(
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers,
+                },
+                modifiers,
+            );
+        }
+        harness.run_steps(2);
+    };
+    let current = model(&harness).snapshot().status.current().cloned();
+    let selected =
+        |harness: &Harness<'_, Gui>| model(harness).sampler().selected_slice(current.as_ref());
+
+    // A click on a slice's start selects the slice.
+    click(&mut harness, x(12_000), egui::Modifiers::NONE);
+    assert_eq!(selected(&harness), Some(12_000));
+
+    // A mark on the third slice's start: the slice still takes the click.
+    click(&mut harness, x(24_000), egui::Modifiers::SHIFT);
+    let marks = model(&harness).snapshot().marks.clone();
+    assert_eq!(marks.len(), 1, "no mark");
+    click(&mut harness, x(24_000), egui::Modifiers::NONE);
+    assert_eq!(selected(&harness), Some(24_000));
+
+    // The pointer turns to a left-right arrow over a start, not between.
+    let cursor = |h: &Harness<'_, Gui>| h.output().platform_output.cursor_icon;
+    harness.hover_at(x(18_000));
+    harness.run_steps(1);
+    assert_eq!(cursor(&harness), egui::CursorIcon::Default);
+    harness.hover_at(x(24_000));
+    harness.run_steps(1);
+    assert_eq!(cursor(&harness), egui::CursorIcon::ResizeHorizontal);
+
+    // And the drag, with the arrow throughout: the slice's start moves, the
+    // mark stays.
+    harness.drag_at(x(24_000));
+    harness.run_steps(1);
+    for k in 1..=4 {
+        harness.hover_at(x(24_000 + 1_200 * k));
+        harness.run_steps(1);
+        assert_eq!(cursor(&harness), egui::CursorIcon::ResizeHorizontal);
+    }
+    harness.drop_at(x(28_800));
+    harness.run_steps(2);
+    let moved = starts(&harness)[2];
+    assert!(
+        moved.abs_diff(28_800) <= 2 * scale.per_column,
+        "slice 3 starts at {moved}"
+    );
+    assert_eq!(selected(&harness), Some(moved));
+    assert_eq!(model(&harness).snapshot().marks, marks, "the mark moved");
+}

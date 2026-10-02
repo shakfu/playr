@@ -1534,11 +1534,12 @@ fn planned_slices_are_drawn_before_they_are_written() {
             fades: Default::default(),
             loops: false,
             ot_file: false,
+            cuts: None,
         },
         spans: vec![(1600, Some(2880)), (2880, Some(4000))],
     });
     let lines = Case::new(View::Sampler, &snapshot)
-        .sampler(sampler)
+        .sampler(sampler.clone())
         .size(42, 20)
         .render();
     let axis = columns(&lines[13]);
@@ -1549,6 +1550,32 @@ fn planned_slices_are_drawn_before_they_are_written() {
         lines[14]
             .trim_start_matches('\u{2502}')
             .starts_with("2 slices planned: enter writes, esc d"),
+        "{:?}",
+        lines[14]
+    );
+
+    // The selected slice's start is reversed, over a mark there too; an
+    // edited plan says so.
+    use playr_app::sampler::Selected;
+    use ratatui::style::Modifier;
+    let mut selected = sampler;
+    selected.selected = Some(("/m/t.wav".into(), Selected::Slice(2880)));
+    if let Some(plan) = selected.pending.as_mut() {
+        plan.job.cuts = Some(vec![1600, 2880]);
+    }
+    let case = |sampler| {
+        Case::new(View::Sampler, &snapshot)
+            .sampler(sampler)
+            .size(42, 20)
+    };
+    let buf = case(selected.clone()).buffer();
+    let cell = &buf[(1 + 18, 13)];
+    assert_eq!(cell.symbol(), "+");
+    assert!(cell.modifier.contains(Modifier::REVERSED));
+    assert!(!buf[(1 + 10, 13)].modifier.contains(Modifier::REVERSED));
+    let lines = case(selected).render();
+    assert!(
+        lines[14].contains("2 slices planned, edited: enter writes"),
         "{:?}",
         lines[14]
     );

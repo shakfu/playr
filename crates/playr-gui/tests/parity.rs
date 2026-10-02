@@ -101,7 +101,8 @@ fn every_action() -> Vec<Action> {
         Action::SelectMarkAt(Duration::from_secs(1)),
         Action::Deselect,
         Action::MoveSelected(playr_app::action::Nudge::Columns(1)),
-        Action::MoveMarkTo(Duration::from_secs(1)),
+        Action::MoveSelectedTo(Duration::from_secs(1)),
+        Action::SelectSliceAt(Duration::from_secs(1)),
         Action::SnapSelected,
         Action::RemoveSelected,
         Action::PickEdge(playr_app::sampler::Edge::Start),
@@ -207,7 +208,8 @@ fn every_action() -> Vec<Action> {
             | Action::SelectMarkAt(_)
             | Action::Deselect
             | Action::MoveSelected(_)
-            | Action::MoveMarkTo(_)
+            | Action::MoveSelectedTo(_)
+            | Action::SelectSliceAt(_)
             | Action::SnapSelected
             | Action::RemoveSelected
             | Action::PickEdge(_)

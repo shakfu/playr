@@ -16,7 +16,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 - `PATH` and `DIR` run to the end of the line; a leading `~` is the home directory, and a relative path is relative to where playr started. `:scan` runs in the background, reports progress on the bottom line, and creates the library if there is none. It keeps tracks whose files are gone and counts them, then asks to prune, or prunes at once if `auto_prune` is set. `:rescan`, or `:sync`, re-scans every directory previously given to `:scan` or `playr scan`. `:roots` lists those directories; `:roots add DIR` is another spelling of `:scan DIR`, and `:roots rm DIR` forgets one, removing the tracks and marks under it after asking. `:prune` removes the tracks of missing files, their places in playlists, and the marks of missing files under `DIR`, after asking; with no directory it covers every directory previously scanned. `:open` adds the files to the end of the selection and plays them.
 
-- Renamed commands keep their old names, so bindings written for them still work: `:next-view` and `:prev-view` are `:view next` and `:view prev`; `:unmark`, `:delmarks`, `:next-mark`, `:prev-mark` and `:move-mark` are `:mark-undo`, `:mark-clear`, `:mark-next`, `:mark-prev` and `:mark-move`; `:clear-search` is `:search-clear`; in the queue, `:dequeue`, `:reorder` and `:queue-clear` are `:remove`, `:move` and `:clear`.
+- Renamed commands keep their old names, so bindings written for them still work: `:next-view` and `:prev-view` are `:view next` and `:view prev`; `:unmark`, `:delmarks`, `:next-mark` and `:prev-mark` are `:mark-undo`, `:mark-clear`, `:mark-next` and `:mark-prev`; `:move-mark` and `:mark-move` are `:move-to`; `:clear-search` is `:search-clear`; in the queue, `:dequeue`, `:reorder` and `:queue-clear` are `:remove`, `:move` and `:clear`.
 
 - `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
 
@@ -138,13 +138,14 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:range [START END]`               |                         | set the range to slice, or clear it    |
 | `:loop [on\|off] \| N [save\|clear]` | `l`; F1-F8, with shift  | loop the range or region, or recall or save |
 | `:loops clear`                    |                         | clear this track's loops; asks y/n     |
-| `:audition [next\|prev]`          | `a`, `,` `.`            | play the selection, a slice, the range or region once; step slices |
+| `:audition [next\|prev]`          | `a`, `,` `.`            | play the selection, a slice, the range or region once; select and step slices |
 | `:scrub TIME`                     | drag, with Scrub on     | play a moment from a time              |
 | `:select TIME`                    | click a mark            | select the mark at a time              |
+| `:select-slice TIME`              | click a slice's start   | select the planned slice starting at a time |
 | `:edge start\|end`                 | `[` `]`                 | select a range end                     |
 | `:deselect`                       | `D`                     | select nothing                         |
-| `:move +N\|-N\|N%`                 | `<` `>`                 | move the selected mark or range end    |
-| `:mark-move TIME`                 | drag a mark             | move the selected mark to a time       |
+| `:move +N\|-N\|N%`                 | `<` `>`                 | move the selected mark, range end or slice start |
+| `:move-to TIME`                   | drag a mark or slice start | move the selection to a time        |
 | `:onset`                          | `#`                     | move the selection to the nearest rise |
 | `:remove`                         | `backspace`             | remove the selected mark, or the range |
 | `:write`                           | `enter`                 | write the slices :slice planned        |
@@ -152,7 +153,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 
 In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; a selected end moves the loop with it.
 
-The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a click, or a range end, selected by `[` `]`. A selected end is shown reversed, and a selection out of view as a reversed `<` or `>` at that edge. `{` `}` play from the mark to the next, and step from the selected mark rather than the playhead. With nothing selected, `backspace` clears the range and the other edit keys refuse. `u` undoes the last change to the marks or the range, up to 100 back, until the track changes; `r` puts back what `u` took, until the next change.
+The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a click, a range end, selected by `[` `]`, or a planned slice, selected by `,` `.`. A slice is edited by its start, which moves the end of the slice before; `backspace` joins it to that slice. A selected end is shown reversed, and a selection out of view as a reversed `<` or `>` at that edge. `{` `}` play from the mark to the next, and step from the selected mark rather than the playhead. With nothing selected, `backspace` clears the range and the other edit keys refuse. `u` undoes the last change to the marks, the range or the planned slices, up to 100 back, until the track changes; `r` puts back what `u` took, until the next change.
 
 ## Extensions
 

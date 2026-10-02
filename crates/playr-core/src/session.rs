@@ -1952,6 +1952,7 @@ impl Session {
             fades: self.fades,
             loops,
             ot_file: self.ot_file,
+            cuts: None,
         })
     }
 }

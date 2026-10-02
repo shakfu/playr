@@ -392,6 +392,11 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
     if let Some(c) = selected.and_then(|f| layout.column_of(f)) {
         axis[c] = ('|', reversed);
     }
+    let slice = app.sampler.selected_slice(current);
+    if let Some(c) = slice.and_then(|f| layout.column_of(f)) {
+        let style = Style::default().fg(p.edge).add_modifier(Modifier::BOLD);
+        axis[c] = ('+', style.add_modifier(Modifier::REVERSED));
+    }
     // A selection out of view points the way to it, reversed, a cell inside
     // the playhead's arrow when both are past the same side.
     let off = app
