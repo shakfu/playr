@@ -361,6 +361,10 @@ pub struct Shared {
     /// devices commonly reject `snd_pcm_pause` (errno 77), and stopping the
     /// device also risks a click on resume.
     pub paused: AtomicBool,
+    /// Silences the callback as `paused` does, while the engine refills a ring
+    /// that a seek emptied or a new stream started with. A device started on
+    /// the first few frames underruns when the engine is late with the next.
+    pub priming: AtomicBool,
     /// Output sample rate, for converting `frames_out` into a time.
     pub position_rate: AtomicU32,
     /// `frames_out` value at which the current track began.
@@ -406,6 +410,7 @@ impl Shared {
             frames_out: AtomicU64::new(0),
             volume: AtomicU32::new(1.0f32.to_bits()),
             paused: AtomicBool::new(false),
+            priming: AtomicBool::new(false),
             position_rate: AtomicU32::new(0),
             track_start: AtomicU64::new(0),
             position_offset: AtomicU64::new(0),
@@ -549,7 +554,7 @@ where
 /// the frames played.
 ///
 /// The body of every output callback, so it must not lock or allocate. It
-/// emits silence while paused, and on underrun rather than repeating stale
+/// emits silence while paused or priming, and on underrun rather than repeating stale
 /// samples, which would click. Metering is after the tone control and before
 /// the volume, so it describes what plays, ReplayGain and EQ included, rather
 /// than the volume setting.
@@ -570,7 +575,7 @@ pub fn render<T>(
         }
         shared.flush_done.store(requested, Ordering::Relaxed);
     }
-    if shared.paused.load(Ordering::Relaxed) {
+    if shared.paused.load(Ordering::Relaxed) || shared.priming.load(Ordering::Relaxed) {
         for slot in out.iter_mut() {
             *slot = conv(0.0);
         }

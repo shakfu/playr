@@ -2802,9 +2802,11 @@ fn a_in_the_queue_view_adds_the_track_to_the_selection_once() {
     use playr_core::audio::State;
 
     let dir = tempfile::tempdir().unwrap();
-    let songs = dir.path().join("music");
-    music(&songs);
-    let a = track(&songs.join("a.wav").to_string_lossy());
+    // Long enough to still be playing when polled: a 50 ms track can start
+    // and end between two polls on a busy machine.
+    let file = dir.path().join("a.wav");
+    common::silence(&file, 8000, 10.0);
+    let a = track(&file.to_string_lossy());
     let mut model = Model::new(
         db::open(&dir.path().join("library.db")).unwrap(),
         common::fake_player().0,

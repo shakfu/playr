@@ -511,6 +511,11 @@ const REFILL_BELOW: f64 = 0.5;
 /// slower than FLAC and is what made this visible.
 const PUMP_BUDGET: Duration = Duration::from_millis(8);
 
+/// Audio the ring holds before a device starts on it after a seek or on a new
+/// stream. Decoding it takes milliseconds, so it delays the start by little,
+/// and it covers the engine waking late for the next push.
+const PRIME: Duration = Duration::from_millis(100);
+
 /// Longest a seek waits for the device to discard buffered audio before
 /// reopening the device instead. A device that has stopped calling back never
 /// discards.
@@ -698,6 +703,7 @@ impl Engine {
             self.poll_flush();
             if self.state == State::Playing {
                 self.pump();
+                self.end_priming();
             }
             self.advance_marks();
             self.pause_when_reached();
@@ -1149,6 +1155,7 @@ impl Engine {
     }
 
     fn open_output(&self, plan: Plan) -> Result<Output, output::OutputError> {
+        self.shared.priming.store(true, Ordering::Relaxed);
         Output::open(
             self.backend.as_ref(),
             plan,
@@ -1316,6 +1323,7 @@ impl Engine {
             pos.as_nanos().min(u64::MAX as u128) as u64,
             Ordering::Relaxed,
         );
+        self.shared.priming.store(true, Ordering::Relaxed);
         let generation = self.shared.flush_requested.fetch_add(1, Ordering::Relaxed) + 1;
         self.flush = Some(Flush {
             generation,
@@ -1770,6 +1778,21 @@ impl Engine {
         if n > 0 {
             self.carry.drain(..n);
             self.written += (n / channels) as u64;
+        }
+    }
+
+    /// Lets the device start once the ring holds [`PRIME`] of audio, or all
+    /// there is: a one-shot pushed to its end, or a track decoded to its end.
+    fn end_priming(&mut self) {
+        let Some(out) = &self.out else { return };
+        if self.flush.is_some() || !self.shared.priming.load(Ordering::Relaxed) {
+            return;
+        }
+        let target = (f64::from(out.plan.rate) * PRIME.as_secs_f64()) as usize;
+        let all_pushed = self.pause_at.is_some_and(|at| self.written >= at)
+            || (self.stream.is_none() && self.carry.is_empty());
+        if out.buffered_frames() >= target || all_pushed {
+            self.shared.priming.store(false, Ordering::Relaxed);
         }
     }
 

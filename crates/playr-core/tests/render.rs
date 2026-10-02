@@ -40,6 +40,26 @@ fn an_underrun_plays_the_whole_frames_held_then_silence() {
 }
 
 #[test]
+fn priming_plays_silence_and_leaves_the_ring_for_later() {
+    let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
+    let shared = Shared::new();
+    let mut meter = Meter::new(8000, 2);
+    for s in [0.1, -0.1, 0.2, -0.2] {
+        producer.push(s).unwrap();
+    }
+    shared.priming.store(true, Ordering::Relaxed);
+    let mut out = [9.0f32; 4];
+    callback(&mut out, &mut consumer, &shared, &mut meter);
+    assert_eq!(out, [0.0; 4]);
+    assert_eq!(shared.frames_out.load(Ordering::Relaxed), 0);
+
+    shared.priming.store(false, Ordering::Relaxed);
+    callback(&mut out, &mut consumer, &shared, &mut meter);
+    assert_eq!(out, [0.1, -0.1, 0.2, -0.2]);
+    assert_eq!(shared.frames_out.load(Ordering::Relaxed), 2);
+}
+
+#[test]
 fn frames_pushed_during_a_callback_keep_their_channels() {
     // A race, so several rounds: on code that splits frames, one round fails
     // most of the time.
