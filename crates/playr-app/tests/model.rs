@@ -1287,10 +1287,8 @@ fn a_range_end_is_selected_moved_and_removed() {
     // An end not yet set cannot be selected.
     model.perform(Action::PickEdge(Edge::End));
     assert_eq!(model.message(), Some(&Message::NoEdge(Edge::End)));
-    seek(&mut model, secs(2));
-    model.perform(Action::RangeIn);
-    seek(&mut model, secs(4));
-    model.perform(Action::RangeOut);
+    // Set directly: RangeIn/RangeOut take the moving playhead, not an exact frame.
+    model.perform(Action::SetRange(Some((secs(2), secs(4)))));
     model.perform(Action::PickEdge(Edge::End));
     assert_eq!(
         model.sampler().selected_edge(current.as_ref()),
