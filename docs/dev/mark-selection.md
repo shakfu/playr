@@ -1,8 +1,8 @@
 # Mark selection
 
-Status: proposal. Nothing here is implemented.
+Status: proposal. Stage 1 (design A) is decided; stages 2 and 3 are proposed. Nothing here is implemented.
 
-The sampler edits marks through a cursor, a frame apart from the playhead. This file proposes replacing the cursor with a selected mark (design A), and a variant that also selects planned slices (design B).
+The sampler edits marks through a cursor, a frame apart from the playhead. This file replaces the cursor with a selected mark, then extends the selection to planned slices and range ends, with one set of action keys for all three.
 
 ## Problem
 
@@ -16,76 +16,134 @@ The sampler edits marks through a cursor, a frame apart from the playhead. This 
 
 The playhead cannot simply replace the cursor. Every mark edit finds the mark within one column of its target (`near`, `dispatch.rs:1231`). During playback the playhead leaves that column within one column's time: 358 ms at the whole-track zoom of a 4:40 track, microseconds at full zoom. `,` then `o` would usually find no mark.
 
+Alternative: keep the playhead as the target, and widen `near` while playing to a fixed time, such as the last mark crossed within 500 ms. This needs no selection state and no new drawing. It fails when marks sit closer than the window, and the target changes as playback runs: a second `o` can hit a different mark, or none.
+
 ## Current keys
 
 Sampler view unless marked global.
 
-| Target | Select | Move | Snap | Remove | Hear |
-|-|-|-|-|-|-|
-| Mark | `u` `i` (cursor) | `y` `o` | `#` | `delete` | `,` `.` (global, seek) |
-| Range end | `[` `]` | `{` `}` | none | `backspace` (whole range) | `a` |
-| Planned slice | none | none | none | none | `n` `p` |
-| Cursor | `;` `'` `h` | | | | |
+| Target | Set at playhead | Select | Move | Snap | Remove | Hear |
+|-|-|-|-|-|-|-|
+| Mark | `b` (global) | `u` `i` (cursor) | `y` `o` | `#` | `delete`; `B` last added, `C` all (global) | `,` `.` (global, seek) |
+| Range end | `<` `>` | `[` `]` | `{` `}` | none | `backspace` (whole range) | `a` |
+| Planned slice | | none | none | none | none | `n` `p` |
+| Cursor | | `;` `'` `h` | | | | |
 
-## Design A: a selected mark
+`esc` discards the plan.
 
-The sampler keeps one selected mark, on a track. Editing acts on it, wherever the playhead has moved since.
+## Options
+
+Marks are captured during playback and edited while paused. Three ways to edit marks, slices and range ends were considered.
+
+1. **The playhead is the target.** No selection. An edit acts on the mark at the playhead.
+   - For: no state and no new drawing. It matches how marks are placed.
+   - Against: it covers marks only. The playhead identifies the slice it is in, but not which edge, and never a range end. Slices and range ends would still need a second mechanism.
+
+2. **Each kind is selected with its own keys; one set of action keys acts on the selection.** One item is selected at a time: the one selected last.
+   - For: selecting sets the kind, so there is no mode key and no extra keystroke.
+   - Against: still modal, with the mode set as a side effect of selecting. Slices need editable plans.
+
+3. **A mode key picks the kind; shared keys then select and act.**
+   - For: fewest keys; a new kind costs no new keys.
+   - Against: the mode is hidden state, and both frontends must show it at all times. The select keys are shared too, so a wrong mode moves the wrong item with no audio cue. Every kind switch costs a keystroke. `f1`-`f8` and `shift-f1`-`shift-f8` hold loop slots, and F9-F12 are often taken by the OS or terminal (F10 menu and F11 fullscreen in GNOME Terminal).
+
+### Decision
+
+- **Option 2, in three stages.** Stage 1 is design A, done regardless of the later stages. Stages 2 and 3 follow if hand-edited slices and range ends prove needed.
+
+- **Option 3 is rejected.** It is option 2 plus a keystroke per switch and a hidden mode.
+
+- **Option 1 is not taken for marks.** It would serve marks alone. Stages 2 and 3 need selection state for slices and range ends, so marks use the same model.
+
+## Keys
+
+Sampler view unless marked global.
+
+| Kind | Select | Deselect | Hear | Move a column | Snap to onset | Remove |
+|-|-|-|-|-|-|-|
+| Mark | `{` `}` (global), `b`, click | `esc` | `{` `}` | `<` `>` | `#` | `backspace` |
+| Slice | `,` `.` | `esc` | `,` `.` | `<` `>` | `#` | `backspace` |
+| Range end | `[` `]`, click | `esc` | `a` | `<` `>` | `#` | `backspace` |
 
 | Key | Action |
 |-|-|
-| `,` `.` | Seek to the previous or next mark, as now, and select it. |
-| `b` | Add a mark at the playhead and select it. |
-| click or drag on a mark (window) | Select it. A drag moves it, as now. |
-| `y` `o` | Move the selected mark a column, then seek to it. |
-| `#` | Snap the selected mark to the nearest onset, then seek to it. |
-| `delete` | Remove the selected mark. Nothing is selected after. |
+| `i` `o` | `:in` and `:out`: set the range start or end at the playhead. |
+| `u` | Undo the last edit. See [Undo](#undo). |
 
-The selection clears when its mark is removed by any command, including `B` and `C`, and on a track change.
+- **Hearing on select.** `{` `}` audition from the mark to the next, then pause, as `,` `.` audition a slice. `a` hears whatever is selected.
 
-`,` and `.` stay global. Outside the sampler they seek and do not select, since no other view edits marks.
+- **Stepping.** `{` `}` and `,` `.` step from the selected item of their kind, else from the playhead. An audition leaves the playhead at the next mark or slice, so stepping from the playhead would skip one.
+
+- **Outside the sampler**, `{` `}` seek to the previous or next mark, as `,` `.` do now. No other view edits marks, so they do not select. `,` `.` have no global binding.
+
+- **With nothing selected**, `backspace` clears the range, as now, and `a` hears what it does now. The other action keys refuse with a message.
+
+- **Snap.** `#` moves the selected item to the nearest onset. It is not the zero-crossing snap that `S` toggles, which still applies when a mark or range end is set, and to slice edges on export (`:slice-edges`). `nearest_onset` (`samples.rs:165`) takes any frame, so one job serves all three kinds.
+
+- **Removing a range end** clears the whole range. A range with one end is not used.
+
+- **Second move binding.** Option: `ctrl-left` and `ctrl-right` also move the selected item a column. The arrows then follow one pattern: `left` `right` nudge the playhead a column, `shift-left` `shift-right` nudge it 10%, and `ctrl-left` `ctrl-right` move the selection. `Key::parse` already accepts `ctrl-` (`action.rs:337`), and the window passes ctrl through (`playr-gui/src/keys.rs:63`). They are a second binding, not a replacement for `<` `>`: macOS switches Spaces on them by default, and tmux forwards them only with extended keys on.
+
+Keys freed: `y`, `h`, `;`, `'`, `delete`, and `n` `p` in the sampler. `n` `p` then skip tracks in the sampler, as in every other view.
+
+## Undo
+
+`u` undoes the last edit to a mark, slice edge or range end. One history per session, holding edits to the playing track. It clears on a track change, since the range and the plan clear then too.
+
+| Edit | Undone by |
+|-|-|
+| Mark added (`b`) | removing it |
+| Mark moved or snapped | moving it back |
+| Mark removed (`backspace`) | adding it again |
+| Marks cleared (`C`) | adding them all again |
+| Slice edge moved or removed | restoring the plan's previous edits |
+| Range end set, moved or cleared | restoring the previous range |
+
+Marks are stored in the library database (`query::add_mark`, `query::move_mark`, `query::remove_mark`), so undoing a mark edit is a database write. An undo that would collide with a mark added since is refused, as `add_mark_within` refuses now.
+
+`B` (`:mark-undo`) removes the last mark added. `u` covers it, so `B` goes or stays as an alias.
+
+## Stage 1: marks (design A)
+
+The sampler keeps one selected mark, on a track. Editing acts on it.
+
+The selection clears when its mark is removed by any command, including `C` and `u`, on `esc`, and on a track change.
 
 The selected mark is drawn distinct from the others: thicker in the window, a different glyph on the terminal axis. The dashed cursor line and the `#` axis glyph go.
+
+The selection is a track and a frame. A track holds at most one mark per frame: `add_mark_within` refuses a mark on the same frame or within `MARK_NEAR` (`session.rs:1346`), and `move_mark` refuses `MarkInTheWay` (`session.rs:1389`). A move updates the selected frame.
 
 ### Removed
 
 - `Sampler::cursor`, `Action::MoveCursor`, `SetCursor`, `PickMark`.
 
-- `:cursor` and `:mark-pick`, and the keys `;` `'` `h` `u` `i`. `left` and `right` already move the playhead a column.
+- `:cursor` and `:mark-pick`. `left` and `right` already move the playhead a column.
 
 - Sampler, Marks: Cursor earlier, Cursor later, Cursor to playhead.
 
-Five keys come free. Renamed commands kept their old names as working aliases (`CHANGELOG.md:123`). These have no equivalent to alias, so they either refuse with a message naming the replacement or are dropped.
+Renamed commands kept their old names as working aliases (`CHANGELOG.md:95`). These have no equivalent to alias, so they either refuse with a message naming the replacement or are dropped.
 
-### Seeking after an edit
+### Gaps
 
-Seeking after a move or snap lets the result be heard at once. Two cases need a rule:
+- **Off-screen selection.** The selection can leave the view after `left`, `right`, a zoom or `f`. Options: keep it and draw an arrow at the axis edge, as for the playhead, or refuse edits until it is visible.
 
-- **Loop on.** Seeking to a mark outside the looped range leaves the loop. Proposed: do not seek while a loop is on.
+- **Zoom-dependent step.** A column is `per_column` frames, so one `>` moves a mark 358 ms at whole-track zoom of a 4:40 track, or a few samples at full zoom.
 
-- **Playing.** Each press restarts playback from the mark. Several presses in a row stutter. This is the same as pressing `,` repeatedly now.
+## Stage 2: slices (design B)
 
-Alternative: seek only when paused, and audition from the mark when playing. That changes what `a` hears, so it is not proposed here.
+Planned slices become a second kind of selection. `,` `.` audition the previous or next planned slice and select it. The action keys act on its start edge.
 
-## Design B: slices selected with slice keys
-
-Design A, plus planned slices as a second kind of selection. Slices are selected with their own keys. They are moved, snapped and removed with the mark keys.
-
-| Key | Action |
-|-|-|
-| `n` `p` | Audition the next or previous planned slice, as now, and select it. |
-| `y` `o` | Move the selected slice's start edge a column. |
-| `#` | Snap the selected slice's start edge to the nearest onset. |
-| `delete` | Remove the selected slice's start edge, merging it into the slice before. |
-
-One thing is selected at a time: the mark or slice selected last. `,` `.` `b` select a mark; `n` `p` select a slice. The edit keys act on whichever it is. The selection replaces a mode switch, so there is no mode key and no mode to forget.
+`#` on an onset plan's edge changes nothing, since the edge is already an onset. It serves equal and mark plans, and edges moved with `<` `>`.
 
 A slice's start edge is also the previous slice's end, so moving it resizes both. The first slice's start cannot move before the range or region start. Removing the first slice's start is refused.
 
 ### Plans become editable
 
-A plan holds `spans` computed from its `Job` (`samples.rs:282`). Today nothing edits them, and `:slice-edges` replans from the job (`dispatch.rs:523`), so a hand edit would be lost.
+A plan holds `spans` computed from its `Job` (`samples.rs:284`). Today nothing edits them, and `:slice-edges` replans from the job (`dispatch.rs:523`), so a hand edit would be lost.
 
-Proposed: a new `Cut::At(Vec<u64>)`, slicing at the given frames. The first edit converts the plan's job to `Cut::At` with its current edges. Later replans keep the edits. The plan label shows "edited".
+Proposed: store edits as edge changes on the plan, applied after planning. Later replans keep them. The plan label shows "edited".
+
+Alternative: a new `Cut::At(Vec<u64>)`, slicing at given frames, with the first edit converting the job to it. Rejected: `Cut` derives `Copy` (`samples.rs:28`), which a `Vec` drops, and the original job is lost, so edits cannot be undone.
 
 ### Slices planned at marks
 
@@ -95,45 +153,60 @@ Proposed: a new `Cut::At(Vec<u64>)`, slicing at the given frames. The first edit
 
 2. **Edit the mark, then replan.** The plan stays a cut at marks. The edit is kept with the track, as marks are.
 
-Proposed: 1. Choice 2 makes a slice edit behave differently by how the plan was made.
+Proposed: 1. Choice 2 makes a slice edit behave differently by how the plan was made. Cost: after one edit, re-running `:slice marks` gives a different plan from the one shown.
 
-### Range ends
+### Gaps
 
-`[` `]` `{` `}` could fold in the same way: `[` `]` select an end, and `y` `o` move it. That frees `{` `}`. Left out of B, since the range is not a slice, and `delete` on an end has no clear meaning.
+- **Off-screen slice in the terminal.** The "last selected" rule is visible only if the selected slice is drawn. When it is off screen, nothing shows what `>` will act on.
 
-## Comparison
+- **Mode error.** An action key hits a slice when a mark was meant, if `,` `.` were pressed last. The selected item must be drawn clearly in both frontends.
 
-| | A | B |
-|-|-|-|
-| Selection kinds | mark | mark, slice |
-| Keys removed | 5 | 5 |
-| Keys gaining a meaning | `,` `.` `b` select | also `n` `p` select |
-| Core change | none | `Cut::At`; plans keep edits |
-| Hand-edited slices | no | yes |
-| Risk | seeking after an edit while playing | also: an edit key hits a slice when a mark was meant, if `n` `p` were pressed last |
+## Stage 3: range ends
 
-The B risk is the mode error from a modal design, reduced to one rule: the last thing selected. The selected item must be drawn clearly in both frontends for that rule to be visible.
+`[` `]` select a range end, as they pick one now. `<` `>` move it. `#` puts it on an onset, so a loop starts or ends on a transient.
 
 ## Questions
 
-- Should editing a mark while a loop plays elsewhere stay possible? A drops it unless seeks are skipped while looping.
+- **Select keys for marks and slices.** Marks are the most edited kind, but both their select keys (`{` `}`) and move keys (`<` `>`) need shift, while slices get `,` `.`. Swapping them puts marks on `,` `.`, whose shifted forms on a US layout are `<` `>`: select and move on one key. It also keeps the global `,` `.` as mark seek, so nothing global is rebound.
 
-- In B, does `delete` on a slice remove its start or end edge? Start is proposed, matching `y` `o`.
+- **Marks and slices after `:slice marks`.** A mark and a slice edge then sound the same, so `{` and `,` audition the same audio. `>` then moves the mark or the plan edge depending on which was pressed last, and under choice 1 the two diverge silently. Options: draw the selected kind clearly in both frontends, or use choice 2 for mark plans alone, so a slice edit there moves the mark.
 
-- Should `:mark-pick` and `:cursor` stay as refusing aliases, or go?
+- **Hearing a range end.** `[` `]` select without hearing, and `a` hears the whole range. A pre-roll, playing about 2 s up to the selected end, would let an end edit be heard. Probably not needed: there are two ends, so they are not stepped through by ear.
 
-- Is design C, folding the range ends into the selection, wanted now or later?
+- **`backspace` with nothing selected.** Removing a mark clears the selection, so a second `backspace` clears the range. `u` undoes it. Alternative: refuse `backspace` with nothing selected; the range is still cleared by selecting an end and pressing `backspace`.
+
+- `esc` deselects, so `:discard` needs a new key. Candidates: `D`, or a menu entry only.
+
+- Is redo wanted? Not proposed.
+
+- Should editing a mark while a loop plays elsewhere stay possible?
+
+- In stage 2, does `backspace` on a slice remove its start or end edge? Start is proposed, matching `<` `>`.
+
+- Should `:mark-pick`, `:cursor` and `:mark-undo` stay as refusing aliases, or go?
 
 ## Tests
 
-- Selection follows `,` `.` `b` and a click; clears on removal by `delete`, `B`, `C`, and on a track change.
+- `{` `}` audition from the mark to the next and select it; `b` and a click select.
 
-- `y` `o` `#` act on the selected mark after the playhead has moved on.
+- Selection follows `{` `}` `b` and a click; clears on removal by `backspace`, `C`, `u`, on `esc`, and on a track change.
 
-- No selection: edit keys refuse with a message.
+- `{` `}` step from the selected mark, not the playhead; outside the sampler they seek.
 
-- B: `n` `p` select a slice; `y` moves the shared edge of two slices; `delete` merges; the first slice's start is refused.
+- `<` `>` `#` act on the selected mark after the playhead has moved on.
 
-- B: an edited plan survives `:slice-edges`.
+- A move updates the selected frame; a move onto another mark is refused and the selection stays.
+
+- No selection: `backspace` clears the range; `<` `>` `#` refuse with a message.
+
+- `i` `o` set the range ends at the playhead.
+
+- `u` reverses each edit in the [Undo](#undo) table, including the database write for marks; the history clears on a track change.
+
+- Stage 2: `,` `.` select a slice; `>` moves the shared edge of two slices; `#` moves it to an onset; `backspace` merges; the first slice's start is refused.
+
+- Stage 2: an edited plan survives `:slice-edges`.
+
+- Stage 3: `[` `]` select an end; `<` `>` `#` move it; `backspace` clears the range.
 
 - Parity: `crates/playr-gui/tests/parity.rs` still finds every action reachable in the window.
