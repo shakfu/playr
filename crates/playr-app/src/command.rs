@@ -168,8 +168,9 @@ pub const COMMANDS: &[Command] = &[
     any("mark", "[TIME]", "mark the playing position, or a time"),
     any("mark-undo", "", "undo the last mark"),
     any("mark-clear", "", "clear all marks in this track; asks y/n"),
-    any("mark-next", "", "seek to the next mark"),
-    any("mark-prev", "", "seek to the previous mark"),
+    any("mark-next", "", "next mark: seek, or select in the sampler"),
+    any("mark-prev", "", "prev mark: seek, or select in the sampler"),
+    any("undo", "", "undo the last edit to marks or the range"),
     any(
         "slice",
         "region|marks|N|onsets [S]",
@@ -261,22 +262,32 @@ pub const COMMANDS: &[Command] = &[
         "clear",
         "clear this track's loops; asks y/n",
     ),
-    only(Sampler, "cursor", "TIME|+N|-N|N%|off", "move the cursor"),
+    only(Sampler, "select", "TIME", "select the mark at a time"),
+    only(Sampler, "deselect", "", "select nothing"),
     only(
         Sampler,
-        "mark-pick",
-        "next|prev",
-        "move the cursor to a mark",
-    ),
-    only(
-        Sampler,
-        "mark-nudge",
+        "move",
         "+N|-N|N%",
-        "move the mark under the cursor",
+        "move the selected mark or range end",
     ),
-    only(Sampler, "mark-move", "TIME", "move it to a time"),
-    only(Sampler, "mark-snap", "", "move it to the nearest rise"),
-    only(Sampler, "mark-rm", "", "remove it"),
+    only(
+        Sampler,
+        "mark-move",
+        "TIME",
+        "move the selected mark to a time",
+    ),
+    only(
+        Sampler,
+        "onset",
+        "",
+        "move the selection to the nearest rise",
+    ),
+    only(
+        Sampler,
+        "remove",
+        "",
+        "remove the selected mark, or the range",
+    ),
     only(
         Sampler,
         "audition",
@@ -284,19 +295,9 @@ pub const COMMANDS: &[Command] = &[
         "play a slice, the range or region once",
     ),
     only(Sampler, "scrub", "TIME", "play a moment from a time"),
-    only(
-        Sampler,
-        "edge",
-        "start|end | +N | -N | +N%",
-        "pick a range end, or move it N columns",
-    ),
+    only(Sampler, "edge", "start|end", "select a range end"),
     only(Sampler, "write", "", "write the slices :slice planned"),
-    only(
-        Sampler,
-        "discard",
-        "",
-        "discard planned slices, else the range",
-    ),
+    only(Sampler, "discard", "", "discard the planned slices"),
 ];
 
 const MODES: &[(&str, Mode)] = &Mode::NAMES;
@@ -350,11 +351,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("delmarks", "mark-clear"),
     ("next-mark", "mark-next"),
     ("prev-mark", "mark-prev"),
-    ("pick", "mark-pick"),
-    ("nudge-mark", "mark-nudge"),
     ("move-mark", "mark-move"),
-    ("snap-mark", "mark-snap"),
-    ("del-mark", "mark-rm"),
     ("clear-search", "search-clear"),
     ("dequeue", "remove"),
     ("reorder", "move"),
@@ -405,7 +402,14 @@ fn resolve_command(
             .collect();
         match there.as_slice() {
             [one] => format!(":{} works in the {one} view", c.name),
-            _ => format!(":{} works in the {} views", c.name, there.join(" and ")),
+            [rest @ .., last] => {
+                format!(
+                    ":{} works in the {} and {last} views",
+                    c.name,
+                    rest.join(", ")
+                )
+            }
+            [] => unreachable!("{} is a command", c.name),
         }
     };
     if let Some(c) = COMMANDS.iter().find(|c| c.name == word) {
@@ -530,6 +534,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Mark => "mark".into(),
         MarkAt(d) => format!("mark {}", time(d)),
         UndoMark => "mark-undo".into(),
+        Undo => "undo".into(),
         ClearMarks => "mark-clear".into(),
         NextMark => "mark-next".into(),
         PrevMark => "mark-prev".into(),
@@ -550,23 +555,17 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         RangeOut => "out".into(),
         SetRange(None) => "range".into(),
         PickEdge(edge) => format!("edge {}", edge.name()),
-        MoveEdge(crate::action::Nudge::Columns(n)) => format!("edge {n:+}"),
-        MoveEdge(crate::action::Nudge::Percent(n)) => format!("edge {n:+}%"),
         Audition => "audition".into(),
         AuditionSlice(true) => "audition next".into(),
         AuditionSlice(false) => "audition prev".into(),
         Scrub(d) => format!("scrub {}", time(d)),
-        MoveCursor(crate::action::Nudge::Columns(n)) => format!("cursor {n:+}"),
-        MoveCursor(crate::action::Nudge::Percent(n)) => format!("cursor {n:+}%"),
-        SetCursor(None) => "cursor off".into(),
-        SetCursor(Some(d)) => format!("cursor {}", time(d)),
-        PickMark(true) => "mark-pick next".into(),
-        PickMark(false) => "mark-pick prev".into(),
-        MoveMark(crate::action::Nudge::Columns(n)) => format!("mark-nudge {n:+}"),
-        MoveMark(crate::action::Nudge::Percent(n)) => format!("mark-nudge {n:+}%"),
+        SelectMarkAt(d) => format!("select {}", time(d)),
+        Deselect => "deselect".into(),
+        MoveSelected(crate::action::Nudge::Columns(n)) => format!("move {n:+}"),
+        MoveSelected(crate::action::Nudge::Percent(n)) => format!("move {n:+}%"),
         MoveMarkTo(d) => format!("mark-move {}", time(d)),
-        SnapMark => "mark-snap".into(),
-        DeleteMark => "mark-rm".into(),
+        SnapSelected => "onset".into(),
+        RemoveSelected => "remove".into(),
         Loop(None) => "loop".into(),
         Loop(Some(true)) => "loop on".into(),
         Loop(Some(false)) => "loop off".into(),
@@ -984,7 +983,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         "edge" => match rest {
             "start" => Ok(Action::PickEdge(crate::sampler::Edge::Start)),
             "end" => Ok(Action::PickEdge(crate::sampler::Edge::End)),
-            _ => nudge(rest).map(Action::MoveEdge).ok_or_else(usage),
+            _ => Err(usage()),
         },
         "snap" => match rest {
             "" => Ok(Action::Snap(None)),
@@ -1034,22 +1033,16 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         },
         "scrub" if rest.is_empty() => Err(usage()),
         "scrub" => Ok(Action::Scrub(parse_time(rest)?)),
-        "cursor" if rest == "off" => Ok(Action::SetCursor(None)),
-        "cursor" if rest.starts_with(['+', '-']) => {
-            nudge(rest).map(Action::MoveCursor).ok_or_else(usage)
+        "select" if rest.is_empty() => Err(usage()),
+        "select" => Ok(Action::SelectMarkAt(parse_time(rest)?)),
+        "deselect" => nothing(Action::Deselect),
+        "move" if command.view == Some(Sampler) => {
+            nudge(rest).map(Action::MoveSelected).ok_or_else(usage)
         }
-        "cursor" if rest.is_empty() => Err(usage()),
-        "cursor" => Ok(Action::SetCursor(Some(parse_time(rest)?))),
-        "mark-pick" => match rest {
-            "next" => Ok(Action::PickMark(true)),
-            "prev" => Ok(Action::PickMark(false)),
-            _ => Err(usage()),
-        },
-        "mark-nudge" => nudge(rest).map(Action::MoveMark).ok_or_else(usage),
         "mark-move" if rest.is_empty() => Err(usage()),
         "mark-move" => Ok(Action::MoveMarkTo(parse_time(rest)?)),
-        "mark-snap" => nothing(Action::SnapMark),
-        "mark-rm" => nothing(Action::DeleteMark),
+        "onset" => nothing(Action::SnapSelected),
+        "remove" if command.view == Some(Sampler) => nothing(Action::RemoveSelected),
         "in" => nothing(Action::RangeIn),
         "out" => nothing(Action::RangeOut),
         "range" if rest.is_empty() => Ok(Action::SetRange(None)),
@@ -1072,6 +1065,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             "convert takes a ConvertWithMoss format: {}",
             playr_core::convertwithmoss::FORMATS.join(", ")
         )),
+        "undo" => nothing(Action::Undo),
         "write" => nothing(Action::WriteSlices),
         "discard" => nothing(Action::DiscardSlices),
         "slice" => match first_word(rest) {
@@ -1181,7 +1175,7 @@ pub fn completions(
         "loop" if command.view.is_none() => vec!["off".into()],
         "snap" | "fit" | "loop" => vec!["on".into(), "off".into()],
         "edge" => vec!["start".into(), "end".into()],
-        "mark-pick" | "audition" => vec!["next".into(), "prev".into()],
+        "audition" => vec!["next".into(), "prev".into()],
         "loops" => vec!["clear".into()],
         "view" => VIEWS
             .iter()

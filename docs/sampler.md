@@ -10,9 +10,9 @@ The keys and commands are listed in the README under [Marks](../README.md#marks)
 
 A mark is a position in a track, stored in the library by file path and source frame. `b` marks the playing position; `:mark 1:23.5` marks a time.
 
-The **region** is the span between the marks either side of the playhead. With no mark before the playhead it starts at the start of the track; with none after, it runs to the end. Seeking changes the region, so `,` and `.` (previous and next mark) choose which region a `:slice` acts on.
+The **region** is the span between the marks either side of the playhead. With no mark before the playhead it starts at the start of the track; with none after, it runs to the end. Seeking changes the region, so `{` and `}` (previous and next mark) choose which region a `:slice` acts on.
 
-A **range**, set in the sampler view with `<` and `>`, `:range START END`, or a drag in the window, replaces the region while both its ends are set. It is not saved, and a change of track clears it. With a range, `:slice marks` cuts only at the marks inside it, from its start to its end.
+A **range**, set in the sampler view with `i` and `o`, `:range START END`, or a drag in the window, replaces the region while both its ends are set. It is not saved, and a change of track clears it. With a range, `:slice marks` cuts only at the marks inside it, from its start to its end.
 
 ![What each :slice cut writes](media/sampling-cuts.svg)
 
@@ -53,9 +53,9 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 - **Placing a point.** The arrows nudge the playhead a column. With `:snap on`, nudges, marks and range ends move to the nearest zero crossing within 10 ms, so a slice can start where the waveform crosses zero. Turning snap on moves the ends of a range already set. Marks made in this view may be a frame apart.
 
-- **Looping.** `l` plays the range over and over, returning to its start sample-exactly. `[` or `]` picks an end and `{` `}` move it a column, so the ends can be tuned by ear while it loops. With `:fit on`, the view centres on the picked end.
+- **Looping.** `l` plays the range over and over, returning to its start sample-exactly. `[` or `]` selects an end and `<` `>` move it a column, so the ends can be tuned by ear while it loops. With `:fit on`, the view centres on the selected end.
 
-- **Planning.** In this view `:slice` plans instead of writing. The planned edges draw as `+` under the waveform; enter writes exactly those slices and esc discards them; with none planned, esc clears the range. A change of track discards them too. Outside the view, `:slice` plans and writes in one step.
+- **Planning.** In this view `:slice` plans instead of writing. The planned edges draw as `+` under the waveform; enter writes exactly those slices and esc discards them. A change of track discards them too. Outside the view, `:slice` plans and writes in one step.
 
 ## What an export writes
 
@@ -112,7 +112,7 @@ A range cut whole while it loops also carries rtrack's loop fields, counted in t
 
 A slice is exact to the frame for the marks it was given. How close a mark is to the moment you meant depends on four things:
 
-1. **Reaction time.** `b` marks when the key is pressed, after the sound has passed. `:mark TIME` places a mark exactly; `,` and `.` seek to a mark to check it. In the sampler view, pausing, nudging to the point and snapping remove reaction time altogether.
+1. **Reaction time.** `b` marks when the key is pressed, after the sound has passed. `:mark TIME` places a mark exactly; `{` and `}` seek to a mark to check it. In the sampler view, pausing, nudging to the point and snapping remove reaction time altogether.
 
 2. **Output latency.** The playing position counts frames handed to the audio device, not frames heard. The position runs ahead of the sound by the device buffer plus output latency, roughly 10 to 50 ms, so a mark made by ear lands that much late, on top of reaction time. That figure is inferred, not measured.
 

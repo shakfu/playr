@@ -478,6 +478,31 @@ fn the_waveform_seeks_marks_and_zooms_under_the_mouse() {
         other => panic!("no mark: {other:?}"),
     }
 
+    // The new mark is selected; deselected, a plain click on it selects it.
+    let current = model(&harness).snapshot().status.current().cloned();
+    let marked = model(&harness).sampler().selected_mark(current.as_ref());
+    assert!(marked.is_some(), "the new mark is not selected");
+    sampler_menu(&mut harness, "Edit", "Deselect");
+    assert_eq!(
+        model(&harness).sampler().selected_mark(current.as_ref()),
+        None
+    );
+    harness.hover_at(quarter);
+    harness.run_steps(1);
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: quarter,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    harness.run_steps(2);
+    assert_eq!(
+        model(&harness).sampler().selected_mark(current.as_ref()),
+        marked
+    );
+
     // A plain click three quarters along seeks near 9 s.
     let three_quarters = egui::pos2(rect.left() + rect.width() * 0.75, rect.center().y);
     harness.hover_at(three_quarters);
@@ -649,14 +674,15 @@ fn a_drag_sets_the_range_and_the_bar_slices_it() {
         m.snapshot().status.looping == Some((a, end))
     });
 
-    // Move end, then Earlier: the end moves back a column.
-    sampler_menu(&mut harness, "Range", "Move end");
-    sampler_menu(&mut harness, "Range", "Earlier");
+    // Select end, then Earlier: the end moves back a column.
+    sampler_menu(&mut harness, "Range", "Select end");
+    sampler_menu(&mut harness, "Edit", "Earlier");
     let moved = model(&harness).sampler().range(current.as_ref());
     assert_eq!(moved, Some((a, end - per_column as u64)));
 
-    // Escape clears the range and ends the loop.
-    harness.key_press(egui::Key::Escape);
+    // Backspace removes the selected end, which clears the range and ends
+    // the loop.
+    harness.key_press(egui::Key::Backspace);
     harness.run_steps(2);
     assert_eq!(model(&harness).sampler().range(current.as_ref()), None);
     wait(&mut harness, |m| m.snapshot().status.looping.is_none());
@@ -891,7 +917,9 @@ fn a_saved_loop_shows_under_the_stretch_it_spans_and_a_click_loops_it() {
     let current = model(&harness).snapshot().status.current().cloned();
     let range = model(&harness).sampler().range(current.as_ref());
     assert!(range.is_some(), "no range");
-    harness.get_by_label("Save loop").click();
+    // Not looping, the button names what it saves.
+    assert!(harness.query_by_label("Save loop").is_none());
+    harness.get_by_label("Save range").click();
     harness.run_steps(3);
     assert_eq!(model(&harness).snapshot().loops[0], range);
 
@@ -905,14 +933,17 @@ fn a_saved_loop_shows_under_the_stretch_it_spans_and_a_click_loops_it() {
     );
     assert!(band.top() >= wave.bottom() && wave.height() < before.height());
 
-    // Escape clears the range; the loop brings it back and plays it.
-    harness.key_press(egui::Key::Escape);
+    // Backspace clears the range; the loop brings it back and plays it.
+    harness.key_press(egui::Key::Backspace);
     harness.run_steps(2);
     assert_eq!(model(&harness).sampler().range(current.as_ref()), None);
     harness.get_by_label("Loop 1").click();
     harness.run_steps(2);
     wait(&mut harness, |m| m.snapshot().status.looping == range);
     assert_eq!(model(&harness).sampler().range(current.as_ref()), range);
+    harness.run_steps(2);
+    assert!(harness.query_by_label("Save range").is_none());
+    harness.get_by_label("Save loop");
 }
 
 #[test]
@@ -1081,7 +1112,7 @@ fn convert_to_shows_once_enabled_and_is_disabled_until_convertwithmoss_is_instal
 fn the_sampler_menu_holds_every_table_no_button_draws() {
     for (submenu, table) in [
         ("Range", playr_gui::controls::RANGE_MENU),
-        ("Marks", playr_gui::controls::MARK_MENU),
+        ("Edit", playr_gui::controls::EDIT_MENU),
         ("Loops", playr_gui::controls::LOOP_MENU),
     ] {
         let samples = tempfile::tempdir().unwrap();

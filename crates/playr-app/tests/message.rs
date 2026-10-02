@@ -388,16 +388,23 @@ fn terminal_messages_are_worded() {
         (Message::Loop(true), "loop: on"),
         (
             Message::Edge(playr_app::sampler::Edge::End),
-            "moving the range end",
+            "selected the range end",
         ),
         (
             Message::NoEdge(playr_app::sampler::Edge::Start),
-            "no range start to move: set it with < or >",
+            "no range start to select: set it with i or o",
         ),
         (
             Message::NoRangeToLoop,
-            "the range has one end: set the other with < or >",
+            "the range has one end: set the other with i or o",
         ),
+        (
+            Message::NothingSelected,
+            "nothing selected: { } select a mark, [ ] a range end",
+        ),
+        (Message::Deselected, "selected nothing"),
+        (Message::Undone, "undone"),
+        (Message::NothingToUndo, "nothing to undo"),
         (
             Message::Range {
                 start: Some(8_000),

@@ -474,7 +474,7 @@ fn the_range_loops_follows_its_changes_and_escape_clears_it() {
         columns: 100,
     });
     model.perform(Action::PickEdge(Edge::End));
-    model.perform(Action::MoveEdge(Nudge::Columns(-2)));
+    model.perform(Action::MoveSelected(Nudge::Columns(-2)));
     let current = model.snapshot().status.current().cloned();
     assert_eq!(
         model.sampler().range(current.as_ref()),
@@ -482,7 +482,7 @@ fn the_range_loops_follows_its_changes_and_escape_clears_it() {
     );
     settle(&model, &|s| s.looping == Some((16_000, 19_872)));
     model.perform(Action::PickEdge(Edge::Start));
-    model.perform(Action::MoveEdge(Nudge::Percent(100)));
+    model.perform(Action::MoveSelected(Nudge::Percent(100)));
     assert_eq!(
         model.sampler().range(current.as_ref()),
         Some((19_871, 19_872))
@@ -490,12 +490,18 @@ fn the_range_loops_follows_its_changes_and_escape_clears_it() {
     settle(&model, &|s| s.looping == Some((19_871, 19_872)));
     model.perform(Action::SetRange(Some((ms(2_000), ms(2_500)))));
 
-    // Escape, with no slices planned, clears the range, which ends the loop.
-    model.perform(Action::DiscardSlices);
-    assert_eq!(model.sampler().range, None);
-    settle(&model, &|s| s.looping.is_none());
+    // Escape, with no slices planned, leaves the range.
     model.perform(Action::DiscardSlices);
     assert_eq!(model.message(), Some(&Message::NoSlicesPlanned));
+    assert!(model.sampler().range.is_some());
+
+    // Removing with nothing selected clears the range, which ends the loop.
+    model.perform(Action::Deselect);
+    model.perform(Action::RemoveSelected);
+    assert_eq!(model.sampler().range, None);
+    settle(&model, &|s| s.looping.is_none());
+    model.perform(Action::RemoveSelected);
+    assert_eq!(model.message(), Some(&Message::NothingSelected));
 }
 
 #[test]
@@ -1103,86 +1109,137 @@ fn sampler_model(dir: &Path, file: &Path) -> Model {
     model
 }
 
-#[test]
-fn the_cursor_moves_apart_from_the_playhead_and_returns_to_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("long.wav");
-    common::silence(&file, 8000, 10.0);
-    let mut model = sampler_model(dir.path(), &file);
+/// Seeks to `at`, and waits for the player to get there.
+fn seek(model: &mut Model, at: Duration) {
+    model.perform(Action::SeekTo(at));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.session().player().position() != at {
+        assert!(Instant::now() < deadline, "never sought to {at:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
 
-    assert_eq!(
-        model.sampler().cursor,
-        None,
-        "a cursor before one was asked for"
-    );
-    model.perform(Action::SetCursor(Some(Duration::from_secs(4))));
-    assert_eq!(model.sampler().cursor, Some(32_000));
-
-    // Seeking does not drag the cursor along with the playhead.
-    model.perform(Action::SeekTo(Duration::from_secs(1)));
-    assert_eq!(model.sampler().cursor, Some(32_000));
-
-    model.perform(Action::SetCursor(None));
-    assert_eq!(
-        model.sampler().cursor,
-        None,
-        "cursor did not return to the playhead"
-    );
+/// The selected mark's frame, on the playing track.
+fn selected_mark(model: &Model) -> Option<u64> {
+    let current = model.snapshot().status.current().cloned();
+    model.sampler().selected_mark(current.as_ref())
 }
 
 #[test]
-fn a_mark_is_picked_by_the_cursor_then_moved_and_removed() {
+fn the_mark_keys_select_a_mark_and_step_from_the_selection() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("long.wav");
     common::silence(&file, 8000, 10.0);
     let mut model = sampler_model(dir.path(), &file);
     let secs = |n| Duration::from_secs(n);
 
+    // A new mark is selected.
+    model.perform(Action::MarkAt(secs(2)));
+    assert_eq!(selected_mark(&model), Some(16_000));
+    model.perform(Action::MarkAt(secs(6)));
+    assert_eq!(selected_mark(&model), Some(48_000));
+    model.perform(Action::Deselect);
+    assert_eq!(selected_mark(&model), None);
+
+    // From the playhead with nothing selected, then from the selection, so
+    // the playhead an audition leaves behind does not skip a mark.
+    seek(&mut model, secs(1));
+    model.perform(Action::NextMark);
+    assert_eq!(selected_mark(&model), Some(16_000));
+    assert_eq!(model.message(), Some(&Message::Auditioning));
+    seek(&mut model, secs(9));
+    model.perform(Action::PrevMark);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NoEarlierMark)))
+    );
+    model.perform(Action::NextMark);
+    assert_eq!(selected_mark(&model), Some(48_000));
+    model.perform(Action::NextMark);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NoLaterMark)))
+    );
+    assert_eq!(selected_mark(&model), Some(48_000));
+
+    // Outside the sampler they seek, and select nothing.
+    model.perform(Action::Deselect);
+    model.perform(Action::ShowView(View::Library));
+    seek(&mut model, secs(1));
+    model.perform(Action::NextMark);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::AtMark {
+            at: secs(2)
+        })))
+    );
+    assert_eq!(selected_mark(&model), None);
+
+    // The selection goes with its mark, by any command.
+    model.perform(Action::ShowView(View::Sampler));
+    model.perform(Action::SelectMarkAt(secs(6)));
+    assert_eq!(selected_mark(&model), Some(48_000));
+    model.perform(Action::UndoMark);
+    assert_eq!(selected_mark(&model), None);
+}
+
+#[test]
+fn a_selected_mark_moves_and_is_removed() {
+    use playr_app::action::Nudge;
+    use playr_app::sampler::Scale;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+    let secs = |n| Duration::from_secs(n);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
     model.perform(Action::MarkAt(secs(2)));
     model.perform(Action::MarkAt(secs(6)));
 
-    // Nothing under the cursor: refused rather than acting on the nearest.
-    model.perform(Action::SetCursor(Some(secs(4))));
-    model.perform(Action::DeleteMark);
-    assert_eq!(
-        model.message(),
-        Some(&Message::Core(Notice::Refused(Refusal::NoMarkHere)))
-    );
+    // Nothing selected: refused rather than acting on the nearest.
+    model.perform(Action::Deselect);
+    for action in [
+        Action::MoveSelected(Nudge::Columns(1)),
+        Action::SnapSelected,
+        Action::RemoveSelected,
+    ] {
+        model.perform(action);
+        assert_eq!(model.message(), Some(&Message::NothingSelected));
+    }
 
-    // The cursor picks a mark up, and moving it carries the cursor along.
-    model.perform(Action::PickMark(false));
-    assert_eq!(model.sampler().cursor, Some(16_000));
+    // A move carries the selection along, wherever the playhead is.
+    model.perform(Action::SelectMarkAt(secs(2)));
+    seek(&mut model, secs(9));
+    model.perform(Action::MoveSelected(Nudge::Columns(1)));
+    assert_eq!(selected_mark(&model), Some(16_064));
     model.perform(Action::MoveMarkTo(secs(3)));
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Done(Outcome::MarkMoved {
-            from: secs(2),
+            from: Duration::from_millis(2008),
             to: secs(3)
         })))
     );
-    assert_eq!(model.sampler().cursor, Some(24_000));
+    assert_eq!(selected_mark(&model), Some(24_000));
 
-    // It moved rather than being added: still two marks, and one is at 0:03.
-    model.perform(Action::PickMark(true));
-    assert_eq!(
-        model.sampler().cursor,
-        Some(48_000),
-        "the later mark moved too"
-    );
-    model.perform(Action::PickMark(false));
-    model.perform(Action::DeleteMark);
+    model.perform(Action::RemoveSelected);
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Done(Outcome::MarkRemoved {
             at: secs(3)
         })))
     );
-    model.perform(Action::PickMark(false));
-    assert_eq!(
-        model.message(),
-        Some(&Message::Core(Notice::Refused(Refusal::NoEarlierMark))),
-        "the removed mark was still there"
-    );
+    assert_eq!(selected_mark(&model), None);
+    let current = model.snapshot().status.current().cloned();
+    let marks: Vec<u64> = (model.session_mut().marks_for(current.as_ref()).iter())
+        .map(|m| m.frame)
+        .collect();
+    assert_eq!(marks, vec![48_000]);
 }
 
 #[test]
@@ -1195,7 +1252,7 @@ fn a_mark_will_not_move_onto_another() {
     model.perform(Action::MarkAt(secs(2)));
     model.perform(Action::MarkAt(secs(6)));
 
-    model.perform(Action::SetCursor(Some(secs(2))));
+    model.perform(Action::SelectMarkAt(secs(2)));
     model.perform(Action::MoveMarkTo(secs(6)));
     assert_eq!(
         model.message(),
@@ -1203,10 +1260,171 @@ fn a_mark_will_not_move_onto_another() {
             at: secs(6)
         })))
     );
-    // Both are still there, and neither moved.
-    model.perform(Action::SetCursor(Some(secs(2))));
-    model.perform(Action::PickMark(true));
-    assert_eq!(model.sampler().cursor, Some(48_000));
+    // Neither moved, and the selection stayed.
+    assert_eq!(selected_mark(&model), Some(16_000));
+    model.perform(Action::NextMark);
+    assert_eq!(selected_mark(&model), Some(48_000));
+}
+
+#[test]
+fn a_range_end_is_selected_moved_and_removed() {
+    use playr_app::action::Nudge;
+    use playr_app::sampler::{Edge, Scale};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+    let secs = |n| Duration::from_secs(n);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+    let current = model.snapshot().status.current().cloned();
+
+    // An end not yet set cannot be selected.
+    model.perform(Action::PickEdge(Edge::End));
+    assert_eq!(model.message(), Some(&Message::NoEdge(Edge::End)));
+    seek(&mut model, secs(2));
+    model.perform(Action::RangeIn);
+    seek(&mut model, secs(4));
+    model.perform(Action::RangeOut);
+    model.perform(Action::PickEdge(Edge::End));
+    assert_eq!(
+        model.sampler().selected_edge(current.as_ref()),
+        Some(Edge::End)
+    );
+
+    // Selecting a mark replaces it: one thing is selected at a time.
+    model.perform(Action::MarkAt(secs(6)));
+    assert_eq!(model.sampler().selected_edge(current.as_ref()), None);
+    model.perform(Action::PickEdge(Edge::Start));
+    model.perform(Action::MoveSelected(Nudge::Columns(-1)));
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((16_000 - 64, 32_000))
+    );
+
+    // Removing an end clears the range, and the selection with it.
+    model.perform(Action::RemoveSelected);
+    assert_eq!(model.sampler().range(current.as_ref()), None);
+    assert_eq!(model.sampler().selected_edge(current.as_ref()), None);
+}
+
+#[test]
+fn undo_puts_back_marks_and_the_range() {
+    use playr_app::action::Nudge;
+    use playr_app::sampler::Scale;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+    let secs = |n| Duration::from_secs(n);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+    let current = model.snapshot().status.current().cloned();
+    let marks = |model: &mut Model| -> Vec<u64> {
+        (model.session_mut().marks_for(current.as_ref()).iter())
+            .map(|m| m.frame)
+            .collect()
+    };
+
+    model.perform(Action::Undo);
+    assert_eq!(model.message(), Some(&Message::NothingToUndo));
+
+    // Added, moved, removed and cleared, then undone in reverse.
+    model.perform(Action::MarkAt(secs(2)));
+    model.perform(Action::MarkAt(secs(6)));
+    model.perform(Action::MoveSelected(Nudge::Columns(1)));
+    model.perform(Action::SelectMarkAt(secs(2)));
+    model.perform(Action::RemoveSelected);
+    assert_eq!(marks(&mut model), vec![48_064]);
+    model.perform(Action::ClearMarks);
+    model.answer(true);
+    assert!(marks(&mut model).is_empty());
+
+    model.perform(Action::Undo);
+    assert_eq!(model.message(), Some(&Message::Undone));
+    assert_eq!(marks(&mut model), vec![48_064]);
+    model.perform(Action::Undo);
+    assert_eq!(marks(&mut model), vec![16_000, 48_064]);
+    model.perform(Action::Undo);
+    assert_eq!(marks(&mut model), vec![16_000, 48_000]);
+    model.perform(Action::Undo);
+    assert_eq!(marks(&mut model), vec![16_000]);
+
+    // The range, too.
+    model.perform(Action::SetRange(Some((secs(1), secs(3)))));
+    model.perform(Action::SetRange(Some((secs(4), secs(5)))));
+    model.perform(Action::Undo);
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((8_000, 24_000))
+    );
+    model.perform(Action::Undo);
+    assert_eq!(model.sampler().range(current.as_ref()), None);
+
+    // What changes neither is not an edit.
+    model.perform(Action::SeekTo(secs(3)));
+    model.perform(Action::Undo);
+    assert!(marks(&mut model).is_empty());
+    model.perform(Action::Undo);
+    assert_eq!(model.message(), Some(&Message::NothingToUndo));
+}
+
+#[test]
+fn a_selected_range_end_snaps_to_the_nearest_rise() {
+    use playr_app::sampler::Edge;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("hit.wav");
+    // Silence, a hit at 1 s, then silence to 4 s.
+    let rate = 8000;
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&file, spec).unwrap();
+    for i in 0..rate as usize * 4 {
+        let k = i as f32 - rate as f32;
+        let v = match k {
+            k if (0.0..2000.0).contains(&k) => (1.0 - k / 2000.0) * (k * 0.3).sin(),
+            _ => 0.0,
+        };
+        w.write_sample((v * 32_000.0) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+    let mut model = sampler_model(dir.path(), &file);
+    let current = model.snapshot().status.current().cloned();
+
+    model.perform(Action::SetRange(Some((
+        Duration::from_millis(1100),
+        Duration::from_secs(3),
+    ))));
+    model.perform(Action::PickEdge(Edge::Start));
+    model.perform(Action::SnapSelected);
+    assert_eq!(model.message(), Some(&Message::Snapping));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.message() == Some(&Message::Snapping) {
+        assert!(Instant::now() < deadline, "no snap");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let (start, end) = model.sampler().range(current.as_ref()).unwrap();
+    assert!(start.abs_diff(rate as u64) <= 100, "start at {start}");
+    assert_eq!(end, 3 * rate as u64);
+    // One undo puts the end back.
+    model.perform(Action::Undo);
+    assert_eq!(
+        model.sampler().range(current.as_ref()),
+        Some((8_800, 24_000))
+    );
 }
 
 #[test]
@@ -1488,6 +1706,8 @@ fn audition_hears_the_same_span_each_time_it_is_pressed() {
     for at in [2_000, 2_500, 3_000] {
         model.perform(Action::MarkAt(ms(at)));
     }
+    // A new mark is selected, which `a` would hear instead.
+    model.perform(Action::Deselect);
     model.perform(Action::TogglePause);
     let deadline = Instant::now() + Duration::from_secs(5);
     while state(&model) != State::Paused {
@@ -1501,6 +1721,10 @@ fn audition_hears_the_same_span_each_time_it_is_pressed() {
     }
     assert_eq!(audition(&mut model), ms(2_500));
     assert_eq!(audition(&mut model), ms(2_500));
+    // A selected mark is heard up to the next.
+    model.perform(Action::SelectMarkAt(ms(2_000)));
+    assert_eq!(audition(&mut model), ms(2_500));
+    model.perform(Action::Deselect);
 
     // A range to the track's end pauses a frame short of it, and plays again
     // rather than ending the track.

@@ -179,34 +179,29 @@ pub const SAMPLER_BAR: &[Control] = &[
     control("Clear range", Action::SetRange(None)),
 ];
 
-/// Sampler, Range: its ends at the playhead, then choosing an end and moving
-/// it a column. A drag across the waveform does both by pointer.
+/// Sampler, Range: its ends at the playhead, then selecting an end. A drag
+/// across the waveform does both by pointer.
 pub const RANGE_MENU: &[Control] = &[
     control("Range in", Action::RangeIn),
     control("Range out", Action::RangeOut),
-    control("Move start", Action::PickEdge(Edge::Start)),
-    control("Move end", Action::PickEdge(Edge::End)),
-    control("Earlier", Action::MoveEdge(Nudge::Columns(-1))),
-    control("Later", Action::MoveEdge(Nudge::Columns(1))),
+    control("Select start", Action::PickEdge(Edge::Start)),
+    control("Select end", Action::PickEdge(Edge::End)),
 ];
 
-/// Sampler, Marks: moving the cursor and editing the mark under it.
-pub const MARK_MENU: &[Control] = &[
-    control("Select previous mark", Action::PickMark(false)),
-    control("Select next mark", Action::PickMark(true)),
-    control("Mark earlier", Action::MoveMark(Nudge::Columns(-1))),
-    control("Mark later", Action::MoveMark(Nudge::Columns(1))),
-    control("Snap to rise", Action::SnapMark),
-    control("Delete mark", Action::DeleteMark),
-    control("Cursor earlier", Action::MoveCursor(Nudge::Columns(-1))),
-    control("Cursor later", Action::MoveCursor(Nudge::Columns(1))),
-    control("Cursor to playhead", Action::SetCursor(None)),
+/// Sampler, Edit: what acts on the selected mark or range end.
+pub const EDIT_MENU: &[Control] = &[
+    control("Earlier", Action::MoveSelected(Nudge::Columns(-1))),
+    control("Later", Action::MoveSelected(Nudge::Columns(1))),
+    control("Snap to rise", Action::SnapSelected),
+    control("Remove", Action::RemoveSelected),
+    control("Deselect", Action::Deselect),
+    control("Undo", Action::Undo),
 ];
 
-/// A mark's entries in the waveform's menu; the cursor moves to it first.
+/// A mark's entries in the waveform's menu; the mark is selected first.
 pub const MARK_ROW: &[Control] = &[
-    control("Snap to rise", Action::SnapMark),
-    control("Delete mark", Action::DeleteMark),
+    control("Snap to rise", Action::SnapSelected),
+    control("Delete mark", Action::RemoveSelected),
 ];
 
 /// Hearing planned slices, then writing them: in the slice row while a plan
@@ -244,7 +239,7 @@ pub const TABLES: &[&[Control]] = &[
     DISPLAYS,
     SAMPLER_BAR,
     RANGE_MENU,
-    MARK_MENU,
+    EDIT_MENU,
     MARK_ROW,
     PLAN_BAR,
     LOOP_MENU,
@@ -282,7 +277,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("Loop", "the sampler's Loop button"),
     (
         "LoopSlot",
-        "a loop under the waveform, Save loop, and Sampler, Loops",
+        "a loop under the waveform, Save range or Save loop, and Sampler, Loops",
     ),
     ("MoveTrack", "a selection row dragged to another place"),
     ("Add", "a library row's tick box"),
@@ -290,6 +285,10 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
     ("Open", "File, Open files and Open folder"),
     ("Scan", "File, Add folder to library"),
     ("MoveMarkTo", "a mark dragged along the waveform"),
+    (
+        "SelectMarkAt",
+        "a click on a mark, and the mark's entries in the waveform's menu",
+    ),
     ("Rescan", "File, Rescan library"),
     ("Analyze", "File, Analyze library and Analyze folder"),
     ("ShowRoots", "File, Library directories"),

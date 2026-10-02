@@ -39,7 +39,7 @@ A GUI user may never open a terminal, but today a library is created only by `pl
 | list the library's directories, and forget one | `:roots`, `:roots rm DIR` | File menu, Library directories, with a Forget button per row |
 | remove the tracks and marks of missing files | `:prune [DIR]` | File menu, Remove missing files, and Remove missing under folder |
 | play files or directories without adding them | `:open PATH...` | File menu, Open; dropping files on the window |
-| move the sampler's cursor, and the mark under it | `:cursor`, `:mark-pick`, `:mark-nudge`, `:mark-snap`, `:mark-rm` | buttons under the waveform; a mark dragged along it; the cursor drawn as a dashed line |
+| select a mark or range end, and edit it | `:mark-next`, `:mark-prev`, `:edge`, `:move`, `:onset`, `:remove`, `:deselect`, `:undo` | Sampler, Edit; a click on a mark selects it, a drag moves it; the selected mark's line is thicker |
 | media keys and the now-playing panel | the keys themselves | the keys themselves; `Model::attach_media` in both |
 
 Startup errors differ too. The terminal prints bad settings to stderr and exits. A GUI started from a desktop has no visible stderr, so it lists the errors in a window with a Quit button.
@@ -79,9 +79,9 @@ Every row is a feature the terminal has today.
 | sampler waveform | eighth blocks, dB, half-block spectrogram, Braille | painted: envelope, dB, a spectrogram texture, and a min/max line waveform | `Display` |
 | zoom | `z` `Z` `0` | mouse wheel over the waveform; the same keys | `Zoom` |
 | sampler seek and mark | arrows nudge a column or a tenth of the view; `S` snaps | click to seek; a modifier-click adds a mark at that point; the same keys; a Snap to zero tick box | `SeekTo`, `MarkAt`, `Nudge`, `Snap` |
-| range | `<` `>` `backspace` `esc`, `:range`; ends drawn as `[` `]` | a drag across the waveform, or from an edge to move it; Range in, Range out and Clear range buttons; `esc`; ends drawn as lines | `RangeIn`, `RangeOut`, `SetRange`, `DiscardSlices` |
+| range | `i` `o` `backspace`, `:range`; ends drawn as `[` `]` | a drag across the waveform, or from an edge to move it; Range in, Range out and Clear range buttons; ends drawn as lines | `RangeIn`, `RangeOut`, `SetRange`, `RemoveSelected` |
 | loop | `l`, `:loop`; `loop` in the title | a Loop range tick box; the same key | `Loop` |
-| range ends | `[` `]` pick an end, drawn reversed; `{` `}` move it a column | Move start and Move end, drawn chosen, and Earlier and Later buttons; the chosen end's line is thicker; the same keys | `PickEdge`, `MoveEdge` |
+| range ends | `[` `]` select an end, drawn reversed; `<` `>` move it a column | Select start and Select end, drawn chosen; Sampler, Edit; the selected end's line is thicker; the same keys | `PickEdge`, `MoveSelected` |
 | slicing | `:slice`; planned edges as `+`; `enter` `esc` | a Slice menu for three cuts; under the waveform, Slice region or range, Slice at marks, a count with Equal slices, and a sensitivity slider with Slice at onsets; planned edges as lines; Write and Discard buttons | `Slice`, `WriteSlices`, `DiscardSlices` |
 | region detail | line under the waveform | the same line; the region shaded | |
 

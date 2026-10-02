@@ -1754,19 +1754,26 @@ fn the_sampler_draws_the_range_and_snap_and_returns_its_columns() {
         .render();
     assert!(wide[1].contains("snap  loop  t.wav"), "{:?}", wide[1]);
 
-    // The end edge keys move is reversed; the start is chosen at first.
+    // The selected end is reversed; with none selected, neither is.
+    use playr_app::sampler::{Edge, Selected};
     use ratatui::style::Modifier;
     let reversed = |sampler: Sampler, column: u16| {
         let buf = case(sampler).buffer();
         buf[(1 + column, 13)].modifier.contains(Modifier::REVERSED)
     };
-    assert!(reversed(ranged(Some(800), Some(5_600)), 5));
+    assert!(!reversed(ranged(Some(800), Some(5_600)), 5));
     assert!(!reversed(ranged(Some(800), Some(5_600)), 35));
     let end = Sampler {
-        edge: playr_app::sampler::Edge::End,
+        selected: Some(("/m/t.wav".into(), Selected::Edge(Edge::End))),
         ..ranged(Some(800), Some(5_600))
     };
     assert!(reversed(end.clone(), 35) && !reversed(end, 5));
+    // So is the selected mark, at 1 s.
+    let mark = Sampler {
+        selected: Some(("/m/t.wav".into(), Selected::Mark(1_600))),
+        ..ranged(Some(800), Some(5_600))
+    };
+    assert!(reversed(mark.clone(), 10) && !reversed(mark, 25));
 
     // One end alone is drawn, and the region stays between the marks.
     let lines = case(ranged(Some(800), None)).render();

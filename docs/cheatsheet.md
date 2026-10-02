@@ -16,7 +16,7 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 - `PATH` and `DIR` run to the end of the line; a leading `~` is the home directory, and a relative path is relative to where playr started. `:scan` runs in the background, reports progress on the bottom line, and creates the library if there is none. It keeps tracks whose files are gone and counts them, then asks to prune, or prunes at once if `auto_prune` is set. `:rescan`, or `:sync`, re-scans every directory previously given to `:scan` or `playr scan`. `:roots` lists those directories; `:roots add DIR` is another spelling of `:scan DIR`, and `:roots rm DIR` forgets one, removing the tracks and marks under it after asking. `:prune` removes the tracks of missing files, their places in playlists, and the marks of missing files under `DIR`, after asking; with no directory it covers every directory previously scanned. `:open` adds the files to the end of the selection and plays them.
 
-- Renamed commands keep their old names, so bindings written for them still work: `:next-view` and `:prev-view` are `:view next` and `:view prev`; `:unmark`, `:delmarks`, `:next-mark`, `:prev-mark`, `:pick`, `:nudge-mark`, `:move-mark`, `:snap-mark` and `:del-mark` are `:mark-undo`, `:mark-clear`, `:mark-next`, `:mark-prev`, `:mark-pick`, `:mark-nudge`, `:mark-move`, `:mark-snap` and `:mark-rm`; `:clear-search` is `:search-clear`; in the queue, `:dequeue`, `:reorder` and `:queue-clear` are `:remove`, `:move` and `:clear`.
+- Renamed commands keep their old names, so bindings written for them still work: `:next-view` and `:prev-view` are `:view next` and `:view prev`; `:unmark`, `:delmarks`, `:next-mark`, `:prev-mark` and `:move-mark` are `:mark-undo`, `:mark-clear`, `:mark-next`, `:mark-prev` and `:mark-move`; `:clear-search` is `:search-clear`; in the queue, `:dequeue`, `:reorder` and `:queue-clear` are `:remove`, `:move` and `:clear`.
 
 - `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
 
@@ -80,8 +80,9 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:mark [TIME]`                        | `b`                     | mark the playing position, or a time        |
 | `:mark-undo`                          | `B`                     | undo the last mark                          |
 | `:mark-clear`                         | `C`                     | clear all marks in this track; asks y/n     |
-| `:mark-next`                          | `.`                     | seek to the next mark                       |
-| `:mark-prev`                          | `,`                     | seek to the previous mark                   |
+| `:mark-next`                          | `}`                     | next mark: seek, or select in the sampler   |
+| `:mark-prev`                          | `{`                     | prev mark: seek, or select in the sampler   |
+| `:undo`                               | `u` in the sampler      | undo the last edit to marks or the range    |
 | `:slice region\|marks\|N\|onsets [S]` |                         | write samples from the region or the track  |
 | `:loop off`                           |                         | stop looping                                |
 | `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |
@@ -131,24 +132,26 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:nudge +N \| -N \| +N% \| -N%`     | left, right, with shift | move N columns, or N% of the view      |
 | `:snap [on\|off]`                  | `S`                     | snap moves and marks to zero crossings |
 | `:fit [on\|off]`                   | `f`; `\|` is `:fit on`  | zoom to the range and keep it centred  |
-| `:in`                              | `<`                     | start the range at the playhead        |
-| `:out`                             | `>`                     | end the range at the playhead          |
-| `:range [START END]`               | `backspace`             | set the range to slice, or clear it    |
+| `:in`                              | `i`                     | start the range at the playhead        |
+| `:out`                             | `o`                     | end the range at the playhead          |
+| `:range [START END]`               |                         | set the range to slice, or clear it    |
 | `:loop [on\|off] \| N [save\|clear]` | `l`; F1-F8, with shift  | loop the range or region, or recall or save |
 | `:loops clear`                    |                         | clear this track's loops; asks y/n     |
-| `:audition [next\|prev]`          | `a`, `n` `p`            | play a slice, the range or region once; step slices |
+| `:audition [next\|prev]`          | `a`, `,` `.`            | play the selection, a slice, the range or region once; step slices |
 | `:scrub TIME`                     | drag, with Scrub on     | play a moment from a time              |
-| `:cursor TIME\|+N\|-N\|N%\|off`     | `;` `'` `h`             | move the cursor; `h` returns it to the playhead |
-| `:mark-pick next\|prev`            | `u` `i`                 | move the cursor to a mark              |
-| `:mark-nudge +N\|-N\|N%`           | `y` `o`                 | move the mark under the cursor         |
-| `:mark-move TIME`                 | drag it                 | move it to a time                      |
-| `:mark-snap`                      | `#`                     | move it to the nearest rise            |
-| `:mark-rm`                        | `delete`                | remove it                              |
-| `:edge start\|end \| +N \| -N \| +N%` | `[` `]`, then `{` `}`   | pick a range end, or move it N columns |
+| `:select TIME`                    | click a mark            | select the mark at a time              |
+| `:edge start\|end`                 | `[` `]`                 | select a range end                     |
+| `:deselect`                       | `D`                     | select nothing                         |
+| `:move +N\|-N\|N%`                 | `<` `>`                 | move the selected mark or range end    |
+| `:mark-move TIME`                 | drag a mark             | move the selected mark to a time       |
+| `:onset`                          | `#`                     | move the selection to the nearest rise |
+| `:remove`                         | `backspace`             | remove the selected mark, or the range |
 | `:write`                           | `enter`                 | write the slices :slice planned        |
-| `:discard`                         | `esc`                   | discard planned slices, else the range |
+| `:discard`                         | `esc`                   | discard the planned slices             |
 
-In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; `[` or `]` picks an end, shown reversed, for `{` and `}` to move while it loops. `esc` clears the range once no slices are planned.
+In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; a selected end moves the loop with it.
+
+The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a click, or a range end, selected by `[` `]`. A selected end is shown reversed. `{` `}` play from the mark to the next, and step from the selected mark rather than the playhead. With nothing selected, `backspace` clears the range and the other edit keys refuse. `u` undoes the last change to the marks or the range, as far back as the track started playing.
 
 ## Extensions
 

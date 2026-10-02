@@ -23,7 +23,7 @@ None of the three contact external services or download any metadata and images.
 
 - Seek by 5 seconds in either direction, or 30 with shift, resuming on the exact sample
 
-- Marks: `b` marks a moment in a track, `B` undoes the last mark, `,` and `.` seek between marks, and marks are kept in the library
+- Marks: `b` marks a moment in a track, `B` undoes the last mark, `{` and `}` seek between marks, and marks are kept in the library
 
 - Samples: `:slice` writes regions between marks, equal parts or onset slices as lossless WAV files that rtrack loads as a sample bank; planned slices can be heard one by one before they are written, onset slices follow the sensitivity as it changes, and edges can be cut exact, at zero crossings, or faded
 
@@ -392,7 +392,7 @@ These keys are the same in the terminal, the window and the web page, and any of
 | left/right               | seek back or forward 5 seconds              |
 | shift left/right         | seek back or forward 30 seconds             |
 | `b`                      | mark the playing position                   |
-| `,` `.`                  | seek to the previous or next mark           |
+| `{` `}`                  | seek to the previous or next mark           |
 | `B`                      | undo the last mark                          |
 | `C`                      | clear all marks in this track; asks y/n     |
 | `(` `)`                  | varispeed down or up, one semitone a press  |
@@ -431,11 +431,11 @@ A mode applies to whatever list is playing: the library, search results, the sel
 
 ### Marks
 
-`b` marks the playing position in the current track. Marks show as `^` under the progress bar. `.` seeks to the next mark and `,` to the previous one; within a second after a mark, `,` goes to the one before it, so pressing it twice steps back twice. A mark within half a second of an existing one is not added again, except in the sampler view, where marks may be a frame apart.
+`b` marks the playing position in the current track. Marks show as `^` under the progress bar. `}` seeks to the next mark and `{` to the previous one; within a second after a mark, `{` goes to the one before it, so pressing it twice steps back twice. A mark within half a second of an existing one is not added again, except in the sampler view, where marks may be a frame apart.
 
 Marks form a chain: `B` removes the mark added most recently, then the one before, whatever their positions in the track. `C` clears all of the track's marks; it asks first, and only `y` confirms.
 
-Marks are stored in the library by file path and source frame, so they survive a rescan and stay exact at any playback speed. Without a library file they last until playr exits. A mark lands slightly after the moment you meant, by your reaction time; in the [sampler view](#sampler-view) it can be picked up with the cursor and moved, dragged in the window, or snapped to the nearest rise in the sound.
+Marks are stored in the library by file path and source frame, so they survive a rescan and stay exact at any playback speed. Without a library file they last until playr exits. A mark lands slightly after the moment you meant, by your reaction time; in the [sampler view](#sampler-view) it can be selected and moved, dragged in the window, or snapped to the nearest rise in the sound.
 
 ### Samples
 
@@ -487,7 +487,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 ### Sampler view
 
-`4` opens a view of the playing track's waveform, read from the file the first time the view opens for that track. Marks show as `|` under it, the playhead as `^`, the cursor as `#`, and the region between the marks either side of the playhead in the accent colour. The detail line gives the region's times to the millisecond.
+`4` opens a view of the playing track's waveform, read from the file the first time the view opens for that track. Marks show as `|` under it, the selected mark reversed, the playhead as `^`, and the region between the marks either side of the playhead in the accent colour. The detail line gives the region's times to the millisecond.
 
 | key     | command                 | does                                              |
 |---------|-------------------------|---------------------------------------------------|
@@ -499,23 +499,21 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `S`     | `:snap`                 | snap to zero crossings, on or off                 |
 | `f`     | `:fit`                  | zoom to the range and centre on it, on or off     |
 | `\|`    | `:fit on`               | back to the whole range after `[` or `]`          |
-| `<` `>` | `:in`, `:out`           | start or end the range at the playhead            |
-| backspace | `:range`              | clear the range; `:range 1:02 1:04.5` sets one    |
+| `i` `o` | `:in`, `:out`           | start or end the range at the playhead            |
 | `l`     | `:loop`                 | play the range, or else the region, over and over, or stop |
 | F1-F8   | `:loop 1` ... `:loop 8` | loop a saved loop, or save the range to an empty slot |
 | shift-F1-F8 | `:loop N save`      | save the range as loop N, over what it holds      |
-| `[` `]` | `:edge start`, `:edge end` | choose the range end to move, shown reversed   |
-| `{` `}` | `:edge -1`, `:edge +1`  | move that end a column earlier or later           |
-| `a`     | `:audition`             | play the slice, range or region once, then pause  |
-| `n` `p` | `:audition next`, `:audition prev` | play the next or previous planned slice once |
-| `;` `'` | `:cursor -1`, `:cursor +1` | move the cursor a column                       |
-| `h`     | `:cursor off`           | return the cursor to the playhead                 |
-| `u` `i` | `:mark-pick prev`, `:mark-pick next` | move the cursor to a mark           |
-| `y` `o` | `:mark-nudge -1`, `:mark-nudge +1` | move the mark under the cursor         |
-| `#`     | `:mark-snap`            | move it to the nearest rise in the sound          |
-| delete  | `:mark-rm`              | remove it                                         |
+| `{` `}` | `:mark-prev`, `:mark-next` | select the previous or next mark, and play it to the next |
+| `[` `]` | `:edge start`, `:edge end` | select the range's start or end, shown reversed |
+| `<` `>` | `:move -1`, `:move +1`  | move the selected mark or range end a column      |
+| `#`     | `:onset`                | move it to the nearest rise in the sound          |
+| backspace | `:remove`             | remove the selected mark; with an end or nothing selected, clear the range |
+| `D`     | `:deselect`             | select nothing                                    |
+| `u`     | `:undo`                 | undo the last change to the marks or the range    |
+| `a`     | `:audition`             | play the selection, slice, range or region once, then pause |
+| `,` `.` | `:audition prev`, `:audition next` | play the previous or next planned slice once |
 | `enter` | `:write`                | write the slices planned                          |
-| `esc`   | `:discard`              | discard them, or with none planned, clear the range |
+| `esc`   | `:discard`              | discard them                                      |
 
 - **Displays.** The envelope draws each column as two bars in eighth blocks: its RMS level in the bright colour, inside its peak level in a darker one. The waveform is folded, with negative samples counted by their size, so the bars use the full height. RMS shows loudness, such as a verse against a chorus, where a mastered track's peaks are near full scale everywhere; peak shows where each hit starts. The Braille display, which the view starts with, draws the waveform around a centre line, two dots across and four down a cell, which shows its shape. Both scale to the loudest sample in the track.
 
@@ -527,11 +525,13 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Zoom.** Each step halves the time a column shows, down to one frame a cell; the window goes on to 16 points a frame. Down to 64 frames, 1.5 ms at 44.1 kHz, columns start on the 32-frame buckets the peaks are kept in, so a column never shows a neighbour's hit. Closer than that, the view reads the frames it shows, and 2 s either side, in the background; until they arrive, each column shows its bucket's peaks. At a frame a column the window's line display draws each frame's channels' mean around a zero line, with a dot per frame once frames are 4 points apart, so a crossing can be picked out by eye.
 
-- **The cursor.** The cursor is a second position, apart from the playhead, and it is what the mark keys act on. It starts on the playhead and follows it until moved; `h` returns it. `u` and `i` put it on the mark before or after it, which is how a mark is picked up: every mark key acts on the mark the cursor is on, within a column of the view, and says so when there is none. In the window, a mark is dragged along the waveform instead.
+- **The selection.** The edit keys act on one selected item, a mark or a range end, wherever the playhead has moved since. `{` and `}` select the mark before or after the selected one, or the playhead with none selected, and play from it to the next mark. `b` and a click on a mark in the window select it too, and `[` and `]` select a range end. The selection goes when its mark or end is removed, on `D`, and on a change of track. With nothing selected the edit keys say so.
 
-- **Editing a mark.** `y` and `o` move the picked mark a column at a time, `:mark-move TIME` puts it at a time, and delete removes it, wherever it sits in the chain `B` undoes. `#` moves it to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
+- **Editing.** `<` and `>` move the selected mark or range end a column at a time, and `:mark-move TIME` puts a mark at a time. backspace removes the selected mark, wherever it sits in the chain `B` undoes; with a range end selected it clears the range. `#` moves the selection to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
 
-- **Audition.** `a` plays the planned slice the playhead is in, or the range, or the region around it, once, and pauses at its end rather than returning to its start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. With slices planned, `n` and `p`, or Previous slice and Next slice in the window, play the next or previous one, wrapping round at either end, so each can be checked before `enter` writes them; in this view they no longer skip tracks, which `:next` and `:prev` still do. With `slice_edges = "fade"`, an audition fades as the written slice will. Playing on afterwards continues the track from there.
+- **Undo.** `u` undoes the last change to the playing track's marks or range, by any key, command or drag, and again for the one before. The history lasts until the track changes.
+
+- **Audition.** `a` plays the selected mark up to the next, or the range when an end is selected; with nothing selected, the planned slice the playhead is in, or the range, or the region around it. It plays once, and pauses at the end rather than returning to the start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. With slices planned, `,` and `.`, or Previous slice and Next slice in the window, play the previous or next one, wrapping round at either end, so each can be checked before `enter` writes them. With `slice_edges = "fade"`, an audition fades as the written slice will. Playing on afterwards continues the track from there.
 
 - **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track. Outside the view, `:slice` writes at once.
 
@@ -539,11 +539,11 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Snap.** With `:snap on`, shown as `snap` in the title, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms: a frame where the channels' mean changes sign. A nudge snaps only past where it started, so repeated nudges walk from crossing to crossing. Where no crossing is within reach, as in silence, the point stays. Turning snap on moves the ends of a range already set, so a loop drawn first can be snapped after.
 
-- **Range.** `<` and `>` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge, within 8 points of it, moves that edge and picks it for `{` and `}`; the pointer turns to a left-right arrow over an edge that can be dragged.
+- **Range.** `i` and `o` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge, within 8 points of it, moves that edge and selects it; the pointer turns to a left-right arrow over an edge that can be dragged.
 
-- **Fit.** `f`, or the window's Fit button, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `{` and `}` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
+- **Fit.** `f`, or the window's Fit button, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `<` and `>` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
 
-- **Loop.** `l` plays the range over and over, or with no range sets it to the region and loops that, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `<` or `>`, with `{` or `}` after `[` or `]` picks it, with `:range` or a drag, moves the loop at once; clearing the range, a new track, `l` again or `:loop off` in any view ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
+- **Loop.** `l` plays the range over and over, or with no range sets it to the region and loops that, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `i` or `o`, with `<` or `>` after `[` or `]` selects it, with `:range` or a drag, moves the loop at once; clearing the range, a new track, `l` again or `:loop off` in any view ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
 
 - **Saved loops.** Each track keeps up to 8 loops, in the library beside its marks. `:loop N`, on F1 to F8, saves the range to slot N when it is empty; when it holds a loop, it makes that the range and loops it, from a pause or a stop too, and moves a loop already playing at once. `:loop N save`, on shift-F1 to F8, saves over a slot, `:loop N clear` empties it, and `:loops clear` empties them all, after asking. The title lists the slots saved, with `*` on the one the range is. The window has a numbered button for each: a click does what F1 to F8 do, shift-click saves over, and its menu clears it; Clear loops beside them clears them all. Some terminals send shift-F1 as F13; `:map` binds another key if so.
 

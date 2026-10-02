@@ -67,10 +67,15 @@ pub enum Message {
     Auditioning,
     /// The sound around a mark is being read, to find the rise to snap to.
     Snapping,
-    /// Edge moves now shift this end of the range.
+    /// This end of the range is selected.
     Edge(crate::sampler::Edge),
     /// An edge move found no such end of the range to move.
     NoEdge(crate::sampler::Edge),
+    /// An edit key with nothing selected to act on.
+    NothingSelected,
+    Deselected,
+    Undone,
+    NothingToUndo,
     /// A `map` command took effect; holds the `Action::Map`.
     Mapped(Action),
     Unmapped(Key),
@@ -214,14 +219,18 @@ pub fn text(message: &Message) -> String {
             crate::sampler::fmt_frames(*end, *rate)
         ),
         Message::NoRangeToSave(slot) => {
-            format!("no range to save as loop {slot}: set one with < and >, or drag")
+            format!("no range to save as loop {slot}: set one with i and o, or drag")
         }
-        Message::NoRangeToLoop => "the range has one end: set the other with < or >".into(),
+        Message::NoRangeToLoop => "the range has one end: set the other with i or o".into(),
         Message::NothingToAudition => "nothing to hear here: set a range, or mark one".into(),
         Message::Auditioning => "playing once".into(),
         Message::Snapping => "looking for the nearest rise".into(),
-        Message::Edge(edge) => format!("moving the range {}", edge.name()),
-        Message::NoEdge(edge) => format!("no range {} to move: set it with < or >", edge.name()),
+        Message::Edge(edge) => format!("selected the range {}", edge.name()),
+        Message::NoEdge(edge) => format!("no range {} to select: set it with i or o", edge.name()),
+        Message::NothingSelected => "nothing selected: { } select a mark, [ ] a range end".into(),
+        Message::Deselected => "selected nothing".into(),
+        Message::Undone => "undone".into(),
+        Message::NothingToUndo => "nothing to undo".into(),
         Message::Mapped(map) => command::line(map, None),
         Message::Unmapped(key) => format!("unmapped {key}"),
         Message::NotBound { key, view } => {
@@ -426,7 +435,7 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::ScanRunning => "a scan or prune is already running".into(),
         Refusal::AnalysisRunning => "an analysis is already running".into(),
         Refusal::NoRoots => "no directories recorded; :scan DIR adds one".into(),
-        Refusal::NoMarkHere => "no mark under the cursor; [ and ] move to one".into(),
+        Refusal::NoMarkHere => "no mark selected; { and } select one".into(),
         Refusal::MarkInTheWay { at } => {
             format!("a mark is already at {}", fmt_time(*at))
         }

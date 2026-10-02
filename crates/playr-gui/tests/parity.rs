@@ -81,6 +81,7 @@ fn every_action() -> Vec<Action> {
         Action::ClearMarks,
         Action::NextMark,
         Action::PrevMark,
+        Action::Undo,
         Action::Slice(Slicing::Region),
         Action::Zoom(Zoom::In),
         Action::Display(None),
@@ -96,15 +97,13 @@ fn every_action() -> Vec<Action> {
         Action::Audition,
         Action::AuditionSlice(true),
         Action::Scrub(Duration::ZERO),
-        Action::MoveCursor(playr_app::action::Nudge::Columns(1)),
-        Action::SetCursor(None),
-        Action::PickMark(true),
-        Action::MoveMark(playr_app::action::Nudge::Columns(1)),
+        Action::SelectMarkAt(Duration::from_secs(1)),
+        Action::Deselect,
+        Action::MoveSelected(playr_app::action::Nudge::Columns(1)),
         Action::MoveMarkTo(Duration::from_secs(1)),
-        Action::SnapMark,
-        Action::DeleteMark,
+        Action::SnapSelected,
+        Action::RemoveSelected,
         Action::PickEdge(playr_app::sampler::Edge::Start),
-        Action::MoveEdge(playr_app::action::Nudge::Columns(1)),
         Action::WriteSlices,
         Action::DiscardSlices,
         Action::Convert("sf2".into(), None),
@@ -187,6 +186,7 @@ fn every_action() -> Vec<Action> {
             | Action::ClearMarks
             | Action::NextMark
             | Action::PrevMark
+            | Action::Undo
             | Action::Slice(_)
             | Action::Zoom(_)
             | Action::Display(_)
@@ -202,15 +202,13 @@ fn every_action() -> Vec<Action> {
             | Action::Audition
             | Action::AuditionSlice(_)
             | Action::Scrub(_)
-            | Action::MoveCursor(_)
-            | Action::SetCursor(_)
-            | Action::PickMark(_)
-            | Action::MoveMark(_)
+            | Action::SelectMarkAt(_)
+            | Action::Deselect
+            | Action::MoveSelected(_)
             | Action::MoveMarkTo(_)
-            | Action::SnapMark
-            | Action::DeleteMark
+            | Action::SnapSelected
+            | Action::RemoveSelected
             | Action::PickEdge(_)
-            | Action::MoveEdge(_)
             | Action::WriteSlices
             | Action::DiscardSlices
             | Action::Convert(..)

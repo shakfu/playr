@@ -368,11 +368,11 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                 actions.push(Action::Loop(Some(true)));
             }
         }
-        // The cursor picks the mark up, then it moves: `MoveMarkTo` acts on
-        // whatever the cursor is on, as the keys do.
+        // The mark is selected, then it moves: `MoveMarkTo` acts on the
+        // selected mark, as the keys do.
         if let Some((from, to)) = state.mark_drag.take().zip(pointer.map(at)) {
             if from != to {
-                actions.push(Action::SetCursor(Some(from)));
+                actions.push(Action::SelectMarkAt(from));
                 actions.push(Action::MoveMarkTo(to));
             }
         }
@@ -443,6 +443,9 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             } else {
                 Action::SeekTo(at)
             });
+            if let Some(mark) = mark_at(pos).filter(|_| !shift) {
+                actions.push(Action::SelectMarkAt(mark));
+            }
         }
     }
 
@@ -488,8 +491,8 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             ui.separator();
             for control in controls::MARK_ROW {
                 if ui.button(control.label).clicked() {
-                    // The cursor picks the mark, then the action edits it.
-                    chosen.push(Action::SetCursor(Some(mark)));
+                    // The mark is selected, then the action edits it.
+                    chosen.push(Action::SelectMarkAt(mark));
                     chosen.push(control.action.clone());
                 }
             }
@@ -545,8 +548,13 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             state.scrub ^= true;
         }
         let empty = snapshot.loops.iter().position(Option::is_none);
+        // Named for what it saves: a loop slot holds a range, looping or not.
+        let label = match snapshot.status.looping {
+            Some(_) => "Save loop",
+            None => "Save range",
+        };
         let save = ui
-            .add_enabled(ranged && empty.is_some(), egui::Button::new("Save loop"))
+            .add_enabled(ranged && empty.is_some(), egui::Button::new(label))
             .on_hover_text("Save the range as a loop, in the first empty slot")
             .on_disabled_hover_text(match ranged {
                 true => "Every loop is in use. Shift-click one to save the range over it.",
@@ -849,7 +857,9 @@ pub fn menu(model: &Model, ui: &mut egui::Ui) -> Option<Action> {
             };
             let on = match control.action {
                 Action::Display(Some(display)) => display == sampler.display,
-                Action::PickEdge(edge) => edge == sampler.edge,
+                Action::PickEdge(edge) => {
+                    sampler.selected_edge(snapshot.status.current()) == Some(edge)
+                }
                 _ => false,
             };
             if item(ui, model, control, enabled, on) {
@@ -863,7 +873,7 @@ pub fn menu(model: &Model, ui: &mut egui::Ui) -> Option<Action> {
     ui.separator();
     items(ui, controls::SAMPLER_BAR);
     ui.menu_button("Range", |ui| items(ui, controls::RANGE_MENU));
-    ui.menu_button("Marks", |ui| items(ui, controls::MARK_MENU));
+    ui.menu_button("Edit", |ui| items(ui, controls::EDIT_MENU));
     // Chosen outside `items`: the slices' edges, a loop's entry, or a toggle.
     let mut other = None;
     ui.menu_button("Slice", |ui| {
@@ -1082,17 +1092,25 @@ fn paint(
             line(c, colours.edge, 1.0);
         }
     }
-    // The end edge moves shift is drawn thicker.
+    // The selected end and mark are drawn thicker.
+    let current = model.snapshot().status.current();
     let (start, end) = layout.range;
-    let chosen = model.sampler().edge;
+    let chosen = model.sampler().selected_edge(current);
     for (frame, edge) in [(start, Edge::Start), (end, Edge::End)] {
         if let Some(c) = frame.and_then(|e| layout.column_of(e)) {
-            let width = if edge == chosen { 3.0 } else { 1.5 };
+            let width = if Some(edge) == chosen { 3.0 } else { 1.5 };
             line(c, visuals.selection.stroke.color, width);
         }
     }
-    for c in layout.marks.iter().filter_map(|&m| layout.column_of(m)) {
-        line(c, colours.yellow, 1.5);
+    let selected = model.sampler().selected_mark(current);
+    for &m in &layout.marks {
+        if let Some(c) = layout.column_of(m) {
+            line(
+                c,
+                colours.yellow,
+                if Some(m) == selected { 3.0 } else { 1.5 },
+            );
+        }
     }
     if let Some(c) = playhead {
         line(c, visuals.strong_text_color(), 2.0);
@@ -1112,19 +1130,6 @@ fn paint(
             ],
             visuals.strong_text_color(),
             egui::Stroke::NONE,
-        ));
-    }
-    // Last, as in the terminal: the mark keys act on it. Dashed, so a mark or
-    // range end under it still shows.
-    if let Some(c) = model.sampler().cursor.and_then(|f| layout.column_of(f)) {
-        painter.extend(egui::Shape::dashed_line(
-            &[
-                egui::pos2(x(c), rect.top()),
-                egui::pos2(x(c), rect.bottom()),
-            ],
-            egui::Stroke::new(2.0, visuals.selection.stroke.color),
-            6.0,
-            4.0,
         ));
     }
 }

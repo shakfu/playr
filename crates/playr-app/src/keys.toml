@@ -55,8 +55,9 @@ M = "mode -"
 b = "mark"
 B = "mark-undo"
 C = "mark-clear"
-"." = "mark-next"
-"," = "mark-prev"
+# In the sampler view these also select the mark and play it to the next.
+"}" = "mark-next"
+"{" = "mark-prev"
 
 # Keys for one view, which win there over the keys above.
 [keys.library]
@@ -114,10 +115,8 @@ S = "snap"
 f = "fit"
 # Back to the whole range after [ or ] centred the view on one end.
 "|" = "fit on"
-# Shift-comma and shift-period on a US layout, beside the mark keys.
-"<" = "in"
-">" = "out"
-backspace = "range"
+i = "in"
+o = "out"
 l = "loop"
 # Loops kept with the track: F1-F8 recall one, or save the range to an empty
 # one; with shift, save the range over it.
@@ -137,26 +136,17 @@ shift-f5 = "loop 5 save"
 shift-f6 = "loop 6 save"
 shift-f7 = "loop 7 save"
 shift-f8 = "loop 8 save"
-# Hear the range, slice or region once, without leaving it playing.
+# Hear the selection, or the range, slice or region, once.
 a = "audition"
-# Step through planned slices, hearing each once; tracks skip with :next.
-n = "audition next"
-p = "audition prev"
-# The cursor, which is apart from the playhead: a column at a time, or home
-# to the playhead again.
-";" = "cursor -1"
-"'" = "cursor +1"
-h = "cursor off"
-# y u i o: the inner pair moves the cursor to a mark, the outer pair moves the
-# mark it landed on.
-u = "mark-pick prev"
-i = "mark-pick next"
-y = "mark-nudge -1"
-o = "mark-nudge +1"
-"#" = "mark-snap"
-delete = "mark-rm"
-# Pick a range end, then move it a column at a time.
+# Step through planned slices, hearing each once.
+"," = "audition prev"
+"." = "audition next"
+# { and } select a mark, [ and ] a range end; these act on the selection.
 "[" = "edge start"
 "]" = "edge end"
-"{" = "edge -1"
-"}" = "edge +1"
+"<" = "move -1"
+">" = "move +1"
+"#" = "onset"
+backspace = "remove"
+D = "deselect"
+u = "undo"

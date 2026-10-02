@@ -128,8 +128,12 @@ pub enum Action {
     MarkAt(Duration),
     UndoMark,
     ClearMarks,
+    /// Seek to the next mark; in the sampler view, also select it and hear
+    /// it to the next.
     NextMark,
     PrevMark,
+    /// Undo the last edit to the playing track's marks or range.
+    Undo,
 
     /// Write slices of the playing track to the samples directory, or in the
     /// sampler view, plan them to be written.
@@ -158,20 +162,19 @@ pub enum Action {
     LoopSlot(u8, SlotOp),
     /// Empty every loop slot of the playing track, once confirmed.
     ClearLoops,
-    /// Move the sampler's cursor, which is apart from the playhead.
-    MoveCursor(Nudge),
-    /// Put the sampler's cursor at a time, or return it to the playhead.
-    SetCursor(Option<Duration>),
-    /// Move the cursor to the next mark, or the previous one.
-    PickMark(bool),
-    /// Move the mark under the cursor, and the cursor with it.
-    MoveMark(Nudge),
-    /// Move the mark under the cursor to this time; what a drag does.
+    /// Select the mark nearest this time, within a column; what a click does.
+    SelectMarkAt(Duration),
+    /// Select nothing.
+    Deselect,
+    /// Move the selected mark or range end.
+    MoveSelected(Nudge),
+    /// Move the selected mark to this time; what a drag does.
     MoveMarkTo(Duration),
-    /// Move the mark under the cursor to the nearest rise in the sound.
-    SnapMark,
-    /// Remove the mark under the cursor.
-    DeleteMark,
+    /// Move the selected mark or range end to the nearest rise in the sound.
+    SnapSelected,
+    /// Remove the selected mark, or clear the range; with nothing selected,
+    /// clear the range.
+    RemoveSelected,
     /// Play the range, the planned slice at the playhead, or the region
     /// around it, once, and pause at its end.
     Audition,
@@ -179,10 +182,8 @@ pub enum Action {
     AuditionSlice(bool),
     /// Play a moment from this time once; what a drag does with Scrub on.
     Scrub(Duration),
-    /// Choose which end of the range edge moves shift.
+    /// Select an end of the range.
     PickEdge(crate::sampler::Edge),
-    /// Move the chosen end of the range, as a nudge moves the playhead.
-    MoveEdge(Nudge),
     /// Write the slices planned in the sampler view.
     WriteSlices,
     DiscardSlices,

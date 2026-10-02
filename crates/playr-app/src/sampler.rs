@@ -111,9 +111,29 @@ pub struct Sampler {
     /// The span last auditioned, on its track, which a playhead paused at its
     /// end hears again rather than the region after it.
     pub auditioned: Option<(PathBuf, u64, u64)>,
-    /// A frame the view points at, apart from the playhead. `None` follows the
-    /// playhead, which is what the view did before there was a cursor.
-    pub cursor: Option<u64>,
+    /// The mark or range end the edit keys act on, on its track.
+    pub selected: Option<(PathBuf, Selected)>,
+    /// The onset snap running, and what it moves when it lands.
+    pub snapping: Option<(JobId, Selected)>,
+    /// Marks and ranges before each edit to the playing track, latest last.
+    pub history: Vec<Before>,
+}
+
+/// What the edit keys act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Selected {
+    /// The mark at this frame.
+    Mark(u64),
+    /// This end of the range.
+    Edge(Edge),
+}
+
+/// A track's marks and range before an edit, which undo restores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Before {
+    pub path: PathBuf,
+    pub marks: Vec<u64>,
+    pub range: Option<Range>,
 }
 
 /// Frames of the playing track decoded for a close view.
@@ -205,6 +225,30 @@ impl Sampler {
             (true, Edge::Start) => start,
             (true, Edge::End) => end,
             (false, _) => start.zip(end).map(|(a, b)| a + (b - a) / 2),
+        }
+    }
+
+    /// What is selected on `playing`.
+    pub fn selected(&self, playing: Option<&PathBuf>) -> Option<Selected> {
+        match &self.selected {
+            Some((path, selected)) if Some(path) == playing => Some(*selected),
+            _ => None,
+        }
+    }
+
+    /// The frame of the selected mark on `playing`.
+    pub fn selected_mark(&self, playing: Option<&PathBuf>) -> Option<u64> {
+        match self.selected(playing) {
+            Some(Selected::Mark(frame)) => Some(frame),
+            _ => None,
+        }
+    }
+
+    /// The selected end of the range on `playing`.
+    pub fn selected_edge(&self, playing: Option<&PathBuf>) -> Option<Edge> {
+        match self.selected(playing) {
+            Some(Selected::Edge(edge)) => Some(edge),
+            _ => None,
         }
     }
 

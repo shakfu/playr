@@ -33,7 +33,7 @@ use crate::dispatch::{self, Confirm, Frontend, Presentation, Prompt};
 use crate::media::Media;
 use crate::message::{self, Message};
 use crate::persist;
-use crate::sampler::{DetailRead, Sampler, Wave, DETAIL_MARGIN};
+use crate::sampler::{DetailRead, Sampler, Selected, Wave, DETAIL_MARGIN};
 use crate::View;
 
 /// How long a message stays showing.
@@ -915,11 +915,12 @@ impl Model {
                     }
                 }
                 Event::Snapped {
+                    job,
                     track,
                     from,
                     result,
-                    ..
                 } => {
+                    let snapping = self.sampler.snapping.take_if(|(j, _)| *j == job);
                     // The track may have changed while the window decoded; a
                     // mark moved in one that is no longer playing would be a
                     // surprise, so it is dropped.
@@ -928,11 +929,25 @@ impl Model {
                     }
                     match result {
                         Ok(Some(to)) => {
-                            let notice = self.session.move_mark(from, to);
-                            if matches!(notice, Notice::Done(Outcome::MarkMoved { .. })) {
-                                self.sampler.cursor = Some(to);
+                            let before = dispatch::before(self);
+                            match snapping {
+                                Some((_, Selected::Edge(edge))) => {
+                                    dispatch::set_edge(self, &track, edge, to);
+                                    let (start, end) = self.sampler.range_ends(Some(&track));
+                                    if let Ok((_, rate)) = self.session.playing_track() {
+                                        self.notify(Message::Range { start, end, rate });
+                                    }
+                                }
+                                _ => {
+                                    let notice = self.session.move_mark(from, to);
+                                    if matches!(notice, Notice::Done(Outcome::MarkMoved { .. })) {
+                                        self.sampler.selected =
+                                            Some((track.clone(), Selected::Mark(to)));
+                                    }
+                                    self.notify(notice);
+                                }
                             }
-                            self.notify(notice);
+                            dispatch::settle(self, before);
                         }
                         Ok(None) => self.notify(Notice::Refused(Refusal::NoOnsetNear)),
                         Err(error) => self.notify(Notice::Failed {
@@ -1082,6 +1097,15 @@ impl Model {
         {
             self.sampler.pending = None;
         }
+        if self
+            .sampler
+            .selected
+            .as_ref()
+            .is_some_and(|(p, _)| Some(p) != current)
+        {
+            self.sampler.selected = None;
+        }
+        self.sampler.history.retain(|b| Some(&b.path) == current);
         if self
             .sampler
             .range

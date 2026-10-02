@@ -1,6 +1,6 @@
 # Mark selection
 
-Status: proposal. Stage 1 (design A) is decided; stages 2 and 3 are proposed. Nothing here is implemented.
+Status: stage 1 (marks and range ends) is implemented; stage 2 (slices) is proposed.
 
 The sampler edits marks through a cursor, a frame apart from the playhead. This file replaces the cursor with a selected mark, then extends the selection to planned slices and range ends, with one set of action keys for all three.
 
@@ -29,7 +29,7 @@ Sampler view unless marked global.
 | Planned slice | | none | none | none | none | `n` `p` |
 | Cursor | | `;` `'` `h` | | | | |
 
-`esc` discards the plan.
+`esc` (`:discard`) discards the plan, or with none planned clears the range (`dispatch.rs:835`).
 
 ## Options
 
@@ -49,11 +49,22 @@ Marks are captured during playback and edited while paused. Three ways to edit m
 
 ### Decision
 
-- **Option 2, in three stages.** Stage 1 is design A, done regardless of the later stages. Stages 2 and 3 follow if hand-edited slices and range ends prove needed.
+- **Option 2, in two stages.** Stage 1 is design A plus range ends, done regardless. Stage 2 follows if hand-edited slices prove needed.
 
 - **Option 3 is rejected.** It is option 2 plus a keystroke per switch and a hidden mode.
 
-- **Option 1 is not taken for marks.** It would serve marks alone. Stages 2 and 3 need selection state for slices and range ends, so marks use the same model.
+- **Option 1 is not taken for marks.** It would serve marks alone. Range ends and slices need selection state, so marks use the same model.
+
+final remappings:
+
+```text
+			select 		deselect 		hear 		move		snap		remove
+marks 		{ } 		D				{ } 		< > 		# 			backspace
+slice   	, .			D				, . 		< >         #			backspace
+rng end		[ ] 		D			  	a   		< > 		#			backspace
+```
+
+
 
 ## Keys
 
@@ -61,14 +72,15 @@ Sampler view unless marked global.
 
 | Kind | Select | Deselect | Hear | Move a column | Snap to onset | Remove |
 |-|-|-|-|-|-|-|
-| Mark | `{` `}` (global), `b`, click | `esc` | `{` `}` | `<` `>` | `#` | `backspace` |
-| Slice | `,` `.` | `esc` | `,` `.` | `<` `>` | `#` | `backspace` |
-| Range end | `[` `]`, click | `esc` | `a` | `<` `>` | `#` | `backspace` |
+| Mark | `{` `}` (global), `b`, click | `D` | `{` `}` | `<` `>` | `#` | `backspace` |
+| Slice | `,` `.` | `D` | `,` `.` | `<` `>` | `#` | `backspace` |
+| Range end | `[` `]`, click | `D` | `a` | `<` `>` | `#` | `backspace` |
 
 | Key | Action |
 |-|-|
 | `i` `o` | `:in` and `:out`: set the range start or end at the playhead. |
 | `u` | Undo the last edit. See [Undo](#undo). |
+| `esc` | `:discard`: discard the plan, as now. With none planned it refuses; it no longer clears the range. |
 
 - **Hearing on select.** `{` `}` audition from the mark to the next, then pause, as `,` `.` audition a slice. `a` hears whatever is selected.
 
@@ -81,6 +93,10 @@ Sampler view unless marked global.
 - **Snap.** `#` moves the selected item to the nearest onset. It is not the zero-crossing snap that `S` toggles, which still applies when a mark or range end is set, and to slice edges on export (`:slice-edges`). `nearest_onset` (`samples.rs:165`) takes any frame, so one job serves all three kinds.
 
 - **Removing a range end** clears the whole range. A range with one end is not used.
+
+- **`esc` stays `:discard`**, paired with `enter`, which writes the plan. Its range fallback goes, since `backspace` clears the range. `esc` does not deselect: in stage 2 a selected slice belongs to the plan, so a second `esc` would drop the plan and its hand edits, which undo cannot restore.
+
+- **`D` deselects, on trial.** A selection does nothing until an action key is pressed, so deselect may go unused. If it does, `D` is dropped and the selection clears only on removal or a track change.
 
 - **Second move binding.** Option: `ctrl-left` and `ctrl-right` also move the selected item a column. The arrows then follow one pattern: `left` `right` nudge the playhead a column, `shift-left` `shift-right` nudge it 10%, and `ctrl-left` `ctrl-right` move the selection. `Key::parse` already accepts `ctrl-` (`action.rs:337`), and the window passes ctrl through (`playr-gui/src/keys.rs:63`). They are a second binding, not a replacement for `<` `>`: macOS switches Spaces on them by default, and tmux forwards them only with extended keys on.
 
@@ -103,11 +119,17 @@ Marks are stored in the library database (`query::add_mark`, `query::move_mark`,
 
 `B` (`:mark-undo`) removes the last mark added. `u` covers it, so `B` goes or stays as an alias.
 
-## Stage 1: marks (design A)
+## Stage 1: marks and range ends (design A)
 
-The sampler keeps one selected mark, on a track. Editing acts on it.
+The sampler keeps one selected item, on a track: a mark or a range end. Editing acts on it.
 
-The selection clears when its mark is removed by any command, including `C` and `u`, on `esc`, and on a track change.
+Stage 1 takes the whole [Keys](#keys) table except the slice row. That includes `i` `o` for `:in` `:out`, `{` `}` as the global mark keys, `,` `.` unbound, `D` to deselect, and `esc` without its range fallback. `:in` `:out` cannot be split off: `<` `>` move the selection.
+
+Range ends join in stage 1 because `{` `}`, which move a range end now, become the mark keys. `[` `]` select an end, as they pick one now. `<` `>` move it. `#` puts it on an onset, so a loop starts or ends on a transient. No core change is needed.
+
+Undo ships in stage 1 for marks and the range: every row of the [Undo](#undo) table except slice edges, which stage 2 adds.
+
+The selection clears when its mark is removed by any command, including `C` and `u`, on `D`, and on a track change.
 
 The selected mark is drawn distinct from the others: thicker in the window, a different glyph on the terminal axis. The dashed cursor line and the `#` axis glyph go.
 
@@ -161,10 +183,6 @@ Proposed: 1. Choice 2 makes a slice edit behave differently by how the plan was 
 
 - **Mode error.** An action key hits a slice when a mark was meant, if `,` `.` were pressed last. The selected item must be drawn clearly in both frontends.
 
-## Stage 3: range ends
-
-`[` `]` select a range end, as they pick one now. `<` `>` move it. `#` puts it on an onset, so a loop starts or ends on a transient.
-
 ## Questions
 
 - **Select keys for marks and slices.** Marks are the most edited kind, but both their select keys (`{` `}`) and move keys (`<` `>`) need shift, while slices get `,` `.`. Swapping them puts marks on `,` `.`, whose shifted forms on a US layout are `<` `>`: select and move on one key. It also keeps the global `,` `.` as mark seek, so nothing global is rebound.
@@ -174,8 +192,6 @@ Proposed: 1. Choice 2 makes a slice edit behave differently by how the plan was 
 - **Hearing a range end.** `[` `]` select without hearing, and `a` hears the whole range. A pre-roll, playing about 2 s up to the selected end, would let an end edit be heard. Probably not needed: there are two ends, so they are not stepped through by ear.
 
 - **`backspace` with nothing selected.** Removing a mark clears the selection, so a second `backspace` clears the range. `u` undoes it. Alternative: refuse `backspace` with nothing selected; the range is still cleared by selecting an end and pressing `backspace`.
-
-- `esc` deselects, so `:discard` needs a new key. Candidates: `D`, or a menu entry only.
 
 - Is redo wanted? Not proposed.
 
@@ -189,7 +205,7 @@ Proposed: 1. Choice 2 makes a slice edit behave differently by how the plan was 
 
 - `{` `}` audition from the mark to the next and select it; `b` and a click select.
 
-- Selection follows `{` `}` `b` and a click; clears on removal by `backspace`, `C`, `u`, on `esc`, and on a track change.
+- Selection follows `{` `}` `b` and a click; clears on removal by `backspace`, `C`, `u`, on `D`, and on a track change.
 
 - `{` `}` step from the selected mark, not the playhead; outside the sampler they seek.
 
@@ -201,12 +217,16 @@ Proposed: 1. Choice 2 makes a slice edit behave differently by how the plan was 
 
 - `i` `o` set the range ends at the playhead.
 
+- `esc` discards the plan and keeps a selected mark or range end; with no plan it refuses and leaves the range.
+
+- Stage 2: `esc` clears a selected slice with its plan.
+
 - `u` reverses each edit in the [Undo](#undo) table, including the database write for marks; the history clears on a track change.
 
 - Stage 2: `,` `.` select a slice; `>` moves the shared edge of two slices; `#` moves it to an onset; `backspace` merges; the first slice's start is refused.
 
 - Stage 2: an edited plan survives `:slice-edges`.
 
-- Stage 3: `[` `]` select an end; `<` `>` `#` move it; `backspace` clears the range.
+- `[` `]` select an end; `<` `>` `#` move it; `backspace` clears the range.
 
 - Parity: `crates/playr-gui/tests/parity.rs` still finds every action reachable in the window.

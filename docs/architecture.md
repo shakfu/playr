@@ -155,7 +155,9 @@ Conventions:
 
 - **Roots are what the library covers, not a hint for rescanning.** `scan` adds one, `forget_root` removes it with every track and mark under it, and `prune` drops the rows under a root whose files are gone. Forgetting runs on the session's connection rather than a job: it asks the filesystem nothing, so it is one transaction instead of a walk, and it works on a directory that is already gone.
 
-- **The sampler's cursor is the selection.** `Sampler::cursor` is a frame apart from the playhead, `None` following it. Every mark action acts on the mark within a column of the cursor, so there is no separate "picked mark" to keep in step with the marks themselves. `:mark-pick` moves the cursor onto a mark; the window's drag sets the cursor and then moves.
+- **The sampler keeps one selection.** `Sampler::selected` is a mark's frame or a range end, with its track. A track holds at most one mark per frame, so the frame names the mark. `dispatch` drops the selection once its mark or end is gone, and a move carries it to the new frame.
+
+- **Undo compares before and after.** `dispatch` records the playing track's marks and range before each action, and keeps them in `Sampler::history` if the action changed them. Undo restores the difference. The edits need no inverse of their own, and an edit added later is undoable without more code. The cost is reading the marks on every action, which `Session::marks_for` caches.
 
 - **A one-shot range is not a loop.** `Cmd::PlayOnce` sets the same `Loop` with `once`, and `Engine::halt` mirrors `Engine::wrap` forward to the end rather than back to the start: the ring holds exactly the range, the decoder is left at its end, and `pause_at` names the output frame to pause on. `Status::looping` leaves `once` out, so `:loop` cannot switch off a range that was only auditioned.
 

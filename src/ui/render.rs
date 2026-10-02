@@ -354,15 +354,16 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
             axis[c] = ('+', Style::default().fg(p.edge));
         }
     }
-    // The end that edge keys move is reversed.
+    // The selected end is reversed.
+    let edge = app.sampler.selected_edge(current);
     let (start, end) = layout.range;
-    for (frame, glyph, edge) in [
+    for (frame, glyph, this) in [
         (start, '[', sampler::Edge::Start),
         (end, ']', sampler::Edge::End),
     ] {
         if let Some(c) = frame.and_then(|e| layout.column_of(e)) {
             let style = Style::default().fg(p.accent);
-            axis[c] = match edge == app.sampler.edge {
+            axis[c] = match edge == Some(this) {
                 true => (glyph, style.add_modifier(Modifier::REVERSED)),
                 false => (glyph, style),
             };
@@ -384,15 +385,11 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
     if let Some((cell, glyph)) = arrow {
         *cell = (glyph, bold);
     }
-    // Last, so the cursor is always visible: it is what the mark keys act on,
-    // and it may sit on the playhead, a mark or a range end.
-    if let Some(c) = app.sampler.cursor.and_then(|f| layout.column_of(f)) {
-        axis[c] = (
-            '#',
-            Style::default()
-                .fg(p.accent)
-                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
-        );
+    // Last, so the selected mark is always visible: it is what the edit keys
+    // act on, and it may sit on the playhead or a range end.
+    let selected = app.sampler.selected_mark(current);
+    if let Some(c) = selected.and_then(|f| layout.column_of(f)) {
+        axis[c] = ('|', bold.add_modifier(Modifier::REVERSED));
     }
     lines.push(runs(axis.into_iter()));
 

@@ -48,13 +48,12 @@ pub fn allowed(action: &Action) -> bool {
         | Audition
         | AuditionSlice(_)
         | Scrub(_)
-        | MoveCursor(_)
-        | SetCursor(_)
-        | PickMark(_)
-        | MoveMark(_)
+        | SelectMarkAt(_)
+        | Deselect
+        | MoveSelected(_)
         | MoveMarkTo(_)
-        | SnapMark
-        | DeleteMark
+        | SnapSelected
+        | RemoveSelected
         | Zoom(_)
         | Display(_)
         | Nudge(_)
@@ -68,7 +67,6 @@ pub fn allowed(action: &Action) -> bool {
         | LoopSlot(..)
         | ClearLoops
         | PickEdge(_)
-        | MoveEdge(_)
         | WriteSlices
         | DiscardSlices
         | Convert(..) => false,
@@ -81,7 +79,7 @@ pub fn allowed(action: &Action) -> bool {
         | TogglePause | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | StopAfter
         | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | SetEq(..)
         | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
-        | UndoMark | ClearMarks | NextMark | PrevMark | Theme(_) => true,
+        | UndoMark | Undo | ClearMarks | NextMark | PrevMark | Theme(_) => true,
     }
 }
 

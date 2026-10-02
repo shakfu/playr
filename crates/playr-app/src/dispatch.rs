@@ -21,7 +21,7 @@ use playr_core::wave::Peaks;
 
 use crate::action::{Action, Keymap, Slicing, Zoom};
 use crate::message::Message;
-use crate::sampler::{self, Sampler};
+use crate::sampler::{self, Before, Sampler, Selected};
 use crate::{Display, Theme, View};
 
 /// A destructive action held until the listener confirms it.
@@ -277,8 +277,17 @@ pub fn sql_done(f: &mut impl Frontend, then: SqlThen, result: Result<Vec<PathBuf
     }
 }
 
-/// Does `action`.
+/// Does `action`, keeping what it changes in the marks or range for undo.
 pub fn dispatch(action: Action, f: &mut impl Frontend) {
+    if action == Action::Undo {
+        return undo(f);
+    }
+    let before = before(f);
+    act(action, f);
+    settle(f, before);
+}
+
+fn act(action: Action, f: &mut impl Frontend) {
     match action {
         Action::Quit => f.present(Presentation::Quit),
         Action::Help => f.present(Presentation::KeyList),
@@ -545,14 +554,15 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             Ok((path, count)) => f.confirm(Confirm::ClearMarks { path, count }),
             Err(refusal) => f.notify(refusal.into()),
         },
-        Action::NextMark => {
-            let notice = f.session_mut().seek_to_mark(true);
+        Action::NextMark | Action::PrevMark if f.view() == View::Sampler => {
+            select_mark(f, action == Action::NextMark)
+        }
+        Action::NextMark | Action::PrevMark => {
+            let notice = f.session_mut().seek_to_mark(action == Action::NextMark);
             f.notify(notice.into());
         }
-        Action::PrevMark => {
-            let notice = f.session_mut().seek_to_mark(false);
-            f.notify(notice.into());
-        }
+        // `dispatch` undoes before it gets here.
+        Action::Undo => {}
 
         Action::Slice(slicing) => slice(f, slicing),
         Action::Zoom(zoom) => f.present(Presentation::Zoom(zoom)),
@@ -587,104 +597,74 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::Audition => audition(f),
         Action::AuditionSlice(forward) => audition_slice(f, forward),
         Action::Scrub(at) => scrub(f, at),
-        Action::MoveCursor(nudge) => match (peaks(f), f.sampler().scale) {
-            (Some(peaks), Some(scale)) => {
-                let at = cursor_frame(f, peaks.rate);
-                let to = sampler::nudge(&peaks, at, scale.frames(nudge), f.sampler().snap);
-                f.sampler_mut().cursor = Some(to);
-            }
-            _ => f.notify(Message::NoWaveform),
-        },
-        Action::SetCursor(at) => match (at, peaks(f)) {
-            (None, _) => f.sampler_mut().cursor = None,
-            (Some(at), Some(peaks)) => {
-                f.sampler_mut().cursor = Some(sampler::frame_of(at, peaks.rate))
-            }
-            (Some(_), None) => f.notify(Message::NoWaveform),
-        },
-        Action::PickMark(forward) => match peaks(f) {
+        Action::SelectMarkAt(at) => match peaks(f) {
             Some(peaks) => {
-                let at = cursor_frame(f, peaks.rate);
                 let Some(path) = f.session().player().status().current().cloned() else {
                     return f.notify(Refusal::NothingPlaying.into());
                 };
-                let next = f
-                    .session_mut()
-                    .marks_for(Some(&path))
-                    .iter()
-                    .map(|m| m.frame)
-                    .filter(|&m| if forward { m > at } else { m < at })
-                    .min_by_key(|&m| m.abs_diff(at));
-                match next {
-                    Some(frame) => f.sampler_mut().cursor = Some(frame),
-                    None => f.notify(if forward {
-                        Refusal::NoLaterMark.into()
-                    } else {
-                        Refusal::NoEarlierMark.into()
-                    }),
-                }
-            }
-            None => f.notify(Message::NoWaveform),
-        },
-        Action::MoveMark(nudge) => match (peaks(f), f.sampler().scale) {
-            (Some(peaks), Some(scale)) => {
-                let at = cursor_frame(f, peaks.rate);
-                let Some(mark) = f.session_mut().mark_near(at, near(&peaks, Some(scale))) else {
-                    return f.notify(Refusal::NoMarkHere.into());
-                };
-                let to = sampler::nudge(&peaks, mark.frame, scale.frames(nudge), f.sampler().snap);
-                let notice = f.session_mut().move_mark(mark.frame, to);
-                if matches!(notice, Notice::Done(Outcome::MarkMoved { .. })) {
-                    f.sampler_mut().cursor = Some(to);
-                }
-                f.notify(notice.into());
-            }
-            _ => f.notify(Message::NoWaveform),
-        },
-        Action::MoveMarkTo(to) => match peaks(f) {
-            Some(peaks) => {
-                let at = cursor_frame(f, peaks.rate);
-                let within = near(&peaks, f.sampler().scale);
-                let Some(mark) = f.session_mut().mark_near(at, within) else {
-                    return f.notify(Refusal::NoMarkHere.into());
-                };
-                let to = sampler::frame_of(snapped(f, to), peaks.rate);
-                let notice = f.session_mut().move_mark(mark.frame, to);
-                if matches!(notice, Notice::Done(Outcome::MarkMoved { .. })) {
-                    f.sampler_mut().cursor = Some(to);
-                }
-                f.notify(notice.into());
-            }
-            None => f.notify(Message::NoWaveform),
-        },
-        Action::SnapMark => match peaks(f) {
-            Some(peaks) => {
-                let at = cursor_frame(f, peaks.rate);
-                let within = near(&peaks, f.sampler().scale);
-                let Some(mark) = f.session_mut().mark_near(at, within) else {
-                    return f.notify(Refusal::NoMarkHere.into());
-                };
-                let sensitivity = f.onset_sensitivity();
-                match f.session_mut().snap_mark(mark.frame, sensitivity) {
-                    Ok(_) => f.notify(Message::Snapping),
-                    Err(refusal) => f.notify(refusal.into()),
-                }
-            }
-            None => f.notify(Message::NoWaveform),
-        },
-        Action::DeleteMark => match peaks(f) {
-            Some(peaks) => {
-                let at = cursor_frame(f, peaks.rate);
+                let at = sampler::frame_of(at, peaks.rate);
                 let within = near(&peaks, f.sampler().scale);
                 match f.session_mut().mark_near(at, within) {
                     Some(mark) => {
-                        let notice = f.session_mut().remove_mark(mark.frame);
-                        f.notify(notice.into());
+                        f.sampler_mut().selected = Some((path, Selected::Mark(mark.frame)))
                     }
                     None => f.notify(Refusal::NoMarkHere.into()),
                 }
             }
             None => f.notify(Message::NoWaveform),
+        },
+        Action::Deselect => {
+            f.sampler_mut().selected = None;
+            f.notify(Message::Deselected);
+        }
+        Action::MoveSelected(nudge) => match selected(f) {
+            Some((_, Selected::Mark(from))) => match (peaks(f), f.sampler().scale) {
+                (Some(peaks), Some(scale)) => {
+                    let to = sampler::nudge(&peaks, from, scale.frames(nudge), f.sampler().snap);
+                    move_selected_mark(f, from, to);
+                }
+                _ => f.notify(Message::NoWaveform),
+            },
+            Some((_, Selected::Edge(edge))) => move_edge(f, edge, nudge),
+            None => f.notify(Message::NothingSelected),
+        },
+        Action::MoveMarkTo(to) => match (selected(f), peaks(f)) {
+            (Some((_, Selected::Mark(from))), Some(peaks)) => {
+                let to = sampler::frame_of(snapped(f, to), peaks.rate);
+                move_selected_mark(f, from, to);
+            }
+            (Some((_, Selected::Mark(_))), None) => f.notify(Message::NoWaveform),
+            _ => f.notify(Refusal::NoMarkHere.into()),
+        },
+        Action::SnapSelected => {
+            let Some((path, selected)) = selected(f) else {
+                return f.notify(Message::NothingSelected);
+            };
+            let from = match selected {
+                Selected::Mark(frame) => Some(frame),
+                Selected::Edge(sampler::Edge::Start) => f.sampler().range_ends(Some(&path)).0,
+                Selected::Edge(sampler::Edge::End) => f.sampler().range_ends(Some(&path)).1,
+            };
+            let Some(from) = from else {
+                return f.notify(Message::NothingSelected);
+            };
+            let sensitivity = f.onset_sensitivity();
+            match f.session_mut().snap_mark(from, sensitivity) {
+                Ok(job) => {
+                    f.sampler_mut().snapping = Some((job, selected));
+                    f.notify(Message::Snapping);
+                }
+                Err(refusal) => f.notify(refusal.into()),
+            }
+        }
+        Action::RemoveSelected => match selected(f) {
+            Some((_, Selected::Mark(frame))) => {
+                let notice = f.session_mut().remove_mark(frame);
+                f.notify(notice.into());
+            }
+            Some((_, Selected::Edge(_))) => act(Action::SetRange(None), f),
+            None if f.sampler().range.is_some() => act(Action::SetRange(None), f),
+            None => f.notify(Message::NothingSelected),
         },
         Action::Loop(on) => {
             let status = f.session().player().status();
@@ -714,44 +694,19 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
         Action::PickEdge(edge) => {
             f.sampler_mut().edge = edge;
             f.sampler_mut().fit_edge = true;
-            f.notify(Message::Edge(edge));
-        }
-        Action::MoveEdge(nudge) => {
-            let status = f.session().player().status();
-            let Some(path) = status.current().cloned() else {
-                return f.notify(Refusal::NothingPlaying.into());
+            let path = f.session().player().status().current().cloned();
+            let (start, end) = f.sampler().range_ends(path.as_ref());
+            let set = match edge {
+                sampler::Edge::Start => start.is_some(),
+                sampler::Edge::End => end.is_some(),
             };
-            let (Some(peaks), Some(scale)) = (peaks(f), f.sampler().scale) else {
-                return f.notify(Message::NoWaveform);
-            };
-            let edge = f.sampler().edge;
-            let (start, end) = f.sampler().range_ends(Some(&path));
-            let from = match edge {
-                sampler::Edge::Start => start,
-                sampler::Edge::End => end,
-            };
-            let Some(from) = from else {
-                return f.notify(Message::NoEdge(edge));
-            };
-            let to = sampler::nudge(&peaks, from, scale.frames(nudge), f.sampler().snap);
-            // An end stops a frame short of the other, so the range stays.
-            match edge {
-                sampler::Edge::Start => {
-                    let to = end.map_or(to, |e| to.min(e.saturating_sub(1)));
-                    f.sampler_mut().set_range_start(&path, to);
+            match path.filter(|_| set) {
+                Some(path) => {
+                    f.sampler_mut().selected = Some((path, Selected::Edge(edge)));
+                    f.notify(Message::Edge(edge));
                 }
-                sampler::Edge::End => {
-                    let to = start.map_or(to, |s| to.max(s + 1));
-                    f.sampler_mut().set_range_end(&path, to);
-                }
+                None => f.notify(Message::NoEdge(edge)),
             }
-            follow_loop(f);
-            let (start, end) = f.sampler().range_ends(Some(&path));
-            f.notify(Message::Range {
-                start,
-                end,
-                rate: peaks.rate,
-            });
         }
         Action::Snap(on) => {
             let on = on.unwrap_or(!f.sampler().snap);
@@ -831,10 +786,8 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
             Ok(_) => f.notify(Outcome::ConvertStarted { format }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
-        // Escape backs out a step: planned slices first, then the range.
         Action::DiscardSlices => match f.take_plan() {
             Some(_) => f.notify(Message::SlicesDiscarded),
-            None if f.sampler().range.is_some() => dispatch(Action::SetRange(None), f),
             None => f.notify(Message::NoSlicesPlanned),
         },
 
@@ -859,6 +812,12 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
 
 /// Does what `question` asked about, once the listener has said yes.
 pub fn confirmed(question: Confirm, f: &mut impl Frontend) {
+    let before = before(f);
+    confirmed_now(question, f);
+    settle(f, before);
+}
+
+fn confirmed_now(question: Confirm, f: &mut impl Frontend) {
     match question {
         Confirm::ReplacePlaylist { name, queue } => {
             let notice = match queue {
@@ -1219,14 +1178,7 @@ fn peaks(f: &impl Frontend) -> Option<std::sync::Arc<Peaks>> {
     sampler::peaks_of(f.sampler(), status.current()).ok()
 }
 
-/// The frame the sampler points at: its cursor, or the playhead when the
-/// cursor is following it.
-fn cursor_frame(f: &impl Frontend, rate: u32) -> u64 {
-    let playhead = sampler::frame_of(f.session().player().position(), rate);
-    f.sampler().cursor.unwrap_or(playhead)
-}
-
-/// How far from the cursor a mark still counts as under it: one column of the
+/// How far from a click a mark still counts as under it: one column of the
 /// view, so what looks like a hit is one, or 10 ms before anything is drawn.
 fn near(peaks: &Peaks, scale: Option<sampler::Scale>) -> u64 {
     match scale {
@@ -1235,18 +1187,34 @@ fn near(peaks: &Peaks, scale: Option<sampler::Scale>) -> u64 {
     }
 }
 
-/// Plays once, and pauses at the end of, whichever of these has both ends:
-/// the range, the planned slice the playhead is in, or the region around it.
+/// Plays once, and pauses at the end of: the selected mark up to the next,
+/// or the range when an end of it is selected. Otherwise whichever of these
+/// has both ends: the range, the planned slice the playhead is in, or the
+/// region around it.
 ///
 /// The range first, because setting one is how a listener says what they mean;
 /// then the plan, which is what `:slice` is about to write; then the region,
-/// which is what `:slice region` would take. The playhead is the sampler's
-/// cursor, so this is the span under the cursor in each case.
+/// which is what `:slice region` would take.
 fn audition(f: &mut impl Frontend) {
     let Some((path, peaks, at)) = hearing(f) else {
         return;
     };
     let (rate, last) = (peaks.rate, peaks.frames);
+    // A selection says what is meant more plainly than the playhead.
+    match f.sampler().selected(Some(&path)) {
+        Some(Selected::Mark(frame)) => {
+            let end = (mark_frames(f, &path).into_iter())
+                .find(|&m| m > frame)
+                .unwrap_or(last);
+            return play_once(f, path, (frame, end), rate);
+        }
+        Some(Selected::Edge(_)) => {
+            if let Some(range) = f.sampler().range(Some(&path)) {
+                return play_once(f, path, range, rate);
+            }
+        }
+        None => {}
+    }
     // A span with no end runs to the end of the track.
     let ends = |end: Option<u64>| end.unwrap_or(last);
 
@@ -1427,7 +1395,7 @@ fn loop_slot(f: &mut impl Frontend, slot: u8, op: crate::action::SlotOp) {
                 start: Some(start),
                 end: Some(end),
             });
-            dispatch(Action::Loop(Some(true)), f);
+            act(Action::Loop(Some(true)), f);
             f.notify(Message::LoopRecalled {
                 slot,
                 start,
@@ -1469,15 +1437,189 @@ fn snap_range(f: &mut impl Frontend) {
 
 /// Marks `at`, or the position now. In the sampler view the mark may snap,
 /// and may fall as close as a frame to another, where fine cuts need it.
+///
+/// The new mark is selected.
 fn mark(f: &mut impl Frontend, at: Option<Duration>) {
+    let at = at.unwrap_or_else(|| f.session().player().position());
     let notice = if f.view() == View::Sampler {
-        let at = at.unwrap_or_else(|| f.session().player().position());
         let at = snapped(f, at);
         f.session_mut().add_mark_within(Some(at), Duration::ZERO)
     } else {
-        f.session_mut().add_mark(at)
+        f.session_mut().add_mark(Some(at))
     };
+    if let (Notice::Done(Outcome::Marked { at, .. }), Ok((path, rate))) =
+        (&notice, f.session().playing_track())
+    {
+        let frame = sampler::frame_of(*at, rate);
+        f.sampler_mut().selected = Some((path, Selected::Mark(frame)));
+    }
     f.notify(notice.into());
+}
+
+/// The selection on the playing track.
+fn selected(f: &impl Frontend) -> Option<(PathBuf, Selected)> {
+    let path = f.session().player().status().current().cloned()?;
+    let selected = f.sampler().selected(Some(&path))?;
+    Some((path, selected))
+}
+
+/// The playing track's marks, in frames.
+fn mark_frames(f: &mut impl Frontend, path: &PathBuf) -> Vec<u64> {
+    (f.session_mut().marks_for(Some(path)).iter())
+        .map(|m| m.frame)
+        .collect()
+}
+
+/// Selects the next mark after the selected one, or the previous; from the
+/// playhead with none selected. Plays it once, up to the mark after it.
+fn select_mark(f: &mut impl Frontend, forward: bool) {
+    let Some((path, peaks, at)) = hearing(f) else {
+        return;
+    };
+    let from = f.sampler().selected_mark(Some(&path)).unwrap_or(at);
+    let marks = mark_frames(f, &path);
+    let next = marks
+        .iter()
+        .copied()
+        .filter(|&m| if forward { m > from } else { m < from })
+        .min_by_key(|&m| m.abs_diff(from));
+    let Some(frame) = next else {
+        return f.notify(if forward {
+            Refusal::NoLaterMark.into()
+        } else {
+            Refusal::NoEarlierMark.into()
+        });
+    };
+    f.sampler_mut().selected = Some((path.clone(), Selected::Mark(frame)));
+    let end = marks
+        .into_iter()
+        .find(|&m| m > frame)
+        .unwrap_or(peaks.frames);
+    play_once(f, path, (frame, end), peaks.rate);
+}
+
+/// Moves the selected mark from `from` to `to`, keeping it selected.
+fn move_selected_mark(f: &mut impl Frontend, from: u64, to: u64) {
+    let notice = f.session_mut().move_mark(from, to);
+    if let (Notice::Done(Outcome::MarkMoved { .. }), Some(path)) =
+        (&notice, f.session().player().status().current().cloned())
+    {
+        f.sampler_mut().selected = Some((path, Selected::Mark(to)));
+    }
+    f.notify(notice.into());
+}
+
+/// Moves `edge` of the range, as a nudge moves the playhead.
+fn move_edge(f: &mut impl Frontend, edge: sampler::Edge, nudge: crate::action::Nudge) {
+    let status = f.session().player().status();
+    let Some(path) = status.current().cloned() else {
+        return f.notify(Refusal::NothingPlaying.into());
+    };
+    let (Some(peaks), Some(scale)) = (peaks(f), f.sampler().scale) else {
+        return f.notify(Message::NoWaveform);
+    };
+    let (start, end) = f.sampler().range_ends(Some(&path));
+    let from = match edge {
+        sampler::Edge::Start => start,
+        sampler::Edge::End => end,
+    };
+    let Some(from) = from else {
+        return f.notify(Message::NoEdge(edge));
+    };
+    let to = sampler::nudge(&peaks, from, scale.frames(nudge), f.sampler().snap);
+    set_edge(f, &path, edge, to);
+    let (start, end) = f.sampler().range_ends(Some(&path));
+    f.notify(Message::Range {
+        start,
+        end,
+        rate: peaks.rate,
+    });
+}
+
+/// Puts `edge` of the range on `path` at `to`, a frame short of the other
+/// end so the range stays, and keeps a running loop on it.
+pub fn set_edge(f: &mut impl Frontend, path: &PathBuf, edge: sampler::Edge, to: u64) {
+    let (start, end) = f.sampler().range_ends(Some(path));
+    match edge {
+        sampler::Edge::Start => {
+            let to = end.map_or(to, |e| to.min(e.saturating_sub(1)));
+            f.sampler_mut().set_range_start(path, to);
+        }
+        sampler::Edge::End => {
+            let to = start.map_or(to, |s| to.max(s + 1));
+            f.sampler_mut().set_range_end(path, to);
+        }
+    }
+    follow_loop(f);
+}
+
+/// The playing track's marks and range, before an edit.
+pub fn before(f: &mut impl Frontend) -> Option<Before> {
+    let path = f.session().player().status().current().cloned()?;
+    let marks = mark_frames(f, &path);
+    let range = f.sampler().range.clone().filter(|r| r.path == path);
+    Some(Before { path, marks, range })
+}
+
+/// After an action: keeps `before` for undo if the action changed the marks
+/// or range, and drops a selection whose mark or range end is gone.
+pub fn settle(f: &mut impl Frontend, before: Option<Before>) {
+    let after = self::before(f);
+    if let (Some(before), Some(after)) = (before, &after) {
+        if before.path == after.path && before != *after {
+            f.sampler_mut().history.push(before);
+        }
+    }
+    let gone = match (f.sampler().selected.clone(), &after) {
+        (None, _) => false,
+        (Some((path, selected)), Some(after)) if path == after.path => match selected {
+            Selected::Mark(frame) => !after.marks.contains(&frame),
+            Selected::Edge(edge) => {
+                let r = after.range.as_ref();
+                match edge {
+                    sampler::Edge::Start => r.and_then(|r| r.start).is_none(),
+                    sampler::Edge::End => r.and_then(|r| r.end).is_none(),
+                }
+            }
+        },
+        _ => true,
+    };
+    if gone {
+        f.sampler_mut().selected = None;
+    }
+}
+
+/// Puts back the marks and range as they were before the last edit.
+fn undo(f: &mut impl Frontend) {
+    let (path, rate) = match f.session().playing_track() {
+        Ok(track) => track,
+        Err(refusal) => return f.notify(refusal.into()),
+    };
+    let Some(before) = f.sampler_mut().history.pop() else {
+        return f.notify(Message::NothingToUndo);
+    };
+    if before.path != path {
+        f.sampler_mut().history.clear();
+        return f.notify(Message::NothingToUndo);
+    }
+    let now = mark_frames(f, &path);
+    for &frame in now.iter().filter(|m| !before.marks.contains(m)) {
+        if let notice @ Notice::Failed { .. } = f.session_mut().remove_mark(frame) {
+            return f.notify(notice.into());
+        }
+    }
+    for &frame in before.marks.iter().filter(|m| !now.contains(m)) {
+        let at = sampler::time_of(frame, rate);
+        if let notice @ Notice::Failed { .. } =
+            f.session_mut().add_mark_within(Some(at), Duration::ZERO)
+        {
+            return f.notify(notice.into());
+        }
+    }
+    f.sampler_mut().range = before.range;
+    follow_loop(f);
+    settle(f, None);
+    f.notify(Message::Undone);
 }
 
 fn slice(f: &mut impl Frontend, slicing: Slicing) {

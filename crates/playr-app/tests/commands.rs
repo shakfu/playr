@@ -74,18 +74,23 @@ fn view_commands_work_only_in_their_view() {
         assert_eq!(parse(line, Selection), Ok(selection), "{line:?}");
         assert_eq!(parse(line, View::Queue), Ok(queue), "{line:?}");
         let name = line.split_whitespace().next().unwrap();
+        // The sampler's `move` and `remove` act on its selection.
+        let views = match name {
+            "clear" => "selection and queue",
+            _ => "selection, queue and sampler",
+        };
         assert_eq!(
             parse(line, Library),
-            Err(format!(":{name} works in the selection and queue views"))
+            Err(format!(":{name} works in the {views} views"))
         );
     }
     assert_eq!(parse("add", Playlists), Ok(Action::Add));
     assert_eq!(parse("add", View::Queue), Ok(Action::Add));
     // A prefix that matches nothing here names the views it would work in,
-    // though two views list it.
+    // though several views list it.
     assert_eq!(
         parse("rem", Library),
-        Err(":remove works in the selection and queue views".into())
+        Err(":remove works in the selection, queue and sampler views".into())
     );
     // Typed in full, a command from another view is not taken as a prefix of one here.
     assert_eq!(
@@ -136,12 +141,15 @@ fn a_unique_prefix_names_a_command_and_an_ambiguous_one_lists_the_choices() {
                 .into()
         )
     );
-    // Only the commands usable here count: `mark-p` is `mark-prev` unless
-    // `mark-pick` works too.
-    assert_eq!(lib("mark-p"), Ok(Action::PrevMark));
+    // Only the commands usable here count: here `mark-m` names a command
+    // usable elsewhere.
     assert_eq!(
-        parse("mark-p", Sampler),
-        Err("ambiguous command mark-p: mark-prev, mark-pick".into())
+        lib("mark-m"),
+        Err(":mark-move works in the sampler view".into())
+    );
+    assert_eq!(
+        parse("mark-m 0:02", Sampler),
+        Ok(Action::MoveMarkTo(std::time::Duration::from_secs(2)))
     );
     assert_eq!(lib("frobnicate"), Err("unknown command: frobnicate".into()));
     assert!(lib("").is_err());
@@ -211,8 +219,12 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         "range",
         "loop on",
         "edge end",
-        "edge -3",
-        "edge +10%",
+        "move -3",
+        "move +10%",
+        "onset",
+        "remove",
+        "deselect",
+        "select 90",
     ] {
         let action = s(text).unwrap();
         assert_eq!(line(&action, Some(View::Sampler)), text);
@@ -795,30 +807,50 @@ fn default_keys_map_to_actions_by_view() {
     assert_eq!(default_key("\\", Library), Some(Action::SetSpeed(0)));
     // Chords are bound only where named, so Ctrl-M is not `M`.
     assert_eq!(default_key("ctrl-m", Library), None);
-    // The sampler's arrows and range keys; the marks keys beside them stay.
+    // The sampler's arrows, range keys and edit keys; the mark keys are global.
+    use playr_app::action::Nudge;
     assert_eq!(
         default_key("right", View::Sampler),
-        Some(Action::Nudge(playr_app::action::Nudge::Columns(1)))
+        Some(Action::Nudge(Nudge::Columns(1)))
     );
     assert_eq!(default_key("right", Library), Some(Action::SeekBy(5)));
-    assert_eq!(default_key("<", View::Sampler), Some(Action::RangeIn));
-    assert_eq!(default_key(">", View::Sampler), Some(Action::RangeOut));
-    assert_eq!(default_key(",", View::Sampler), Some(Action::PrevMark));
+    assert_eq!(default_key("i", View::Sampler), Some(Action::RangeIn));
+    assert_eq!(default_key("o", View::Sampler), Some(Action::RangeOut));
+    assert_eq!(default_key("{", View::Sampler), Some(Action::PrevMark));
+    assert_eq!(default_key("}", Library), Some(Action::NextMark));
+    assert_eq!(default_key(",", Library), None);
+    assert_eq!(
+        default_key(",", View::Sampler),
+        Some(Action::AuditionSlice(false))
+    );
+    assert_eq!(
+        default_key("<", View::Sampler),
+        Some(Action::MoveSelected(Nudge::Columns(-1)))
+    );
+    assert_eq!(
+        default_key(">", View::Sampler),
+        Some(Action::MoveSelected(Nudge::Columns(1)))
+    );
+    assert_eq!(default_key("#", View::Sampler), Some(Action::SnapSelected));
+    assert_eq!(
+        default_key("backspace", View::Sampler),
+        Some(Action::RemoveSelected)
+    );
+    assert_eq!(default_key("D", View::Sampler), Some(Action::Deselect));
+    assert_eq!(default_key("u", View::Sampler), Some(Action::Undo));
+    // n and p skip tracks in the sampler as everywhere else.
+    assert_eq!(default_key("n", View::Sampler), Some(Action::Next));
     assert_eq!(default_key("<", Library), None);
     assert_eq!(default_key("l", View::Sampler), Some(Action::Loop(None)));
     assert_eq!(
         default_key("esc", View::Sampler),
         Some(Action::DiscardSlices)
     );
-    // Brackets pick and move a range end in the sampler; parentheses change speed.
+    // Brackets select a range end in the sampler; parentheses change speed.
     use playr_app::sampler::Edge;
     assert_eq!(
         default_key("[", View::Sampler),
         Some(Action::PickEdge(Edge::Start))
-    );
-    assert_eq!(
-        default_key("}", View::Sampler),
-        Some(Action::MoveEdge(playr_app::action::Nudge::Columns(1)))
     );
     assert_eq!(default_key("[", Library), None);
     assert_eq!(default_key("(", Library), Some(Action::SpeedBy(-1)));
@@ -897,10 +929,10 @@ fn map_and_unmap_parse_a_view_a_key_and_a_command() {
         lib("map d delete"),
         Err(":delete works in the playlists view; use map playlists d delete".into())
     );
-    // Two views take it, so no one view is suggested.
+    // Several views take it, so no one view is suggested.
     assert_eq!(
         lib("map d remove"),
-        Err(":remove works in the selection and queue views".into())
+        Err(":remove works in the selection, queue and sampler views".into())
     );
     assert_eq!(
         lib("map x map y quit"),
@@ -1066,34 +1098,25 @@ fn scan_and_open_take_a_path_with_home_as_tilde() {
 }
 
 #[test]
-fn the_cursor_and_mark_commands_parse_in_the_sampler_only() {
+fn the_selection_commands_parse_in_the_sampler_only() {
     use playr_app::action::Nudge;
     use std::time::Duration;
     let sampler = |line: &str| parse(line, Sampler);
     let library = |line: &str| parse(line, Library);
 
     assert_eq!(
-        sampler("cursor +1"),
-        Ok(Action::MoveCursor(Nudge::Columns(1)))
+        sampler("select 1:30"),
+        Ok(Action::SelectMarkAt(Duration::from_secs(90)))
+    );
+    assert_eq!(sampler("select"), Err("usage: :select TIME".into()));
+    assert_eq!(sampler("deselect"), Ok(Action::Deselect));
+    assert_eq!(
+        sampler("move -1"),
+        Ok(Action::MoveSelected(Nudge::Columns(-1)))
     );
     assert_eq!(
-        sampler("cursor -10%"),
-        Ok(Action::MoveCursor(Nudge::Percent(-10)))
-    );
-    assert_eq!(sampler("cursor off"), Ok(Action::SetCursor(None)));
-    assert_eq!(
-        sampler("cursor 1:30"),
-        Ok(Action::SetCursor(Some(Duration::from_secs(90))))
-    );
-    assert_eq!(sampler("mark-pick next"), Ok(Action::PickMark(true)));
-    assert_eq!(sampler("mark-pick prev"), Ok(Action::PickMark(false)));
-    assert_eq!(
-        sampler("mark-pick"),
-        Err("usage: :mark-pick next|prev".into())
-    );
-    assert_eq!(
-        sampler("mark-nudge -1"),
-        Ok(Action::MoveMark(Nudge::Columns(-1)))
+        sampler("move +10%"),
+        Ok(Action::MoveSelected(Nudge::Percent(10)))
     );
     assert_eq!(
         sampler("mark-move 0:02"),
@@ -1105,18 +1128,27 @@ fn the_cursor_and_mark_commands_parse_in_the_sampler_only() {
         Ok(Action::Scrub(Duration::from_secs(2)))
     );
     assert_eq!(sampler("scrub"), Err("usage: :scrub TIME".into()));
-    assert_eq!(sampler("mark-snap"), Ok(Action::SnapMark));
-    assert_eq!(sampler("mark-rm"), Ok(Action::DeleteMark));
+    assert_eq!(sampler("onset"), Ok(Action::SnapSelected));
+    assert_eq!(sampler("remove"), Ok(Action::RemoveSelected));
+    assert_eq!(sampler("edge +1"), Err("usage: :edge start|end".into()));
+    // Undo works in every view.
+    assert_eq!(library("undo"), Ok(Action::Undo));
+    // The cursor is gone.
+    assert!(sampler("cursor off").is_err());
+    assert!(sampler("mark-pick next").is_err());
 
     // They belong to the sampler, so elsewhere they say where to go.
     assert_eq!(
-        library("cursor off"),
-        Err(":cursor works in the sampler view".into())
+        library("deselect"),
+        Err(":deselect works in the sampler view".into())
     );
     assert_eq!(
-        library("mark-rm"),
-        Err(":mark-rm works in the sampler view".into())
+        library("onset"),
+        Err(":onset works in the sampler view".into())
     );
+    // `move` and `remove` are the selection's there, and the sampler's here.
+    assert_eq!(parse("remove", Selection), Ok(Action::Remove));
+    assert_eq!(parse("move +1", Selection), Ok(Action::MoveTrack(1)));
 }
 
 #[test]
@@ -1134,20 +1166,15 @@ fn renamed_commands_keep_their_old_names_as_aliases() {
         assert_eq!(lib(old), lib(new), "{old}");
         assert!(lib(new).is_ok(), "{new}");
     }
-    for (old, new) in [
-        ("pick next", "mark-pick next"),
-        ("nudge-mark -1", "mark-nudge -1"),
-        ("move-mark 0:02", "mark-move 0:02"),
-        ("snap-mark", "mark-snap"),
-        ("del-mark", "mark-rm"),
-    ] {
-        assert_eq!(parse(old, Sampler), parse(new, Sampler), "{old}");
-        assert!(parse(new, Sampler).is_ok(), "{new}");
-    }
+    assert_eq!(
+        parse("move-mark 0:02", Sampler),
+        parse("mark-move 0:02", Sampler)
+    );
+    assert!(parse("mark-move 0:02", Sampler).is_ok());
     // An old name still says where it works, by its new name.
     assert_eq!(
-        parse("del-mark", Library),
-        Err(":mark-rm works in the sampler view".into())
+        parse("move-mark 0:02", Library),
+        Err(":mark-move works in the sampler view".into())
     );
     // Help and completion list only the new names.
     let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
@@ -1155,8 +1182,7 @@ fn renamed_commands_keep_their_old_names_as_aliases() {
         "sync",
         "unmark",
         "delmarks",
-        "pick",
-        "del-mark",
+        "move-mark",
         "clear-search",
         "next-view",
     ] {

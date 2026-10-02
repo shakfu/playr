@@ -629,7 +629,7 @@ fn refresh_until(app: &mut App, done: impl Fn(&playr::ui::Snapshot) -> bool) {
 }
 
 #[test]
-fn b_marks_and_comma_and_period_seek_between_marks() {
+fn b_marks_and_braces_seek_between_marks() {
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library.db");
@@ -646,7 +646,7 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     refresh_until(&mut app, |s| s.position > Duration::from_millis(200));
 
     // Stalled for the rest of the test, so each position below is the seek
-    // target exactly. Both a repeated `b` and `,` turn on the playhead being
+    // target exactly. Both a repeated `b` and `{` turn on the playhead being
     // within a second of a mark, and a running device drifts past that
     // between two presses on a loaded machine.
     device.stall();
@@ -666,17 +666,17 @@ fn b_marks_and_comma_and_period_seek_between_marks() {
     let other = db::open(&library).unwrap();
     assert_eq!(query::marks(&other, &path).unwrap().len(), 2);
 
-    // Half a second past the 0:30 mark, within a second of it, so `,` skips it.
+    // Half a second past the 0:30 mark, within a second of it, so `{` skips it.
     seek_to(&mut app, 31.0);
-    press(&mut app, ',');
+    press(&mut app, '{');
     refresh_until(&mut app, |s| s.position.as_secs_f64() < 2.0);
     let back = app.screen().snapshot.position.as_secs_f64();
-    assert!(back < 2.0, "comma went to {back}s, not the first mark");
-    press(&mut app, '.');
+    assert!(back < 2.0, "{{ went to {back}s, not the first mark");
+    press(&mut app, '}');
     refresh_until(&mut app, |s| s.position.as_secs_f64() > 2.0);
     let forward = app.screen().snapshot.position.as_secs_f64();
-    assert!((30.0..31.5).contains(&forward), "period went to {forward}s");
-    press(&mut app, '.');
+    assert!((30.0..31.5).contains(&forward), "}} went to {forward}s");
+    press(&mut app, '}');
     assert_eq!(said(&app), msg(Refusal::NoLaterMark));
 
     // A mark added last but earlier in the track: `B` removes it, not 0:30.

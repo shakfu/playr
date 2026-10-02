@@ -65,7 +65,7 @@ fn an_empty_file_gives_the_defaults() {
     assert_eq!(config, Config::default());
     assert_eq!(config.keys, Keymap::default());
     assert_eq!(config.settings, Settings::default());
-    assert_eq!(Keymap::default().bindings().len(), 128);
+    assert_eq!(Keymap::default().bindings().len(), 122);
 }
 
 #[test]
@@ -192,7 +192,7 @@ x = "delete"
             "line 2: unknown mode shufle; modes: normal, shuffle, repeat, repeat-one",
             "line 3: speed is a whole number from -12 to 12",
             "line 4: unknown setting: colour",
-            "line 7: :remove works in the selection and queue views",
+            "line 7: :remove works in the selection, queue and sampler views",
             "line 8: not a key: zz",
             "line 9: x must be a command string, not an integer",
             "line 10: a key cannot run :map or :unmap",
