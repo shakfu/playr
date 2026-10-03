@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use playr_app::action::{Action, Nudge, Slicing, Zoom};
 use playr_app::sampler::Edge;
+use playr_app::tape::TapeAction;
 use playr_app::{Display, Theme, View};
 
 /// A button or menu item.
@@ -217,6 +218,17 @@ pub const PLAN_BAR: &[Control] = &[
 /// Sampler, Loops, after the numbered loops.
 pub const LOOP_MENU: &[Control] = &[control("Clear loops", Action::ClearLoops)];
 
+/// Buttons atop the Tape tab. Its sliders, tick boxes and windows send
+/// `Action::Tape` with their values.
+pub const TAPE_BAR: &[Control] = &[
+    control("Load range", Action::Tape(TapeAction::Load(None))),
+    control("Play tape", Action::Tape(TapeAction::Play)),
+    control("Stop tape", Action::Tape(TapeAction::Stop)),
+    control("Reset", Action::Tape(TapeAction::Reset)),
+    control("Record", Action::Tape(TapeAction::Record)),
+    control("Save loop", Action::Tape(TapeAction::Save)),
+];
+
 /// Every table above.
 pub const TABLES: &[&[Control]] = &[
     TRANSPORT,
@@ -244,6 +256,7 @@ pub const TABLES: &[&[Control]] = &[
     MARK_ROW,
     PLAN_BAR,
     LOOP_MENU,
+    TAPE_BAR,
 ];
 
 /// Actions whose value comes from how a control is used, by name: a slider's

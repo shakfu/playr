@@ -106,3 +106,27 @@ fn the_spectrogram_ramp_gets_lighter_at_every_step() {
     assert_eq!(magma(-1.0), magma(0.0));
     assert_eq!(magma(2.0), magma(1.0));
 }
+
+/// `top`, with its alpha, laid over the opaque `back`, as egui blends.
+fn over(top: Color32, back: Color32) -> Color32 {
+    let a = top.a() as f32 / 255.0;
+    let mix = |t: u8, b: u8| (t as f32 + b as f32 * (1.0 - a)).round() as u8;
+    Color32::from_rgb(
+        mix(top.r(), back.r()),
+        mix(top.g(), back.g()),
+        mix(top.b(), back.b()),
+    )
+}
+
+/// The tape's loop stays legible under the frozen tint, and the tint shows.
+#[test]
+fn the_frozen_tint_keeps_the_waveform_at_3_to_1() {
+    for (theme, visuals) in themes() {
+        let p = Palette::of(&visuals);
+        let ground = visuals.extreme_bg_color;
+        let (rms, back) = (over(p.frozen, p.rms), over(p.frozen, ground));
+        let ratio = contrast(rms, back);
+        assert!(ratio >= 3.0, "{theme}: {ratio:.2}");
+        assert_ne!(back, ground, "{theme}: the tint does not show");
+    }
+}

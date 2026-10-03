@@ -21,6 +21,8 @@ pub struct Palette {
     pub green: Color32,
     pub yellow: Color32,
     pub red: Color32,
+    /// Laid over the tape's loop where the write head cannot change it.
+    pub frozen: Color32,
 }
 
 pub const DARK: Palette = Palette {
@@ -33,6 +35,7 @@ pub const DARK: Palette = Palette {
     green: Color32::from_rgb(80, 200, 120),
     yellow: Color32::from_rgb(230, 200, 60),
     red: Color32::from_rgb(230, 80, 70),
+    frozen: Color32::from_rgba_premultiplied(20, 26, 34, 34),
 };
 
 /// As [`DARK`], with peaks lighter than RMS so they recede on a light ground.
@@ -46,6 +49,7 @@ pub const LIGHT: Palette = Palette {
     green: Color32::from_rgb(30, 140, 60),
     yellow: Color32::from_rgb(150, 100, 0),
     red: Color32::from_rgb(200, 40, 40),
+    frozen: Color32::from_rgba_premultiplied(5, 12, 22, 34),
 };
 
 impl Palette {

@@ -12,12 +12,14 @@ categories = ["multimedia::audio"]
 
 [dependencies]
 playr-core.workspace = true
+playr-looper.workspace = true
+# The looper's output stream, on the device playr-core finds.
+cpal.workspace = true
 rusqlite.workspace = true
 souvlaki.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-# The fake audio device in playr-core's test helpers.
-cpal.workspace = true
+# playr-core's fake audio device in the test helpers uses cpal and rtrb.
 rtrb.workspace = true
 hound.workspace = true

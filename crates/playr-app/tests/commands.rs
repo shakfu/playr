@@ -1330,3 +1330,70 @@ fn stop_takes_after_or_a_sleep_time_and_round_trips() {
         assert_eq!(lib(&line(&action, None)), Ok(action));
     }
 }
+
+#[test]
+fn tape_commands_parse_in_any_view_and_round_trip() {
+    use playr_app::tape::{Pos, TapeAction as T, VoiceSetting as V};
+    let pct = Pos::Percent;
+    for (text, action) in [
+        ("tape load", T::Load(None)),
+        ("tape load 3", T::Load(Some(3))),
+        ("tape play", T::Play),
+        ("tape stop", T::Stop),
+        ("tape reset", T::Reset),
+        ("tape save", T::Save),
+        ("tape rec", T::Record),
+        ("tape write off", T::Write(false)),
+        ("tape feedback 0.85", T::Feedback(0.85)),
+        ("tape wear 0.3", T::Wear(0.3)),
+        (
+            "tape window 0 50%",
+            T::WriteWindow(Pos::Time(Duration::ZERO), pct(50.0)),
+        ),
+        ("tape 2 on", T::Voice(2, V::On(true))),
+        ("tape 2 rate -0.5", T::Voice(2, V::Rate(-0.5))),
+        (
+            "tape 3 window 25% 75%",
+            T::Voice(3, V::Window(pct(25.0), pct(75.0))),
+        ),
+        (
+            "tape 1 window 0.5 1.25",
+            T::Voice(
+                1,
+                V::Window(
+                    Pos::Time(Duration::from_millis(500)),
+                    Pos::Time(Duration::from_millis(1250)),
+                ),
+            ),
+        ),
+        ("tape 2 send 0.6", T::Voice(2, V::Send(0.6))),
+        ("tape 2 wear 0.4", T::Voice(2, V::Wear(0.4))),
+        ("tape 1 level 0.5", T::Voice(1, V::Level(0.5))),
+        ("tape 1 pan -1", T::Voice(1, V::Pan(-1.0))),
+        ("tape 1 fade 40", T::Voice(1, V::Fade(40.0))),
+    ] {
+        let action = Action::Tape(action);
+        for view in [Library, Sampler] {
+            assert_eq!(parse(text, view), Ok(action.clone()), "{text}");
+        }
+        assert_eq!(line(&action, None), text);
+    }
+    for (text, error) in [
+        ("tape", "usage: :tape"),
+        ("tape 4 on", "voices are 1 to 3"),
+        ("tape 0 on", "voices are 1 to 3"),
+        ("tape 1 rate 5", "rate is -4 to 4"),
+        ("tape 1 rate nan", "rate is -4 to 4"),
+        ("tape feedback 1.1", "feedback is 0 to 1"),
+        ("tape 1 pan 2", "pan is -1 to 1"),
+        ("tape 1 fade 2000", "fade is 0 to 1000"),
+        ("tape 3 wear -1", "wear is 0 to 1"),
+        ("tape window 0 250%", "not a percentage: 250%"),
+        ("tape load 9", "not a loop slot: 9"),
+        ("tape 1 rate", "usage: :tape"),
+        ("tape write maybe", "usage: :tape"),
+    ] {
+        let got = parse(text, Library).unwrap_err();
+        assert!(got.contains(error), "{text}: {got}");
+    }
+}

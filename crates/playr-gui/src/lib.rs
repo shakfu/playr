@@ -9,6 +9,7 @@ pub mod controls;
 pub mod keys;
 pub mod palette;
 mod sampler;
+mod tape;
 mod transport;
 mod views;
 
@@ -51,6 +52,10 @@ pub struct Gui {
     theme: Option<Theme>,
     /// Whether the EQ dialog shows.
     eq_open: bool,
+    /// The view the Tape tab was opened over, while it shows. It is not a
+    /// `View`: the terminal has no Tape view, so keys keep acting in this one.
+    tape: Option<View>,
+    tape_tab: tape::State,
 }
 
 impl Gui {
@@ -65,11 +70,17 @@ impl Gui {
             sampler: sampler::State::default(),
             theme: None,
             eq_open: false,
+            tape: None,
+            tape_tab: tape::State::default(),
         }
     }
 
     pub fn model(&self) -> &Model {
         &self.model
+    }
+
+    pub fn model_mut(&mut self) -> &mut Model {
+        &mut self.model
     }
 
     /// Draws one frame into `ui`, the whole window.
@@ -79,6 +90,10 @@ impl Gui {
         self.follow_theme(ui.ctx());
         self.follow_input(ui.ctx());
         self.keys(ui.ctx());
+        // A key that changed the view leaves the Tape tab for it.
+        if self.tape.is_some_and(|v| v != self.model.view()) {
+            self.tape = None;
+        }
 
         self.dropped(ui.ctx());
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
@@ -91,7 +106,8 @@ impl Gui {
         if self.model.quitting() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        if self.model.snapshot().status.state == State::Playing {
+        let tape_playing = self.model.deck().status().is_some_and(|s| s.playing());
+        if self.model.snapshot().status.state == State::Playing || tape_playing {
             ui.ctx().request_repaint_after(FRAME);
         } else if self.model.message().is_some() {
             ui.ctx().request_repaint_after(Duration::from_secs(1));
@@ -352,11 +368,15 @@ impl Gui {
                     View::Sampler => view.title().to_string(),
                 };
                 if ui
-                    .selectable_label(self.model.view() == view, title)
+                    .selectable_label(self.tape.is_none() && self.model.view() == view, title)
                     .clicked()
                 {
+                    self.tape = None;
                     self.perform(Action::ShowView(view));
                 }
+            }
+            if ui.selectable_label(self.tape.is_some(), "Tape").clicked() {
+                self.tape = Some(self.model.view());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.search_field(ui)
@@ -482,6 +502,12 @@ impl Gui {
     }
 
     fn view(&mut self, ui: &mut egui::Ui) {
+        if self.tape.is_some() {
+            for action in tape::show(&self.model, ui, &mut self.tape_tab) {
+                self.perform(action);
+            }
+            return;
+        }
         let view = self.model.view();
         let cursor = self.model.cursor(view);
         // A row the cursor moved to by a key, not a click, is scrolled into view.

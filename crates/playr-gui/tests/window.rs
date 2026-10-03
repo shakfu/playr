@@ -1427,3 +1427,125 @@ fn a_planned_slice_start_is_clicked_and_dragged_over_a_mark() {
     assert_eq!(selected(&harness), Some(moved));
     assert_eq!(model(&harness).snapshot().marks, marks, "the mark moved");
 }
+
+#[test]
+fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 504.0));
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = smallest(dir.path(), "1", false);
+    harness.get_by_label("Tape").click();
+    harness.run_steps(2);
+    for label in [
+        "Tape waveform",
+        "Voice 1 rate",
+        "Voice 3 end",
+        "Voice 3 wear",
+        "Write wear",
+        "Write end",
+    ] {
+        harness.get_by_label(label);
+    }
+    assert_fits(&harness, window, "the Tape tab");
+
+    // With no range set, Load range is refused as :tape load is.
+    harness.get_by_label("Load range").click();
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().model().message(),
+        Some(&Message::Tape(playr_app::tape::TapeMessage::NoRange))
+    );
+
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(2);
+    assert_eq!(harness.state().model().view(), View::Queue);
+    assert!(harness.query_by_label("Tape waveform").is_none());
+}
+
+#[test]
+fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
+    use playr_app::tape::{Deck, Extent};
+    use playr_looper::Window;
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = smallest(dir.path(), "1", false);
+    harness.state_mut().model_mut().set_deck(Deck::manual());
+    // 2 s to 6 s of the 12 s track at 8 kHz, with a second either side.
+    harness
+        .state_mut()
+        .model_mut()
+        .perform(playr_app::action::Action::SetRange(Some((
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(6),
+        ))));
+    harness.get_by_label("Tape").click();
+    harness.run_steps(2);
+    harness.get_by_label("Load range").click();
+    wait(&mut harness, |m| m.deck().loaded().is_some());
+    harness.run_steps(2);
+    let e = harness.state().model().deck().loaded().unwrap();
+    assert_eq!(
+        e,
+        Extent {
+            frames: 48_000,
+            range: Window::new(8000, 40_000),
+            rate: 8000,
+        }
+    );
+    let window =
+        |h: &Harness<'_, Gui>, i: usize| h.state().model().deck().state().unwrap().voices[i].window;
+    let rect = harness.get_by_label("Tape waveform").rect();
+    // The 12-point write strip, the 98-point waveform, then a 12-point lane a voice.
+    let strip = rect.top() + 6.0;
+    let wave = rect.top() + 12.0 + 49.0;
+    let lane = |i: usize| rect.top() + 12.0 + 98.0 + 12.0 * i as f32 + 6.0;
+    let at = |frame: usize| rect.left() + rect.width() * frame as f32 / 48_000.0;
+    let drag = |h: &mut Harness<'_, Gui>, y: f32, from: f32, to: f32| {
+        h.hover_at(egui::pos2(from, y));
+        h.run_steps(1);
+        h.drag_at(egui::pos2(from, y));
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.hover_at(egui::pos2(from + (to - from) * k as f32 / 4.0, y));
+            h.run_steps(1);
+        }
+        h.drop_at(egui::pos2(to, y));
+        h.run_steps(2);
+    };
+
+    // On the waveform, voice 1's end, from the range's end to a quarter in.
+    drag(&mut harness, wave, at(40_000), at(16_000));
+    let w = window(&harness, 0);
+    assert_eq!(w.start, 8000);
+    assert!(w.end.abs_diff(16_000) <= 100, "{w:?}");
+
+    // The whole window, later, by its middle.
+    let len = w.len();
+    drag(&mut harness, wave, at(12_000), at(28_000));
+    let w = window(&harness, 0);
+    assert_eq!(w.len(), len, "a moved window keeps its length");
+    assert!(w.start.abs_diff(24_000) <= 100, "{w:?}");
+
+    // An end dropped within reach of the range's end lands on it exactly.
+    drag(&mut harness, wave, at(w.end), at(40_150));
+    assert_eq!(window(&harness, 0).end, 40_000);
+
+    // Voice 2's lane selects it, and the waveform then edits its window.
+    drag(&mut harness, lane(1), at(8000), at(20_000));
+    assert!(window(&harness, 1).start.abs_diff(20_000) <= 100);
+    drag(&mut harness, wave, at(40_000), at(36_000));
+    assert!(window(&harness, 1).end.abs_diff(36_000) <= 100);
+    assert_eq!(window(&harness, 0).end, 40_000, "voice 1 stays");
+    // Its name in the grid selects a voice too.
+    harness.get_by_label("Voice 1").click();
+    harness.run_steps(2);
+    drag(&mut harness, wave, at(40_000), at(32_000));
+    assert!(window(&harness, 0).end.abs_diff(32_000) <= 100);
+
+    // The write window's start, in its strip; the voices' windows stay.
+    drag(&mut harness, strip, at(8000), at(24_000));
+    let ww = harness.state().model().deck().state().unwrap().write_window;
+    assert!(
+        ww.start.abs_diff(24_000) <= 100 && ww.end == 40_000,
+        "{ww:?}"
+    );
+    assert!(window(&harness, 1).start.abs_diff(20_000) <= 100);
+}

@@ -177,7 +177,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         (None, Some(path)) => playr_app::config::Config::load_for(Program::Terminal, &path, false),
         (None, None) => Ok(playr_app::config::Config::default()),
     };
-    let config = match config {
+    let mut config = match config {
         Ok(config) => config,
         Err(errors) => {
             let label = if plays { "playr" } else { "playr: warning" };
@@ -190,6 +190,10 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             playr_app::config::Config::default()
         }
     };
+    // In the settings, so the tape plays where the player does.
+    if cli.device.is_some() {
+        config.settings.device = cli.device.clone();
+    }
 
     if let Some(Command::Formats) = cli.command {
         print_formats();
@@ -343,7 +347,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     if !std::io::stdout().is_terminal() {
         return Err("playr needs a terminal: stdout is not one".into());
     }
-    let player = Player::new(cli.device.as_deref().or(config.settings.device.as_deref()))?;
+    let player = Player::new(config.settings.device.as_deref())?;
 
     // `ratatui::init` panics without a terminal; report it instead, since
     // running playr from a pipe or a service is an easy mistake to make.

@@ -21,6 +21,7 @@ pub mod meter;
 pub mod model;
 pub mod persist;
 pub mod sampler;
+pub mod tape;
 
 /// A part of the interface that scopes key bindings and commands. A terminal
 /// shows one at a time; a GUI maps its panels or focus onto them.

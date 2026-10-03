@@ -33,9 +33,9 @@ So the core:
 ## Crates
 
 ```
-playr         terminal frontend  ---+
-playr-gui     egui frontend      ---+--> playr-app --> playr-core
-playr-server  web and OSC        ---+
+playr         terminal frontend  ---+                 +-> playr-core
+playr-gui     egui frontend      ---+--> playr-app ---+
+playr-server  web and OSC        ---+                 +-> playr-looper
 playr-tauri   Tauri backend      -----------------> playr-core [serde]
 ```
 
@@ -45,7 +45,9 @@ The Rust frontends also depend on `playr-core` directly, for `Session` and the t
 
 - **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `analysis`, `gain`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
 
-- **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state) and `sampler` (the sampler view's state and column geometry). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
+- **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state), `sampler` (the sampler view's state and column geometry) and `tape` (the tape looper's actions and its stream). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
+
+- **playr-looper** (`crates/playr-looper`): the tape looper's engine, on interleaved `f32` at the device's rate. It depends on neither `playr-core` nor `playr-app`, decodes nothing and resamples nothing; `playr_app::tape` reads the range through `playr-core` and hands it a ready loop. `docs/dev/looper-engine.md` has the design.
 
 - **playr-gui** (`crates/playr-gui`): the desktop window, with egui. It wraps `Model` as the terminal does.
 

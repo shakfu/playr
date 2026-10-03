@@ -518,3 +518,94 @@ fn a_conversion_names_what_convertwithmoss_left_out_first() {
         format!("ConvertWithMoss: {dropped} (2 more) converted to /x/amen/opxy")
     );
 }
+
+#[test]
+fn tape_messages_are_worded() {
+    use playr_app::tape::{TapeAction, TapeMessage as T, VoiceSetting};
+    let home = std::env::home_dir().unwrap();
+    let file = home.join("samples/song-tape/song-tape-mix.wav");
+    for (message, words) in [
+        (T::Loading, "reading the tape".to_string()),
+        (
+            T::Loaded {
+                frames: 66_150,
+                rate: 44_100,
+            },
+            "tape loaded: 1.50 s; :tape play".into(),
+        ),
+        (T::Done(TapeAction::Play), "tape playing".into()),
+        (T::Done(TapeAction::Stop), "tape stopped".into()),
+        (
+            T::Done(TapeAction::Reset),
+            "tape reset to the loop as loaded".into(),
+        ),
+        (
+            T::Done(TapeAction::Voice(2, VoiceSetting::Rate(-0.5))),
+            "tape 2 rate -0.5".into(),
+        ),
+        (T::NoTape, "no tape loaded; :tape load first".into()),
+        (
+            T::NoRange,
+            "no range to load; set one, or :tape load N for a loop".into(),
+        ),
+        (T::EmptySlot(2), "loop 2 is empty".into()),
+        (
+            T::EmptyWindow,
+            "the window is empty; its start must come before its end".into(),
+        ),
+        (T::AlreadySaving, "the tape is already being saved".into()),
+        (T::Saving, "saving the tape".into()),
+        (
+            T::Saved(file.clone()),
+            "saved the tape to ~/samples/song-tape/song-tape-mix.wav".into(),
+        ),
+        (
+            T::Recording(file.clone()),
+            "recording the tape to ~/samples/song-tape/song-tape-mix.wav".into(),
+        ),
+        (
+            T::Recorded {
+                path: file.clone(),
+                frames: 88_200,
+                rate: 44_100,
+                dropped: 0,
+            },
+            "recorded 2.00 s to ~/samples/song-tape/song-tape-mix.wav".into(),
+        ),
+        (
+            T::Recorded {
+                path: file,
+                frames: 88_200,
+                rate: 44_100,
+                dropped: 3,
+            },
+            "recorded 2.00 s to ~/samples/song-tape/song-tape-mix.wav; 3 blocks lost, the disk was too slow".into(),
+        ),
+        (T::Failed("no device".into()), "tape: no device".into()),
+    ] {
+        assert_eq!(text(&Message::Tape(message)), words);
+    }
+}
+
+#[test]
+fn idle_tape_controls_say_why() {
+    use playr_app::message::idle_text;
+    use playr_app::tape::Idle;
+    for (idle, words) in [
+        (Idle::VoiceOff, "no effect: the voice is off"),
+        (Idle::WriteOff, "no effect: Write is off"),
+        (Idle::NoSend, "no effect: Send is 0"),
+        (Idle::Silent, "no effect: Level is 0"),
+        (Idle::Still, "no effect: Rate is 0, so the head never wraps"),
+        (
+            Idle::NoRoom,
+            "no effect: no audio either side of the window to crossfade into",
+        ),
+        (
+            Idle::Unchanging,
+            "nothing changes: Feedback is 1, Wear is 0 and every Send is 0",
+        ),
+    ] {
+        assert_eq!(idle_text(idle), words);
+    }
+}

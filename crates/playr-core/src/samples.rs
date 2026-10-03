@@ -289,7 +289,7 @@ pub struct Plan {
 
 /// Frames `start..end` of the track at `path`, which counts frames at `rate`,
 /// interleaved, with the channel count. Fewer where the track ends first.
-pub(crate) fn read_frames(
+pub fn read_frames(
     path: &Path,
     rate: u32,
     start: u64,
@@ -800,7 +800,7 @@ fn sfz(stem: &str, slices: &[(u64, u64)], looped: bool) -> String {
 }
 
 /// The track's file name without its extension, safe as part of a file name.
-fn name_for(path: &Path) -> String {
+pub fn name_for(path: &Path) -> String {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy())
@@ -822,7 +822,7 @@ fn name_for(path: &Path) -> String {
 }
 
 /// `parent/name`, or `parent/name-2` and so on, whichever does not exist yet.
-fn unused_dir(parent: &Path, name: &str) -> Result<PathBuf, String> {
+pub fn unused_dir(parent: &Path, name: &str) -> Result<PathBuf, String> {
     for n in 1.. {
         let dir = match n {
             1 => parent.join(name),

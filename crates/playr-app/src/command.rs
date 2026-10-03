@@ -179,6 +179,11 @@ pub const COMMANDS: &[Command] = &[
     ),
     any("loop", "off", "stop looping"),
     any(
+        "tape",
+        "load|play|stop|save|...",
+        "the tape looper; :tape alone lists all",
+    ),
+    any(
         "map",
         "[VIEW] KEY COMMAND",
         "bind a key, in one view or in all",
@@ -581,6 +586,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         SetRange(Some((a, b))) => format!("range {} {}", time(a), time(b)),
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
+        Tape(t) => format!("tape {}", tape_line(t)),
         Convert(format, None) => format!("convert {format}"),
         Convert(format, Some(dir)) => format!("convert {format} {}", dir.display()),
         Theme(t) => format!("theme {}", t.name()),
@@ -610,6 +616,114 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         }
         Unmap { view: Some(v), key } => format!("unmap {} {key}", view_name(*v)),
         Unmap { view: None, key } => format!("unmap {key}"),
+    }
+}
+
+/// What `:tape` takes, as its usage says it.
+const TAPE_USAGE: &str = "usage: :tape load [N] | play | stop | reset | save | rec | \
+     write on|off | feedback F | wear W | window A B | \
+     V on|off | V rate R|window A B|level L|pan P|send S|wear W|fade MS";
+
+/// Parses what follows `:tape`. Voices count from 1; windows take a time or
+/// a percentage of the loop at each end.
+fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
+    use crate::tape::{TapeAction as T, VoiceSetting as V};
+    let usage = || TAPE_USAGE.to_string();
+    let value = |w: &str, what: &str, lo: f32, hi: f32| {
+        w.parse::<f32>()
+            .ok()
+            .filter(|v| (lo..=hi).contains(v))
+            .ok_or_else(|| format!("{what} is {} to {}", number(lo.into()), number(hi.into())))
+    };
+    let on = |w: &str| match w {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(usage()),
+    };
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    match words.as_slice() {
+        ["load"] => Ok(T::Load(None)),
+        ["load", n] => match n.parse::<u8>() {
+            Ok(n) if (1..=playr_core::session::LOOP_SLOTS).contains(&n) => Ok(T::Load(Some(n))),
+            _ => Err(format!("not a loop slot: {n}")),
+        },
+        ["play"] => Ok(T::Play),
+        ["stop"] => Ok(T::Stop),
+        ["reset"] => Ok(T::Reset),
+        ["save"] => Ok(T::Save),
+        ["rec"] => Ok(T::Record),
+        ["write", w] => on(w).map(T::Write),
+        ["feedback", v] => value(v, "feedback", 0.0, 1.0).map(T::Feedback),
+        ["wear", v] => value(v, "wear", 0.0, 1.0).map(T::Wear),
+        ["window", a, b] => Ok(T::WriteWindow(tape_pos(a)?, tape_pos(b)?)),
+        [n, setting @ ..] if n.parse::<u8>().is_ok() => {
+            let n: u8 = n.parse().expect("checked");
+            if !(1..=playr_looper::VOICES as u8).contains(&n) {
+                return Err(format!("voices are 1 to {}", playr_looper::VOICES));
+            }
+            let s = match setting {
+                [w] => V::On(on(w)?),
+                ["rate", r] => V::Rate(value(r, "rate", -4.0, 4.0)?),
+                ["window", a, b] => V::Window(tape_pos(a)?, tape_pos(b)?),
+                ["level", v] => V::Level(value(v, "level", 0.0, 1.0)?),
+                ["pan", v] => V::Pan(value(v, "pan", -1.0, 1.0)?),
+                ["send", v] => V::Send(value(v, "send", 0.0, 1.0)?),
+                ["wear", v] => V::Wear(value(v, "wear", 0.0, 1.0)?),
+                ["fade", ms] => V::Fade(value(ms, "fade", 0.0, 1000.0)?),
+                _ => return Err(usage()),
+            };
+            Ok(T::Voice(n, s))
+        }
+        _ => Err(usage()),
+    }
+}
+
+/// `25%` of the loop's range, or a time into it: `1.5`, `0:02`. Below 0% or
+/// past 100% reaches into the handles either side.
+fn tape_pos(word: &str) -> Result<crate::tape::Pos, String> {
+    use crate::tape::Pos;
+    match word.strip_suffix('%') {
+        Some(p) => p
+            .parse::<f32>()
+            .ok()
+            .filter(|p| (-100.0..=200.0).contains(p))
+            .map(Pos::Percent)
+            .ok_or_else(|| format!("not a percentage: {word}")),
+        None => parse_time(word).map(Pos::Time),
+    }
+}
+
+/// What follows `tape ` in the command line for `t`.
+fn tape_line(t: &crate::tape::TapeAction) -> String {
+    use crate::tape::{Pos, TapeAction as T, VoiceSetting as V};
+    let n = |v: &f32| number(f64::from(*v));
+    let pos = |p: &Pos| match p {
+        Pos::Percent(p) => format!("{}%", n(p)),
+        Pos::Time(d) => number(d.as_secs_f64()),
+    };
+    let on = |b: &bool| if *b { "on" } else { "off" };
+    match t {
+        T::Load(None) => "load".into(),
+        T::Load(Some(slot)) => format!("load {slot}"),
+        T::Play => "play".into(),
+        T::Stop => "stop".into(),
+        T::Reset => "reset".into(),
+        T::Save => "save".into(),
+        T::Record => "rec".into(),
+        T::Write(b) => format!("write {}", on(b)),
+        T::WriteWindow(a, b) => format!("window {} {}", pos(a), pos(b)),
+        T::Feedback(v) => format!("feedback {}", n(v)),
+        T::Wear(v) => format!("wear {}", n(v)),
+        T::Voice(i, s) => match s {
+            V::On(b) => format!("{i} {}", on(b)),
+            V::Rate(v) => format!("{i} rate {}", n(v)),
+            V::Window(a, b) => format!("{i} window {} {}", pos(a), pos(b)),
+            V::Level(v) => format!("{i} level {}", n(v)),
+            V::Pan(v) => format!("{i} pan {}", n(v)),
+            V::Send(v) => format!("{i} send {}", n(v)),
+            V::Wear(v) => format!("{i} wear {}", n(v)),
+            V::Fade(v) => format!("{i} fade {}", n(v)),
+        },
     }
 }
 
@@ -1026,6 +1140,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
                 }
             }
         },
+        "tape" => tape(rest).map(Action::Tape),
         "loops" => match rest {
             "clear" => Ok(Action::ClearLoops),
             _ => Err(usage()),

@@ -21,6 +21,7 @@ opus = ["playr-core/opus"]
 [dependencies]
 playr-core.workspace = true
 playr-app.workspace = true
+playr-looper.workspace = true
 eframe = "0.36.2"
 egui_extras = "0.36.2"
 clap = { version = "4.6", features = ["derive"] }

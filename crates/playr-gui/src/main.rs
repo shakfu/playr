@@ -105,11 +105,15 @@ fn start(cli: Cli) -> Result<Start, Vec<String>> {
         Err(e) => return Err(fail(&e)),
     }
     .map_err(|e| fail(&e))?;
-    let config = match (&cli.settings, config::default_path()) {
+    let mut config = match (&cli.settings, config::default_path()) {
         (Some(path), _) => Config::load_for(Program::Gui, path, true),
         (None, Some(path)) => Config::load_for(Program::Gui, &path, false),
         (None, None) => Ok(Config::default()),
     }?;
+    // In the settings, so the tape plays where the player does.
+    if cli.device.is_some() {
+        config.settings.device = cli.device.clone();
+    }
     let mut tracks = Vec::new();
     if !cli.paths.is_empty() {
         let found = scan::playable(&cli.paths, |key| {
@@ -122,8 +126,7 @@ fn start(cli: Cli) -> Result<Start, Vec<String>> {
         }
         tracks = found.tracks;
     }
-    let player = Player::new(cli.device.as_deref().or(config.settings.device.as_deref()))
-        .map_err(|e| fail(&e))?;
+    let player = Player::new(config.settings.device.as_deref()).map_err(|e| fail(&e))?;
     Ok(Start {
         instance: Some(instance),
         conn,

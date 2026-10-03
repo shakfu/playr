@@ -1817,6 +1817,19 @@ impl Session {
         self.reload();
     }
 
+    /// Adds the audio file at `path` to the library, as a scan would, without
+    /// recording its directory as a root.
+    pub fn add_to_library(&mut self, path: &Path) -> Result<(), String> {
+        let path = path
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let track = scan::read_track(&path)
+            .ok_or_else(|| format!("{}: not a readable audio file", path.display()))?;
+        db::upsert(&self.conn, &track).map_err(|e| e.to_string())?;
+        self.reload();
+        Ok(())
+    }
+
     /// Whether `dir` can be pruned, or every recorded root when `None`, for a
     /// frontend to refuse before it asks.
     pub fn check_prune(&self, dir: Option<&Path>) -> Result<(), Refusal> {

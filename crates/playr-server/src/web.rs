@@ -27,7 +27,7 @@ pub const VIEWS: [View; 4] = [View::Library, View::Queue, View::Selection, View:
 
 /// Whether the page may perform `action`. Not quitting, which would stop the
 /// server; not a path from the page, which could name any file; not changing
-/// the keys, which the page reads once; and nothing of the sampler.
+/// the keys, which the page reads once; and nothing of the sampler or tape.
 /// `:rescan` is allowed: it only covers directories already recorded by a scan.
 ///
 /// Every variant is named, so a new action does not compile until it is
@@ -70,7 +70,9 @@ pub fn allowed(action: &Action) -> bool {
         | PickEdge(_)
         | WriteSlices
         | DiscardSlices
-        | Convert(..) => false,
+        | Convert(..)
+        // Not in the first version: it would play on the server's device.
+        | Tape(_) => false,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection

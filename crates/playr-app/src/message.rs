@@ -115,6 +115,7 @@ pub enum Message {
     StopIn(Option<Duration>),
     /// The sleep timer ran out and stopped playback.
     Slept,
+    Tape(crate::tape::TapeMessage),
 }
 
 impl From<Notice> for Message {
@@ -190,6 +191,7 @@ pub fn text(message: &Message) -> String {
         Message::StopIn(Some(d)) => format!("stopping in {}", fmt_time(*d)),
         Message::StopIn(None) => "sleep timer off".into(),
         Message::Slept => "sleep timer ran out; stopped".into(),
+        Message::Tape(m) => tape_text(m),
         Message::NoPlaylistUnderCursor => {
             "no playlist under the cursor in the playlists view".into()
         }
@@ -507,6 +509,65 @@ pub fn stopping(after: bool, left: Option<Duration>) -> Option<String> {
 }
 
 /// `path`, with the home directory shown as `~` to keep messages short.
+/// Why a tape control does nothing, as its tooltip says.
+pub fn idle_text(idle: crate::tape::Idle) -> &'static str {
+    use crate::tape::Idle;
+    match idle {
+        Idle::VoiceOff => "no effect: the voice is off",
+        Idle::WriteOff => "no effect: Write is off",
+        Idle::NoSend => "no effect: Send is 0",
+        Idle::Silent => "no effect: Level is 0",
+        Idle::Still => "no effect: Rate is 0, so the head never wraps",
+        Idle::NoRoom => "no effect: no audio either side of the window to crossfade into",
+        Idle::Unchanging => "nothing changes: Feedback is 1, Wear is 0 and every Send is 0",
+    }
+}
+
+fn tape_text(m: &crate::tape::TapeMessage) -> String {
+    use crate::tape::{TapeAction, TapeMessage};
+    let secs = |frames: f64, rate: u32| frames / f64::from(rate.max(1));
+    match m {
+        TapeMessage::Loading => "reading the tape".into(),
+        TapeMessage::Loaded { frames, rate } => {
+            format!(
+                "tape loaded: {:.2} s; :tape play",
+                secs(*frames as f64, *rate)
+            )
+        }
+        TapeMessage::Done(TapeAction::Play) => "tape playing".into(),
+        TapeMessage::Done(TapeAction::Stop) => "tape stopped".into(),
+        TapeMessage::Done(TapeAction::Reset) => "tape reset to the loop as loaded".into(),
+        TapeMessage::Done(a) => command::line(&Action::Tape(*a), None),
+        TapeMessage::NoTape => "no tape loaded; :tape load first".into(),
+        TapeMessage::NoRange => "no range to load; set one, or :tape load N for a loop".into(),
+        TapeMessage::EmptySlot(n) => format!("loop {n} is empty"),
+        TapeMessage::EmptyWindow => {
+            "the window is empty; its start must come before its end".into()
+        }
+        TapeMessage::AlreadySaving => "the tape is already being saved".into(),
+        TapeMessage::Saving => "saving the tape".into(),
+        TapeMessage::Saved(path) => format!("saved the tape to {}", home_as_tilde(path)),
+        TapeMessage::Recording(path) => format!("recording the tape to {}", home_as_tilde(path)),
+        TapeMessage::Recorded {
+            path,
+            frames,
+            rate,
+            dropped,
+        } => {
+            let done = format!(
+                "recorded {:.2} s to {}",
+                secs(*frames as f64, *rate),
+                home_as_tilde(path)
+            );
+            match dropped {
+                0 => done,
+                n => format!("{done}; {n} blocks lost, the disk was too slow"),
+            }
+        }
+        TapeMessage::Failed(e) => format!("tape: {e}"),
+    }
+}
+
 pub fn home_as_tilde(path: &Path) -> String {
     let home = std::env::home_dir();
     match home.and_then(|h| path.strip_prefix(h).ok().map(|rest| rest.to_path_buf())) {

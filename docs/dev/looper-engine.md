@@ -1,6 +1,6 @@
 # Looper engine
 
-Status: proposal, not built. The open questions are at the end.
+Status: built, unreleased. Where the build departs from this design, and how each open question was settled, is at the end.
 
 A loop made in the sampler plays through 3 voices at once. Each voice reads the same audio at its own rate and direction, over its own part of the loop. A write head records the voices back into the loop with feedback, so each pass changes the loop's content. The mix plays live, can be recorded, and the loop itself can be saved as a sample. The engine lives in a new crate, `playr-looper`; the window shows it in a Tape tab, and `:tape` commands reach every setting.
 
@@ -223,3 +223,55 @@ The cpal layer needs an audio device, which CI runners lack. It is tested by han
 6. **Voice count.** Fixed at 3, or 2 to 4.
 
 7. **Track playback during the tape.** Paused, as proposed, or kept playing on the same device. Keeping it needs the mixed design of question 1.
+
+## How the open questions were settled
+
+1. Own stream, as proposed.
+
+2. A free ratio, -4 to 4, in `:tape N rate` and on the Tape tab's slider. Semitones on the tab are not built.
+
+3. 32-bit float.
+
+4. Neither option: the Tape tab is the window's own, not a `View`. Keys and commands keep acting in the view under it, and a key that changes the view leaves it. `View::ALL`, the terminal and the server are unchanged.
+
+5. Accepted; no cap.
+
+6. Fixed at 3.
+
+7. Paused.
+
+## Where the build departs
+
+- **`Cmd` is not `Copy`.** `Load` carries a `Box`. The settings are a separate `Copy` enum, `Setting`, inside `Cmd::Set`.
+
+- **No `Cmd::Reset`.** `Handle::reset` sends `Load` with the copy it keeps, and `Load` puts every head at its window's start.
+
+- **More is smoothed.** Voice and write on/off, feedback and wear move over 20 ms as well. A feedback change otherwise leaves a step in the loop itself.
+
+- **Peak grid.** A column takes its new peak when the write head leaves it, not a reset when it enters, so the column does not dip while the head crosses it.
+
+- **Output is stereo.** Loops have 1 or 2 channels; a source with more keeps its first two. A mono loop pans with `sqrt(1 - p)`, `sqrt(1 + p)`. A stereo loop keeps the near channel and pans the far one into it with `cos`, `sin` of `p * pi/2`, so a hard pan keeps both channels' content; a balance law would drop one. Correlated channels panned hard sum to up to twice their level, 3 dB more than the mono law. Both are unity at the centre, so a voice at rate 1 plays its frames exactly.
+
+- **Wear per voice.** Each voice has a low-pass on its send, mapped as the write head's wear. It leaves what is heard alone and builds up each pass the voice records the loop again, so voices can wear the loop at different rates. The write head's wear stays: with every send at 0 it is the only way to darken the loop. `Setting::VoiceWear`, `:tape V wear W`.
+
+- **Pre-roll and post-roll.** A load reads up to 1 s of the track before the range and after it (`ROLL` in `playr_app::tape`), cut where the track ends. `Loop::range` marks the range in the buffer; every window starts as it, and Start and End count from it. Save loop writes the range alone, so the sample is still exactly the loop's length.
+
+- **Where a crossfade reads.** As designed, the leaving head fades out past its window's edge, which keeps each pass exactly one window long. The design read wrapped audio when a window met the buffer's edge, which for a whole-loop window is the new head's own audio, a +3 dB bump at every wrap. `crossfade` now chooses per wrap: past the edge when the post-roll there holds the fade; else the new head starts early in the pre-roll before the other edge, reaching it as the old head reaches the end, so the pass is still one window long; else the fade is cut to the longer of the two, to 0 when there is neither. Nothing is read beyond the buffer. An in-window crossfade was rejected: the overlap shortens each pass by the fade, which moves a loop cut to a bar off tempo.
+
+- **Crossfades are drawn** in the Tape tab's lanes where `crossfade` puts them, with the pre-roll and post-roll dimmed, so what a wrap reads beyond the window shows.
+
+- **Fade cap.** A fade is at most `window / (2 * max(|rate|, 1))` frames, so it ends before the next wrap at rates above 1.
+
+- **A head that has not moved** goes to its window's end when its rate turns negative, so a reversed voice starts at the end, not one frame into the start.
+
+- **Recording** takes blocks only while the tape plays. A snapshot is returned as aborted by a `Load` or a new write window.
+
+- **Returned memory.** The callback leaves a command in the ring until the return ring has room for what it returns, so it never has to drop one.
+
+- **Directories** are `<track>-tape`, `<track>-tape-2` and so on, from `samples::unused_dir`, not `<track>-tape-N` from 1. A save or a recording takes a new one each time.
+
+- **Library.** `Session::add_to_library` adds the one file without recording its directory as a root.
+
+- **A new load starts from the defaults.** It builds a new looper at the new loop's rate.
+
+- **Known limits.** A wrap during a crossfade, as when the rate rises mid-fade, drops the fading head, which can click. The first frame after every send reaches 0 can step by up to about 0.07, as the clipper is bypassed at once. Equal-power crossfades of correlated material can step up to 1.41 times the material's largest step (inference, not measured).

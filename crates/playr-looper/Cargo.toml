@@ -1,0 +1,20 @@
+[package]
+name = "playr-looper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A three-voice tape looper that rewrites its own loop, for playr"
+keywords = ["audio", "looper", "tape", "sampler"]
+categories = ["multimedia::audio"]
+
+[dependencies]
+cpal.workspace = true
+rtrb.workspace = true
+hound.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+hound.workspace = true

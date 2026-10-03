@@ -197,6 +197,8 @@ pub struct Model {
     /// each track change rather than every frame.
     bpm: Option<f32>,
     bpm_for: Option<PathBuf>,
+    /// The tape looper, which plays on its own stream.
+    tape: crate::tape::Deck,
 }
 
 impl Model {
@@ -282,6 +284,7 @@ impl Model {
             peak_hold: None,
             bpm: None,
             bpm_for: None,
+            tape: crate::tape::Deck::new(config.settings.device.clone()),
             snapshot: Snapshot::default(),
         };
         model.session.send(Cmd::SetVolume(values.volume));
@@ -352,6 +355,7 @@ impl Model {
             self.bpm_for = current.clone();
         }
         self.drain_events(current.as_ref());
+        crate::tape::poll(self);
         // After the events, so what the panel asks for acts on this frame.
         for action in self
             .media
@@ -663,6 +667,17 @@ impl Model {
 
     pub fn keymap(&self) -> &Keymap {
         &self.keys
+    }
+
+    /// The tape looper, to draw.
+    pub fn deck(&self) -> &crate::tape::Deck {
+        &self.tape
+    }
+
+    /// Plays the tape through `deck` from now on, as a test does through
+    /// [`crate::tape::Deck::manual`].
+    pub fn set_deck(&mut self, deck: crate::tape::Deck) {
+        self.tape = deck;
     }
 
     pub fn sampler(&self) -> &Sampler {
@@ -1197,6 +1212,10 @@ impl Model {
 }
 
 impl Frontend for Model {
+    fn tape(&mut self) -> &mut crate::tape::Deck {
+        &mut self.tape
+    }
+
     fn session(&self) -> &Session {
         &self.session
     }

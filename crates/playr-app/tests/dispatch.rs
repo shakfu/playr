@@ -33,6 +33,7 @@ struct Headless {
     plan: Option<Plan>,
     planning: bool,
     sampler: playr_app::sampler::Sampler,
+    tape: playr_app::tape::Deck,
 }
 
 fn slot(view: View) -> Option<usize> {
@@ -107,6 +108,9 @@ impl Frontend for Headless {
         self.plan.take()
     }
     fn sql_started(&mut self, _: JobId, _: playr_app::dispatch::SqlThen) {}
+    fn tape(&mut self) -> &mut playr_app::tape::Deck {
+        &mut self.tape
+    }
 }
 
 /// A headless frontend over a library file of tracks a, b and c, and
@@ -142,6 +146,7 @@ fn headless() -> (Headless, tempfile::TempDir) {
         plan: None,
         planning: false,
         sampler: Default::default(),
+        tape: playr_app::tape::Deck::manual(),
     };
     (frontend, dir)
 }
@@ -580,4 +585,253 @@ fn the_new_questions_say_what_they_will_do() {
         .question(),
         "take up amen.flac again at 1:35, with its queue of 3 tracks?"
     );
+}
+
+/// Runs `f`'s manual tape for `frames` stereo frames, then takes in what
+/// it finished.
+fn run_tape(f: &mut Headless, frames: usize) {
+    let mut out = vec![0.0; 512 * 2];
+    for _ in 0..frames.div_ceil(512) {
+        f.tape.process(&mut out);
+    }
+    playr_app::tape::poll(f);
+}
+
+/// Runs `f`'s tape until `done` holds of the last message.
+fn tape_until(f: &mut Headless, done: impl Fn(&Message) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !last(f).is_some_and(&done) {
+        assert!(std::time::Instant::now() < deadline, "{:?}", last(f));
+        run_tape(f, 512);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn the_tape_loads_the_range_and_saves_the_loop_and_the_mix_to_the_library() {
+    use playr_app::tape::{Pos, TapeAction as T, TapeMessage as M, VoiceSetting as V};
+    use playr_core::audio::State;
+    let tape = |f: &mut Headless, t| dispatch(Action::Tape(t), f);
+    let said = |f: &Headless, m: M| assert_eq!(last(f), Some(&Message::Tape(m)));
+
+    let (mut f, dir) = headless();
+    let samples = dir.path().join("samples");
+    f.session.set_samples_dir(samples.clone());
+    tape(&mut f, T::Play);
+    said(&f, M::NoTape);
+    tape(&mut f, T::Load(None));
+    assert_eq!(last(&f), Some(&Refusal::NothingPlaying.into()));
+
+    let file = dir.path().join("song.wav");
+    common::tone(&file, 8000, 2.0, -6.0);
+    let track = Track {
+        path: file.to_string_lossy().into(),
+        ..Default::default()
+    };
+    f.session.play(&[track], 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.playing_track().is_err() {
+        assert!(std::time::Instant::now() < deadline, "never played");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    tape(&mut f, T::Load(None));
+    said(&f, M::NoRange);
+    tape(&mut f, T::Load(Some(1)));
+    said(&f, M::EmptySlot(1));
+
+    f.sampler.range = Some(playr_app::sampler::Range {
+        path: file.clone(),
+        start: Some(4000),
+        end: Some(12_000),
+    });
+    tape(&mut f, T::Load(None));
+    said(&f, M::Loading);
+    tape_until(&mut f, |m| m != &Message::Tape(M::Loading));
+    said(
+        &f,
+        M::Loaded {
+            frames: 8000,
+            rate: 8000,
+        },
+    );
+    // The range, with what the track holds of a second either side as pre-roll
+    // and post-roll.
+    assert_eq!(
+        f.tape.loaded(),
+        Some(playr_app::tape::Extent {
+            frames: 16_000,
+            range: playr_looper::Window::new(4000, 12_000),
+            rate: 8000,
+        })
+    );
+
+    // Playing the tape pauses the player.
+    tape(&mut f, T::Play);
+    said(&f, M::Done(T::Play));
+    while f.session.player().status().state != State::Paused {
+        assert!(std::time::Instant::now() < deadline, "never paused");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    for t in [
+        T::Write(true),
+        T::Feedback(0.7),
+        T::Voice(2, V::On(true)),
+        T::Voice(2, V::Rate(-0.5)),
+        T::Voice(2, V::Send(0.5)),
+        T::Voice(2, V::Wear(0.4)),
+    ] {
+        tape(&mut f, t);
+        said(&f, M::Done(t));
+    }
+    // What the controls show follows what was sent.
+    let state = *f.tape.state().unwrap();
+    assert_eq!((state.voices[1].rate, state.voices[1].wear), (-0.5, 0.4));
+    assert!(state.playing && state.write && state.voices[1].on);
+    tape(
+        &mut f,
+        T::Voice(1, V::Window(Pos::Percent(50.0), Pos::Percent(25.0))),
+    );
+    said(&f, M::EmptyWindow);
+
+    tape(&mut f, T::Record);
+    let Some(Message::Tape(M::Recording(mix))) = last(&f).cloned() else {
+        panic!("{:?}", last(&f));
+    };
+    run_tape(&mut f, 4000);
+    tape(&mut f, T::Save);
+    tape(&mut f, T::Save);
+    said(&f, M::AlreadySaving);
+    tape_until(&mut f, |m| matches!(m, Message::Tape(M::Saved(_))));
+    let Some(Message::Tape(M::Saved(lp))) = last(&f).cloned() else {
+        unreachable!()
+    };
+    // Recording stops on its own when the callback does not acknowledge it;
+    // the manual tape here never does.
+    tape(&mut f, T::Record);
+    let Some(Message::Tape(M::Recorded { path, frames, .. })) = last(&f).cloned() else {
+        panic!("{:?}", last(&f));
+    };
+    assert_eq!(path, mix);
+
+    let wav = |p: &std::path::Path| {
+        let r = hound::WavReader::open(p).unwrap();
+        let spec = r.spec();
+        (spec.channels, spec.sample_rate, r.duration())
+    };
+    assert_eq!(wav(&lp), (2, 8000, 8000));
+    assert_eq!(wav(&mix), (2, 8000, frames as u32));
+    assert!(frames >= 4000, "{frames}");
+    for p in [&lp, &mix] {
+        assert!(p.starts_with(&samples), "{}", p.display());
+        let canonical = p.canonicalize().unwrap();
+        let canonical = canonical.to_string_lossy();
+        assert!(
+            f.session.tracks().iter().any(|t| t.path == canonical),
+            "{canonical} is not in the library"
+        );
+    }
+    assert_ne!(lp.parent(), mix.parent(), "each save has its own directory");
+}
+
+#[test]
+fn tape_windows_count_from_the_range_and_reach_into_the_rolls() {
+    use playr_app::tape::{settings, Extent, Pos, TapeAction as T, TapeMessage, VoiceSetting as V};
+    use playr_looper::{Setting, Window};
+    use std::time::Duration;
+    // A range of 8000 frames with 1000 frames of pre-roll and post-roll.
+    let e = Extent {
+        frames: 10_000,
+        range: Window::new(1000, 9000),
+        rate: 4000,
+    };
+    let at = |a, b| T::WriteWindow(a, b);
+    assert_eq!(
+        settings(at(Pos::Percent(25.0), Pos::Percent(100.0)), e),
+        Ok(vec![Setting::WriteWindow(Window::new(3000, 9000))])
+    );
+    assert_eq!(
+        settings(
+            T::Voice(
+                3,
+                V::Window(
+                    Pos::Time(Duration::from_millis(500)),
+                    Pos::Time(Duration::from_secs(9))
+                )
+            ),
+            e
+        ),
+        Ok(vec![Setting::Window(2, Window::new(3000, 10_000))])
+    );
+    assert_eq!(
+        settings(at(Pos::Percent(-12.5), Pos::Percent(150.0)), e),
+        Ok(vec![Setting::WriteWindow(Window::new(0, 10_000))])
+    );
+    assert_eq!(
+        settings(at(Pos::Percent(50.0), Pos::Percent(50.0)), e),
+        Err(TapeMessage::EmptyWindow)
+    );
+}
+
+#[test]
+fn tape_controls_say_when_they_have_no_effect() {
+    use playr_app::tape::{no_effect, Control as C, Extent, Idle, TapeState};
+    use playr_looper::Window;
+    let e = Extent {
+        frames: 10_000,
+        range: Window::new(1000, 9000),
+        rate: 8000,
+    };
+    let idle = |s: &TapeState, c| no_effect(s, e, c);
+    let mut s = TapeState::new(e.range);
+
+    // One voice, its wear set, writing on, nothing else changed.
+    s.voices[0].wear = 0.1;
+    s.write = true;
+    assert_eq!(idle(&s, C::Wear(0)), Some(Idle::NoSend));
+    assert_eq!(idle(&s, C::Write), Some(Idle::Unchanging));
+    s.feedback = 0.9;
+    assert_eq!(idle(&s, C::Write), None, "the loop now fades");
+    assert_eq!(
+        idle(&s, C::Wear(0)),
+        Some(Idle::NoSend),
+        "but does not darken"
+    );
+    s.voices[0].send = 0.5;
+    assert_eq!(idle(&s, C::Wear(0)), None);
+    assert_eq!(idle(&s, C::Send(0)), None);
+
+    // Write off idles what only writing uses.
+    s.write = false;
+    for c in [
+        C::Send(0),
+        C::Wear(0),
+        C::Feedback,
+        C::WriteWear,
+        C::WriteWindow,
+    ] {
+        assert_eq!(idle(&s, c), Some(Idle::WriteOff), "{c:?}");
+    }
+    assert_eq!(idle(&s, C::Write), None);
+
+    // A voice off idles all of its own controls first.
+    for c in [
+        C::Rate(1),
+        C::Level(1),
+        C::Pan(1),
+        C::Send(1),
+        C::Wear(1),
+        C::Fade(1),
+    ] {
+        assert_eq!(idle(&s, c), Some(Idle::VoiceOff), "{c:?}");
+    }
+    s.voices[0].level = 0.0;
+    assert_eq!(idle(&s, C::Pan(0)), Some(Idle::Silent));
+    s.voices[0].rate = 0.0;
+    assert_eq!(idle(&s, C::Fade(0)), Some(Idle::Still));
+    // A window over the whole buffer has nothing either side to fade into.
+    s.voices[0].rate = 1.0;
+    s.voices[0].window = Window::new(0, 10_000);
+    assert_eq!(idle(&s, C::Fade(0)), Some(Idle::NoRoom));
+    s.voices[0].window = e.range;
+    assert_eq!(idle(&s, C::Fade(0)), None);
 }

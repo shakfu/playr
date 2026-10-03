@@ -222,6 +222,9 @@ pub trait Frontend {
     /// passes its result to [`sql_done`] with `then`. A later statement
     /// replaces an earlier one still running.
     fn sql_started(&mut self, job: JobId, then: SqlThen);
+
+    /// The tape looper's state.
+    fn tape(&mut self) -> &mut crate::tape::Deck;
 }
 
 /// What to do with the tracks a `:sql` statement names, once it finishes.
@@ -828,6 +831,7 @@ fn act(action: Action, f: &mut impl Frontend) {
             Ok(_) => f.notify(Outcome::ConvertStarted { format }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
+        Action::Tape(t) => crate::tape::act(f, t),
         Action::DiscardSlices => {
             // Edits set by hand would otherwise be lost for good.
             let then = before(f).filter(|b| edited(&b.plan));

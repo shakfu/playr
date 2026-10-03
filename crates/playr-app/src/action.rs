@@ -195,6 +195,8 @@ pub enum Action {
     /// Converts the slices last written to this ConvertWithMoss format.
     /// With a directory, converts that export instead of the last.
     Convert(String, Option<PathBuf>),
+    /// Drive the tape looper.
+    Tape(crate::tape::TapeAction),
     /// Draw in these colours.
     Theme(crate::Theme),
     /// Show these columns, in this order, until playr exits.

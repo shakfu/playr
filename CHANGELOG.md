@@ -4,6 +4,20 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Added
+
+- A tape looper over the sampler's range. Three voices read one loop, each at its own rate (-4 to 4, negative in reverse), over its own window, with its own level, pan, crossfade, and a low-pass on what it sends. A write head records the sends back into the loop with feedback and a darkening low-pass of its own, so each pass changes the loop. The load keeps up to a second of the track either side of the range as pre-roll and post-roll, so a crossfade fades into the audio that followed the window and the loop repeats exactly one window long. On a stereo loop, pan folds the far channel into the near one rather than dropping it. The loop or the mix saves as a 32-bit float WAV under `samples/<track>-tape/` and is added to the library. It plays on its own output stream, on the player's device, and pauses the player. The terminal has the commands; the window adds a Tape tab with the waveform, the windows and heads, the selected voice's window dragged on the waveform by its edges or whole, and a row of controls per voice. The server has neither. Library API: the new crate `playr-looper`, with `Loop::with_range`, `Setting::VoiceWear`, `crossfade` and `fade_frames`; `Action::Tape`, `playr_app::tape` with `no_effect`, `message::idle_text`, `Frontend::tape`, `Model::deck`, `Session::add_to_library`; `samples::read_frames`, `unused_dir` and `name_for` are public.
+
+  ```
+  :tape load [N]        the range, or loop slot N, of the playing track
+  :tape play|stop|reset|save|rec
+  :tape 2 rate -0.5     :tape 3 window 25% 75%     :tape 2 send 0.6
+  :tape 2 wear 0.4
+  :tape write on        :tape feedback 0.85        :tape wear 0.3
+  ```
+
+  The design, and where the build departs from it, is in `docs/dev/looper-engine.md`.
+
 ### Changed
 
 - Undo brings back an edited plan that was discarded or replaced by a new cut, such as one from the window's Sensitivity slider. Before, the starts set by hand were lost with no way back. Making or replacing an unedited plan is still not a step: undo would put back a cut a later one replaced.

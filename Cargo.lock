@@ -3766,6 +3766,7 @@ dependencies = [
  "cpal",
  "hound",
  "playr-core",
+ "playr-looper",
  "rtrb",
  "rusqlite",
  "souvlaki",
@@ -3803,9 +3804,20 @@ dependencies = [
  "hound",
  "playr-app",
  "playr-core",
+ "playr-looper",
  "rfd",
  "rtrb",
  "rusqlite",
+ "tempfile",
+]
+
+[[package]]
+name = "playr-looper"
+version = "0.17.0"
+dependencies = [
+ "cpal",
+ "hound",
+ "rtrb",
  "tempfile",
 ]
 

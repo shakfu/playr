@@ -33,6 +33,8 @@ None of the three contact external services or download any metadata and images.
 
 - Each export also holds an `.sfz` kit and one WAV with a cue point at each slice; with the ConvertWithMoss extension, `:convert` turns an export, the last or any earlier one, into 16 sampler formats, among them MPC, SP-404MK2, OP-XY, Deluge, Logic's Sampler and Kontakt
 
+- Tape looper: three voices read the sampler's range at their own rates and directions, and a write head records them back into it with feedback, so the loop changes each pass; the loop or the mix saves as a sample
+
 - Spectrogram of the playing track in the sampler view, read with its waveform, in the terminal and the window
 
 - The sampler's region shows its peak, loudness in LUFS and stereo correlation
@@ -549,6 +551,28 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 - **Saved loops.** Each track keeps up to 8 loops, in the library beside its marks. `:loop N`, on F1 to F8, saves the range to slot N when it is empty; when it holds a loop, it makes that the range and loops it, from a pause or a stop too, and moves a loop already playing at once. `:loop N save`, on shift-F1 to F8, saves over a slot, `:loop N clear` empties it, and `:loops clear` empties them all, after asking. The title lists the slots saved, with `*` on the one the range is. The window has a numbered button for each: a click does what F1 to F8 do, shift-click saves over, and its menu clears it; Clear loops beside them clears them all. Some terminals send shift-F1 as F13; `:map` binds another key if so.
 
 The waveform glyphs are the view's only characters outside ASCII. Marks are placed at the playhead, or in the window at a shift-click.
+
+### Tape
+
+`:tape load` copies the sampler's range of the playing track into a loop, or `:tape load N` copies loop slot N. Three voices read it at once, each at its own rate and over its own window. A write head records what the voices send back into the loop, with feedback, so a reversed or half-speed voice is printed into it and every voice reads that on the next pass. The terminal has the commands; the window has a Tape tab with the same controls.
+
+| command | does |
+|-|-|
+| `:tape play`, `:tape stop` | play the tape, pausing the player, or stop it |
+| `:tape V on`, `:tape V off` | turn voice 1, 2 or 3 on or off; voice 1 starts on |
+| `:tape V rate R` | frames a frame, -4 to 4; negative plays in reverse |
+| `:tape V window A B` | the part of the loop the voice repeats |
+| `:tape V level L`, `pan P`, `send S` | what is heard of it, where, and what is recorded of it |
+| `:tape V wear W` | darken what the voice records, a little more each pass it records the loop again, 0 to 1 |
+| `:tape V fade MS` | the crossfade at each wrap, 0 to 1000 ms |
+| `:tape write on` | record the sends into the loop |
+| `:tape feedback F` | how much of the loop survives a pass, 0 to 1 |
+| `:tape wear W` | darken everything the write head records, each pass, 0 to 1 |
+| `:tape window A B` | the part of the loop that is rewritten |
+| `:tape reset` | the loop as loaded |
+| `:tape save`, `:tape rec` | save the loop, or start and stop recording the mix |
+
+The load also reads up to a second of the track before the range, the pre-roll, and after it, the post-roll, which the window draws dimmed. Windows start as the range and take a time from its start, `1.5`, or a part of it, `25%`; below 0% or past 100% reaches into the pre-roll or post-roll. At each wrap a voice crossfades, equal power over the fade time: the leaving head fades out into the audio that follows its window, or, where the post-roll is too short, the new head fades in from the pre-roll. Either way the loop repeats every window's length exactly, and a fade with no room either side is cut short. The lanes draw both curves where they read. In the window, the waveform shows the selected voice's window, chosen by clicking its name or its lane: drag an edge to move it, or between the edges to move the window whole. A drag in a voice's lane edits that voice. The write window has its own strip above the waveform and drags the same way. What the write head cannot change, outside its window or all of the loop while writing is off, is tinted and hatched, and labelled frozen in the strip: it plays as loaded, untouched by feedback and wear. A control that does nothing as the tape is set, such as a voice's Wear while its Send is 0, is dimmed, and its tooltip says why; it can still be set ahead. An edge dropped near the range's edge lands on it. On a stereo loop, pan keeps the near channel and folds the far one into it, so a hard pan keeps both; a mono loop pans with equal power. Writing is off until turned on, and with feedback at 1 and no sends it leaves the loop exactly as it was. A loop saves its range, without pre-roll or post-roll, as `samples/<track>-tape/<track>-tape-loop.wav` and a recording as `-mix.wav`, both 32-bit float, in a new directory each time, and both are added to the library. The tape plays on its own output stream on the player's device, which fails on a device held exclusively, such as an ALSA `hw:` device. Loading again starts from the default settings.
 
 ### Varispeed
 
