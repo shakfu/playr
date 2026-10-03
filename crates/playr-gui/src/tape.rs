@@ -1,5 +1,5 @@
 //! The Tape tab: the looper's loop, each voice's window and head, the write
-//! window and head, and a row of controls each. The terminal has the `:tape`
+//! window and head, and a strip of controls each. The terminal has the `:tape`
 //! commands only; see `docs/dev/looper-engine.md`.
 
 use eframe::egui;
@@ -21,8 +21,10 @@ const WAVE: f32 = 98.0;
 const LANE: f32 = 12.0;
 /// Points along each drawn crossfade curve.
 const CURVE: usize = 16;
-/// Narrow enough for every row to fit 800 points.
+/// The narrowest a slider gets, and what a strip keeps beside it: the
+/// headings and the value field.
 const SLIDER: f32 = 54.0;
+const BESIDE: f32 = 112.0;
 
 /// How near an edge, in points, a press grabs it, and a dragged edge or
 /// window snaps to the range's edges.
@@ -87,16 +89,16 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
                 actions.push(c.action.clone());
             }
         }
+        // Beside the buttons, so the strips fit the smallest window.
+        if frames.is_none() {
+            ui.weak(match deck.loading() {
+                true => "Reading the range.",
+                false => "Set a range in the sampler while a track plays, then Load range.",
+            });
+        }
     });
     waveform(ui, model, &state, extent, tab, &mut actions);
-    if frames.is_none() {
-        ui.weak(match deck.loading() {
-            true => "Reading the range.",
-            false => "Set a range in the sampler while a track plays, then Load range.",
-        });
-    }
     ui.add_enabled_ui(frames.is_some(), |ui| {
-        ui.spacing_mut().slider_width = SLIDER;
         rows(ui, &state, extent, tab, &mut actions);
     });
     actions
@@ -451,8 +453,8 @@ fn percent(w: Window, e: Extent) -> (f32, f32) {
     }
 }
 
-/// Two drag values for a window's start and end, in percent, each in its own
-/// cell of a grid row; the action on a change.
+/// Two drag values for a window's start and end, in percent, side by side;
+/// the action on a change.
 fn window(
     ui: &mut egui::Ui,
     w: Window,
@@ -481,7 +483,9 @@ fn window(
         });
         response.changed()
     };
-    let changed = drag(ui, &mut a, "start") | drag(ui, &mut b, "end");
+    let changed = ui
+        .horizontal(|ui| drag(ui, &mut a, "start") | drag(ui, &mut b, "end"))
+        .inner;
     changed.then_some((Pos::Percent(a), Pos::Percent(b)))
 }
 
@@ -543,12 +547,13 @@ fn slider(
     .then_some(v)
 }
 
-/// The voice grid's headings, with what each column does.
-const HEADINGS: [(&str, &str); 10] = [
-    ("", ""),
-    ("On", "plays the voice"),
-    ("Start", "where the voice's window starts, in % of the loop"),
-    ("End", "where the voice's window ends"),
+/// A voice strip's rows, with what each does. On sits by the name, to fit
+/// the smallest window.
+const VOICE_ROWS: [(&str, &str); 7] = [
+    (
+        "Window",
+        "where the voice's window starts and ends, in % of the loop",
+    ),
     ("Rate", "frames a frame; negative plays in reverse"),
     ("Level", "what is heard of the voice"),
     (
@@ -569,27 +574,24 @@ const HEADINGS: [(&str, &str); 10] = [
     ),
 ];
 
-/// The voices' rows, then the write head's, in one grid so its columns line
-/// up with theirs.
-/// The write row's headings, in the voices' columns.
-const WRITE_HEADINGS: [(&str, &str); 9] = [
-    ("", ""),
-    ("On", "records the voices' sends into the loop"),
-    ("Start", "where the part of the loop that is rewritten starts"),
-    ("End", "where it ends"),
+/// The write strip's rows.
+const WRITE_ROWS: [(&str, &str); 3] = [
+    (
+        "Window",
+        "where the part of the loop that is rewritten starts and ends",
+    ),
     (
         "Feedback",
         "how much of what the loop held survives each pass of the write head; 0 replaces it with the sends",
     ),
-    ("", ""),
-    ("", ""),
-    ("", ""),
     (
         "Wear",
         "a low-pass on everything the write head records; it darkens the loop each pass",
     ),
 ];
 
+/// A strip per voice, then the write head's, side by side; a parameter adds
+/// a row, not a column.
 fn rows(
     ui: &mut egui::Ui,
     state: &TapeState,
@@ -597,101 +599,155 @@ fn rows(
     tab: &mut State,
     actions: &mut Vec<Action>,
 ) {
-    egui::Grid::new("tape rows")
-        .num_columns(10)
-        .spacing([8.0, 4.0])
-        .show(ui, |ui| {
-            for (heading, tip) in HEADINGS {
-                ui.weak(heading).on_hover_text(tip);
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.columns(VOICES + 1, |columns| {
+            let Some((write, voices)) = columns.split_last_mut() else {
+                return;
+            };
+            for (i, ui) in voices.iter_mut().enumerate() {
+                voice(ui, state, e, i, tab, actions);
             }
-            ui.end_row();
-            for (i, v) in state.voices.iter().enumerate() {
-                let n = i as u8 + 1;
-                let name = format!("Voice {n}");
-                let why = |c| no_effect(state, e, c).map(idle_text);
-                let mut set = |s| actions.push(Action::Tape(T::Voice(n, s)));
-                if ui
-                    .selectable_label(tab.selected == i, &name)
-                    .on_hover_text("show and edit this voice's window on the waveform")
-                    .clicked()
-                {
-                    tab.selected = i;
-                }
-                let mut on = v.on;
-                if ui.checkbox(&mut on, "").on_hover_text(&name).changed() {
-                    set(V::On(on));
-                }
-                if let Some((a, b)) = window(ui, v.window, e, &name, why(C::Window(i))) {
-                    set(V::Window(a, b));
-                }
-                let rate = format!("{name} rate");
-                if let Some(x) = slider(ui, v.rate, -4.0..=4.0, rate, why(C::Rate(i))) {
-                    set(V::Rate(x));
-                }
-                let level = format!("{name} level");
-                if let Some(x) = slider(ui, v.level, 0.0..=1.0, level, why(C::Level(i))) {
-                    set(V::Level(x));
-                }
-                let pan = format!("{name} pan");
-                if let Some(x) = slider(ui, v.pan, -1.0..=1.0, pan, why(C::Pan(i))) {
-                    set(V::Pan(x));
-                }
-                let send = format!("{name} send");
-                if let Some(x) = slider(ui, v.send, 0.0..=1.0, send, why(C::Send(i))) {
-                    set(V::Send(x));
-                }
-                let wear = format!("{name} wear");
-                if let Some(x) = slider(ui, v.wear, 0.0..=1.0, wear, why(C::Wear(i))) {
-                    set(V::Wear(x));
-                }
-                let mut fade = v.fade;
-                let response = dimmed(ui, why(C::Fade(i)), |ui| {
-                    ui.add(egui::DragValue::new(&mut fade).range(0.0..=1000.0))
-                });
-                response.widget_info(|| {
-                    egui::WidgetInfo::labeled(
-                        egui::WidgetType::DragValue,
-                        true,
-                        format!("{name} fade"),
-                    )
-                });
-                if response.changed() {
-                    set(V::Fade(fade));
-                }
-                ui.end_row();
-            }
-            ui.end_row();
-            for (heading, tip) in WRITE_HEADINGS {
-                ui.weak(heading).on_hover_text(tip);
-            }
-            ui.end_row();
-            write_row(ui, state, e, actions);
-            ui.end_row();
+            write_strip(write, state, e, actions);
         });
+    });
 }
 
-/// The write head's row: its window, then Feedback under Rate and Wear
-/// under the voices' Wear.
-fn write_row(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Vec<Action>) {
+/// A grid of heading and control rows, with sliders as wide as the column
+/// leaves them.
+fn strip(ui: &mut egui::Ui, id: impl egui::AsIdSalt, add: impl FnOnce(&mut egui::Ui)) {
+    ui.spacing_mut().slider_width = (ui.available_width() - BESIDE).max(SLIDER);
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, add);
+}
+
+/// A heading, with what it does on hover, and the control `add` puts beside it.
+fn row<R>(
+    ui: &mut egui::Ui,
+    (heading, tip): (&str, &str),
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.weak(heading).on_hover_text(tip);
+    let r = add(ui);
+    ui.end_row();
+    r
+}
+
+/// Voice `i`'s strip: its name, which selects it, then its controls.
+fn voice(
+    ui: &mut egui::Ui,
+    state: &TapeState,
+    e: Extent,
+    i: usize,
+    tab: &mut State,
+    actions: &mut Vec<Action>,
+) {
+    let v = &state.voices[i];
+    let n = i as u8 + 1;
+    let name = format!("Voice {n}");
     let why = |c| no_effect(state, e, c).map(idle_text);
-    ui.label("Write");
-    let mut write = state.write;
-    let tick = dimmed(ui, why(C::Write), |ui| ui.checkbox(&mut write, ""));
-    if tick.on_hover_text("Write").changed() {
-        actions.push(Action::Tape(T::Write(write)));
-    }
-    if let Some((a, b)) = window(ui, state.write_window, e, "Write", why(C::WriteWindow)) {
-        actions.push(Action::Tape(T::WriteWindow(a, b)));
-    }
-    let feedback = "Write feedback".to_string();
-    if let Some(x) = slider(ui, state.feedback, 0.0..=1.0, feedback, why(C::Feedback)) {
-        actions.push(Action::Tape(T::Feedback(x)));
-    }
-    for _ in 0..3 {
-        ui.label("");
-    }
-    let wear = "Write wear".to_string();
-    if let Some(x) = slider(ui, state.wear, 0.0..=1.0, wear, why(C::WriteWear)) {
-        actions.push(Action::Tape(T::Wear(x)));
-    }
+    let mut set = |s| actions.push(Action::Tape(T::Voice(n, s)));
+    ui.horizontal(|ui| {
+        let mut on = v.on;
+        let tick = ui.checkbox(&mut on, "").on_hover_text("plays the voice");
+        let label = format!("{name} on");
+        tick.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, &label)
+        });
+        if tick.changed() {
+            set(V::On(on));
+        }
+        if ui
+            .selectable_label(tab.selected == i, &name)
+            .on_hover_text("show and edit this voice's window on the waveform")
+            .clicked()
+        {
+            tab.selected = i;
+        }
+    });
+    let [window_row, rate, level, pan, send, wear, fade] = VOICE_ROWS;
+    strip(ui, ("tape voice", i), |ui| {
+        let w = row(ui, window_row, |ui| {
+            window(ui, v.window, e, &name, why(C::Window(i)))
+        });
+        if let Some((a, b)) = w {
+            set(V::Window(a, b));
+        }
+        let sliders = [
+            (
+                rate,
+                v.rate,
+                -4.0..=4.0,
+                C::Rate(i),
+                V::Rate as fn(f32) -> V,
+            ),
+            (level, v.level, 0.0..=1.0, C::Level(i), V::Level),
+            (pan, v.pan, -1.0..=1.0, C::Pan(i), V::Pan),
+            (send, v.send, 0.0..=1.0, C::Send(i), V::Send),
+            (wear, v.wear, 0.0..=1.0, C::Wear(i), V::Wear),
+        ];
+        for (heading, value, range, control, setting) in sliders {
+            let label = format!("{name} {}", heading.0.to_lowercase());
+            if let Some(x) = row(ui, heading, |ui| {
+                slider(ui, value, range, label, why(control))
+            }) {
+                set(setting(x));
+            }
+        }
+        let mut value = v.fade;
+        let response = row(ui, fade, |ui| {
+            dimmed(ui, why(C::Fade(i)), |ui| {
+                ui.add(egui::DragValue::new(&mut value).range(0.0..=1000.0))
+            })
+        });
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, format!("{name} fade"))
+        });
+        if response.changed() {
+            set(V::Fade(value));
+        }
+    });
+}
+
+/// The write head's strip: its own controls, as the voices' do not apply.
+fn write_strip(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Vec<Action>) {
+    let why = |c| no_effect(state, e, c).map(idle_text);
+    let mut push = |t| actions.push(Action::Tape(t));
+    ui.horizontal(|ui| {
+        let mut write = state.write;
+        let tick = dimmed(ui, why(C::Write), |ui| ui.checkbox(&mut write, ""));
+        let tick = match why(C::Write) {
+            Some(_) => tick,
+            None => tick.on_hover_text("records the voices' sends into the loop"),
+        };
+        tick.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, write, "Write on")
+        });
+        if tick.changed() {
+            push(T::Write(write));
+        }
+        ui.label("Write");
+    });
+    let [window_row, feedback, wear] = WRITE_ROWS;
+    strip(ui, "tape write", |ui| {
+        let w = row(ui, window_row, |ui| {
+            window(ui, state.write_window, e, "Write", why(C::WriteWindow))
+        });
+        if let Some((a, b)) = w {
+            push(T::WriteWindow(a, b));
+        }
+        let label = "Write feedback".to_string();
+        if let Some(x) = row(ui, feedback, |ui| {
+            slider(ui, state.feedback, 0.0..=1.0, label, why(C::Feedback))
+        }) {
+            push(T::Feedback(x));
+        }
+        let label = "Write wear".to_string();
+        if let Some(x) = row(ui, wear, |ui| {
+            slider(ui, state.wear, 0.0..=1.0, label, why(C::WriteWear))
+        }) {
+            push(T::Wear(x));
+        }
+    });
 }

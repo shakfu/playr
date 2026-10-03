@@ -258,6 +258,8 @@ The cpal layer needs an audio device, which CI runners lack. It is tested by han
 
 - **Where a crossfade reads.** As designed, the leaving head fades out past its window's edge, which keeps each pass exactly one window long. The design read wrapped audio when a window met the buffer's edge, which for a whole-loop window is the new head's own audio, a +3 dB bump at every wrap. `crossfade` now chooses per wrap: past the edge when the post-roll there holds the fade; else the new head starts early in the pre-roll before the other edge, reaching it as the old head reaches the end, so the pass is still one window long; else the fade is cut to the longer of the two, to 0 when there is neither. Nothing is read beyond the buffer. An in-window crossfade was rejected: the overlap shortens each pass by the fade, which moves a loop cut to a bar off tempo.
 
+- **A strip per voice, not a row.** The voices and the write head each have a column of controls, side by side. A row per voice used 800 points with 5 sliders at 54 points; a strip adds a parameter as a row, and its sliders take the column's width. At 800 by 504 the strips leave less than one row spare, so a further parameter needs a taller minimum window, or a scroll and a fit test that allows one.
+
 - **Crossfades are drawn** in the Tape tab's lanes where `crossfade` puts them, with the pre-roll and post-roll dimmed, so what a wrap reads beyond the window shows.
 
 - **Fade cap.** A fade is at most `window / (2 * max(|rate|, 1))` frames, so it ends before the next wrap at rates above 1.

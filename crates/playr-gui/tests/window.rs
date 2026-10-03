@@ -1442,6 +1442,9 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
         "Voice 3 wear",
         "Write wear",
         "Write end",
+        "Voice 2 on",
+        "Voice 3 fade",
+        "Write on",
     ] {
         harness.get_by_label(label);
     }
