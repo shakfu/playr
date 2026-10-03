@@ -500,3 +500,27 @@ fn an_album_is_its_album_and_artist_or_its_directory() {
     );
     assert_eq!(key(&t(None, Some("X"), "/1/a.flac")), None);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_path_through_a_link_selects_tracks_stored_by_either_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("a.wav"), b"").unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let stored = |p: &Path| Track {
+        path: p.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    // Stored by the link, asked for by the link: the resolved path alone missed it.
+    let by_link = [stored(&link.join("a.wav"))];
+    let paths = [link.join("a.wav")];
+    let (chosen, missing) = analysis::select(&by_link, &paths);
+    assert_eq!((chosen.len(), missing.len()), (1, 0));
+    // Stored by the real path, asked for by the link.
+    let by_real = [stored(&real.canonicalize().unwrap().join("a.wav"))];
+    let (chosen, missing) = analysis::select(&by_real, &paths);
+    assert_eq!((chosen.len(), missing.len()), (1, 0));
+}

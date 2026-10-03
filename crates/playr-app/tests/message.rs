@@ -21,6 +21,7 @@ fn outcomes_are_worded() {
     let home = std::env::home_dir().unwrap();
     for (outcome, words) in [
         (Outcome::AddedToSelection, "added to selection"),
+        (Outcome::FindingTempo, "analysing the track for its tempo"),
         (Outcome::AlreadyInSelection, "already in selection"),
         (Outcome::RemovedFromSelection, "removed from selection"),
         (
@@ -320,6 +321,10 @@ fn refusals_are_worded() {
             "already marked at 0:00",
         ),
         (Refusal::NoMarks, "no marks in this track"),
+        (
+            Refusal::NoTempo,
+            "no clear pulse in this track to cut beats at",
+        ),
         (Refusal::NoLaterMark, "no later mark"),
         (Refusal::NoEarlierMark, "no earlier mark"),
         (Refusal::NoLibraryPath, "no library file to scan into"),

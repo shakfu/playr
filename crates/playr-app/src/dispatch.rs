@@ -1859,7 +1859,56 @@ fn slice(f: &mut impl Frontend, slicing: Slicing) {
         Slicing::Marks => Cut::Marks,
         Slicing::Equal(n) => Cut::Equal(n),
         Slicing::Onsets(s) => Cut::Onsets(s.unwrap_or(f.onset_sensitivity())),
+        Slicing::Beats(n) => match beats(f, n) {
+            Some(cut) => cut,
+            None => return,
+        },
     };
+    cut_with(f, cut, range);
+}
+
+/// The cut every `n` beats at the playing track's tempo. A track with none
+/// is analysed first and cut by [`tempo_found`] when that lands.
+fn beats(f: &mut impl Frontend, n: u32) -> Option<Cut> {
+    let path = match f.session().playing_track() {
+        Ok((path, _)) => path,
+        Err(refusal) => {
+            f.notify(refusal.into());
+            return None;
+        }
+    };
+    if let Some(bpm) = f.session().bpm(&path) {
+        return Some(Cut::Beats(n, bpm));
+    }
+    match f.session_mut().analyze(Some(path.clone())) {
+        Ok(job) => {
+            f.sampler_mut().tempo_for = Some((job, path, n));
+            f.notify(Outcome::FindingTempo.into());
+        }
+        Err(refusal) => f.notify(refusal.into()),
+    }
+    None
+}
+
+/// Cuts every `n` beats once the analysis [`beats`] started has landed, if
+/// `path` still plays. Analysed and still without a tempo, it is refused.
+pub(crate) fn tempo_found(f: &mut impl Frontend, path: &std::path::Path, n: u32) {
+    let playing = f.session().playing_track().ok().map(|(p, _)| p);
+    if playing.as_deref() != Some(path) {
+        return;
+    }
+    let Some(bpm) = f.session().bpm(path) else {
+        return f.notify(Refusal::NoTempo.into());
+    };
+    let range = {
+        let status = f.session().player().status();
+        f.sampler().range(status.current())
+    };
+    cut_with(f, Cut::Beats(n, bpm), range);
+}
+
+/// Plans `cut` in the sampler, or exports it from any other view.
+fn cut_with(f: &mut impl Frontend, cut: Cut, range: Option<(u64, u64)>) {
     if f.view() == View::Sampler {
         // A slider being dragged asks every frame; a sensitivity that comes
         // while a plan is being made waits for it, and only the last is planned.

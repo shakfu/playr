@@ -1109,6 +1109,105 @@ fn sampler_model(dir: &Path, file: &Path) -> Model {
     model
 }
 
+/// A model in the sampler, playing `file`, which is in the library file at
+/// `dir/library.db` as it is on disk, so an analysis of it is current.
+fn analysable(dir: &Path, file: &Path, tagged: Option<f32>) -> Model {
+    use playr_app::sampler::Wave;
+    let library = dir.join("library.db");
+    let conn = db::open(&library).unwrap();
+    let mut t = track(file.to_str().unwrap());
+    let meta = std::fs::metadata(file).unwrap();
+    t.size = meta.len() as i64;
+    t.mtime = meta
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+    db::upsert(&conn, &t).unwrap();
+    if let Some(bpm) = tagged {
+        let a = playr_core::analysis::Analysis {
+            bpm_tag: Some(bpm),
+            ..Default::default()
+        };
+        db::analysis::put(&conn, &t, a).unwrap();
+    }
+    let mut model = Model::new(conn, common::fake_player().0, vec![t], Config::default());
+    model.session_mut().set_library_path(library);
+    model.perform(Action::ShowView(View::Sampler));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
+        assert!(Instant::now() < deadline, "no waveform");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model
+}
+
+/// Refreshes `model` until `done` holds, for at most 30 s: an analysis
+/// decodes the whole file.
+fn until(model: &mut Model, done: impl Fn(&Model) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !done(model) {
+        assert!(Instant::now() < deadline, "{:?}", model.message());
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn slicing_at_beats_takes_the_track_s_tempo() {
+    use playr_app::action::Slicing;
+    use playr_core::samples::Cut;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.wav");
+    common::silence(&file, 8000, 10.0);
+    // Tagged at 120 BPM: 4 beats is 2 s, 16,000 frames at 8 kHz.
+    let mut model = analysable(dir.path(), &file, Some(120.0));
+    model.perform(Action::Slice(Slicing::Beats(4)));
+    until(&mut model, |m| m.sampler().pending.is_some());
+    let plan = model.sampler().pending.as_ref().unwrap();
+    assert_eq!(plan.job.cut, Cut::Beats(4, 120.0));
+    assert_eq!(
+        plan.spans.iter().map(|s| s.0).collect::<Vec<_>>(),
+        [0, 16_000, 32_000, 48_000, 64_000]
+    );
+}
+
+#[test]
+fn slicing_at_beats_analyses_a_track_with_no_tempo_first() {
+    use playr_app::action::Slicing;
+    use playr_core::samples::Cut;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("clicks.wav");
+    common::clicks(&file, 22_050, 120.0, 12.0);
+    let mut model = analysable(dir.path(), &file, None);
+    model.perform(Action::Slice(Slicing::Beats(4)));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::FindingTempo)))
+    );
+    until(&mut model, |m| m.sampler().pending.is_some());
+    let Cut::Beats(4, bpm) = model.sampler().pending.as_ref().unwrap().job.cut else {
+        panic!("not cut at beats");
+    };
+    assert!((bpm - 120.0).abs() < 1.0, "{bpm}");
+    assert_eq!(model.session().bpm(&file), Some(bpm), "the tempo is kept");
+}
+
+#[test]
+fn slicing_at_beats_refuses_a_track_analysed_with_no_pulse() {
+    use playr_app::action::Slicing;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = analysable(dir.path(), &file, None);
+    model.perform(Action::Slice(Slicing::Beats(4)));
+    let refused = Message::Core(Notice::Refused(Refusal::NoTempo));
+    until(&mut model, |m| m.message() == Some(&refused));
+    assert!(model.sampler().pending.is_none() && model.sampler().tempo_for.is_none());
+}
+
 /// Seeks to `at`, and waits for the player to get there. Playing, the
 /// playhead moves on at once, so a poll can miss `at` itself.
 fn seek(model: &mut Model, at: Duration) {

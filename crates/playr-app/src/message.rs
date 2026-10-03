@@ -366,6 +366,7 @@ fn outcome_text(outcome: &Outcome) -> String {
         Outcome::AnalysisStarted { dir: Some(dir) } => {
             format!("analysing {}", home_as_tilde(dir))
         }
+        Outcome::FindingTempo => "analysing the track for its tempo".into(),
         Outcome::Analysing { done, total } => format!("analysing: {done}/{total} tracks"),
         Outcome::Analysed { analysed: 0, .. } => {
             "nothing to analyse; every track is up to date".into()
@@ -457,6 +458,7 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::PlaylistEmpty => "playlist is empty".into(),
         Refusal::AlreadyMarked { at } => format!("already marked at {}", fmt_time(*at)),
         Refusal::NoMarks => "no marks in this track".into(),
+        Refusal::NoTempo => "no clear pulse in this track to cut beats at".into(),
         Refusal::NoLoops => "no loops saved in this track".into(),
         Refusal::NoLaterMark => "no later mark".into(),
         Refusal::NoEarlierMark => "no earlier mark".into(),

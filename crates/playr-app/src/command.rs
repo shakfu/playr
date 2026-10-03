@@ -174,8 +174,8 @@ pub const COMMANDS: &[Command] = &[
     any("redo", "", "put back the last edit undone"),
     any(
         "slice",
-        "region|marks|N|onsets [S]",
-        "write samples from the region or the track",
+        "region|marks|N|...",
+        "write samples; :slice alone lists all",
     ),
     any("loop", "off", "stop looping"),
     any(
@@ -604,6 +604,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Slice(Slicing::Equal(n)) => format!("slice {n}"),
         Slice(Slicing::Onsets(None)) => "slice onsets".into(),
         Slice(Slicing::Onsets(Some(s))) => format!("slice onsets {}", number(f64::from(*s))),
+        Slice(Slicing::Beats(n)) => format!("slice beats {n}"),
         Map { view, key, action } => {
             let target = match action {
                 Some(a) => line(a, *view),
@@ -620,6 +621,13 @@ pub fn line(action: &Action, view: Option<View>) -> String {
 }
 
 /// What `:tape` takes, as its usage says it.
+/// What `:slice` takes, as its usage says it. The help row is shorter, so
+/// every row of `:help` fits 80 columns.
+const SLICE_USAGE: &str = "usage: :slice region|marks|N|onsets [S]|beats N";
+
+/// Most beats in one slice of `:slice beats`: 16 bars of 4/4.
+pub const MAX_BEATS: u32 = 64;
+
 const TAPE_USAGE: &str = "usage: :tape load [N] | play | stop | reset | save | rec | \
      write on|off | feedback F | wear W | thin T | window A B | \
      V on|off | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
@@ -1223,11 +1231,15 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
                 Ok(s) if (0.0..=1.0).contains(&s) => Ok(Action::Slice(Slicing::Onsets(Some(s)))),
                 _ => Err("onset sensitivity is 0 to 1".into()),
             },
+            ("beats", n) => match n.parse::<u32>() {
+                Ok(n) if (1..=MAX_BEATS).contains(&n) => Ok(Action::Slice(Slicing::Beats(n))),
+                _ => Err(format!("beats a slice are 1 to {MAX_BEATS}")),
+            },
             (n, "") if n.parse::<usize>().is_ok() => match n.parse::<usize>() {
                 Ok(n) if (2..=MAX_SLICES).contains(&n) => Ok(Action::Slice(Slicing::Equal(n))),
                 _ => Err(format!("slices are 2 to {MAX_SLICES}")),
             },
-            _ => Err(usage()),
+            _ => Err(SLICE_USAGE.into()),
         },
         "map" => {
             let (view, key, target) = binding(rest)?;

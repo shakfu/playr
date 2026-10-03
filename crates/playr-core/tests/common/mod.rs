@@ -60,6 +60,29 @@ pub fn tone(path: &Path, rate: u32, secs: f32, dbfs: f32) {
     write_wav(path, rate, pcm);
 }
 
+/// Writes `secs` of 16-bit stereo clicks at `bpm`, at `rate`: a 10 ms burst
+/// of a decaying 1 kHz sine on each beat, from frame 0.
+pub fn clicks(path: &Path, rate: u32, bpm: f32, secs: f32) {
+    let period = rate as f64 * 60.0 / bpm as f64;
+    let burst = rate as usize / 100;
+    let pcm: Vec<u8> = (0..(rate as f32 * secs) as usize)
+        .flat_map(|i| {
+            let k = i - (((i as f64 / period).floor() * period).round() as usize).min(i);
+            let v = match k < burst {
+                true => {
+                    let t = k as f32 / rate as f32;
+                    0.5 * (1.0 - k as f32 / burst as f32)
+                        * (std::f32::consts::TAU * 1000.0 * t).sin()
+                }
+                false => 0.0,
+            };
+            let sample = ((v * i16::MAX as f32).round() as i16).to_le_bytes();
+            [sample, sample].concat()
+        })
+        .collect();
+    write_wav(path, rate, pcm);
+}
+
 /// Writes 16-bit stereo WAV at `rate`: each `(secs, level)` holds one constant level.
 pub fn levels(path: &Path, rate: u32, parts: &[(f32, f32)]) {
     let pcm: Vec<u8> = parts

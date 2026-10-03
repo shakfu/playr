@@ -36,6 +36,9 @@ pub enum Cut {
     Equal(usize),
     /// The region, at onsets found with this sensitivity, from 0 to 1.
     Onsets(f32),
+    /// The region, every this many beats at this tempo in BPM, in phase with
+    /// the first mark inside it, else from its start.
+    Beats(u32, f32),
 }
 
 /// What an export does at each slice's edges, against clicks.
@@ -199,6 +202,39 @@ pub fn equal_spans(len: u64, n: usize) -> Vec<(u64, u64)> {
             (start, end)
         })
         .collect()
+}
+
+/// Slice edges every `beats` beats at `bpm` across `len` frames from `start`,
+/// as offsets from `start`, from 0 to `len`. The grid falls on the first of
+/// `marks` inside, so a slice before it may be short; without one, on 0.
+/// Each edge is rounded from its exact position, so none drifts.
+pub fn beat_points(
+    marks: &[u64],
+    start: u64,
+    len: u64,
+    rate: u32,
+    beats: u32,
+    bpm: f32,
+) -> Result<Vec<u64>, String> {
+    let step = f64::from(rate) * 60.0 * f64::from(beats) / f64::from(bpm);
+    if !(step >= 1.0 && step.is_finite()) {
+        return Err(format!("{bpm} BPM is not a tempo to cut at"));
+    }
+    let anchor = marks
+        .iter()
+        .filter(|&&m| m > start && m - start < len)
+        .min()
+        .map_or(0.0, |&m| (m - start) as f64);
+    let first = anchor - (anchor / step).floor() * step;
+    let inner = (0u64..)
+        .map(|k| (first + k as f64 * step).round() as u64)
+        .skip_while(|&p| p == 0)
+        .take_while(|&p| p < len);
+    let mut points: Vec<u64> = std::iter::once(0).chain(inner).collect();
+    if len > 0 {
+        points.push(len);
+    }
+    Ok(points)
 }
 
 /// Spans from each point to the next, and from the last to `len`.
@@ -414,6 +450,16 @@ pub fn plan_with(job: &Job, audio: &OnsetAudio) -> Result<Vec<Span>, String> {
                     .map(|(s, e)| (start + s, Some(start + e)))
                     .collect()
             }
+            Cut::Beats(beats, bpm) => {
+                let len = match end {
+                    Some(end) => end - start,
+                    None => Reader::open(&job.path, job.rate, start)?.count_to(None)?,
+                };
+                beat_points(&job.marks, start, len, job.rate, beats, bpm)?
+                    .windows(2)
+                    .map(|w| (start + w[0], Some(start + w[1])))
+                    .collect()
+            }
             Cut::Onsets(sensitivity) => {
                 let mono = audio.mono(&job.path, job.rate, start, end)?;
                 let points: Vec<u64> = onsets(&mono, job.rate, sensitivity)
@@ -522,6 +568,11 @@ pub fn write(job: &Job, spans: &[Span]) -> Result<Exported, String> {
             });
     let finished = written.and_then(|slices| {
         let looped = job.loops && slices.len() == 1;
+        if let (true, Some(&(start, end))) = (looped, slices.first()) {
+            let wav = dir.join(file_name(&stem, 0));
+            append_loop(&wav, job.rate, end - start)
+                .map_err(|e| format!("cannot write {}: {e}", wav.display()))?;
+        }
         fs::write(
             dir.join("samples.json"),
             metadata(&job.path, job.rate, &slices, looped),
@@ -574,11 +625,21 @@ fn write_sliced(job: &Job, dir: &Path, slices: &[(u64, u64)]) -> Result<(), Stri
         .collect::<Result<_, String>>()?;
     let starts: Vec<u32> = points.iter().map(|p| p.0).collect();
     crate::sliced::append_cue(&wav, &starts).map_err(fail)?;
+    if job.loops && slices.len() == 1 {
+        append_loop(&wav, job.rate, end - first).map_err(fail)?;
+    }
     if job.ot_file && points.len() <= crate::sliced::OT_SLICES {
         let ot = crate::sliced::ot_file(job.rate, within(end)?, &points);
         fs::write(out.join(format!("{name}.ot")), ot).map_err(fail)?;
     }
     Ok(())
+}
+
+/// Marks all `frames` of the WAV at `wav` to loop, in a `smpl` chunk.
+fn append_loop(wav: &Path, rate: u32, frames: u64) -> std::io::Result<()> {
+    let last = u32::try_from(frames.saturating_sub(1))
+        .map_err(|_| std::io::Error::other("too long for one WAV file"))?;
+    crate::sliced::append_chunk(wav, &crate::sliced::smpl_chunk(rate, 0, last))
 }
 
 /// A decoder positioned at a source frame, handing out frames in order.

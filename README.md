@@ -454,12 +454,13 @@ Marks are stored in the library by file path and source frame, so they survive a
 | `:slice marks`      | the whole track, cut at every mark                                   |
 | `:slice N`          | the region in N equal parts, 2 to 256                                |
 | `:slice onsets [S]` | the region, cut where hits start; `S` from 0 to 1, higher finds more |
+| `:slice beats N`    | the region, every N beats at the analysed tempo, 1 to 64             |
 
 Each export writes a new directory, named after the track, under `samples` in [`settings.toml`](#configuration), by default `~/Music/playr/samples`. A second export of `amen.flac` goes to `amen-2`. The directory holds:
 
 - `000-amen_S00.wav`, `001-amen_S01.wav`, and so on, one file per slice, in the layout rtrack loads as a sample bank.
 
-- `samples.json`, with the source file and each slice's start and end frame. A range cut whole while it loops (`l`) is marked to loop over the whole slice, so rtrack loads it looping.
+- `samples.json`, with the source file and each slice's start and end frame. A range cut whole while it loops (`l`) is marked to loop over the whole slice, so rtrack loads it looping. Its WAV files carry the loop too, in a `smpl` chunk, which other samplers read.
 
 - `amen.sfz`, an [SFZ](https://sfzformat.com/) file that puts each slice on its own key, the first on C1 (36) and up to key 127, which is 92 slices. Samplers that read SFZ load the slices as a kit.
 
@@ -542,7 +543,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Snap.** With `:snap on`, shown as `snap` in the title, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms: a frame where the channels' mean changes sign. A nudge snaps only past where it started, so repeated nudges walk from crossing to crossing. Where no crossing is within reach, as in silence, the point stays. Turning snap on moves the ends of a range already set, so a loop drawn first can be snapped after.
 
-- **Range.** `i` and `o` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge, within 8 points of it, moves that edge and selects it; the pointer turns to a left-right arrow over an edge, mark or slice start that can be dragged, and keeps it while dragging.
+- **Range.** `i` and `o` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, `:slice beats 4` every 4 beats, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge, within 8 points of it, moves that edge and selects it; the pointer turns to a left-right arrow over an edge, mark or slice start that can be dragged, and keeps it while dragging.
 
 - **Fit.** `f`, or the window's Fit button, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `<` and `>` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
 

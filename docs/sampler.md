@@ -22,8 +22,15 @@ A **range**, set in the sampler view with `i` and `o`, `:range START END`, or a 
 | `:slice marks` | the whole track, cut at every mark; the playhead does not matter |
 | `:slice N` | the region in N equal parts, 2 to 256; the last part takes the remainder |
 | `:slice onsets [S]` | the region, cut where hits start; `S` from 0 to 1, higher finds more |
+| `:slice beats N` | the region, every N beats at the track's tempo, 1 to 64 |
 
 An export holds at most 256 slices, the size of an rtrack sample bank. A cut that would make more is refused.
+
+### Beats
+
+`:slice beats N` cuts at the tempo `:analyze` measured, or the track's BPM tag, which wins. A track not analysed yet is analysed first, in the background, and cut when that finishes. One whose pulse is too faint to trust is then refused. The cuts fall in phase with the first mark inside the region, so a mark on a downbeat puts every cut on one; the slice before that mark is shorter. Without a mark they start at the region's start. Each cut is placed from the first, not from the one before, so rounding does not add up.
+
+The tempo is one number for the track. On music not played to a click, cuts drift from the beat over a long region (inference); onsets follow the playing instead. A tempo above about 170 BPM is read at half, so `:slice beats 2` then cuts every beat.
 
 ### Onsets
 
@@ -77,7 +84,7 @@ Each export makes a new directory under `samples` in `settings.toml`, `~/Music/p
 
 `amen.sfz` maps each slice to a key, from C1 (36), for samplers that read SFZ and for `:convert`, which the README's Samples section describes. It is named after the directory, so a second export's kit is `amen-2.sfz`. A looped range is written with `loop_mode=loop_continuous`.
 
-`sliced/amen.wav` is the span from the first slice's start to the last one's end as one file, with a `cue ` chunk holding a point at each slice's start, in frames from the file's start. With `slice_ot_file = true`, `sliced/amen.ot` gives an Octatrack the same slices, each with its start and end, when there are 64 or fewer. Both take the directory's name. They sit in their own directory so that the export's own holds only what rtrack loads.
+`sliced/amen.wav` is the span from the first slice's start to the last one's end as one file, with a `cue ` chunk holding a point at each slice's start, in frames from the file's start. A range cut whole while it loops also gets a `smpl` chunk, in this file and in its slice file, looping the whole file forward, with middle C as its root note. With `slice_ot_file = true`, `sliced/amen.ot` gives an Octatrack the same slices, each with its start and end, when there are 64 or fewer. Both take the directory's name. They sit in their own directory so that the export's own holds only what rtrack loads.
 
 `samples.json` records where each slice came from, in source frames, end exclusive:
 

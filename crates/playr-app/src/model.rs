@@ -999,8 +999,13 @@ impl Model {
                 Event::AnalyzeProgress { done, total, .. } => {
                     self.notify(Outcome::Analysing { done, total })
                 }
-                Event::Analysed { result, .. } => {
+                Event::Analysed { job, result } => {
                     self.session.analysed();
+                    let wanted = self.sampler.tempo_for.take_if(|(id, ..)| *id == job);
+                    if let (Some((_, path, n)), Ok(_)) = (wanted, &result) {
+                        dispatch::tempo_found(self, &path, n);
+                        continue;
+                    }
                     match result {
                         Ok(stats) => self.notify(Outcome::Analysed {
                             analysed: stats.analysed,

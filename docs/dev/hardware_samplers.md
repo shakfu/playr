@@ -340,7 +340,20 @@ Each cue point is 24 bytes:
 
 ### WAV `smpl` chunk
 
-Loop points and a root note inside the WAV. It is the usual place for a sustain loop (reported; [WAVE File Format](http://midi.teragonaudio.com/tech/wave.htm) documents it, and could not be fetched for this note). The layout is open.
+Loop points and a root note inside the WAV. It is the usual place for a sustain loop (reported; [WAVE File Format](http://midi.teragonaudio.com/tech/wave.htm) documents it, and could not be fetched for this note). Layout from [RecordingBlogs](https://www.recordingblogs.com/wiki/sample-chunk-of-a-wave-file), all fields 32-bit little-endian:
+
+| field | value playr writes |
+|-|-|
+| manufacturer, product | 0 |
+| sample period | nanoseconds a sample: 10^9 / rate, truncated |
+| MIDI unity note | 60 |
+| pitch fraction, SMPTE format, SMPTE offset | 0 |
+| loops, sampler data bytes | 1, 0 |
+| loop: ID, type | 1, 0 (forward) |
+| loop: start, end | 0, the last frame; the page says "the end sample is also played" |
+| loop: fraction, play count | 0, 0 (endless) |
+
+The page counts start and end "in samples". playr writes frames, as for cue points; a byte reading is the same open question as there.
 
 ### Octatrack `.ot`
 
@@ -408,7 +421,7 @@ An instrument file holding the audio and its slices. [polyend/tracker-lib](https
 
 - **Frame index or byte offset in a cue point's sample start.** Check what the M8 and the Blackbox expect.
 
-- **Which devices read `smpl` loops.** `TODO.md`, "Loop points in the WAV", depends on it.
+- **Which devices read `smpl` loops.** A looped range now writes one; see "Built".
 
 - **Bit depth and rate each device accepts.** playr writes 24-bit at the source's rate; ot_utils assumes 16-bit 44.1 kHz mono.
 
@@ -470,4 +483,12 @@ The sliced file, on 2026-09-30:
 
 - **ffprobe, sox and Python's `wave` read the WAV** with no warning. None of them reports cue points, so the chunk was checked by reading its bytes back.
 
-- **Not built:** a `smpl` chunk for a looped range, labels for the cue points, and any check on a device.
+- **Not built:** labels for the cue points, and any check on a device.
+
+The loop in the WAV, on 2026-10-03:
+
+- **A range cut whole while it loops gets a `smpl` chunk** in its slice file and in `sliced/NAME.wav`, after the audio and, in the second, after the `cue ` chunk. Its one loop covers the whole file. Layout in "WAV `smpl` chunk" above.
+
+- **hound still reads both files**, which the tests check; a reader that ignores unknown chunks should too (inference).
+
+- **Not checked on any device or sampler.** "Which devices read `smpl` loops" stays open.

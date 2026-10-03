@@ -255,6 +255,8 @@ pub enum Slicing {
     /// At onsets, with this sensitivity, or with `onset_sensitivity` from the
     /// settings when `None`.
     Onsets(Option<f32>),
+    /// Every this many beats at the track's analysed tempo.
+    Beats(u32),
 }
 
 /// A key, as bindings name it. Each frontend converts its own key events to

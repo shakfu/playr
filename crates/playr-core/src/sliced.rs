@@ -1,6 +1,6 @@
 //! Slice points for samplers that take one file: a `cue ` chunk in the WAV,
 //! which the Dirtywave M8 and the 1010music blackbox are reported to read,
-//! and an Octatrack `.ot` file beside it.
+//! and an Octatrack `.ot` file beside it. A loop goes in a `smpl` chunk.
 //!
 //! `docs/dev/hardware_samplers.md` has both layouts, where each came from,
 //! and what is still unchecked. The `.ot` layout and its constants follow
@@ -37,15 +37,57 @@ pub fn cue_chunk(points: &[u32]) -> Vec<u8> {
     chunk
 }
 
+/// The MIDI note at which a looped WAV plays at its own pitch: middle C, as
+/// for a lone sample played across a keyboard. The kit puts slices from key
+/// 36, a drum-pad convention, but a looped range is one sample.
+const UNITY_NOTE: u32 = 60;
+
+/// A `smpl` chunk with one loop, forward and endless, from frame `start` to
+/// frame `last`, which is played too, as the format counts it. Layout from
+/// [RecordingBlogs](https://www.recordingblogs.com/wiki/sample-chunk-of-a-wave-file);
+/// positions are frames, as in the `cue ` chunk.
+pub fn smpl_chunk(rate: u32, start: u32, last: u32) -> Vec<u8> {
+    let mut chunk = Vec::with_capacity(68);
+    chunk.extend(b"smpl");
+    let fields: [u32; 16] = [
+        60, // the chunk's size after this field: 36 bytes, then one 24-byte loop
+        0,  // manufacturer: none
+        0,  // product
+        1_000_000_000 / rate.max(1),
+        UNITY_NOTE,
+        0, // pitch fraction
+        0, // SMPTE format
+        0, // SMPTE offset
+        1, // loops
+        0, // bytes of sampler data
+        1, // the loop's ID
+        0, // forward
+        start,
+        last,
+        0, // fraction
+        0, // plays: endless
+    ];
+    for f in fields {
+        chunk.extend(f.to_le_bytes());
+    }
+    chunk
+}
+
 /// Adds a `cue ` chunk for `points` to the WAV file at `path`, after its
 /// audio, and corrects the file's length in its header.
 pub fn append_cue(path: &Path, points: &[u32]) -> std::io::Result<()> {
+    append_chunk(path, &cue_chunk(points))
+}
+
+/// Adds `chunk` to the WAV file at `path`, after what it holds, and corrects
+/// the file's length in its header.
+pub fn append_chunk(path: &Path, chunk: &[u8]) -> std::io::Result<()> {
     let mut file = fs::OpenOptions::new().read(true).write(true).open(path)?;
     // A chunk starts on an even byte; 24-bit mono audio can end on an odd one.
     if file.seek(SeekFrom::End(0))? % 2 == 1 {
         file.write_all(&[0])?;
     }
-    file.write_all(&cue_chunk(points))?;
+    file.write_all(chunk)?;
     let riff = file.stream_position()? - 8;
     let riff = u32::try_from(riff).map_err(|_| std::io::Error::other("over 4 GB"))?;
     file.seek(SeekFrom::Start(4))?;

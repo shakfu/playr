@@ -986,6 +986,7 @@ fn export_and_slice_choose_how_the_track_is_cut() {
         ("slice 16", Slicing::Equal(16)),
         ("slice onsets", Slicing::Onsets(None)),
         ("slice onsets 0.8", Slicing::Onsets(Some(0.8))),
+        ("slice beats 4", Slicing::Beats(4)),
     ] {
         assert_eq!(lib(text), Ok(Action::Slice(cut)), "{text}");
         for view in [Selection, Playlists] {
@@ -1005,6 +1006,18 @@ fn export_and_slice_choose_how_the_track_is_cut() {
         line(&Action::Slice(Slicing::Onsets(None)), None),
         "slice onsets"
     );
+    assert_eq!(
+        line(&Action::Slice(Slicing::Beats(8)), None),
+        "slice beats 8"
+    );
+    for text in [
+        "slice beats 0",
+        "slice beats 65",
+        "slice beats",
+        "slice beats x",
+    ] {
+        assert_eq!(lib(text), Err("beats a slice are 1 to 64".into()), "{text}");
+    }
     assert_eq!(lib("slice 1"), Err("slices are 2 to 256".into()));
     assert_eq!(lib("slice 257"), Err("slices are 2 to 256".into()));
     assert_eq!(
@@ -1013,15 +1026,15 @@ fn export_and_slice_choose_how_the_track_is_cut() {
     );
     assert_eq!(
         lib("slice"),
-        Err("usage: :slice region|marks|N|onsets [S]".into())
+        Err("usage: :slice region|marks|N|onsets [S]|beats N".into())
     );
     assert_eq!(
         lib("slice bars"),
-        Err("usage: :slice region|marks|N|onsets [S]".into())
+        Err("usage: :slice region|marks|N|onsets [S]|beats N".into())
     );
     assert_eq!(
         lib("slice region 2"),
-        Err("usage: :slice region|marks|N|onsets [S]".into())
+        Err("usage: :slice region|marks|N|onsets [S]|beats N".into())
     );
     assert_eq!(lib("export"), Err("unknown command: export".into()));
 }

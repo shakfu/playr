@@ -379,7 +379,12 @@ pub fn select<'a>(library: &'a [Track], paths: &'a [PathBuf]) -> (Vec<Track>, Ve
     if paths.is_empty() {
         return (library.to_vec(), Vec::new());
     }
-    let under = |t: &Track, root: &Path| Path::new(&t.path).starts_with(root);
+    // As given, or resolved: a library under a symbolic link, such as
+    // macOS's /var, may hold its tracks by either path.
+    let under = |t: &Track, given: &Path, root: &Path| {
+        let path = Path::new(&t.path);
+        path.starts_with(given) || path.starts_with(root)
+    };
     let resolved: Vec<PathBuf> = paths
         .iter()
         .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
@@ -387,12 +392,17 @@ pub fn select<'a>(library: &'a [Track], paths: &'a [PathBuf]) -> (Vec<Track>, Ve
     let missing = paths
         .iter()
         .zip(&resolved)
-        .filter(|(_, root)| !library.iter().any(|t| under(t, root)))
+        .filter(|(given, root)| !library.iter().any(|t| under(t, given, root)))
         .map(|(given, _)| given)
         .collect();
     let chosen = library
         .iter()
-        .filter(|t| resolved.iter().any(|root| under(t, root)))
+        .filter(|t| {
+            paths
+                .iter()
+                .zip(&resolved)
+                .any(|(given, root)| under(t, given, root))
+        })
         .cloned()
         .collect();
     (chosen, missing)

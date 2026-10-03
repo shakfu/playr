@@ -84,7 +84,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:mark-prev`                          | `{`; `,` but in the sampler | prev mark: seek, or select in the sampler |
 | `:undo`                               | `u` in the sampler      | undo the last edit to marks, range or plan  |
 | `:redo`                               | `r` in the sampler      | put back the last edit undone               |
-| `:slice region\|marks\|N\|onsets [S]` |                         | write samples from the region or the track  |
+| `:slice region\|marks\|N\|...`        |                         | write samples; `:slice` alone lists all     |
 | `:loop off`                           |                         | stop looping                                |
 | `:tape load\|play\|stop\|save\|...`   |                         | the tape looper; `:tape` alone lists all    |
 | `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |

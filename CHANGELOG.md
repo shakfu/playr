@@ -21,11 +21,19 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
   The design, and where the build departs from it, is in `docs/dev/looper-engine.md`.
 
+- `:slice beats N` cuts the region every N beats, 1 to 64, at the tempo `:analyze` measured or the BPM tag. The cuts fall in phase with the first mark inside the region, else its start. A track with no tempo yet is analysed first and cut when that finishes; one with no clear pulse is then refused. The window's Slice drop-down offers it as Beats. Library API: `Cut::Beats`, `samples::beat_points`, `Refusal::NoTempo`, `Outcome::FindingTempo`.
+
+- A range cut whole while it loops gets a `smpl` chunk in its WAV files, the slice file and `sliced/NAME.wav`, looping the whole file. Before, only `samples.json` and the `.sfz` file held the loop, and samplers that load a bare WAV read neither. The root note is middle C, as for a lone sample; the kit's key 36 is a drum-pad convention. Library API: `sliced::smpl_chunk`, `sliced::append_chunk`.
+
 ### Changed
 
 - playr-gui's minimum height is 592 points, up from 504, so the Tape tab's strips fit without scrolling.
 
 - Undo brings back an edited plan that was discarded or replaced by a new cut, such as one from the window's Sensitivity slider. Before, the starts set by hand were lost with no way back. Making or replacing an unedited plan is still not a step: undo would put back a cut a later one replaced.
+
+### Fixed
+
+- `:analyze PATH` found no tracks when the library held them by a path through a symbolic link, such as macOS's `/var`: it compared the stored paths only with the resolved one. It now matches either.
 
 ## [0.17.0]
 

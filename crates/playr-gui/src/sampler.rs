@@ -60,10 +60,17 @@ enum Method {
     Marks,
     Equal,
     Onsets,
+    Beats,
 }
 
 impl Method {
-    const ALL: [Method; 4] = [Method::Region, Method::Marks, Method::Equal, Method::Onsets];
+    const ALL: [Method; 5] = [
+        Method::Region,
+        Method::Marks,
+        Method::Equal,
+        Method::Onsets,
+        Method::Beats,
+    ];
 
     /// The method that makes `cut`.
     fn of(cut: Cut) -> Method {
@@ -72,6 +79,7 @@ impl Method {
             Cut::Marks => Method::Marks,
             Cut::Equal(_) => Method::Equal,
             Cut::Onsets(_) => Method::Onsets,
+            Cut::Beats(..) => Method::Beats,
         }
     }
 
@@ -85,6 +93,7 @@ impl Method {
             Some(Method::Marks) => "At marks",
             Some(Method::Equal) => "Equal",
             Some(Method::Onsets) => "At onsets",
+            Some(Method::Beats) => "Beats",
         }
     }
 }
@@ -120,6 +129,8 @@ pub struct State {
     /// sensitivity starts from the settings.
     method: Option<Method>,
     slices: usize,
+    /// Beats a slice, for slicing at the track's tempo.
+    beats: u32,
     sensitivity: Option<f32>,
     /// The height the view took besides the waveform in the last frame: its
     /// header, the loops, the detail line and the rows of controls.
@@ -147,6 +158,7 @@ impl Default for State {
             menu: None,
             method: None,
             slices: 8,
+            beats: 4,
             sensitivity: None,
             around: None,
             spectrogram: None,
@@ -621,11 +633,13 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         ui.label("Slice");
         // The drop-down shows the plan that waits, however it was made, and
         // takes its count or sensitivity once the plan has landed.
-        let planning = sampler.planning.is_some();
+        // An analysis finding the tempo for beats counts as planning.
+        let planning = sampler.planning.is_some() || sampler.tempo_for.is_some();
         let cut = sampler.pending.as_ref().map(|p| p.job.cut);
         match cut.filter(|_| !planning) {
             Some(Cut::Equal(count)) => state.slices = count,
             Some(Cut::Onsets(s)) => *sensitivity = s,
+            Some(Cut::Beats(n, _)) => state.beats = n,
             _ => {}
         }
         let method = cut.map(Method::of).or(state.method.filter(|_| planning));
@@ -662,6 +676,14 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             Some(Method::Onsets) => ui
                 .add(egui::Slider::new(sensitivity, 0.0..=1.0).text("Sensitivity"))
                 .changed(),
+            Some(Method::Beats) => {
+                let beats = egui::DragValue::new(&mut state.beats)
+                    .range(1..=playr_app::command::MAX_BEATS)
+                    .suffix(" beats");
+                ui.add(beats)
+                    .on_hover_text("Beats a slice, at the track's analysed tempo")
+                    .changed()
+            }
             _ => false,
         };
         match chosen.unwrap_or(method.filter(|_| changed)) {
@@ -672,6 +694,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                     Method::Marks => Slicing::Marks,
                     Method::Equal => Slicing::Equal(state.slices),
                     Method::Onsets => Slicing::Onsets(Some(*sensitivity)),
+                    Method::Beats => Slicing::Beats(state.beats),
                 }));
             }
             None if chosen.is_some() => {

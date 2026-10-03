@@ -91,6 +91,9 @@ pub enum Outcome {
     AnalysisStarted {
         dir: Option<std::path::PathBuf>,
     },
+    /// `:slice beats` on a track with no tempo yet: it is being analysed,
+    /// and is cut once that finishes.
+    FindingTempo,
     /// An analysis has finished `done` of `total` files.
     Analysing {
         done: usize,
@@ -217,6 +220,9 @@ pub enum Refusal {
         at: Duration,
     },
     NoMarks,
+    /// `:slice beats` on a track with no tempo after analysing it: no BPM
+    /// tag, and too faint a pulse to trust.
+    NoTempo,
     NoLoops,
     NoLaterMark,
     NoEarlierMark,

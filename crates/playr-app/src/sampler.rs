@@ -96,6 +96,9 @@ pub struct Sampler {
     /// An onset sensitivity asked for while a plan was being made, which
     /// replaces that plan once it lands.
     pub onsets_wanted: Option<f32>,
+    /// An analysis finding the tempo `:slice beats` needs: its job, the track,
+    /// and the beats a slice asked for, cut once it lands.
+    pub tempo_for: Option<(JobId, PathBuf, u32)>,
     /// Whether moves and marks in the view snap to zero crossings.
     pub snap: bool,
     /// Whether the view centres on the range, once both ends are set, rather

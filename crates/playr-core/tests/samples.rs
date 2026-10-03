@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use playr_core::samples::{
-    equal_spans, export, kit_path, nearest_onset, onsets, plan, plan_with, region, sliced_dir,
-    spans_at, Cut, Edges, Exported, Fades, Job, OnsetAudio, FIRST_KEY, MAX_SLICES,
+    beat_points, equal_spans, export, kit_path, nearest_onset, onsets, plan, plan_with, region,
+    sliced_dir, spans_at, Cut, Edges, Exported, Fades, Job, OnsetAudio, FIRST_KEY, MAX_SLICES,
 };
 use playr_core::wave::{snap_reach, Peaks};
 
@@ -859,10 +859,103 @@ fn a_looped_range_is_written_to_loop_whole_with_its_edges_as_set() {
             std::fs::read_to_string(kit_path(&out.dir)).unwrap(),
             "<region> sample=000-src_S00.wav key=36 loop_mode=loop_continuous loop_start=0 loop_end=39995\n"
         );
+        // The WAV files carry the loop too, as `smpl` names it: the last frame played.
+        let name = out.dir.file_name().unwrap().to_string_lossy().into_owned();
+        let sliced = sliced_dir(&out.dir).join(format!("{name}.wav"));
+        for wav in [out.dir.join("000-src_S00.wav"), sliced] {
+            assert_eq!(smpl_loop(&wav), Some((20_833, 60, 0, 39_995)), "{wav:?}");
+        }
+        cue_points(&sliced_dir(&out.dir).join(format!("{name}.wav")));
     }
     let out = export(&job(&file, 48_000, &[5_000], 0, Cut::Region, dir.path())).unwrap();
     let json = std::fs::read_to_string(out.dir.join("samples.json")).unwrap();
     assert!(!json.contains("loop"), "a slice not looped loops: {json}");
+    assert_eq!(smpl_loop(&files(&out.dir)[0]), None);
+}
+
+/// The `smpl` chunk's sample period, unity note, and its one loop's first
+/// and last frames, in the WAV file at `path`; `None` without one.
+fn smpl_loop(path: &Path) -> Option<(u32, u32, u32, u32)> {
+    let bytes = std::fs::read(path).unwrap();
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    assert_eq!(word(4) as usize + 8, bytes.len(), "the header's length");
+    let mut at = 12;
+    while at < bytes.len() {
+        let size = word(at + 4) as usize;
+        if &bytes[at..at + 4] == b"smpl" {
+            assert_eq!((size, word(at + 36)), (60, 1), "one loop");
+            let body = at + 8;
+            return Some((
+                word(body + 8),
+                word(body + 12),
+                word(body + 44),
+                word(body + 48),
+            ));
+        }
+        at += 8 + size + size % 2;
+    }
+    None
+}
+
+#[test]
+fn beats_fall_on_the_tempo_in_phase_with_the_first_mark() {
+    // 120 BPM at 48 kHz: a beat is 24,000 frames, 4 beats 96,000.
+    assert_eq!(
+        beat_points(&[], 0, 400_000, 48_000, 4, 120.0).unwrap(),
+        [0, 96_000, 192_000, 288_000, 384_000, 400_000]
+    );
+    // A mark inside sets the phase; the slice before it is short. Marks
+    // outside the region are ignored.
+    assert_eq!(
+        beat_points(
+            &[5, 1_050_000, 1_500_000],
+            1_000_000,
+            300_000,
+            48_000,
+            4,
+            120.0
+        )
+        .unwrap(),
+        [0, 50_000, 146_000, 242_000, 300_000]
+    );
+    // A tempo that is no whole number of frames: each edge is rounded from
+    // its exact place, so the last is where 50 steps put it.
+    let points = beat_points(&[], 0, 1_100_000, 44_100, 1, 128.0).unwrap();
+    assert_eq!(
+        points[50],
+        (50.0f64 * 44_100.0 * 60.0 / 128.0).round() as u64
+    );
+    assert!(beat_points(&[], 0, 1000, 44_100, 1, 0.0).is_err());
+}
+
+#[test]
+fn a_range_cut_at_beats_writes_each_slice_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("src.wav");
+    source(&file, 48_000, 2, 24, 100_003);
+    // 240 BPM: a beat is 12,000 frames. The mark at 26,000 sets the phase.
+    let job = Job {
+        range: Some((20_000, 60_000)),
+        ..job(
+            &file,
+            48_000,
+            &[26_000],
+            0,
+            Cut::Beats(1, 240.0),
+            dir.path(),
+        )
+    };
+    let out = export(&job).unwrap();
+    assert_eq!(
+        out.slices,
+        [
+            (20_000, 26_000),
+            (26_000, 38_000),
+            (38_000, 50_000),
+            (50_000, 60_000)
+        ]
+    );
+    assert_exact(&out, 2, 24);
 }
 
 #[test]
