@@ -170,7 +170,7 @@ pub const COMMANDS: &[Command] = &[
     any("mark-clear", "", "clear all marks in this track; asks y/n"),
     any("mark-next", "", "next mark: seek, or select in the sampler"),
     any("mark-prev", "", "prev mark: seek, or select in the sampler"),
-    any("undo", "", "undo the last edit to marks or the range"),
+    any("undo", "", "undo the last edit to marks, range or plan"),
     any("redo", "", "put back the last edit undone"),
     any(
         "slice",

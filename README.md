@@ -509,7 +509,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `#`     | `:onset`                | move it to the nearest rise in the sound          |
 | backspace | `:remove`             | remove the selected mark, join the selected slice to the one before; with an end or nothing selected, clear the range |
 | `D`     | `:deselect`             | select nothing                                    |
-| `u`     | `:undo`                 | undo the last change to the marks or the range    |
+| `u`     | `:undo`                 | undo the last change to the marks, range or plan  |
 | `r`     | `:redo`                 | put back the last change undone                   |
 | `a`     | `:audition`             | play the selection, slice, range or region once, then pause |
 | `,` `.` | `:audition prev`, `:audition next` | select the previous or next planned slice, and play it once |
@@ -530,7 +530,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Editing.** `<` and `>` move the selected mark or range end a column at a time, and `:move-to TIME` puts it at a time; in the window, a mark or slice start is dragged. backspace removes the selected mark, wherever it sits in the chain `B` undoes; with a range end selected it clears the range. A selected slice is edited by its start: `<` and `>` move it, taking the end of the slice before with it, and backspace joins it to the slice before. Each start stays a frame inside its neighbours, and the first stays inside the range or region. The plan shows `edited`, and keeps the starts when `:slice-edges` plans it again; a new `:slice` replaces them. The marks do not move. `#` moves the selection to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
 
-- **Undo.** `u` undoes the last change to the playing track's marks, range or planned slices, by any key, command or drag, and again for the one before, and selects what was selected then. Making, replacing or discarding a plan is not a change it undoes. It keeps the last 100 changes, until the track changes. `r` puts back what `u` took, until a new change.
+- **Undo.** `u` undoes the last change to the playing track's marks, range or planned slices, by any key, command or drag, and again for the one before, and selects what was selected then. Making or replacing a plan is not a change it undoes, unless the plan replaced or discarded was edited. It keeps the last 100 changes, until the track changes. `r` puts back what `u` took, until a new change.
 
 - **Audition.** `a` plays the selected mark up to the next, the selected slice, or the range when an end is selected; with nothing selected, the planned slice the playhead is in, or the range, or the region around it. It plays once, and pauses at the end rather than returning to the start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. With slices planned, `,` and `.`, or Previous slice and Next slice in the window, select and play the previous or next one, wrapping round at either end, so each can be checked before `enter` writes them. With `slice_edges = "fade"`, an audition fades as the written slice will. Playing on afterwards continues the track from there.
 

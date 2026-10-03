@@ -82,7 +82,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:mark-clear`                         | `C`                     | clear all marks in this track; asks y/n     |
 | `:mark-next`                          | `}`; `.` but in the sampler | next mark: seek, or select in the sampler |
 | `:mark-prev`                          | `{`; `,` but in the sampler | prev mark: seek, or select in the sampler |
-| `:undo`                               | `u` in the sampler      | undo the last edit to marks or the range    |
+| `:undo`                               | `u` in the sampler      | undo the last edit to marks, range or plan  |
 | `:redo`                               | `r` in the sampler      | put back the last edit undone               |
 | `:slice region\|marks\|N\|onsets [S]` |                         | write samples from the region or the track  |
 | `:loop off`                           |                         | stop looping                                |

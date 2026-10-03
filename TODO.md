@@ -18,7 +18,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Desktop window
 
-- [ ] **CJK fonts.** egui's default fonts cover Latin, Greek and Cyrillic, so Japanese, Chinese and Korean tags show as boxes. Bundling Noto Sans CJK adds about 16 MB a binary (estimate); loading a system font needs a font-lookup crate and differs per platform.
+- [ ] **Non-Latin text in the GUI.** egui's default fonts cover Latin, Greek and Cyrillic. Library text in other scripts (tags, titles, paths) renders as boxes. Users with Chinese, Japanese or Korean (CJK) libraries cannot read their tracks in the GUI; the terminal is unaffected. Each script needs a system or bundled font. egui 0.36 shapes text with `harfrust` but has no bidi algorithm, so a title mixing right-to-left and left-to-right text may show out of order (inference).
 
 - [ ] **macOS signing and notarization.** `playr.app` is unsigned, so a downloaded copy is refused until allowed in System Settings. Needs an Apple Developer account and the workflow's secrets.
 
@@ -28,7 +28,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Playback
 
-- [ ] **Fade-in / Fade-out**: set `:fade-in 0.1` or `:fade-out 0.2` so that sequential track fade into one another.
+- [ ] **Crossfade.** `:crossfade 2` overlaps a track's last 2 s with the next one's first, fading one out as the other fades in. Needs two decoders and a mixer stage in the engine. Tracks at different sample rates cannot share one output stream, so one side must be resampled; see "Gapless across a sample-rate change". A first step without overlap: fade a track's end and the next one's start, with one decoder, reusing the gain ramp at an audition's ends (`Cmd::PlayOnce`). Both change the audio at track boundaries, against gapless playback and exact samples, so both are settings, off by default.
 
 - [ ] **Fine varispeed.** `:speed` parses whole semitones. A semitone is 5.9%, so 120 BPM moves to 127.1 or 113.3 with nothing between. Add `:speed +50c`, and `:tempo 128` on an analysed track to set the ratio that gives 128 BPM. Check first whether the resampler takes an arbitrary ratio.
 
@@ -36,15 +36,15 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Sampler
 
-- [ ] **Add undo in slicing**
-
 - [ ] **Waveform cache.** The sampler keeps one track's `Peaks` and decodes the whole file again on each return to a track. Time `Peaks::read` on a few tracks first; skip this if a read is short. Otherwise keep recent `Arc<Peaks>` in memory, capped at 100 MB and evicting the least recently used. Cap by bytes, not tracks: a 4-minute track is about 17 MB, a 60-minute mix about 250 MB. Check modification time and size on a hit. Optionally read the selection's tracks ahead, so a first visit is fast too. A file cache survives restarts but needs a format, invalidation and cleanup; not worth it for 4 or 5 working tracks.
 
 - [ ] **Preview in the sampler.** Show the waveform of the track highlighted in a list without playing it. The range, marks, `:in`, `:out` and loop all assume the playing track, so decide what each does on a track not playing.
 
 - [ ] **Spectrogram at high sample rates.** The transform is 2048 frames at every rate, so a bin is 21.5 Hz at 44.1 kHz and 94 Hz at 192 kHz, and bass on hi-res files blurs further. Scaling the transform with the rate, 4096 at 96 kHz and 8192 at 192 kHz, keeps about 46 ms and 21 Hz everywhere, at more CPU per read on those files.
 
-- [ ] **Move a planned slice's edge.** Onset slicing puts some edges a little early or late, and the only fix is another sensitivity, which moves every edge. `write_slices` writes `Plan::spans` as they are, so an edited plan needs no change in the core. It needs an action in `playr-app` that moves the edge between two spans, keys for the terminal, and a drag in the window as marks have. The plan then matches no cut, so the window's Slice drop-down needs a name for it, and planning again loses the edits. Chosen on 2026-09-30 over turning the planned edges into marks and slicing at those.
+- [ ] **Name an edited plan in the Slice drop-down.** After a planned slice is moved or joined, the drop-down still shows the method that made the plan, such as "At onsets". Only the plan line says "edited". Moving the sensitivity slider then plans again and replaces the edits; undo brings them back. An "Edited" entry in the drop-down would say so before the slider moves.
+
+- [ ] **Keep an edited plan across a track change.** Changing tracks drops the planned slices and clears undo, so starts set by hand are lost for good. Options: confirm before leaving a track with an edited plan, or keep each track's plan until it is written or discarded.
 
 - [ ] **Planned edges to marks.** One action turns a plan's edges into marks, which are kept in the library and already drag, nudge and snap. It matters once a WAV is exported with cue points (see "Loop points in the WAV"): the marks would then carry the slice points into the file for a hardware sampler. Open: whether the edges replace the marks in the range or join them, and whether the cue export should read the plan's edges directly and skip this step.
 
@@ -126,8 +126,6 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **Gapless across a sample-rate change.** A rate change rebuilds the output stream and leaves a gap. Fixing it means resampling both sides to a common rate, which trades a gap for a conversion. Worth a flag, not a default.
 
-- [ ] **Crossfade.** Needs two decoders and a mixer stage. Candidate for dropping: it conflicts with gapless playback and the exact-sample claims.
-
 - [ ] **Pitch-preserving speed.** The README rules it out by definition. For a musician practising against a loop it outranks most items; for a person who samples, varispeed is the right tool. Needs a phase vocoder or a dependency, and a new engine stage. The primary user samples (decision 2), and time-stretching a sample is a DAW's job on an exact slice, so this stays low.
 
 ### Sampler
@@ -149,8 +147,6 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 - [ ] **Terminal background detection.** In the terminal, `system` is the ANSI set, as `dark` is. An OSC 11 query at startup would find a light background in most modern terminals, but can stall over ssh and tmux. `COLORFGBG` is cheaper, and only some terminals set it.
 
 - [ ] **Dim text on Solarized Dark.** `dim` and the selected row's background are ANSI bright black, which Solarized Dark sets to its background colour, so dim text disappears there. Not tested here.
-
-- [ ] **Show when slices are planned.** `enter` plays in three views and writes files in the sampler view when slices are planned. An indicator while slices are planned would reduce the risk.
 
 ### Server
 

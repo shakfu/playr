@@ -292,7 +292,7 @@ The sampler's buttons were cut from five rows to two, and a Sampler menu replace
 
 - **Shift-click on the progress bar marks there** (`MarkAt`); a plain click seeks.
 
-- **Not yet:** the sampler view, CJK fonts, packaging, and a context menu for the sampler's slices.
+- **Not yet:** the sampler view, non-Latin text, packaging, and a context menu for the sampler's slices.
 
 ### Where step 4 differs from the sketch
 
@@ -304,7 +304,7 @@ The sampler's buttons were cut from five rows to two, and a Sampler menu replace
 
 - **Shared with the terminal:** tab titles (`View::title`), the confirmation question (`Confirm::question`), the key and command lists (`command::key_rows`, `command_rows`), the meter's scale and zones (`playr_app::meter`), the now-playing label (`model::now_playing`), and `Model::waking`, whose event sink wakes egui.
 
-- **Not yet:** file dialogs and dropped files (`:open` and `:scan` work from the command bar), the sampler view, CJK fonts, and packaging. The Linux window libraries in the CI workflows are egui's usual list, not yet confirmed by a run.
+- **Not yet:** file dialogs and dropped files (`:open` and `:scan` work from the command bar), the sampler view, non-Latin text, and packaging. The Linux window libraries in the CI workflows are egui's usual list, not yet confirmed by a run.
 
 - **Tests:** `crates/playr-gui/tests/window.rs` drives the window headless with `egui_kittest`: tabs, keys, clicks, a confirmation, the search field and the command bar. `tests/keys.rs` covers turning egui key events into bindings.
 
@@ -334,7 +334,7 @@ The sampler's buttons were cut from five rows to two, and a Sampler menu replace
 
 ## Open questions
 
-- **Fonts.** egui's default fonts cover Latin, Greek and Cyrillic, not CJK. A terminal shows CJK tags with the terminal's font; the GUI shows boxes unless it loads a font with those glyphs. Bundling Noto Sans CJK adds about 16 MB per binary (estimate); loading a system font needs a font-lookup crate and differs per platform.
+- **Non-Latin text.** egui's default fonts cover Latin, Greek and Cyrillic. The GUI shows library text in other scripts (tags, titles, paths) as boxes; a terminal uses its own font. Users with Chinese, Japanese or Korean (CJK) libraries cannot read their tracks in the GUI. CJK needs a font with those glyphs: bundling Noto Sans CJK adds about 16 MB per binary (estimate), and loading a system font differs per platform. egui 0.36 shapes text with `harfrust` but has no bidi algorithm, so a title mixing right-to-left and left-to-right text may show out of order (inference).
 
 - **Native paths.** Both frontends use `~/.local/share/playr` and `~/.config/playr` on every platform, which is unusual on Windows and macOS. Moving to each platform's directories would move existing libraries.
 

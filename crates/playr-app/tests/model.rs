@@ -1549,11 +1549,85 @@ fn a_planned_slice_is_selected_moved_and_joined_to_the_one_before() {
     assert_eq!(starts(&model), [0, 40_000, 60_000]);
     assert_eq!(selected(&model), Some(40_000));
 
-    // Discarding is not an edit: undo does not bring the plan back.
+    // Discarding an edited plan is a step: undo brings it back, selected,
+    // and redo discards it again.
     model.perform(Action::DiscardSlices);
     assert_eq!(selected(&model), None);
     model.perform(Action::Undo);
+    assert_eq!(starts(&model), [0, 40_000, 60_000]);
+    assert_eq!(selected(&model), Some(40_000));
+    model.perform(Action::Redo);
     assert!(model.sampler().pending.is_none());
+}
+
+/// Refreshes `model` until no plan is being made.
+fn wait_for_plan(model: &mut Model) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.sampler().planning.is_some() {
+        assert!(Instant::now() < deadline, "no plan");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn undo_brings_back_an_edited_plan_a_new_cut_replaced() {
+    use playr_app::action::{Nudge, Slicing};
+    use playr_app::sampler::Scale;
+    use playr_core::samples::Edges;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = planned(dir.path(), &file, 4);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+
+    // An unedited plan replaced is not a step.
+    model.perform(Action::Slice(Slicing::Equal(2)));
+    wait_for_plan(&mut model);
+    assert_eq!(starts(&model), [0, 40_000]);
+    model.perform(Action::Undo);
+    assert_eq!(model.message(), Some(&Message::NothingToUndo));
+    assert_eq!(starts(&model), [0, 40_000]);
+
+    // An edited one is: undo puts it back over the new cut, and redo the cut.
+    model.perform(Action::AuditionSlice(true));
+    model.perform(Action::MoveSelected(Nudge::Columns(1)));
+    assert_eq!(starts(&model), [0, 40_064]);
+    model.perform(Action::Slice(Slicing::Equal(4)));
+    wait_for_plan(&mut model);
+    assert_eq!(starts(&model), [0, 20_000, 40_000, 60_000]);
+    model.perform(Action::Undo);
+    assert_eq!(model.message(), Some(&Message::Undone));
+    assert_eq!(starts(&model), [0, 40_064]);
+    model.perform(Action::Redo);
+    assert_eq!(starts(&model), [0, 20_000, 40_000, 60_000]);
+
+    // Undo while a cut is being made undoes the last edit, and drops the cut.
+    model.perform(Action::Undo);
+    model.perform(Action::Slice(Slicing::Equal(3)));
+    model.perform(Action::Undo);
+    assert!(model.sampler().planning.is_none());
+    model.refresh();
+    std::thread::sleep(Duration::from_millis(200));
+    model.refresh();
+    assert_eq!(starts(&model), [0, 40_000]);
+
+    // An edited plan put back after the edges changed is planned their way.
+    model.perform(Action::Redo);
+    assert_eq!(starts(&model), [0, 40_064]);
+    model.perform(Action::DiscardSlices);
+    model.perform(Action::SetSliceEdges(Edges::Fade));
+    model.perform(Action::Undo);
+    assert!(model.sampler().planning.is_some());
+    wait_for_plan(&mut model);
+    assert_eq!(starts(&model), [0, 40_064]);
+    let plan = model.sampler().pending.as_ref().unwrap();
+    assert_eq!(plan.job.edges, Edges::Fade);
 }
 
 #[test]

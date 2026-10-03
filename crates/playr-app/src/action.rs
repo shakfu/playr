@@ -132,7 +132,7 @@ pub enum Action {
     /// it to the next.
     NextMark,
     PrevMark,
-    /// Undo the last edit to the playing track's marks or range.
+    /// Undo the last edit to the playing track's marks, range or planned slices.
     Undo,
     /// Put back the last edit undone.
     Redo,

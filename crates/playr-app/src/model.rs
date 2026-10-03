@@ -906,6 +906,9 @@ impl Model {
                         }
                         Ok(plan) => {
                             self.sampler.onsets_wanted = None;
+                            // Its edits set by hand would otherwise be lost for good.
+                            let replaced = dispatch::before(self)
+                                .filter(|b| b.plan.as_ref().is_some_and(|p| p.job.cuts.is_some()));
                             let slices = plan.spans.len();
                             // A slice selected in the plan replaced goes with it.
                             if let Some((_, Selected::Slice(start))) = self.sampler.selected {
@@ -914,6 +917,9 @@ impl Model {
                                 }
                             }
                             self.sampler.pending = Some(plan);
+                            if let Some(replaced) = replaced {
+                                dispatch::remember(self, replaced);
+                            }
                             self.notify(Outcome::Planned { slices });
                         }
                         Err(error) => {

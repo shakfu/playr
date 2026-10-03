@@ -106,7 +106,7 @@ Sampler view unless marked global.
 
 - **Before and after, not inverses.** `dispatch` records the marks, range, plan and selection before each action and keeps them if the action changed the marks or range or edited the plan. Undo restores the difference, so an edit needs no inverse of its own, and one added later is undoable without more code. Marks are in the library database, so undoing a mark edit is a database write.
 
-- **Plans.** Making, replacing or discarding a plan is not an edit. Undo restores a plan only over the same cut, so it never puts back a cut that a later one replaced.
+- **Plans.** Making or replacing a plan is not an edit, so undo never puts back a cut that a later one replaced. The exception is an edited plan replaced or discarded, whose starts set by hand would otherwise be lost. That step is kept where it happens: `DiscardSlices`, or a new plan landing in `Model`, outside `dispatch`. Undo restores a plan over the same cut, or across such a step, and drops a plan still being made.
 
 - **Selection.** Undo and redo select what was selected in the state they restore, so a mark removed comes back selected.
 

@@ -828,10 +828,19 @@ fn act(action: Action, f: &mut impl Frontend) {
             Ok(_) => f.notify(Outcome::ConvertStarted { format }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
-        Action::DiscardSlices => match f.take_plan() {
-            Some(_) => f.notify(Message::SlicesDiscarded),
-            None => f.notify(Message::NoSlicesPlanned),
-        },
+        Action::DiscardSlices => {
+            // Edits set by hand would otherwise be lost for good.
+            let then = before(f).filter(|b| edited(&b.plan));
+            match f.take_plan() {
+                Some(_) => {
+                    if let Some(then) = then {
+                        remember(f, then);
+                    }
+                    f.notify(Message::SlicesDiscarded);
+                }
+                None => f.notify(Message::NoSlicesPlanned),
+            }
+        }
 
         Action::Map { view, key, action } => {
             let shown = Action::Map {
@@ -1689,11 +1698,23 @@ fn same_cut(a: &Plan, b: &Plan) -> bool {
     cut(a) == cut(b)
 }
 
+/// Whether `plan` has slice starts set by hand.
+fn edited(plan: &Option<Plan>) -> bool {
+    plan.as_ref().is_some_and(|p| p.job.cuts.is_some())
+}
+
+/// Keeps `state` for undo, and ends redo.
+pub fn remember(f: &mut impl Frontend, state: Before) {
+    keep(&mut f.sampler_mut().history, state);
+    f.sampler_mut().future.clear();
+}
+
 /// After an action: keeps `before` for undo if the action changed the marks
 /// or range, or edited the planned slices, and drops a selection that is gone.
 ///
-/// A plan made, replaced or discarded is not an edit: undo would put back a
-/// cut that a later one replaced.
+/// A plan made or replaced is not an edit here: undo would put back a cut that
+/// a later one replaced. An edited plan replaced or discarded is kept where
+/// that happens, as its edits would otherwise be lost.
 pub fn settle(f: &mut impl Frontend, before: Option<Before>) {
     let after = self::before(f);
     if let (Some(before), Some(after)) = (before, &after) {
@@ -1703,8 +1724,7 @@ pub fn settle(f: &mut impl Frontend, before: Option<Before>) {
         };
         let changed = before.marks != after.marks || before.range != after.range || edited;
         if before.path == after.path && changed {
-            keep(&mut f.sampler_mut().history, before);
-            f.sampler_mut().future.clear();
+            remember(f, before);
         }
     }
     let gone = match (f.sampler().selected.clone(), &after) {
@@ -1796,12 +1816,31 @@ fn restore(f: &mut impl Frontend, state: &Before, rate: u32) -> Result<(), Notic
     }
     f.sampler_mut().range = state.range.clone();
     follow_loop(f);
-    // The plan shown, if it is still the cut `state` edited.
+    // The plan shown, if it is still the cut `state` edited, or if this step
+    // replaced or discarded an edited plan.
     let plan = f.sampler_mut().pending.take();
-    f.sampler_mut().pending = match (plan, &state.plan) {
-        (Some(now), Some(then)) if same_cut(&now, then) => Some(then.clone()),
-        (plan, _) => plan,
+    let swap = edited(&plan)
+        || edited(&state.plan)
+        || matches!((&plan, &state.plan), (Some(now), Some(then)) if same_cut(now, then));
+    f.sampler_mut().pending = match swap {
+        true => state.plan.clone(),
+        false => plan,
     };
+    if swap {
+        // A plan still being made would replace the one put back.
+        f.sampler_mut().planning = None;
+        f.sampler_mut().onsets_wanted = None;
+        // Edges or fades changed since: plan it their way, keeping its starts.
+        if let Some(plan) = f.take_plan() {
+            match f.session().plans_current(&plan.job) {
+                true => f.sampler_mut().pending = Some(plan),
+                false => {
+                    let id = f.session_mut().replan(plan.job);
+                    f.planning(id);
+                }
+            }
+        }
+    }
     f.sampler_mut().selected = state.selected.map(|s| (state.path.clone(), s));
     Ok(())
 }
