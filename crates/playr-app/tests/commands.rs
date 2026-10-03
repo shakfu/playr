@@ -1333,7 +1333,7 @@ fn stop_takes_after_or_a_sleep_time_and_round_trips() {
 
 #[test]
 fn tape_commands_parse_in_any_view_and_round_trip() {
-    use playr_app::tape::{Pos, TapeAction as T, VoiceSetting as V};
+    use playr_app::tape::{Filter, Pos, TapeAction as T, VoiceSetting as V};
     let pct = Pos::Percent;
     for (text, action) in [
         ("tape load", T::Load(None)),
@@ -1371,6 +1371,15 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape 1 level 0.5", T::Voice(1, V::Level(0.5))),
         ("tape 1 pan -1", T::Voice(1, V::Pan(-1.0))),
         ("tape 1 fade 40", T::Voice(1, V::Fade(40.0))),
+        ("tape thin 0.2", T::Thin(0.2)),
+        ("tape 2 ping on", T::Voice(2, V::Ping(true))),
+        ("tape 1 slew 500", T::Voice(1, V::Slew(500.0))),
+        ("tape 3 drive 0.25", T::Voice(3, V::Drive(0.25))),
+        ("tape 1 filter 0.4", T::Voice(1, V::Cutoff(0.4))),
+        ("tape 1 filter hp", T::Voice(1, V::Filter(Filter::High))),
+        ("tape 2 filter bp", T::Voice(2, V::Filter(Filter::Band))),
+        ("tape 2 filter lp", T::Voice(2, V::Filter(Filter::Low))),
+        ("tape 3 solo on", T::Voice(3, V::Solo(true))),
     ] {
         let action = Action::Tape(action);
         for view in [Library, Sampler] {
@@ -1387,6 +1396,10 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape feedback 1.1", "feedback is 0 to 1"),
         ("tape 1 pan 2", "pan is -1 to 1"),
         ("tape 1 fade 2000", "fade is 0 to 1000"),
+        ("tape 1 slew 20000", "slew is 0 to 10000"),
+        ("tape 1 filter notch", "filter is 0 to 1"),
+        ("tape thin 2", "thin is 0 to 1"),
+        ("tape 1 ping maybe", "usage: :tape"),
         ("tape 3 wear -1", "wear is 0 to 1"),
         ("tape window 0 250%", "not a percentage: 250%"),
         ("tape load 9", "not a loop slot: 9"),

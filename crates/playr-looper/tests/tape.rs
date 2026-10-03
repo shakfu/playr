@@ -1,6 +1,6 @@
 //! The DSP, driven offline: the tests listed in `docs/dev/looper-engine.md`.
 
-use playr_looper::{Loop, Setting, Tape, Window};
+use playr_looper::{Filter, Loop, Setting, Tape, Window};
 
 const SR: u32 = 48_000;
 
@@ -599,5 +599,110 @@ fn a_send_crosses_the_range_s_edges_without_a_step() {
     for edge in [range.start, range.end] {
         let step = max_step(&b[edge - 600..edge + 600]);
         assert!(step <= material, "edge {edge}: {step} > {material}");
+    }
+}
+
+#[test]
+fn ping_turns_at_the_window_s_edges_without_a_jump() {
+    let src = noise(4000, 0.5);
+    let w = Window::new(1000, 2000);
+    let mut t = tape(
+        src.clone(),
+        1,
+        &[Setting::Window(0, w), Setting::Ping(0, true)],
+    );
+    let out = left(&run(&mut t, 3000));
+    for k in 0..1000 {
+        assert_eq!(out[k], src[1000 + k], "forward {k}");
+    }
+    // Back from the last frame, without playing it twice, then forward again.
+    for k in 0..999 {
+        assert_eq!(out[1000 + k], src[1998 - k], "back {k}");
+    }
+    assert_eq!(out[1999], src[1001]);
+    assert_eq!(out[2000], src[1002]);
+    run(&mut t, 100_000);
+    assert!(w.start as f64 <= t.voice(0) && t.voice(0) < w.end as f64);
+}
+
+#[test]
+fn a_slew_sets_how_long_a_rate_change_takes() {
+    let mut t = tape(sine(96_000, 220.0, 0.8), 1, &[Setting::Slew(0, 100.0)]);
+    run(&mut t, 1000);
+    let before = t.voice(0);
+    t.set(Setting::Rate(0, 2.0));
+    run(&mut t, 4800);
+    // A linear ramp from 1 to 2 over 100 ms covers 1.5 frames a frame.
+    let moved = t.voice(0) - before;
+    assert!((moved - 1.5 * 4800.0).abs() < 2.0, "{moved}");
+}
+
+#[test]
+fn drive_lifts_quiet_material_and_holds_loud_material_down() {
+    let peak = |amp: f32| {
+        let mut t = tape(sine(4800, 220.0, amp), 1, &[Setting::Drive(0, 1.0)]);
+        left(&run(&mut t, 4800))
+            .iter()
+            .fold(0.0f32, |m, s| m.max(s.abs()))
+    };
+    let quiet = peak(0.01);
+    assert!((quiet / 0.01 - 4.0).abs() < 0.05, "{quiet}: 12 dB up");
+    assert!(peak(0.9) <= 0.25);
+}
+
+#[test]
+fn the_filter_passes_its_band_and_cuts_the_rest() {
+    // Cutoff 0.5 is 632 Hz; 100 Hz is 2.7 octaves below, 5 kHz 3 above.
+    let gain = |kind: Filter, hz: f32| {
+        let src = sine(48_000, hz, 0.5);
+        let mut t = tape(
+            src.clone(),
+            1,
+            &[Setting::Cutoff(0, 0.5), Setting::Filter(0, kind)],
+        );
+        let out = left(&run(&mut t, 48_000));
+        rms(&out[4800..]) / rms(&src[4800..])
+    };
+    assert!(gain(Filter::Low, 100.0) > 0.95);
+    assert!(gain(Filter::Low, 5000.0) < 0.03);
+    assert!(gain(Filter::High, 100.0) < 0.03);
+    assert!(gain(Filter::High, 5000.0) > 0.95);
+    assert!(gain(Filter::Band, 632.0) > 0.95);
+    // Butterworth damping makes the band wide: about 0.22 and 0.18 here.
+    assert!(gain(Filter::Band, 100.0) < 0.25);
+    assert!(gain(Filter::Band, 5000.0) < 0.25);
+}
+
+#[test]
+fn solo_changes_what_is_heard_not_what_is_sent() {
+    let src = noise(4800, 0.5);
+    let settings = [
+        Setting::Write(true),
+        Setting::Feedback(0.5),
+        Setting::Send(0, 0.5),
+        Setting::On(1, true),
+        Setting::Rate(1, -1.0),
+        Setting::Send(1, 0.3),
+    ];
+    let mut soloed = tape(src.clone(), 1, &settings);
+    soloed.set(Setting::Solo(1, true));
+    let mut muted = tape(src, 1, &settings);
+    muted.set(Setting::Level(0, 0.0));
+    assert_eq!(run(&mut soloed, 4800 * 3), run(&mut muted, 4800 * 3));
+    assert_eq!(buffer(&soloed), buffer(&muted));
+}
+
+#[test]
+fn thin_takes_the_low_end_out_each_pass() {
+    // Brightness over power rises as the low end goes.
+    let tilt = |x: &[f32]| brightness(x) / rms(x).powi(2);
+    let src = noise(4800, 0.9);
+    let mut t = tape(src.clone(), 1, &[Setting::Write(true), Setting::Thin(1.0)]);
+    let mut last = tilt(&src);
+    for pass in 0..5 {
+        run(&mut t, 4800);
+        let b = tilt(&buffer(&t));
+        assert!(b > 1.02 * last, "pass {pass}: {b} vs {last}");
+        last = b;
     }
 }

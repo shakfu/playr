@@ -789,6 +789,9 @@ fn tape_controls_say_when_they_have_no_effect() {
     s.write = true;
     assert_eq!(idle(&s, C::Wear(0)), Some(Idle::NoSend));
     assert_eq!(idle(&s, C::Write), Some(Idle::Unchanging));
+    s.thin = 0.3;
+    assert_eq!(idle(&s, C::Write), None, "the loop now thins");
+    s.thin = 0.0;
     s.feedback = 0.9;
     assert_eq!(idle(&s, C::Write), None, "the loop now fades");
     assert_eq!(
@@ -808,6 +811,7 @@ fn tape_controls_say_when_they_have_no_effect() {
         C::Feedback,
         C::WriteWear,
         C::WriteWindow,
+        C::Thin,
     ] {
         assert_eq!(idle(&s, c), Some(Idle::WriteOff), "{c:?}");
     }
@@ -821,17 +825,27 @@ fn tape_controls_say_when_they_have_no_effect() {
         C::Send(1),
         C::Wear(1),
         C::Fade(1),
+        C::Ping(1),
+        C::Slew(1),
+        C::Drive(1),
+        C::Cutoff(1),
+        C::Filter(1),
     ] {
         assert_eq!(idle(&s, c), Some(Idle::VoiceOff), "{c:?}");
     }
+    // Soloing a voice that is off still silences the others.
+    assert_eq!(idle(&s, C::Solo(1)), None);
     s.voices[0].level = 0.0;
     assert_eq!(idle(&s, C::Pan(0)), Some(Idle::Silent));
     s.voices[0].rate = 0.0;
     assert_eq!(idle(&s, C::Fade(0)), Some(Idle::Still));
+    assert_eq!(idle(&s, C::Ping(0)), Some(Idle::Still));
     // A window over the whole buffer has nothing either side to fade into.
     s.voices[0].rate = 1.0;
     s.voices[0].window = Window::new(0, 10_000);
     assert_eq!(idle(&s, C::Fade(0)), Some(Idle::NoRoom));
     s.voices[0].window = e.range;
     assert_eq!(idle(&s, C::Fade(0)), None);
+    s.voices[0].ping = true;
+    assert_eq!(idle(&s, C::Fade(0)), Some(Idle::Turns));
 }

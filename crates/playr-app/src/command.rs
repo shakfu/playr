@@ -621,13 +621,14 @@ pub fn line(action: &Action, view: Option<View>) -> String {
 
 /// What `:tape` takes, as its usage says it.
 const TAPE_USAGE: &str = "usage: :tape load [N] | play | stop | reset | save | rec | \
-     write on|off | feedback F | wear W | window A B | \
-     V on|off | V rate R|window A B|level L|pan P|send S|wear W|fade MS";
+     write on|off | feedback F | wear W | thin T | window A B | \
+     V on|off | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
+     ping on|off|slew MS|drive D|filter F|lp|hp|bp|solo on|off";
 
 /// Parses what follows `:tape`. Voices count from 1; windows take a time or
 /// a percentage of the loop at each end.
 fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
-    use crate::tape::{TapeAction as T, VoiceSetting as V};
+    use crate::tape::{Filter, TapeAction as T, VoiceSetting as V};
     let usage = || TAPE_USAGE.to_string();
     let value = |w: &str, what: &str, lo: f32, hi: f32| {
         w.parse::<f32>()
@@ -655,6 +656,7 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
         ["write", w] => on(w).map(T::Write),
         ["feedback", v] => value(v, "feedback", 0.0, 1.0).map(T::Feedback),
         ["wear", v] => value(v, "wear", 0.0, 1.0).map(T::Wear),
+        ["thin", v] => value(v, "thin", 0.0, 1.0).map(T::Thin),
         ["window", a, b] => Ok(T::WriteWindow(tape_pos(a)?, tape_pos(b)?)),
         [n, setting @ ..] if n.parse::<u8>().is_ok() => {
             let n: u8 = n.parse().expect("checked");
@@ -670,6 +672,14 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
                 ["send", v] => V::Send(value(v, "send", 0.0, 1.0)?),
                 ["wear", v] => V::Wear(value(v, "wear", 0.0, 1.0)?),
                 ["fade", ms] => V::Fade(value(ms, "fade", 0.0, 1000.0)?),
+                ["ping", w] => V::Ping(on(w)?),
+                ["slew", ms] => V::Slew(value(ms, "slew", 0.0, playr_looper::MAX_SLEW_MS)?),
+                ["drive", v] => V::Drive(value(v, "drive", 0.0, 1.0)?),
+                ["filter", "lp"] => V::Filter(Filter::Low),
+                ["filter", "hp"] => V::Filter(Filter::High),
+                ["filter", "bp"] => V::Filter(Filter::Band),
+                ["filter", v] => V::Cutoff(value(v, "filter", 0.0, 1.0)?),
+                ["solo", w] => V::Solo(on(w)?),
                 _ => return Err(usage()),
             };
             Ok(T::Voice(n, s))
@@ -695,7 +705,7 @@ fn tape_pos(word: &str) -> Result<crate::tape::Pos, String> {
 
 /// What follows `tape ` in the command line for `t`.
 fn tape_line(t: &crate::tape::TapeAction) -> String {
-    use crate::tape::{Pos, TapeAction as T, VoiceSetting as V};
+    use crate::tape::{Filter, Pos, TapeAction as T, VoiceSetting as V};
     let n = |v: &f32| number(f64::from(*v));
     let pos = |p: &Pos| match p {
         Pos::Percent(p) => format!("{}%", n(p)),
@@ -714,6 +724,7 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
         T::WriteWindow(a, b) => format!("window {} {}", pos(a), pos(b)),
         T::Feedback(v) => format!("feedback {}", n(v)),
         T::Wear(v) => format!("wear {}", n(v)),
+        T::Thin(v) => format!("thin {}", n(v)),
         T::Voice(i, s) => match s {
             V::On(b) => format!("{i} {}", on(b)),
             V::Rate(v) => format!("{i} rate {}", n(v)),
@@ -723,6 +734,19 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
             V::Send(v) => format!("{i} send {}", n(v)),
             V::Wear(v) => format!("{i} wear {}", n(v)),
             V::Fade(v) => format!("{i} fade {}", n(v)),
+            V::Ping(b) => format!("{i} ping {}", on(b)),
+            V::Slew(v) => format!("{i} slew {}", n(v)),
+            V::Drive(v) => format!("{i} drive {}", n(v)),
+            V::Cutoff(v) => format!("{i} filter {}", n(v)),
+            V::Filter(f) => format!(
+                "{i} filter {}",
+                match f {
+                    Filter::Low => "lp",
+                    Filter::High => "hp",
+                    Filter::Band => "bp",
+                }
+            ),
+            V::Solo(b) => format!("{i} solo {}", on(b)),
         },
     }
 }

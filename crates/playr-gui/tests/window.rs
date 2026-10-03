@@ -1076,7 +1076,7 @@ fn convert_to_shows_once_enabled_and_is_disabled_until_convertwithmoss_is_instal
         config,
     );
     let mut harness = Harness::builder()
-        .with_size(egui::vec2(800.0, 504.0))
+        .with_size(egui::vec2(800.0, 592.0))
         .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
     harness.run_steps(2);
     let open = |harness: &mut Harness<'_, Gui>| {
@@ -1130,7 +1130,7 @@ fn the_sampler_menu_holds_every_table_no_button_draws() {
 /// A window at its minimum size, as `with_min_inner_size` in main.rs, playing a track with a long title, in `view`,
 /// with the transport's buttons as words when `text`.
 fn smallest(dir: &std::path::Path, view: &str, text: bool) -> Harness<'static, Gui> {
-    sized(dir, view, text, 504.0)
+    sized(dir, view, text, 592.0)
 }
 
 /// The same, 800 points wide and `height` high.
@@ -1195,7 +1195,7 @@ fn assert_fits(harness: &Harness<'_, Gui>, window: egui::Rect, what: &str) {
 
 #[test]
 fn every_control_fits_the_smallest_window_without_overlap() {
-    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 504.0));
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 592.0));
     for (view, text) in [("1", false), ("5", false), ("1", true)] {
         let dir = tempfile::tempdir().unwrap();
         let harness = smallest(dir.path(), view, text);
@@ -1206,7 +1206,7 @@ fn every_control_fits_the_smallest_window_without_overlap() {
 
 #[test]
 fn the_sampler_s_controls_leave_the_waveform_200_points_of_the_smallest_window() {
-    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 504.0));
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 592.0));
     let dir = tempfile::tempdir().unwrap();
     let mut harness = smallest(dir.path(), "5", false);
     // The slice row at its widest: a slider, and a plan to review.
@@ -1267,7 +1267,7 @@ fn transport_text_buttons_show_words() {
 
 #[test]
 fn the_waveform_takes_the_height_the_controls_leave() {
-    for height in [504.0, 720.0] {
+    for height in [592.0, 720.0] {
         let dir = tempfile::tempdir().unwrap();
         let harness = sized(dir.path(), "5", false, height);
         let rect = |label: &str| harness.get_by_label(label).rect();
@@ -1430,7 +1430,7 @@ fn a_planned_slice_start_is_clicked_and_dragged_over_a_mark() {
 
 #[test]
 fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
-    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 504.0));
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 592.0));
     let dir = tempfile::tempdir().unwrap();
     let mut harness = smallest(dir.path(), "1", false);
     harness.get_by_label("Tape").click();
@@ -1445,6 +1445,13 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
         "Voice 2 on",
         "Voice 3 fade",
         "Write on",
+        "Voice 2 ping",
+        "Voice 3 solo",
+        "Voice 1 slew",
+        "Voice 3 drive",
+        "Voice 3 filter",
+        "Voice 3 band-pass",
+        "Write thin",
     ] {
         harness.get_by_label(label);
     }
@@ -1551,4 +1558,13 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
         "{ww:?}"
     );
     assert!(window(&harness, 1).start.abs_diff(20_000) <= 100);
+
+    // The toggles by each name, and the filter's type.
+    for label in ["Voice 2 ping", "Voice 3 solo", "Voice 1 high-pass"] {
+        harness.get_by_label(label).click();
+        harness.run_steps(2);
+    }
+    let s = *harness.state().model().deck().state().unwrap();
+    assert!(s.voices[1].ping && s.voices[2].solo);
+    assert_eq!(s.voices[0].filter, playr_app::tape::Filter::High);
 }

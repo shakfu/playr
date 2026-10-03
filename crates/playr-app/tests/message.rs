@@ -603,7 +603,11 @@ fn idle_tape_controls_say_why() {
         ),
         (
             Idle::Unchanging,
-            "nothing changes: Feedback is 1, Wear is 0 and every Send is 0",
+            "nothing changes: Feedback is 1, Wear and Thin are 0 and every Send is 0",
+        ),
+        (
+            Idle::Turns,
+            "no effect: Ping turns the head at the edges, so it never wraps",
         ),
     ] {
         assert_eq!(idle_text(idle), words);

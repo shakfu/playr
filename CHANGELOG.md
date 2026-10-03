@@ -6,19 +6,24 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
-- A tape looper over the sampler's range. Three voices read one loop, each at its own rate (-4 to 4, negative in reverse), over its own window, with its own level, pan, crossfade, and a low-pass on what it sends. A write head records the sends back into the loop with feedback and a darkening low-pass of its own, so each pass changes the loop. The load keeps up to a second of the track either side of the range as pre-roll and post-roll, so a crossfade fades into the audio that followed the window and the loop repeats exactly one window long. While the write window is the range, the write head writes the rolls as the range's continuation, so they keep the loop's level and carry its sends; frozen rolls played the track at full level at every wrap once feedback had faded the loop. On a stereo loop, pan folds the far channel into the near one rather than dropping it. The loop or the mix saves as a 32-bit float WAV under `samples/<track>-tape/` and is added to the library. It plays on its own output stream, on the player's device, and pauses the player. The terminal has the commands; the window adds a Tape tab with the waveform, the windows and heads, the selected voice's window dragged on the waveform by its edges or whole, and a strip of controls per voice and one for the write head. The server has neither. Library API: the new crate `playr-looper`, with `Loop::with_range`, `Setting::VoiceWear`, `crossfade` and `fade_frames`; `Action::Tape`, `playr_app::tape` with `no_effect`, `message::idle_text`, `Frontend::tape`, `Model::deck`, `Session::add_to_library`; `samples::read_frames`, `unused_dir` and `name_for` are public.
+- A tape looper over the sampler's range. Three voices read one loop, each at its own rate (-4 to 4, negative in reverse), over its own window, with its own level, pan, crossfade, rate slew, drive, filter, and a low-pass on what it sends; a voice can turn at its window's edges instead of wrapping, and can be soloed. A write head records the sends back into the loop with feedback, a darkening low-pass and a thinning high-pass of its own, so each pass changes the loop. The load keeps up to a second of the track either side of the range as pre-roll and post-roll, so a crossfade fades into the audio that followed the window and the loop repeats exactly one window long. While the write window is the range, the write head writes the rolls as the range's continuation, so they keep the loop's level and carry its sends; frozen rolls played the track at full level at every wrap once feedback had faded the loop. On a stereo loop, pan folds the far channel into the near one rather than dropping it. The loop or the mix saves as a 32-bit float WAV under `samples/<track>-tape/` and is added to the library. It plays on its own output stream, on the player's device, and pauses the player. The terminal has the commands; the window adds a Tape tab with the waveform, the windows and heads, the selected voice's window dragged on the waveform by its edges or whole, and a strip of controls per voice and one for the write head. The server has neither. Library API: the new crate `playr-looper`, with `Loop::with_range`, `Setting::VoiceWear`, `crossfade` and `fade_frames`; `Action::Tape`, `playr_app::tape` with `no_effect`, `message::idle_text`, `Frontend::tape`, `Model::deck`, `Session::add_to_library`; `samples::read_frames`, `unused_dir` and `name_for` are public.
 
   ```
   :tape load [N]        the range, or loop slot N, of the playing track
   :tape play|stop|reset|save|rec
   :tape 2 rate -0.5     :tape 3 window 25% 75%     :tape 2 send 0.6
   :tape 2 wear 0.4
+  :tape 1 ping on       :tape 1 slew 500           :tape 3 drive 0.25
+  :tape 1 filter 0.4    :tape 1 filter hp          :tape 2 solo on
   :tape write on        :tape feedback 0.85        :tape wear 0.3
+  :tape thin 0.2
   ```
 
   The design, and where the build departs from it, is in `docs/dev/looper-engine.md`.
 
 ### Changed
+
+- playr-gui's minimum height is 592 points, up from 504, so the Tape tab's strips fit without scrolling.
 
 - Undo brings back an edited plan that was discarded or replaced by a new cut, such as one from the window's Sensitivity slider. Before, the starts set by hand were lost with no way back. Making or replacing an unedited plan is still not a step: undo would put back a cut a later one replaced.
 

@@ -7,7 +7,7 @@ use playr_app::action::Action;
 use playr_app::message::idle_text;
 use playr_app::model::Model;
 use playr_app::tape::{
-    no_effect, Control as C, Extent, Pos, TapeAction as T, TapeState, VoiceSetting as V,
+    no_effect, Control as C, Extent, Filter, Pos, TapeAction as T, TapeState, VoiceSetting as V,
 };
 use playr_looper::{Window, COLUMNS, VOICES};
 
@@ -252,7 +252,10 @@ fn waveform(
             false => visuals.weak_text_color(),
         };
         painter.rect_filled(lane, 1.0, colour.gamma_multiply(0.35));
-        crossfades(&painter, v, extent, lane, &x, colour);
+        // A head under Ping turns rather than wraps, so it never crossfades.
+        if !v.ping {
+            crossfades(&painter, v, extent, lane, &x, colour);
+        }
         if i == selected {
             painter.rect_stroke(
                 lane,
@@ -555,14 +558,18 @@ fn slider(
     .then_some(v)
 }
 
-/// A voice strip's rows, with what each does. On sits by the name, to fit
-/// the smallest window.
-const VOICE_ROWS: [(&str, &str); 7] = [
+/// A voice strip's rows, with what each does. On, Ping and Solo sit by the
+/// name, to fit the smallest window.
+const VOICE_ROWS: [(&str, &str); 11] = [
     (
         "Window",
         "where the voice's window starts and ends, in % of the loop",
     ),
     ("Rate", "frames a frame; negative plays in reverse"),
+    (
+        "Slew",
+        "how long a rate change takes, in ms; long slews bend the pitch as a tape speeding up or slowing down",
+    ),
     ("Level", "what is heard of the voice"),
     (
         "Pan",
@@ -577,13 +584,22 @@ const VOICE_ROWS: [(&str, &str); 7] = [
         "a low-pass on what the voice sends; it darkens what the voice prints each pass",
     ),
     (
+        "Drive",
+        "saturation on what the voice reads, heard and sent: quiet material up to 12 dB louder, loud material held down",
+    ),
+    (
+        "Filter",
+        "the filter's cutoff, 20 Hz to 20 kHz; a low-pass at 1 or a high-pass at 0 passes everything",
+    ),
+    ("Type", "what the filter passes: lows, highs, or a band"),
+    (
         "Xfade",
         "the crossfade at each wrap, in ms: the head leaving fades out into the audio past the window as the one starting fades in; the loop keeps its length",
     ),
 ];
 
 /// The write strip's rows.
-const WRITE_ROWS: [(&str, &str); 3] = [
+const WRITE_ROWS: [(&str, &str); 4] = [
     (
         "Window",
         "where the part of the loop that is rewritten starts and ends",
@@ -596,6 +612,17 @@ const WRITE_ROWS: [(&str, &str); 3] = [
         "Wear",
         "a low-pass on everything the write head records; it darkens the loop each pass",
     ),
+    (
+        "Thin",
+        "a high-pass on everything the write head records, 20 Hz to 2 kHz; it thins the loop each pass",
+    ),
+];
+
+/// The filter types, as the Type row names them, with what each passes.
+const FILTERS: [(Filter, &str, &str); 3] = [
+    (Filter::Low, "LP", "low-pass"),
+    (Filter::High, "HP", "high-pass"),
+    (Filter::Band, "BP", "band-pass"),
 ];
 
 /// A strip per voice, then the write head's, side by side; a parameter adds
@@ -642,6 +669,27 @@ fn row<R>(
     r
 }
 
+/// A toggle named `name` for assistive technology, showing `text`; whether
+/// it was clicked.
+fn toggle(ui: &mut egui::Ui, on: bool, text: &str, name: String, tip: &str) -> bool {
+    let response = ui.selectable_label(on, text).on_hover_text(tip);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, &name)
+    });
+    response.clicked()
+}
+
+/// A field in ms from 0 to `max`, dimmed when `idle` says why it has no
+/// effect; the new value on a change.
+fn ms(ui: &mut egui::Ui, value: f32, max: f32, name: String, idle: Option<&str>) -> Option<f32> {
+    let mut v = value;
+    let response = dimmed(ui, idle, |ui| {
+        ui.add(egui::DragValue::new(&mut v).range(0.0..=max))
+    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &name));
+    response.changed().then_some(v)
+}
+
 /// Voice `i`'s strip: its name, which selects it, then its controls.
 fn voice(
     ui: &mut egui::Ui,
@@ -673,8 +721,20 @@ fn voice(
         {
             tab.selected = i;
         }
+        let ping = "turn at the window's edges and play back, instead of wrapping";
+        let ping = why(C::Ping(i)).unwrap_or(ping);
+        let clicked = dimmed_click(ui, why(C::Ping(i)), |ui| {
+            toggle(ui, v.ping, "Ping", format!("{name} ping"), ping)
+        });
+        if clicked {
+            set(V::Ping(!v.ping));
+        }
+        let solo = "hear only the soloed voices; what each sends is unchanged";
+        if toggle(ui, v.solo, "S", format!("{name} solo"), solo) {
+            set(V::Solo(!v.solo));
+        }
     });
-    let [window_row, rate, level, pan, send, wear, fade] = VOICE_ROWS;
+    let [window_row, rate, slew, level, pan, send, wear, drive, filter, kind, fade] = VOICE_ROWS;
     strip(ui, ("tape voice", i), |ui| {
         let w = row(ui, window_row, |ui| {
             window(ui, v.window, e, &name, why(C::Window(i)))
@@ -694,28 +754,67 @@ fn voice(
             (pan, v.pan, -1.0..=1.0, C::Pan(i), V::Pan),
             (send, v.send, 0.0..=1.0, C::Send(i), V::Send),
             (wear, v.wear, 0.0..=1.0, C::Wear(i), V::Wear),
+            (drive, v.drive, 0.0..=1.0, C::Drive(i), V::Drive),
+            (filter, v.cutoff, 0.0..=1.0, C::Cutoff(i), V::Cutoff),
         ];
-        for (heading, value, range, control, setting) in sliders {
+        for (k, (heading, value, range, control, setting)) in sliders.into_iter().enumerate() {
             let label = format!("{name} {}", heading.0.to_lowercase());
             if let Some(x) = row(ui, heading, |ui| {
                 slider(ui, value, range, label, why(control))
             }) {
                 set(setting(x));
             }
+            // Slew under Rate, which it changes.
+            if k == 0 {
+                let label = format!("{name} slew");
+                let max = playr_looper::MAX_SLEW_MS;
+                if let Some(x) = row(ui, slew, |ui| ms(ui, v.slew, max, label, why(C::Slew(i)))) {
+                    set(V::Slew(x));
+                }
+            }
         }
-        let mut value = v.fade;
-        let response = row(ui, fade, |ui| {
-            dimmed(ui, why(C::Fade(i)), |ui| {
-                ui.add(egui::DragValue::new(&mut value).range(0.0..=1000.0))
+        let picked = row(ui, kind, |ui| {
+            ui.horizontal(|ui| {
+                let mut picked = None;
+                for (f, text, what) in FILTERS {
+                    let clicked = dimmed_click(ui, why(C::Filter(i)), |ui| {
+                        let tip = why(C::Filter(i)).unwrap_or(what);
+                        toggle(ui, v.filter == f, text, format!("{name} {what}"), tip)
+                    });
+                    if clicked {
+                        picked = Some(f);
+                    }
+                }
+                picked
             })
+            .inner
         });
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, format!("{name} fade"))
-        });
-        if response.changed() {
-            set(V::Fade(value));
+        if let Some(f) = picked {
+            set(V::Filter(f));
+        }
+        let label = format!("{name} fade");
+        if let Some(x) = row(ui, fade, |ui| {
+            ms(ui, v.fade, 1000.0, label, why(C::Fade(i)))
+        }) {
+            set(V::Fade(x));
         }
     });
+}
+
+/// Adds a clickable control with `add`, dimmed when `idle` says it has no
+/// effect; whether it was clicked.
+fn dimmed_click(
+    ui: &mut egui::Ui,
+    idle: Option<&str>,
+    add: impl FnOnce(&mut egui::Ui) -> bool,
+) -> bool {
+    ui.scope(|ui| {
+        if idle.is_some() {
+            ui.multiply_opacity(0.4);
+        }
+        add(ui)
+    })
+    .inner
 }
 
 /// The write head's strip: its own controls, as the voices' do not apply.
@@ -737,7 +836,7 @@ fn write_strip(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Ve
         }
         ui.label("Write");
     });
-    let [window_row, feedback, wear] = WRITE_ROWS;
+    let [window_row, feedback, wear, thin] = WRITE_ROWS;
     strip(ui, "tape write", |ui| {
         let w = row(ui, window_row, |ui| {
             window(ui, state.write_window, e, "Write", why(C::WriteWindow))
@@ -745,17 +844,23 @@ fn write_strip(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Ve
         if let Some((a, b)) = w {
             push(T::WriteWindow(a, b));
         }
-        let label = "Write feedback".to_string();
-        if let Some(x) = row(ui, feedback, |ui| {
-            slider(ui, state.feedback, 0.0..=1.0, label, why(C::Feedback))
-        }) {
-            push(T::Feedback(x));
-        }
-        let label = "Write wear".to_string();
-        if let Some(x) = row(ui, wear, |ui| {
-            slider(ui, state.wear, 0.0..=1.0, label, why(C::WriteWear))
-        }) {
-            push(T::Wear(x));
+        let sliders = [
+            (
+                feedback,
+                state.feedback,
+                C::Feedback,
+                T::Feedback as fn(f32) -> T,
+            ),
+            (wear, state.wear, C::WriteWear, T::Wear),
+            (thin, state.thin, C::Thin, T::Thin),
+        ];
+        for (heading, value, control, action) in sliders {
+            let label = format!("Write {}", heading.0.to_lowercase());
+            if let Some(x) = row(ui, heading, |ui| {
+                slider(ui, value, 0.0..=1.0, label, why(control))
+            }) {
+                push(action(x));
+            }
         }
     });
 }

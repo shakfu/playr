@@ -5,8 +5,10 @@ use std::f32::consts::FRAC_PI_2;
 
 use crate::{Error, COLUMNS, VOICES};
 
-/// How long changes to rate, level, pan, send, feedback and wear take.
+/// How long changes to level, pan, send, feedback and wear take.
 const SMOOTH_MS: f32 = 20.0;
+/// How long a rate change takes until a voice's slew is set.
+pub const DEFAULT_SLEW_MS: f32 = SMOOTH_MS;
 /// How long the write blends in and out at the write window's edges.
 const EDGE_MS: f32 = 10.0;
 /// The crossfade at a voice's wrap until set otherwise.
@@ -17,6 +19,14 @@ const DC_HZ: f32 = 10.0;
 /// band on a log scale.
 const WEAR_HZ: f32 = 500.0;
 const WEAR_TOP_HZ: f32 = 20_000.0;
+/// The thin high-pass's cutoff at thin 0 and at 1, on a log scale between.
+const THIN_HZ: (f32, f32) = (20.0, 2000.0);
+/// A voice filter's cutoff at 0 and at 1, on a log scale between.
+const FILTER_HZ: (f32, f32) = (20.0, 20_000.0);
+/// The gain a voice's drive reaches at 1, as a ratio: 24 dB.
+const DRIVE_GAIN: f32 = 16.0;
+/// The longest rate slew, in ms.
+pub const MAX_SLEW_MS: f32 = 10_000.0;
 
 /// The wear low-pass's one-pole coefficient: off at 0, falling on a log
 /// scale from the top of the band to [`WEAR_HZ`] at 1.
@@ -24,6 +34,96 @@ fn wear_coefficient(wear: f32, sample_rate: u32) -> f32 {
     let top = WEAR_TOP_HZ.min(0.45 * sample_rate as f32);
     let fc = top * (WEAR_HZ / top).powf(wear);
     1.0 - (-std::f32::consts::TAU * fc / sample_rate as f32).exp()
+}
+
+/// A one-pole low-pass coefficient for a cutoff of `hz`.
+fn one_pole(hz: f32, sample_rate: u32) -> f32 {
+    1.0 - (-std::f32::consts::TAU * hz / sample_rate as f32).exp()
+}
+
+/// The thin high-pass's one-pole coefficient: 20 Hz at 0, rising on a log
+/// scale to 2 kHz at 1.
+fn thin_coefficient(thin: f32, sample_rate: u32) -> f32 {
+    let (lo, hi) = THIN_HZ;
+    one_pole(lo * (hi / lo).powf(thin), sample_rate)
+}
+
+/// Drive `d`, 0 to 1: gain up to [`DRIVE_GAIN`] into the soft clip, half of
+/// it in dB taken back after, so quiet material gains up to 12 dB and loud
+/// material is held under a quarter of full scale. 0 passes `x` unchanged.
+fn drive(x: f32, d: f32) -> f32 {
+    if d == 0.0 {
+        return x;
+    }
+    let k = DRIVE_GAIN.powf(d);
+    clip(k * x) / k.sqrt()
+}
+
+/// What a voice's filter passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Filter {
+    #[default]
+    Low,
+    High,
+    Band,
+}
+
+/// A state-variable filter, Butterworth damped, per channel, in its
+/// topology-preserving form, which stays stable as the cutoff moves.
+#[derive(Debug, Clone, Copy)]
+struct Svf {
+    ic1: [f32; 2],
+    ic2: [f32; 2],
+    a: [f32; 3],
+    /// The cutoff, 0 to 1, the coefficients were computed for.
+    at: f32,
+}
+
+/// The damping, 1/Q, for a Butterworth response.
+const SVF_K: f32 = std::f32::consts::SQRT_2;
+
+impl Svf {
+    fn new() -> Self {
+        Svf {
+            ic1: [0.0; 2],
+            ic2: [0.0; 2],
+            a: [0.0; 3],
+            at: f32::NAN,
+        }
+    }
+
+    fn tune(&mut self, cutoff: f32, sample_rate: u32) {
+        if cutoff == self.at {
+            return;
+        }
+        self.at = cutoff;
+        let (lo, hi) = FILTER_HZ;
+        let hz = (lo * (hi / lo).powf(cutoff)).min(0.45 * sample_rate as f32);
+        let g = (std::f32::consts::PI * hz / sample_rate as f32).tan();
+        let a1 = 1.0 / (1.0 + g * (g + SVF_K));
+        self.a = [a1, g * a1, g * g * a1];
+    }
+
+    /// Filters `x` in place as `kind` at the tuned cutoff. Low at 1 and high
+    /// at 0 pass it unchanged; the state runs on, so moving off either end
+    /// does not start from silence.
+    fn process(&mut self, x: &mut [f32; 2], kind: Filter, cutoff: f32) {
+        let [a1, a2, a3] = self.a;
+        for (ch, x) in x.iter_mut().enumerate() {
+            let v3 = *x - self.ic2[ch];
+            let v1 = a1 * self.ic1[ch] + a2 * v3;
+            let v2 = self.ic2[ch] + a2 * self.ic1[ch] + a3 * v3;
+            self.ic1[ch] = 2.0 * v1 - self.ic1[ch];
+            self.ic2[ch] = 2.0 * v2 - self.ic2[ch];
+            *x = match kind {
+                Filter::Low if cutoff >= 1.0 => *x,
+                Filter::High if cutoff <= 0.0 => *x,
+                Filter::Low => v2,
+                Filter::High => *x - SVF_K * v1 - v2,
+                Filter::Band => SVF_K * v1,
+            };
+        }
+    }
 }
 
 /// Output frames a crossfade at a wrap takes: `fade_ms`, cut to half the time
@@ -300,10 +400,23 @@ pub enum Setting {
     Fade(usize, f32),
     /// The low-pass on the voice's send, 0 to 1 as [`Setting::Wear`].
     VoiceWear(usize, f32),
+    /// Turn at the window's edges instead of wrapping.
+    Ping(usize, bool),
+    /// How long a rate change takes, 0 to [`MAX_SLEW_MS`] ms.
+    Slew(usize, f32),
+    /// Saturation on what the voice reads, 0 to 1.
+    Drive(usize, f32),
+    /// The voice filter's cutoff, 0 to 1: 20 Hz to 20 kHz on a log scale.
+    Cutoff(usize, f32),
+    Filter(usize, Filter),
+    /// Hear only the soloed voices, while any is; sends are unchanged.
+    Solo(usize, bool),
     Write(bool),
     WriteWindow(Window),
     Feedback(f32),
     Wear(f32),
+    /// A high-pass on everything the write head records, 0 to 1.
+    Thin(f32),
 }
 
 /// One read head, and a second while a wrap crossfades.
@@ -320,6 +433,17 @@ struct Voice {
     wear_at: f32,
     wear_a: f32,
     wear_lp: [f32; 2],
+    drive: Ramp,
+    cutoff: Ramp,
+    filter: Filter,
+    svf: Svf,
+    /// What is heard of the voice under solo, 0 or 1.
+    heard: Ramp,
+    solo: bool,
+    ping: bool,
+    /// The direction Ping has turned the head to, as a sign on its rate.
+    dir: f64,
+    slew_ms: f32,
     fade_ms: f32,
     window: Window,
     /// A window set while the head was inside the current one; it applies
@@ -349,6 +473,15 @@ impl Voice {
             wear_at: 0.0,
             wear_a: 1.0,
             wear_lp: [0.0; 2],
+            drive: Ramp::new(0.0),
+            cutoff: Ramp::new(1.0),
+            filter: Filter::Low,
+            svf: Svf::new(),
+            heard: Ramp::new(1.0),
+            solo: false,
+            ping: false,
+            dir: 1.0,
+            slew_ms: DEFAULT_SLEW_MS,
             fade_ms: DEFAULT_FADE_MS,
             window: Window::new(0, 0),
             next: None,
@@ -382,6 +515,7 @@ impl Voice {
             self.pos = self.home(w);
             self.homed = true;
             self.old = None;
+            self.dir = 1.0;
         } else if w.contains(self.pos) {
             self.next = Some(w);
         } else {
@@ -405,10 +539,13 @@ impl Voice {
             return false;
         }
         let rate = self.rate.next();
-        let level = self.level.next() * gate;
+        let level = self.level.next() * gate * self.heard.next();
         let pan = self.pan.next();
         let sends = self.send.next() * gate;
         let wear = self.wear.next();
+        let drive_d = self.drive.next();
+        let cutoff = self.cutoff.next();
+        self.svf.tune(cutoff, sample_rate);
         if wear != self.wear_at {
             self.wear_at = wear;
             self.wear_a = wear_coefficient(wear, sample_rate);
@@ -425,6 +562,11 @@ impl Voice {
                 *s = *s * gin + o * gout;
             }
         }
+        // Drive, then the filter, which can take off the edge drive adds.
+        for s in s.iter_mut().take(lp.channels) {
+            *s = drive(*s, drive_d);
+        }
+        self.svf.process(&mut s, self.filter, cutoff);
 
         let [l, r] = pan_frame(s, lp.channels, pan);
         mix[0] += l * level;
@@ -443,7 +585,7 @@ impl Voice {
     }
 
     fn advance(&mut self, rate: f32, sample_rate: u32, frames: usize) {
-        let r = rate as f64;
+        let r = rate as f64 * self.dir;
         self.pos += r;
         self.homed = false;
         if let Some(old) = &mut self.old {
@@ -455,6 +597,9 @@ impl Voice {
         }
         if rate == 0.0 {
             return;
+        }
+        if self.ping {
+            return self.turn(sample_rate);
         }
         let (w, to) = (self.window, self.next.unwrap_or(self.window));
         let x = crossfade(w, to, frames, rate, self.fade_ms, sample_rate);
@@ -483,6 +628,29 @@ impl Voice {
     }
 }
 
+impl Voice {
+    /// Under Ping: a head past either end of its window comes back from it,
+    /// reversed, with no jump to fade over. A window set meanwhile applies here.
+    fn turn(&mut self, sample_rate: u32) {
+        let w = self.window;
+        let (first, last) = (w.start as f64, (w.end - 1) as f64);
+        let back = match () {
+            _ if self.pos > last => 2.0 * last - self.pos,
+            _ if self.pos < first => 2.0 * first - self.pos,
+            _ => return,
+        };
+        self.dir = -self.dir;
+        self.pos = back.clamp(first, last);
+        if let Some(to) = self.next.take() {
+            self.window = to;
+            if !to.contains(self.pos) {
+                let at = self.pos.clamp(to.start as f64, (to.end - 1) as f64);
+                self.jump(at, self.rate.value, sample_rate);
+            }
+        }
+    }
+}
+
 /// One frame of the loop's `channels`, panned to stereo. Mono pans with equal
 /// power. Stereo keeps the near channel and pans the far one into it with
 /// equal power, so a hard pan keeps both channels' content. Both are unity
@@ -503,6 +671,8 @@ fn pan_frame(s: [f32; 2], channels: usize, pan: f32) -> [f32; 2] {
 #[derive(Debug, Clone, Copy, Default)]
 struct Filters {
     lp: [f32; 2],
+    /// The thin high-pass's low-pass, which it takes from its input.
+    hp: [f32; 2],
     dc_x: [f32; 2],
     dc_y: [f32; 2],
 }
@@ -512,6 +682,8 @@ struct Pass {
     feedback: f32,
     wear: f32,
     lp_a: f32,
+    thin: f32,
+    hp_a: f32,
     dc_g: f32,
     dc_r: f32,
     send: [f32; 2],
@@ -555,6 +727,11 @@ impl Lane {
                 x = f.lp[ch];
             } else {
                 f.lp[ch] = x;
+            }
+            // Its low-pass runs while off, so thin starts from where it is.
+            f.hp[ch] += p.hp_a * (x - f.hp[ch]);
+            if p.thin > 0.0 {
+                x -= f.hp[ch];
             }
             if p.sending {
                 let y = p.dc_g * (x - f.dc_x[ch]) + p.dc_r * f.dc_y[ch];
@@ -603,11 +780,15 @@ struct Writer {
     gate: Ramp,
     feedback: Ramp,
     wear: Ramp,
+    thin: Ramp,
     window: Window,
     pos: usize,
     /// The wear low-pass's coefficient, and the wear it was computed for.
     lp_a: f32,
     lp_wear: f32,
+    /// The thin high-pass's coefficient, and the thin it was computed for.
+    hp_a: f32,
+    hp_thin: f32,
     main: Lane,
     /// The post-roll and pre-roll, written while the window is the range.
     post: Lane,
@@ -621,10 +802,13 @@ impl Writer {
             gate: Ramp::new(0.0),
             feedback: Ramp::new(1.0),
             wear: Ramp::new(0.0),
+            thin: Ramp::new(0.0),
             window: Window::new(0, 0),
             pos: 0,
             lp_a: 1.0,
             lp_wear: 0.0,
+            hp_a: 0.0,
+            hp_thin: f32::NAN,
             main: Lane::new(),
             post: Lane::new(),
             pre: Lane::new(),
@@ -669,6 +853,7 @@ impl Writer {
         let gate = self.gate.next();
         let feedback = self.feedback.next();
         let wear = self.wear.next();
+        let thin = self.thin.next();
         if gate == 0.0 && !self.on {
             self.advance();
             return;
@@ -677,10 +862,16 @@ impl Writer {
             self.lp_wear = wear;
             self.lp_a = wear_coefficient(wear, sample_rate);
         }
+        if thin != self.hp_thin {
+            self.hp_thin = thin;
+            self.hp_a = thin_coefficient(thin, sample_rate);
+        }
         let p = Pass {
             feedback,
             wear,
             lp_a: self.lp_a,
+            thin,
+            hp_a: self.hp_a,
             dc_g: (1.0 + dc_r) / 2.0,
             dc_r,
             send,
@@ -792,6 +983,7 @@ impl Tape {
             }
             Setting::Feedback(v) if finite(v) => self.writer.feedback.set(v.clamp(0.0, 1.0), ramp),
             Setting::Wear(v) if finite(v) => self.writer.wear.set(v.clamp(0.0, 1.0), ramp),
+            Setting::Thin(v) if finite(v) => self.writer.thin.set(v.clamp(0.0, 1.0), ramp),
             Setting::On(i, on) if i < VOICES => {
                 let v = &mut self.voices[i];
                 v.on = on;
@@ -799,7 +991,11 @@ impl Tape {
             }
             Setting::Rate(i, r) if i < VOICES && finite(r) => {
                 let v = &mut self.voices[i];
-                v.rate.set(r.clamp(-4.0, 4.0), ramp);
+                let slew = match self.playing {
+                    true => (v.slew_ms * sr as f32 / 1000.0) as u32,
+                    false => 0,
+                };
+                v.rate.set(r.clamp(-4.0, 4.0), slew);
                 if v.homed {
                     v.pos = v.home(v.window);
                 }
@@ -818,6 +1014,28 @@ impl Tape {
             }
             Setting::Fade(i, ms) if i < VOICES && finite(ms) => {
                 self.voices[i].fade_ms = ms.clamp(0.0, 1000.0)
+            }
+            Setting::Ping(i, on) if i < VOICES => {
+                let v = &mut self.voices[i];
+                v.ping = on;
+                v.dir = 1.0;
+            }
+            Setting::Slew(i, ms) if i < VOICES && finite(ms) => {
+                self.voices[i].slew_ms = ms.clamp(0.0, MAX_SLEW_MS)
+            }
+            Setting::Drive(i, v) if i < VOICES && finite(v) => {
+                self.voices[i].drive.set(v.clamp(0.0, 1.0), ramp)
+            }
+            Setting::Cutoff(i, v) if i < VOICES && finite(v) => {
+                self.voices[i].cutoff.set(v.clamp(0.0, 1.0), ramp)
+            }
+            Setting::Filter(i, kind) if i < VOICES => self.voices[i].filter = kind,
+            Setting::Solo(i, on) if i < VOICES => {
+                self.voices[i].solo = on;
+                let any = self.voices.iter().any(|v| v.solo);
+                for v in &mut self.voices {
+                    v.heard.set((!any || v.solo) as u8 as f32, ramp);
+                }
             }
             Setting::Window(i, w) if i < VOICES && !w.is_empty() && w.end <= frames => {
                 self.voices[i].set_window(w, self.playing, sr)

@@ -9,6 +9,7 @@ use std::time::Duration;
 use playr_core::audio::resample::Resample;
 use playr_core::audio::State;
 use playr_core::samples;
+pub use playr_looper::Filter;
 use playr_looper::{Handle, Loop, Looper, Returned, Setting, Window};
 
 use crate::dispatch::Frontend;
@@ -35,6 +36,17 @@ pub enum VoiceSetting {
     Wear(f32),
     /// The crossfade at a wrap, in ms.
     Fade(f32),
+    /// Turn at the window's edges instead of wrapping.
+    Ping(bool),
+    /// How long a rate change takes, in ms.
+    Slew(f32),
+    /// Saturation on what the voice reads, 0 to 1.
+    Drive(f32),
+    /// The filter's cutoff, 0 to 1.
+    Cutoff(f32),
+    Filter(Filter),
+    /// Hear only the soloed voices; what they send is unchanged.
+    Solo(bool),
 }
 
 /// What `:tape` does.
@@ -57,6 +69,8 @@ pub enum TapeAction {
     WriteWindow(Pos, Pos),
     Feedback(f32),
     Wear(f32),
+    /// A high-pass on everything the write head records, 0 to 1.
+    Thin(f32),
 }
 
 /// What the tape reports.
@@ -155,6 +169,12 @@ pub struct VoiceState {
     pub send: f32,
     pub wear: f32,
     pub fade: f32,
+    pub ping: bool,
+    pub slew: f32,
+    pub drive: f32,
+    pub cutoff: f32,
+    pub filter: Filter,
+    pub solo: bool,
 }
 
 /// The tape's settings as last sent. The looper's own are not readable
@@ -167,6 +187,7 @@ pub struct TapeState {
     pub write_window: Window,
     pub feedback: f32,
     pub wear: f32,
+    pub thin: f32,
 }
 
 impl TapeState {
@@ -183,6 +204,12 @@ impl TapeState {
             send: 0.0,
             wear: 0.0,
             fade: playr_looper::DEFAULT_FADE_MS,
+            ping: false,
+            slew: playr_looper::DEFAULT_SLEW_MS,
+            drive: 0.0,
+            cutoff: 1.0,
+            filter: Filter::Low,
+            solo: false,
         };
         TapeState {
             voices: [voice(true), voice(false), voice(false)],
@@ -191,6 +218,7 @@ impl TapeState {
             write_window: whole,
             feedback: 1.0,
             wear: 0.0,
+            thin: 0.0,
         }
     }
 
@@ -210,6 +238,13 @@ impl TapeState {
             Setting::Send(i, x) => self.voices[i].send = x,
             Setting::Fade(i, x) => self.voices[i].fade = x,
             Setting::VoiceWear(i, x) => self.voices[i].wear = x,
+            Setting::Ping(i, on) => self.voices[i].ping = on,
+            Setting::Slew(i, x) => self.voices[i].slew = x,
+            Setting::Drive(i, x) => self.voices[i].drive = x,
+            Setting::Cutoff(i, x) => self.voices[i].cutoff = x,
+            Setting::Filter(i, f) => self.voices[i].filter = f,
+            Setting::Solo(i, on) => self.voices[i].solo = on,
+            Setting::Thin(x) => self.thin = x,
         }
     }
 }
@@ -594,10 +629,17 @@ pub enum Control {
     Send(usize),
     Wear(usize),
     Fade(usize),
+    Ping(usize),
+    Slew(usize),
+    Drive(usize),
+    Cutoff(usize),
+    Filter(usize),
+    Solo(usize),
     Write,
     WriteWindow,
     Feedback,
     WriteWear,
+    Thin,
 }
 
 /// Why a control does nothing as the tape is set.
@@ -610,9 +652,11 @@ pub enum Idle {
     Still,
     /// No pre-roll or post-roll for a crossfade to read.
     NoRoom,
-    /// Writing on, with nothing that changes the loop: feedback 1, wear 0
-    /// and every voice playing sending nothing.
+    /// Writing on, with nothing that changes the loop: feedback 1, wear 0,
+    /// thin 0 and every voice playing sending nothing.
     Unchanging,
+    /// Ping turns the head at the window's edges, so it never wraps.
+    Turns,
 }
 
 /// Why `control` has no effect with the tape set as `s`, over a loop of
@@ -622,7 +666,15 @@ pub fn no_effect(s: &TapeState, e: Extent, control: Control) -> Option<Idle> {
     let off = |i: usize| (!voice(i).on).then_some(Idle::VoiceOff);
     let write_off = || (!s.write).then_some(Idle::WriteOff);
     match control {
-        Control::Window(i) | Control::Rate(i) => off(i),
+        Control::Window(i)
+        | Control::Rate(i)
+        | Control::Slew(i)
+        | Control::Drive(i)
+        | Control::Cutoff(i)
+        | Control::Filter(i) => off(i),
+        Control::Ping(i) => off(i).or((voice(i).rate == 0.0).then_some(Idle::Still)),
+        // A voice off still silences the others when soloed.
+        Control::Solo(_) => None,
         Control::Level(i) => off(i),
         Control::Pan(i) => off(i).or((voice(i).level == 0.0).then_some(Idle::Silent)),
         Control::Send(i) => off(i).or_else(write_off),
@@ -634,13 +686,17 @@ pub fn no_effect(s: &TapeState, e: Extent, control: Control) -> Option<Idle> {
             let x = playr_looper::crossfade(v.window, v.window, e.frames, v.rate, 1000.0, e.rate);
             off(i)
                 .or((v.rate == 0.0).then_some(Idle::Still))
+                .or(v.ping.then_some(Idle::Turns))
                 .or((x.frames == 0).then_some(Idle::NoRoom))
         }
         Control::Write => {
             let sending = s.voices.iter().any(|v| v.on && v.send > 0.0);
-            (s.write && s.feedback == 1.0 && s.wear == 0.0 && !sending).then_some(Idle::Unchanging)
+            let still = s.feedback == 1.0 && s.wear == 0.0 && s.thin == 0.0;
+            (s.write && still && !sending).then_some(Idle::Unchanging)
         }
-        Control::WriteWindow | Control::Feedback | Control::WriteWear => write_off(),
+        Control::WriteWindow | Control::Feedback | Control::WriteWear | Control::Thin => {
+            write_off()
+        }
     }
 }
 
@@ -667,6 +723,7 @@ pub fn settings(action: TapeAction, e: Extent) -> Result<Vec<Setting>, TapeMessa
         TapeAction::WriteWindow(a, b) => Setting::WriteWindow(window(a, b)?),
         TapeAction::Feedback(v) => Setting::Feedback(v),
         TapeAction::Wear(v) => Setting::Wear(v),
+        TapeAction::Thin(v) => Setting::Thin(v),
         TapeAction::Voice(n, s) => {
             let i = usize::from(n) - 1;
             match s {
@@ -678,6 +735,12 @@ pub fn settings(action: TapeAction, e: Extent) -> Result<Vec<Setting>, TapeMessa
                 VoiceSetting::Send(v) => Setting::Send(i, v),
                 VoiceSetting::Wear(v) => Setting::VoiceWear(i, v),
                 VoiceSetting::Fade(ms) => Setting::Fade(i, ms),
+                VoiceSetting::Ping(on) => Setting::Ping(i, on),
+                VoiceSetting::Slew(ms) => Setting::Slew(i, ms),
+                VoiceSetting::Drive(v) => Setting::Drive(i, v),
+                VoiceSetting::Cutoff(v) => Setting::Cutoff(i, v),
+                VoiceSetting::Filter(f) => Setting::Filter(i, f),
+                VoiceSetting::Solo(on) => Setting::Solo(i, on),
             }
         }
         TapeAction::Load(_) | TapeAction::Reset | TapeAction::Save | TapeAction::Record => {

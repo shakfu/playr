@@ -519,7 +519,10 @@ pub fn idle_text(idle: crate::tape::Idle) -> &'static str {
         Idle::Silent => "no effect: Level is 0",
         Idle::Still => "no effect: Rate is 0, so the head never wraps",
         Idle::NoRoom => "no effect: no audio either side of the window to crossfade into",
-        Idle::Unchanging => "nothing changes: Feedback is 1, Wear is 0 and every Send is 0",
+        Idle::Unchanging => {
+            "nothing changes: Feedback is 1, Wear and Thin are 0 and every Send is 0"
+        }
+        Idle::Turns => "no effect: Ping turns the head at the edges, so it never wraps",
     }
 }
 
