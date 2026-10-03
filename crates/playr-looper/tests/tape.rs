@@ -498,3 +498,106 @@ fn windows_start_as_the_loop_s_range() {
     assert_eq!(t.voice(0), 100.0);
     assert_eq!(t.write_window(), Window::new(100, 900));
 }
+
+/// `tape`, with `range` chosen and the frames either side of it as rolls.
+fn rolled(samples: Vec<f32>, range: Window, settings: &[Setting]) -> Tape {
+    let mut t = Tape::new(SR);
+    let lp = Loop::new(samples, 1).unwrap().with_range(range).unwrap();
+    t.load(Box::new(lp));
+    for &s in settings {
+        t.set(s);
+    }
+    t.set(Setting::Play);
+    t
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
+}
+
+#[test]
+fn while_writing_the_range_the_rolls_decay_with_it() {
+    let src = noise(6000, 0.9);
+    let range = Window::new(1000, 5000);
+    let mut t = rolled(
+        src.clone(),
+        range,
+        &[Setting::Write(true), Setting::Feedback(0.7)],
+    );
+    let mut want = src;
+    for _ in 0..5 {
+        run(&mut t, range.len());
+        want.iter_mut().for_each(|s| *s *= 0.7);
+        assert_eq!(buffer(&t), want);
+    }
+}
+
+#[test]
+fn feedback_one_with_no_sends_leaves_the_rolls_exact() {
+    let src = noise(6000, 0.9);
+    let mut t = rolled(
+        src.clone(),
+        Window::new(1000, 5000),
+        &[
+            Setting::Write(true),
+            Setting::Feedback(1.0),
+            Setting::Rate(0, -1.0),
+            Setting::Fade(0, 1000.0),
+        ],
+    );
+    run(&mut t, 4000 * 10);
+    assert_eq!(buffer(&t), src);
+}
+
+#[test]
+fn a_wrap_into_the_rolls_is_no_louder_than_the_decayed_loop() {
+    // Two voices in opposite directions fade past both edges into the rolls
+    // while feedback and small sends shrink the loop.
+    let sec = SR as usize;
+    let range = Window::new(sec, 5 * sec);
+    let mut t = rolled(
+        noise(6 * sec, 0.3),
+        range,
+        &[
+            Setting::Rate(0, -1.0),
+            Setting::Send(0, 0.1),
+            Setting::Fade(0, 1000.0),
+            Setting::On(1, true),
+            Setting::Rate(1, 1.0),
+            Setting::Level(1, 0.4),
+            Setting::Send(1, 0.2),
+            Setting::Fade(1, 1000.0),
+            Setting::Write(true),
+            Setting::Feedback(0.5),
+        ],
+    );
+    run(&mut t, range.len() * 12);
+    let pass = left(&run(&mut t, range.len()));
+    let wrap = rms(&pass[..sec / 20]);
+    let body = rms(&pass[sec..3 * sec]);
+    assert!(wrap <= 2.0 * body, "after the wrap {wrap}, mid-pass {body}");
+}
+
+#[test]
+fn a_send_crosses_the_range_s_edges_without_a_step() {
+    let src = sine(48_000, 330.0, 0.8);
+    let material = max_step(&src);
+    let range = Window::new(9000, 39_000);
+    let mut t = rolled(
+        src,
+        range,
+        &[
+            Setting::Write(true),
+            Setting::Feedback(0.5),
+            Setting::Rate(0, -1.0),
+            Setting::Send(0, 0.3),
+        ],
+    );
+    // Half a pass on, so no head is near an edge.
+    run(&mut t, range.len() * 10 + range.len() / 2);
+    let b = buffer(&t);
+    for edge in [range.start, range.end] {
+        let step = max_step(&b[edge - 600..edge + 600]);
+        assert!(step <= material, "edge {edge}: {step} > {material}");
+    }
+}

@@ -499,7 +499,104 @@ fn pan_frame(s: [f32; 2], channels: usize, pan: f32) -> [f32; 2] {
     }
 }
 
-/// The write head and its filters.
+/// The write path's filters: the wear low-pass and the DC blocker.
+#[derive(Debug, Clone, Copy, Default)]
+struct Filters {
+    lp: [f32; 2],
+    dc_x: [f32; 2],
+    dc_y: [f32; 2],
+}
+
+/// What the write head writes with on one frame.
+struct Pass {
+    feedback: f32,
+    wear: f32,
+    lp_a: f32,
+    dc_g: f32,
+    dc_r: f32,
+    send: [f32; 2],
+    sending: bool,
+    /// The blend from the old content to the new.
+    g: f32,
+}
+
+/// A run of frames the write head writes: its window, or a roll it writes as
+/// the range's continuation. Each has its own filters and peak column.
+#[derive(Debug, Clone, Copy)]
+struct Lane {
+    filters: Filters,
+    /// The peak column the lane is in, the peak written in it so far, and
+    /// whether the lane will have rewritten all of it on leaving.
+    col: usize,
+    col_peak: f32,
+    col_whole: bool,
+}
+
+impl Lane {
+    fn new() -> Self {
+        Lane {
+            filters: Filters::default(),
+            col: usize::MAX,
+            col_peak: 0.0,
+            col_whole: false,
+        }
+    }
+
+    /// Writes frame `i`. The lane's frames end at `bound`.
+    fn write(&mut self, lp: &mut Loop, i: usize, p: &Pass, bound: usize) {
+        let f = &mut self.filters;
+        let c = lp.channels;
+        for (ch, slot) in lp.samples[i * c..i * c + c].iter_mut().enumerate() {
+            let old = *slot;
+            let mut x = old * p.feedback + p.send[ch];
+            // Bypassed filters track their input, so they resume without a step.
+            if p.wear > 0.0 {
+                f.lp[ch] += p.lp_a * (x - f.lp[ch]);
+                x = f.lp[ch];
+            } else {
+                f.lp[ch] = x;
+            }
+            if p.sending {
+                let y = p.dc_g * (x - f.dc_x[ch]) + p.dc_r * f.dc_y[ch];
+                f.dc_x[ch] = x;
+                f.dc_y[ch] = y;
+                x = clip(y);
+            } else {
+                f.dc_x[ch] = x;
+                f.dc_y[ch] = x;
+            }
+            *slot = match p.g {
+                1.0 => x,
+                g => old + g * (x - old),
+            };
+        }
+        self.peak(lp, i, bound);
+    }
+
+    /// Keeps the peak grid in step with what the lane writes.
+    fn peak(&mut self, lp: &mut Loop, i: usize, bound: usize) {
+        let col = lp.column(i);
+        if col != self.col {
+            self.leave(lp);
+            self.col = col;
+            self.col_peak = 0.0;
+            // Whole when entered at its first frame and it ends inside the lane.
+            let first = (col as u64 * lp.frames() as u64).div_ceil(COLUMNS as u64) as usize;
+            let end = ((col as u64 + 1) * lp.frames() as u64).div_ceil(COLUMNS as u64) as usize;
+            self.col_whole = i == first && end <= bound;
+        }
+        self.col_peak = self.col_peak.max(lp.peak_at(i));
+        lp.peaks[col] = lp.peaks[col].max(self.col_peak);
+    }
+
+    fn leave(&mut self, lp: &mut Loop) {
+        if self.col_whole && self.col < COLUMNS {
+            lp.peaks[self.col] = self.col_peak;
+        }
+    }
+}
+
+/// The write head and its lanes.
 #[derive(Debug, Clone)]
 struct Writer {
     on: bool,
@@ -511,14 +608,10 @@ struct Writer {
     /// The wear low-pass's coefficient, and the wear it was computed for.
     lp_a: f32,
     lp_wear: f32,
-    lp: [f32; 2],
-    dc_x: [f32; 2],
-    dc_y: [f32; 2],
-    /// The peak column the head is in, the peak written in it so far, and
-    /// whether the head will have rewritten all of it on leaving.
-    col: usize,
-    col_peak: f32,
-    col_whole: bool,
+    main: Lane,
+    /// The post-roll and pre-roll, written while the window is the range.
+    post: Lane,
+    pre: Lane,
 }
 
 impl Writer {
@@ -532,28 +625,25 @@ impl Writer {
             pos: 0,
             lp_a: 1.0,
             lp_wear: 0.0,
-            lp: [0.0; 2],
-            dc_x: [0.0; 2],
-            dc_y: [0.0; 2],
-            col: usize::MAX,
-            col_peak: 0.0,
-            col_whole: false,
+            main: Lane::new(),
+            post: Lane::new(),
+            pre: Lane::new(),
         }
     }
 
     fn rewind(&mut self) {
         self.pos = self.window.start;
-        self.lp = [0.0; 2];
-        self.dc_x = [0.0; 2];
-        self.dc_y = [0.0; 2];
-        self.col = usize::MAX;
+        self.main = Lane::new();
+        self.post = Lane::new();
+        self.pre = Lane::new();
     }
 
     /// Blend gain at the head: 0 to 1 over the window's first `edge` frames
-    /// and back over its last, or 1 when the window is the whole loop.
-    fn edge(&self, frames: usize, edge: usize) -> f32 {
+    /// and back over its last, or 1 when the window is the whole loop or
+    /// the range, whose rolls are written with it.
+    fn edge(&self, lp: &Loop, edge: usize) -> f32 {
         let w = self.window;
-        if w.len() == frames || w.len() < 2 * edge || edge == 0 {
+        if w.len() == lp.frames() || w == lp.range || w.len() < 2 * edge || edge == 0 {
             return 1.0;
         }
         let i = self.pos - w.start;
@@ -561,7 +651,12 @@ impl Writer {
         (d as f32 / edge as f32).min(1.0)
     }
 
-    /// Writes the frame under the head and advances.
+    /// Writes the frame under the head and advances. While the window is the
+    /// range, the frames a crossing head reads past its edges are written as
+    /// the range's continuation: their own content at the same feedback, plus
+    /// the send written one range-length away. Each roll then keeps the
+    /// range's level and carries its sends, so a crossfade into it does not
+    /// meet the loop as loaded.
     fn write(
         &mut self,
         lp: &mut Loop,
@@ -582,58 +677,35 @@ impl Writer {
             self.lp_wear = wear;
             self.lp_a = wear_coefficient(wear, sample_rate);
         }
-        let g = self.edge(lp.frames(), edge) * gate;
-        let dc_g = (1.0 + dc_r) / 2.0;
-        let c = lp.channels;
-        let i = self.pos;
-        for (ch, slot) in lp.samples[i * c..i * c + c].iter_mut().enumerate() {
-            let old = *slot;
-            let mut x = old * feedback + send[ch];
-            // Bypassed filters track their input, so they resume without a step.
-            if wear > 0.0 {
-                self.lp[ch] += self.lp_a * (x - self.lp[ch]);
-                x = self.lp[ch];
-            } else {
-                self.lp[ch] = x;
+        let p = Pass {
+            feedback,
+            wear,
+            lp_a: self.lp_a,
+            dc_g: (1.0 + dc_r) / 2.0,
+            dc_r,
+            send,
+            sending,
+            g: self.edge(lp, edge) * gate,
+        };
+        let (i, r) = (self.pos, lp.range);
+        if self.window == r {
+            let n = r.len();
+            // Each roll starts from the range's filters where it joins the range.
+            if i + n < lp.frames() {
+                if i == r.start {
+                    self.post.filters = self.main.filters;
+                }
+                self.post.write(lp, i + n, &p, lp.frames().min(r.end + n));
             }
-            if sending {
-                let y = dc_g * (x - self.dc_x[ch]) + dc_r * self.dc_y[ch];
-                self.dc_x[ch] = x;
-                self.dc_y[ch] = y;
-                x = clip(y);
-            } else {
-                self.dc_x[ch] = x;
-                self.dc_y[ch] = x;
+            if i >= n {
+                if i == r.start.max(n) {
+                    self.pre.filters = self.main.filters;
+                }
+                self.pre.write(lp, i - n, &p, r.start);
             }
-            *slot = match g {
-                1.0 => x,
-                g => old + g * (x - old),
-            };
         }
-        self.peak(lp);
+        self.main.write(lp, i, &p, self.window.end);
         self.advance();
-    }
-
-    /// Keeps the peak grid in step with what the head writes.
-    fn peak(&mut self, lp: &mut Loop) {
-        let col = lp.column(self.pos);
-        if col != self.col {
-            self.leave(lp);
-            self.col = col;
-            self.col_peak = 0.0;
-            // Whole when entered at its first frame and it ends inside the window.
-            let first = (col as u64 * lp.frames() as u64).div_ceil(COLUMNS as u64) as usize;
-            let end = ((col as u64 + 1) * lp.frames() as u64).div_ceil(COLUMNS as u64) as usize;
-            self.col_whole = self.pos == first && end <= self.window.end;
-        }
-        self.col_peak = self.col_peak.max(lp.peak_at(self.pos));
-        lp.peaks[col] = lp.peaks[col].max(self.col_peak);
-    }
-
-    fn leave(&mut self, lp: &mut Loop) {
-        if self.col_whole && self.col < COLUMNS {
-            lp.peaks[self.col] = self.col_peak;
-        }
     }
 
     fn advance(&mut self) {

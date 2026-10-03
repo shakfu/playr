@@ -194,11 +194,19 @@ fn waveform(
         }
     }
     // What the write head cannot change: outside its window, or all of it
-    // while writing is off. A hatch marks it too, for those who cannot tell
-    // the tint.
+    // while writing is off. While its window is the range it writes the rolls
+    // too, up to a range's length out. A hatch marks it too, for those who
+    // cannot tell the tint.
     let ww = state.write_window;
+    let reach = match ww == extent.range {
+        true => ww.len(),
+        false => 0,
+    };
     let frozen = match state.write {
-        true => vec![Window::new(0, ww.start), Window::new(ww.end, frames)],
+        true => vec![
+            Window::new(0, ww.start.saturating_sub(reach)),
+            Window::new((ww.end + reach).min(frames), frames),
+        ],
         false => vec![Window::new(0, frames)],
     };
     for part in frozen.into_iter().filter(|w| !w.is_empty()) {
