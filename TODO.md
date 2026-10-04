@@ -52,6 +52,8 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **OP-XY frame counts at other rates.** ConvertWithMoss 20.3.0 resamples a 48 or 96 kHz slice to 44.1 kHz for the OP-XY, but `patch.json` keeps the old counts: `framecount`, `sample.end` and `loop.end` say 24,000 or 48,000 for a file of 22,050 frames. Every playr export keeps its source's rate, so a 48 kHz track hits it. What the device does with an end past the file is X6 in `docs/dev/device_tests.md`. Fix upstream: the report is drafted in `docs/dev/issues/convertwithmoss-issue.md`. Until then `:convert opxy` could resample to 44.1 kHz first, or warn. Found 2026-10-01.
 
+- [ ] **Which samplers read the `smpl` loop.** A range cut whole while it loops carries its loop in a `smpl` chunk since 2026-10-04, in frames, like the cue points. No device or sampler has read one yet; "Which devices read `smpl` loops" in `docs/dev/hardware_samplers.md` stays open, and `docs/dev/device_tests.md` needs a test for it beside the cue point ones.
+
 - [ ] **Refuse or split past a format's limit.** ConvertWithMoss keeps 24 zones for the OP-XY and drops the rest; `:convert` now says so, after the fact. A table of limits per format would let `:convert` refuse first, or write one preset per 24 slices, as AudioHit splits `.ot` files. The OP-XY's is the only limit known; `docs/dev/hardware_samplers.md` lists the devices' slice limits.
 
 ### Library
@@ -64,7 +66,11 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **Calibrate the cutoff heuristics.** The two spectral findings were set against ffmpeg's encoders, not files whose provenance is known; a library of lossless files with known sources would settle them. The tempo confidence is calibrated, against librosa; see `docs/dev/analyze.md`.
 
-- [ ] **Tempo above 170 BPM.** The prior still halves it. The reading records the level above as an alternate, which `bpm:` matches, so such a track is found by the tempo it is heard at, but the number playr shows is the halved one. Choosing between the two needs accent or metrical modelling.
+- [ ] **Tempo above 170 BPM.** The prior still halves it. The reading records the level above as an alternate, which `bpm:` matches, so such a track is found by the tempo it is heard at, but the number playr shows is the halved one. Choosing between the two needs accent or metrical modelling. Until then `:bpm x2` corrects a track by hand.
+
+- [ ] **A beat grid that follows drift.** The grid is one tempo for the whole track. On the user's library, 23 of the 57 tracks with a clear low-band pulse drift over 35 ms between its first and last quarter, mostly sampled hip hop and music played live (`crates/playr-core/tests/grid_report.rs`; "A beat grid" in `docs/dev/analyze.md`). A loop of a few bars does not notice; slicing a whole track at beats, and DJ decks syncing one, would. Options: beat markers, as Mixxx's variable grids, or a grid per section. Measure on music made to a click first: it may need nothing.
+
+- [ ] **Check the grid's level against a reference.** `HALVED_BELOW`, 80 BPM, was set on one library by counting tracks shown at double; no reference tempo was available, since librosa is not installed. Running librosa's `beat_track` over the same files beside `grid_report.rs` would test the limit, and the phase with a better judge than the low-band fold, which a bassline pulls.
 
 - [ ] **Watch for changes.** A scan is manual. `notify` could pick up new files, at the cost of a watcher thread.
 
@@ -171,6 +177,8 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 - [ ] **Opus in WebM seek precision.** Seeks land 1.5 ms early. Matroska timestamps are whole milliseconds, and Symphonia subtracts the 6.5 ms codec delay in those units. The Opus header gives the delay in samples, which would recover part of it.
 
 ### Architecture
+
+- [ ] **A DJ tab.** Two decks with beat matching, scoped in `docs/dev/dj-engine.md`. DJing is outside the primary user of decision 2, so a decision comes first. Of its build steps, the grid (2) and the x2 and /2 correction are built; next is step 1, a `playr-dsp` crate holding the looper's read head, ramps and filters, which both would share.
 
 - [ ] **Unmaintained dependencies.** `cargo audit` finds no vulnerabilities, but warns that `derivative`, `instant` and `ttf-parser`, pulled in by egui, are unmaintained. Recheck after each egui upgrade. **upstream**.
 

@@ -375,18 +375,27 @@ fn the_default_output_device_plays() {
     player.send(Cmd::SetVolume(0.0));
     let dir = tempfile::tempdir().unwrap();
     let track = dir.path().join("a.wav");
-    silence(&track, 44100, 5.0);
+    // Longer than the wait, so the track cannot have ended by its close, and
+    // a wait long enough for a machine busy building and testing in parallel:
+    // once, under `make test`, 5 s with a 5 s track found it stopped.
+    silence(&track, 44100, 30.0);
     player.send(Cmd::Play(vec![track], 0));
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while player.position() < Duration::from_millis(300) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
     let s = player.status();
-    assert_eq!(s.state, State::Playing, "error: {:?}", s.error);
+    let seen = format!(
+        "{:?} at {:?}, error {:?}",
+        s.state,
+        player.position(),
+        s.error
+    );
+    assert_eq!(s.state, State::Playing, "{seen}");
     assert!(
         player.position() >= Duration::from_millis(300),
-        "the device did not play"
+        "the device did not play: {seen}"
     );
 
     // The device's callback discards the buffer, well inside the timeout that

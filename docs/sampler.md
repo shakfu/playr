@@ -22,7 +22,7 @@ A **range**, set in the sampler view with `i` and `o`, `:range START END`, or a 
 | `:slice marks` | the whole track, cut at every mark; the playhead does not matter |
 | `:slice N` | the region in N equal parts, 2 to 256; the last part takes the remainder |
 | `:slice onsets [S]` | the region, cut where hits start; `S` from 0 to 1, higher finds more |
-| `:slice beats N` | the region, every N beats at the track's tempo, 1 to 64 |
+| `:slice beats [N]` | the region, every N beats at the track's tempo, 1 to 64; 4 without N |
 
 An export holds at most 256 slices, the size of an rtrack sample bank. A cut that would make more is refused.
 

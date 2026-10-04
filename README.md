@@ -454,7 +454,7 @@ Marks are stored in the library by file path and source frame, so they survive a
 | `:slice marks`      | the whole track, cut at every mark                                   |
 | `:slice N`          | the region in N equal parts, 2 to 256                                |
 | `:slice onsets [S]` | the region, cut where hits start; `S` from 0 to 1, higher finds more |
-| `:slice beats N`    | the region, every N beats at the analysed tempo, 1 to 64             |
+| `:slice beats [N]`  | the region, every N beats at the analysed tempo, 1 to 64; 4 without N |
 
 Each export writes a new directory, named after the track, under `samples` in [`settings.toml`](#configuration), by default `~/Music/playr/samples`. A second export of `amen.flac` goes to `amen-2`. The directory holds:
 

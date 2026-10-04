@@ -637,7 +637,10 @@ pub fn line(action: &Action, view: Option<View>) -> String {
 /// What `:tape` takes, as its usage says it.
 /// What `:slice` takes, as its usage says it. The help row is shorter, so
 /// every row of `:help` fits 80 columns.
-const SLICE_USAGE: &str = "usage: :slice region|marks|N|onsets [S]|beats N";
+const SLICE_USAGE: &str = "usage: :slice region|marks|N|onsets [S]|beats [N]";
+
+/// Beats a slice of `:slice beats` with no count: a bar of 4/4.
+pub const DEFAULT_BEATS: u32 = 4;
 
 /// Most beats in one slice of `:slice beats`: 16 bars of 4/4.
 pub const MAX_BEATS: u32 = 64;
@@ -1251,6 +1254,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
                 Ok(s) if (0.0..=1.0).contains(&s) => Ok(Action::Slice(Slicing::Onsets(Some(s)))),
                 _ => Err("onset sensitivity is 0 to 1".into()),
             },
+            ("beats", "") => Ok(Action::Slice(Slicing::Beats(DEFAULT_BEATS))),
             ("beats", n) => match n.parse::<u32>() {
                 Ok(n) if (1..=MAX_BEATS).contains(&n) => Ok(Action::Slice(Slicing::Beats(n))),
                 _ => Err(format!("beats a slice are 1 to {MAX_BEATS}")),

@@ -158,7 +158,7 @@ impl Default for State {
             menu: None,
             method: None,
             slices: 8,
-            beats: 4,
+            beats: playr_app::command::DEFAULT_BEATS,
             sensitivity: None,
             around: None,
             spectrogram: None,
