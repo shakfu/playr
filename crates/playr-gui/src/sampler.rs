@@ -79,7 +79,7 @@ impl Method {
             Cut::Marks => Method::Marks,
             Cut::Equal(_) => Method::Equal,
             Cut::Onsets(_) => Method::Onsets,
-            Cut::Beats(..) => Method::Beats,
+            Cut::Beats { .. } => Method::Beats,
         }
     }
 
@@ -639,7 +639,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         match cut.filter(|_| !planning) {
             Some(Cut::Equal(count)) => state.slices = count,
             Some(Cut::Onsets(s)) => *sensitivity = s,
-            Some(Cut::Beats(n, _)) => state.beats = n,
+            Some(Cut::Beats { beats, .. }) => state.beats = beats,
             _ => {}
         }
         let method = cut.map(Method::of).or(state.method.filter(|_| planning));
@@ -679,7 +679,14 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             Some(Method::Beats) => {
                 let beats = egui::DragValue::new(&mut state.beats)
                     .range(1..=playr_app::command::MAX_BEATS)
-                    .suffix(" beats");
+                    .custom_formatter(|n, _| match n {
+                        1.0 => "1 beat".into(),
+                        n => format!("{n} beats"),
+                    })
+                    .custom_parser(|text| {
+                        let digits = text.trim().trim_end_matches(['b', 'e', 'a', 't', 's', ' ']);
+                        digits.parse().ok()
+                    });
                 ui.add(beats)
                     .on_hover_text("Beats a slice, at the track's analysed tempo")
                     .changed()
@@ -904,7 +911,7 @@ pub fn menu(model: &Model, ui: &mut egui::Ui) -> Option<Action> {
     let mut items = |ui: &mut egui::Ui, table: &[Control]| {
         for control in table {
             let enabled = match control.action {
-                Action::Slice(_) => true,
+                Action::Slice(_) | Action::FixTempo(_) => true,
                 Action::AuditionSlice(_) | Action::WriteSlices | Action::DiscardSlices => {
                     here && pending
                 }
@@ -931,6 +938,7 @@ pub fn menu(model: &Model, ui: &mut egui::Ui) -> Option<Action> {
     items(ui, controls::SAMPLER_BAR);
     ui.menu_button("Range", |ui| items(ui, controls::RANGE_MENU));
     ui.menu_button("Edit", |ui| items(ui, controls::EDIT_MENU));
+    ui.menu_button("Tempo", |ui| items(ui, controls::TEMPO_MENU));
     // Chosen outside `items`: the slices' edges, a loop's entry, or a toggle.
     let mut other = None;
     ui.menu_button("Slice", |ui| {

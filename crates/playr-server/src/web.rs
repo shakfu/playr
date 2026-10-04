@@ -45,6 +45,7 @@ pub fn allowed(action: &Action) -> bool {
         | Unmap { .. } => false,
         ShowView(View::Sampler)
         | Slice(_)
+        | FixTempo(_)
         | Audition
         | AuditionSlice(_)
         | Scrub(_)

@@ -1167,7 +1167,11 @@ fn slicing_at_beats_takes_the_track_s_tempo() {
     model.perform(Action::Slice(Slicing::Beats(4)));
     until(&mut model, |m| m.sampler().pending.is_some());
     let plan = model.sampler().pending.as_ref().unwrap();
-    assert_eq!(plan.job.cut, Cut::Beats(4, 120.0));
+    let tagged = Cut::Beats {
+        beats: 4,
+        bpm: 120.0,
+    };
+    assert_eq!(plan.job.cut, tagged, "a tag alone gives no grid");
     assert_eq!(
         plan.spans.iter().map(|s| s.0).collect::<Vec<_>>(),
         [0, 16_000, 32_000, 48_000, 64_000]
@@ -1180,7 +1184,7 @@ fn slicing_at_beats_analyses_a_track_with_no_tempo_first() {
     use playr_core::samples::Cut;
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("clicks.wav");
-    common::clicks(&file, 22_050, 120.0, 12.0);
+    common::clicks(&file, 22_050, 120.0, 0.25, 12.0);
     let mut model = analysable(dir.path(), &file, None);
     model.perform(Action::Slice(Slicing::Beats(4)));
     assert_eq!(
@@ -1188,11 +1192,63 @@ fn slicing_at_beats_analyses_a_track_with_no_tempo_first() {
         Some(&Message::Core(Notice::Done(Outcome::FindingTempo)))
     );
     until(&mut model, |m| m.sampler().pending.is_some());
-    let Cut::Beats(4, bpm) = model.sampler().pending.as_ref().unwrap().job.cut else {
-        panic!("not cut at beats");
+    let plan = model.sampler().pending.as_ref().unwrap();
+    let Cut::Beats { beats: 4, bpm } = plan.job.cut else {
+        panic!("not cut at beats: {:?}", plan.job.cut);
     };
-    assert!((bpm - 120.0).abs() < 1.0, "{bpm}");
-    assert_eq!(model.session().bpm(&file), Some(bpm), "the tempo is kept");
+    assert!((bpm - 120.0).abs() < 0.05, "{bpm}");
+    // Every 2 s from the region's start, the track's, at 22,050 frames a
+    // second, within 3 ms: the grid's tempo is measured, not exact.
+    let starts: Vec<u64> = plan.spans.iter().map(|s| s.0).collect();
+    let want: Vec<f64> = (0..6).map(|k| k as f64 * 44_100.0).collect();
+    assert_eq!(starts.len(), want.len(), "{starts:?}");
+    for (s, w) in starts.iter().zip(&want) {
+        assert!((*s as f64 - w).abs() < 66.0, "{starts:?}");
+    }
+    assert!(model.session().grid(&file).is_some(), "the grid is kept");
+}
+
+#[test]
+fn a_tempo_is_corrected_by_octaves_and_slicing_follows() {
+    use playr_app::action::Slicing;
+    use playr_core::analysis::TempoFix;
+    use playr_core::samples::Cut;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = analysable(dir.path(), &file, Some(120.0));
+    let fixed = |bpm, factor| {
+        Some(Message::Core(Notice::Done(Outcome::TempoFixed {
+            bpm,
+            factor,
+        })))
+    };
+    let fix = |model: &mut Model, f| {
+        model.perform(Action::FixTempo(f));
+        model.refresh();
+        model.message().cloned()
+    };
+    assert_eq!(fix(&mut model, TempoFix::Double), fixed(240.0, 2.0));
+    assert_eq!(model.bpm(), Some(240.0), "the status bar reads it again");
+    assert_eq!(fix(&mut model, TempoFix::Double), fixed(480.0, 4.0));
+    assert_eq!(
+        fix(&mut model, TempoFix::Double),
+        Some(Message::Core(Notice::Refused(Refusal::TempoFixLimit)))
+    );
+    assert_eq!(fix(&mut model, TempoFix::Reset), fixed(120.0, 1.0));
+    assert_eq!(fix(&mut model, TempoFix::Halve), fixed(60.0, 0.5));
+    // A beat is now 1 s, so 2 beats are 16,000 frames at 8 kHz.
+    model.perform(Action::Slice(Slicing::Beats(2)));
+    until(&mut model, |m| m.sampler().pending.is_some());
+    let plan = model.sampler().pending.as_ref().unwrap();
+    assert_eq!(
+        plan.job.cut,
+        Cut::Beats {
+            beats: 2,
+            bpm: 60.0
+        }
+    );
+    assert_eq!(plan.spans[1].0, 16_000);
 }
 
 #[test]

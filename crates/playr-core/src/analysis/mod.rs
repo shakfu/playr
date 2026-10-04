@@ -26,8 +26,17 @@ use tempo::Tempo;
 /// The analysers' version. A row from an older one is analysed again.
 ///
 /// 1: as built. 2: tempo records the metrical level either side of the one it
-/// chose, which an older row has no column for.
-pub const VERSION: i64 = 2;
+/// chose, which an older row has no column for. 3: a beat grid. 4: the grid
+/// at the faster level where the estimate records one. 5: only where the
+/// estimate is under [`HALVED_BELOW`].
+pub const VERSION: i64 = 5;
+
+/// Below this, an estimate with a faster level recorded gets its grid there:
+/// a house track read at 62 BPM is one at 124. Above it the estimate stands.
+/// Taking the faster level everywhere put 47 of 158 grids in one library at
+/// 170 BPM or more, mostly hip hop and downtempo read at 87 to 120 and shown
+/// at double; see "A beat grid" in `docs/dev/analyze.md`.
+pub const HALVED_BELOW: f32 = 80.0;
 
 /// Files written per transaction, as a scan writes them.
 pub const BATCH: usize = crate::scan::SCAN_BATCH;
@@ -47,6 +56,19 @@ pub const STEEP_DB: f32 = 25.0;
 
 /// Tracks this close in length, with the same title and artist, are duplicates.
 pub const DUPLICATE_WITHIN_MS: i64 = 2000;
+
+/// A correction to a track's tempo by an octave, made by hand when the
+/// analysis read it at the wrong level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TempoFix {
+    Double,
+    Halve,
+    /// Back to the tempo the analysis shows.
+    Reset,
+}
+
+/// The widest correction either way: two octaves.
+pub const MAX_TEMPO_FIX: f32 = 4.0;
 
 /// What a FLAC header's checksum says of the decoded audio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +125,10 @@ pub struct Analysis {
     pub tempo: Option<tempo::Estimate>,
     /// A BPM tag, which [`Analysis::bpm`] prefers to the estimate.
     pub bpm_tag: Option<f32>,
+    /// The beat grid, near the tag's tempo when there is one, else near a
+    /// confident estimate's, at its faster level where one is recorded and
+    /// the estimate is under [`HALVED_BELOW`]; `None` with neither.
+    pub grid: Option<tempo::Grid>,
 }
 
 impl Analysis {
@@ -209,7 +235,17 @@ pub fn analyse(path: &Path) -> Analysis {
         .zip(a.bits)
         .and_then(|(b, width)| (b.or != 0).then(|| width.saturating_sub(b.or.trailing_zeros())));
     a.cutoff = cut.finish();
-    a.tempo = beat.finish();
+    a.tempo = beat.estimate();
+    // A grid at half the tempo tests every other beat, where an off-beat hat
+    // or a clap can outscore the kick; at the faster level every beat counts.
+    let level = a.bpm_tag.or(a
+        .tempo
+        .filter(|t| t.confidence >= tempo::MIN_CONFIDENCE)
+        .map(|t| match t.alt {
+            Some(alt) if t.bpm < HALVED_BELOW => alt,
+            _ => t.bpm,
+        }));
+    a.grid = level.and_then(|bpm| beat.grid(bpm));
     let measured = loud.finish();
     if a.error.is_none() {
         a.loudness = measured.lufs;

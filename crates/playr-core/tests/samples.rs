@@ -906,16 +906,9 @@ fn beats_fall_on_the_tempo_in_phase_with_the_first_mark() {
     );
     // A mark inside sets the phase; the slice before it is short. Marks
     // outside the region are ignored.
+    let marks = [5, 1_050_000, 1_500_000];
     assert_eq!(
-        beat_points(
-            &[5, 1_050_000, 1_500_000],
-            1_000_000,
-            300_000,
-            48_000,
-            4,
-            120.0
-        )
-        .unwrap(),
+        beat_points(&marks, 1_000_000, 300_000, 48_000, 4, 120.0).unwrap(),
         [0, 50_000, 146_000, 242_000, 300_000]
     );
     // A tempo that is no whole number of frames: each edge is rounded from
@@ -926,6 +919,30 @@ fn beats_fall_on_the_tempo_in_phase_with_the_first_mark() {
         (50.0f64 * 44_100.0 * 60.0 / 128.0).round() as u64
     );
     assert!(beat_points(&[], 0, 1000, 44_100, 1, 0.0).is_err());
+}
+
+#[test]
+fn no_beat_slice_is_shorter_than_half_a_beat_at_either_end() {
+    // 2 bars at 120 BPM and 48 kHz are 192,000 frames; a range 600 frames
+    // longer, as a range set by hand is, cuts as 2 bars, not 2 and a sliver.
+    assert_eq!(
+        beat_points(&[], 0, 192_600, 48_000, 4, 120.0).unwrap(),
+        [0, 96_000, 192_600]
+    );
+    assert_eq!(
+        beat_points(&[], 0, 192_600, 48_000, 8, 120.0).unwrap(),
+        [0, 192_600]
+    );
+    // A mark just inside the start would leave a sliver before it.
+    assert_eq!(
+        beat_points(&[1_000], 0, 192_000, 48_000, 4, 120.0).unwrap(),
+        [0, 97_000, 192_000]
+    );
+    // Half a beat is kept.
+    assert_eq!(
+        beat_points(&[12_000], 0, 192_000, 48_000, 4, 120.0).unwrap(),
+        [0, 12_000, 108_000, 192_000]
+    );
 }
 
 #[test]
@@ -941,7 +958,10 @@ fn a_range_cut_at_beats_writes_each_slice_exact() {
             48_000,
             &[26_000],
             0,
-            Cut::Beats(1, 240.0),
+            Cut::Beats {
+                beats: 1,
+                bpm: 240.0,
+            },
             dir.path(),
         )
     };

@@ -86,6 +86,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:redo`                               | `r` in the sampler      | put back the last edit undone               |
 | `:slice region\|marks\|N\|...`        |                         | write samples; `:slice` alone lists all     |
 | `:loop off`                           |                         | stop looping                                |
+| `:bpm x2\|/2\|reset`                  |                         | correct the playing track's tempo an octave |
 | `:tape load\|play\|stop\|save\|...`   |                         | the tape looper; `:tape` alone lists all    |
 | `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |
 | `:unmap [VIEW] KEY`                   |                         | remove a key binding                        |

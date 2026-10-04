@@ -677,7 +677,17 @@ fn an_older_analysis_table_gains_the_alternate_column() {
         ..Default::default()
     };
     assert!(!analysis::is_current(&t, Some(&rows["/m/a.flac"].0)));
-    db::analysis::put(&conn, &t, Analysis::default()).unwrap();
+    // The grid's columns came with it.
+    let grid = Some(analysis::tempo::Grid {
+        bpm: 127.98,
+        t0: 0.25,
+    });
+    let a = Analysis {
+        grid,
+        ..Default::default()
+    };
+    db::analysis::put(&conn, &t, a).unwrap();
+    assert_eq!(db::analysis::rows(&conn).unwrap()["/m/a.flac"].1.grid, grid);
 }
 
 #[test]
@@ -687,4 +697,78 @@ fn a_changed_file_drops_out_of_a_bpm_search() {
     assert_eq!(db::query::search(&conn, "bpm:128").unwrap().len(), 1);
     db::upsert(&conn, &Track { mtime: 99, ..t }).unwrap();
     assert!(db::query::search(&conn, "bpm:128").unwrap().is_empty());
+}
+
+#[test]
+fn a_grid_s_tempo_is_the_one_shown_sorted_and_found() {
+    // As a house track is read: 62 with 124 recorded, and its grid at 124.
+    let conn = db::open_memory().unwrap();
+    let t = library_track(&conn, "/m/house.m4a", "X");
+    let a = Analysis {
+        tempo: Some(analysis::tempo::Estimate {
+            bpm: 62.0,
+            confidence: 0.76,
+            alt: Some(124.01),
+        }),
+        grid: Some(analysis::tempo::Grid {
+            bpm: 124.003,
+            t0: 0.35,
+        }),
+        ..Default::default()
+    };
+    db::analysis::put(&conn, &t, a).unwrap();
+    let shown = db::analysis::bpm_of(&conn, &t.path).unwrap().unwrap();
+    assert!((shown - 124.003).abs() < 1e-4, "{shown}");
+    let measured = db::analysis::measures(&conn, std::slice::from_ref(&t)).unwrap();
+    assert_eq!(
+        measured[&t.path].bpm,
+        Some(shown),
+        "the column shows it too"
+    );
+    // Found by what is shown, and still by the estimate.
+    for q in ["bpm:124", "bpm:62"] {
+        assert_eq!(db::query::search(&conn, q).unwrap().len(), 1, "{q}");
+    }
+    assert!(db::query::search(&conn, "bpm:90").unwrap().is_empty());
+}
+
+#[test]
+fn a_tempo_corrected_by_hand_is_shown_found_and_kept_through_analysis() {
+    let conn = db::open_memory().unwrap();
+    let t = with_tempo(&conn, "/m/slow.flac", None, Some((140.0, 0.9)));
+    db::analysis::set_tempo_fix(&conn, &t.path, 0.5).unwrap();
+    assert_eq!(db::analysis::bpm_of(&conn, &t.path).unwrap(), Some(70.0));
+    let measured = db::analysis::measures(&conn, std::slice::from_ref(&t)).unwrap();
+    assert_eq!(measured[&t.path].bpm, Some(70.0));
+    assert_eq!(db::query::search(&conn, "bpm:70").unwrap().len(), 1);
+    // Analysed again: the row is replaced, the correction is not.
+    let again = Analysis {
+        tempo: Some(analysis::tempo::Estimate {
+            bpm: 140.0,
+            confidence: 0.9,
+            alt: None,
+        }),
+        ..Default::default()
+    };
+    db::analysis::put(&conn, &t, again).unwrap();
+    assert_eq!(db::analysis::bpm_of(&conn, &t.path).unwrap(), Some(70.0));
+    // A factor of 1 removes it.
+    db::analysis::set_tempo_fix(&conn, &t.path, 1.0).unwrap();
+    assert_eq!(db::analysis::tempo_fix(&conn, &t.path).unwrap(), 1.0);
+    assert_eq!(db::analysis::bpm_of(&conn, &t.path).unwrap(), Some(140.0));
+}
+
+#[test]
+fn pruning_a_gone_file_removes_its_tempo_correction() {
+    let dir = tempfile::tempdir().unwrap();
+    // Resolved, as a scan stores it: macOS's temporary directory is a link.
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("gone.flac");
+    std::fs::write(&path, b"").unwrap();
+    let conn = db::open_memory().unwrap();
+    let t = with_tempo(&conn, path.to_str().unwrap(), Some(120.0), None);
+    db::analysis::set_tempo_fix(&conn, &t.path, 2.0).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    db::prune_missing(&conn, &root).unwrap();
+    assert_eq!(db::analysis::tempo_fix(&conn, &t.path).unwrap(), 1.0);
 }

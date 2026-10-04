@@ -94,6 +94,12 @@ pub enum Outcome {
     /// `:slice beats` on a track with no tempo yet: it is being analysed,
     /// and is cut once that finishes.
     FindingTempo,
+    /// The playing track's tempo, corrected by hand: `factor` times what the
+    /// analysis shows, 1 after a reset.
+    TempoFixed {
+        bpm: f32,
+        factor: f32,
+    },
     /// An analysis has finished `done` of `total` files.
     Analysing {
         done: usize,
@@ -223,6 +229,10 @@ pub enum Refusal {
     /// `:slice beats` on a track with no tempo after analysing it: no BPM
     /// tag, and too faint a pulse to trust.
     NoTempo,
+    /// A tempo correction on a track with no tempo to correct.
+    NoTempoToFix,
+    /// A tempo correction past [`crate::analysis::MAX_TEMPO_FIX`] either way.
+    TempoFixLimit,
     NoLoops,
     NoLaterMark,
     NoEarlierMark,
@@ -263,6 +273,7 @@ pub enum Task {
     Analyze,
     Prune,
     Open,
+    FixTempo,
 }
 
 impl From<Outcome> for Notice {

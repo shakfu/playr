@@ -25,13 +25,21 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - A range cut whole while it loops gets a `smpl` chunk in its WAV files, the slice file and `sliced/NAME.wav`, looping the whole file. Before, only `samples.json` and the `.sfz` file held the loop, and samplers that load a bare WAV read neither. The root note is middle C, as for a lone sample; the kit's key 36 is a drum-pad convention. Library API: `sliced::smpl_chunk`, `sliced::append_chunk`.
 
+- `playr analyze` finds a beat grid: the tempo to 0.01 BPM and where the first beat falls. Where the estimate reads under 80 BPM and records the double, as a house track at 62 BPM with 124 recorded, the grid takes the faster level: at half the tempo it tests every other beat, and on that track it settled 0.6 of a beat off the kick. Above 80 the estimate stands; taking the double there put hip hop read at 95 at 190. The tempo the status bar and the tempo column show, and sort by, is the grid's where there is one, and `bpm:` finds it, as well as the estimate. `:slice beats` cuts at the grid's tempo, from the first mark or the region's start as before, and leaves out a cut within half a beat of either end, so a range a few frames longer than 2 bars no longer ends in a sliver. On synthetic click tracks the grid holds within 2.6 ms of the beats, and within 2.3 ms after 5 minutes. Library API: `tempo::Grid`, `Tempo::grid`, `Tempo::estimate`, `Analysis::grid`, `db::analysis::grid_of`, `Session::grid`; `Cut::Beats` is now a struct variant.
+
 ### Changed
+
+- `:bpm x2` and `:bpm /2` correct the playing track's tempo by an octave, up to two either way, and `:bpm reset` puts it back; the window has them under Sampler, Tempo. The tempo shown, sorted, searched and cut at follows. The correction is kept in a table of its own, not in the track's analysis, whose row is replaced when the track is analysed again; pruning a gone file or forgetting its root removes it. The server's page cannot make one, as it cannot use the sampler. Library API: `TempoFix`, `Session::fix_tempo`, `Session::tempo_rev`, `db::analysis::tempo_fix` and `set_tempo_fix`.
+
+- The analyser is version 5, for the grid, so `playr analyze` measures every track again. Until it does, tempos are not shown or searched, as on the move to version 2.
 
 - playr-gui's minimum height is 592 points, up from 504, so the Tape tab's strips fit without scrolling.
 
 - Undo brings back an edited plan that was discarded or replaced by a new cut, such as one from the window's Sensitivity slider. Before, the starts set by hand were lost with no way back. Making or replacing an unedited plan is still not a step: undo would put back a cut a later one replaced.
 
 ### Fixed
+
+- Digits typed into a number field in the window, such as the sampler's slice count, ran the keys bound to them instead, which show views and sections. Only the search, command and name fields held the keys; any field being typed into now does.
 
 - `:analyze PATH` found no tracks when the library held them by a path through a symbolic link, such as macOS's `/var`: it compared the stored paths only with the resolved one. It now matches either.
 

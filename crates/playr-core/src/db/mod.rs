@@ -147,13 +147,19 @@ fn init(conn: &Connection) -> Result<()> {
     // `CREATE TABLE IF NOT EXISTS` leaves a table made by an earlier playr as
     // it was, so a column added to one needs adding here too. The rows stay:
     // `analysis::VERSION` decides which are read again.
-    let has_alt: bool = tx.query_row(
-        "SELECT EXISTS (SELECT 1 FROM pragma_table_info('analysis') WHERE name = 'bpm_alt')",
-        [],
-        |r| r.get(0),
-    )?;
-    if !has_alt {
-        tx.execute_batch("ALTER TABLE analysis ADD COLUMN bpm_alt REAL;")?;
+    for (column, kind) in [
+        ("bpm_alt", "REAL"),
+        ("grid_bpm", "REAL"),
+        ("grid_t0", "REAL"),
+    ] {
+        let has: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM pragma_table_info('analysis') WHERE name = ?1)",
+            [column],
+            |r| r.get(0),
+        )?;
+        if !has {
+            tx.execute_batch(&format!("ALTER TABLE analysis ADD COLUMN {column} {kind};"))?;
+        }
     }
     if old_index || old_triggers {
         // Updating every row in place fires the new trigger, which indexes it.
@@ -393,8 +399,8 @@ pub(crate) fn stored_root(conn: &Connection, root: &Path) -> Result<Option<Strin
 }
 
 /// Forgets `root` and removes everything the library held under it: the
-/// tracks, with their places in playlists, and the marks, loops and analysis of
-/// every file under it, in the library or not. `None` if no root matches.
+/// tracks, with their places in playlists, and the marks, loops, analysis and
+/// tempo corrections of every file under it, in the library or not. `None` if no root matches.
 ///
 /// Unlike [`prune_missing`] this does not ask the filesystem anything. A
 /// directory that is no longer a root is no longer part of the library,
@@ -415,6 +421,10 @@ pub fn forget_root(conn: &Connection, root: &Path) -> Result<Option<Pruned>> {
     }
     tx.execute(
         "DELETE FROM analysis WHERE substr(path, 1, length(?1)) = ?1",
+        [&prefix],
+    )?;
+    tx.execute(
+        "DELETE FROM tempo_fix WHERE substr(path, 1, length(?1)) = ?1",
         [&prefix],
     )?;
     tx.execute(

@@ -41,8 +41,10 @@ pub fn put(conn: &Connection, t: &Track, a: Analysis) -> Result<()> {
         "INSERT OR REPLACE INTO analysis
            (path, mtime, size, version, error, rate, frames, header_frames,
             skipped, lossless, bits, md5, md5_hex, bits_used, cutoff_hz,
-            cutoff_db, loudness, peak, histogram, bpm, bpm_alt, bpm_conf, bpm_tag)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
+            cutoff_db, loudness, peak, histogram, bpm, bpm_alt, bpm_conf, bpm_tag,
+            grid_bpm, grid_t0)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,
+                 ?24,?25)",
         params![
             t.path,
             t.mtime,
@@ -67,6 +69,8 @@ pub fn put(conn: &Connection, t: &Track, a: Analysis) -> Result<()> {
             a.tempo.and_then(|t| t.alt),
             a.tempo.map(|t| t.confidence),
             a.bpm_tag,
+            a.grid.map(|g| g.bpm),
+            a.grid.map(|g| g.t0),
         ],
     )?;
     Ok(())
@@ -74,7 +78,8 @@ pub fn put(conn: &Connection, t: &Track, a: Analysis) -> Result<()> {
 
 const COLS: &str = "path, mtime, size, version, error, rate, frames, header_frames,
                     skipped, lossless, bits, md5, md5_hex, bits_used, cutoff_hz,
-                    cutoff_db, loudness, peak, histogram, bpm, bpm_alt, bpm_conf, bpm_tag";
+                    cutoff_db, loudness, peak, histogram, bpm, bpm_alt, bpm_conf, bpm_tag,
+                    grid_bpm, grid_t0";
 
 fn row_to_analysis(r: &Row) -> rusqlite::Result<(String, Stat, Analysis)> {
     let hz: Option<u32> = r.get(14)?;
@@ -82,6 +87,8 @@ fn row_to_analysis(r: &Row) -> rusqlite::Result<(String, Stat, Analysis)> {
     let bpm: Option<f32> = r.get(19)?;
     let alt: Option<f32> = r.get(20)?;
     let conf: Option<f32> = r.get(21)?;
+    let grid_bpm: Option<f64> = r.get(23)?;
+    let grid_t0: Option<f64> = r.get(24)?;
     let histogram: Option<Vec<u8>> = r.get(18)?;
     let md5: Option<String> = r.get(11)?;
     Ok((
@@ -114,6 +121,9 @@ fn row_to_analysis(r: &Row) -> rusqlite::Result<(String, Stat, Analysis)> {
                 alt,
             }),
             bpm_tag: r.get(22)?,
+            grid: grid_bpm
+                .zip(grid_t0)
+                .map(|(bpm, t0)| tempo::Grid { bpm, t0 }),
         },
     ))
 }
@@ -159,12 +169,14 @@ pub fn loudness_of(conn: &Connection, path: &str) -> Result<Option<(Histogram, f
 }
 
 /// What the columns show, for every track with a current row: loudness,
-/// peak and the tempo to show, which is the tag when there is one.
+/// peak and the tempo to show, as [`bpm_of`] gives it.
 pub fn measures(conn: &Connection, library: &[Track]) -> Result<HashMap<String, Measures>> {
     let mut stmt = conn.prepare(
         "SELECT a.path, a.mtime, a.size, a.version, a.loudness, a.peak,
-                COALESCE(a.bpm_tag, CASE WHEN a.bpm_conf >= ?1 THEN a.bpm END)
-           FROM analysis a WHERE a.error IS NULL",
+                COALESCE(a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?1 THEN a.bpm END)
+                  * COALESCE(f.factor, 1)
+           FROM analysis a LEFT JOIN tempo_fix f ON f.path = a.path
+          WHERE a.error IS NULL",
     )?;
     let rows = stmt.query_map([tempo::MIN_CONFIDENCE], |r| {
         Ok((
@@ -196,12 +208,33 @@ pub fn measures(conn: &Connection, library: &[Track]) -> Result<HashMap<String, 
         .collect())
 }
 
-/// The tempo to show for `path`: its BPM tag, else a confident estimate.
+/// The beat grid of `path`, when the row describes the file as the library
+/// knows it. A grid is stored only for a tagged or confident tempo.
+pub fn grid_of(conn: &Connection, path: &str) -> Result<Option<tempo::Grid>> {
+    let row: Option<(Option<f64>, Option<f64>)> = conn
+        .query_row(
+            "SELECT a.grid_bpm, a.grid_t0
+               FROM analysis a
+               JOIN tracks t ON t.path = a.path AND t.mtime = a.mtime AND t.size = a.size
+              WHERE a.path = ?1 AND a.version = ?2",
+            params![path, crate::analysis::VERSION],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(row.and_then(|(bpm, t0)| Some(tempo::Grid { bpm: bpm?, t0: t0? })))
+}
+
+/// The tempo to show for `path`: its grid's, else its BPM tag, else a
+/// confident estimate, times any correction made by hand. A grid is measured
+/// to 0.01 BPM near the tag or the estimate, at the faster level where the
+/// estimate read half the tempo, so a house track read at 62 shows 124.
 /// `None` unless the row describes the file as the library knows it.
 pub fn bpm_of(conn: &Connection, path: &str) -> Result<Option<f32>> {
     conn.query_row(
-        "SELECT COALESCE(a.bpm_tag, CASE WHEN a.bpm_conf >= ?2 THEN a.bpm END)
+        "SELECT COALESCE(a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?2 THEN a.bpm END)
+                  * COALESCE(f.factor, 1)
            FROM analysis a
+           LEFT JOIN tempo_fix f ON f.path = a.path
            JOIN tracks t ON t.path = a.path AND t.mtime = a.mtime AND t.size = a.size
           WHERE a.path = ?1 AND a.version = ?3",
         params![path, tempo::MIN_CONFIDENCE, crate::analysis::VERSION],
@@ -225,11 +258,36 @@ pub fn delete_album(conn: &Connection, key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Removes the rows of `paths`, as pruning removes their tracks.
+/// The correction made by hand to `path`'s tempo: 1 for none.
+pub fn tempo_fix(conn: &Connection, path: &str) -> Result<f32> {
+    conn.query_row(
+        "SELECT factor FROM tempo_fix WHERE path = ?1",
+        [path],
+        |r| r.get(0),
+    )
+    .optional()
+    .map(|f| f.unwrap_or(1.0))
+}
+
+/// Stores `factor` as `path`'s tempo correction; 1 removes it.
+pub fn set_tempo_fix(conn: &Connection, path: &str, factor: f32) -> Result<()> {
+    match factor == 1.0 {
+        true => conn.execute("DELETE FROM tempo_fix WHERE path = ?1", [path])?,
+        false => conn.execute(
+            "INSERT OR REPLACE INTO tempo_fix (path, factor) VALUES (?1, ?2)",
+            params![path, factor],
+        )?,
+    };
+    Ok(())
+}
+
+/// Removes the rows of `paths`, and their tempo corrections, as pruning
+/// removes their tracks.
 pub(crate) fn delete(conn: &Connection, paths: &[String]) -> Result<usize> {
     let mut n = 0;
     for p in paths {
         n += conn.execute("DELETE FROM analysis WHERE path = ?1", [p])?;
+        conn.execute("DELETE FROM tempo_fix WHERE path = ?1", [p])?;
     }
     Ok(n)
 }

@@ -22,6 +22,27 @@ fn outcomes_are_worded() {
     for (outcome, words) in [
         (Outcome::AddedToSelection, "added to selection"),
         (Outcome::FindingTempo, "analysing the track for its tempo"),
+        (
+            Outcome::TempoFixed {
+                bpm: 124.0,
+                factor: 2.0,
+            },
+            "tempo 124.0 BPM, x2 the analysis",
+        ),
+        (
+            Outcome::TempoFixed {
+                bpm: 31.0,
+                factor: 0.25,
+            },
+            "tempo 31.0 BPM, /4 the analysis",
+        ),
+        (
+            Outcome::TempoFixed {
+                bpm: 62.0,
+                factor: 1.0,
+            },
+            "tempo 62.0 BPM, as analysed",
+        ),
         (Outcome::AlreadyInSelection, "already in selection"),
         (Outcome::RemovedFromSelection, "removed from selection"),
         (
@@ -324,6 +345,14 @@ fn refusals_are_worded() {
         (
             Refusal::NoTempo,
             "no clear pulse in this track to cut beats at",
+        ),
+        (
+            Refusal::NoTempoToFix,
+            "no tempo for this track to correct; :analyze it first",
+        ),
+        (
+            Refusal::TempoFixLimit,
+            "a tempo is corrected by at most 2 octaves either way",
         ),
         (Refusal::NoLaterMark, "no later mark"),
         (Refusal::NoEarlierMark, "no earlier mark"),

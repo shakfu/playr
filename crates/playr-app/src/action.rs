@@ -77,6 +77,8 @@ pub enum Action {
     Rescan,
     /// Analyse a directory's tracks, or every track for `None`.
     Analyze(Option<PathBuf>),
+    /// Correct the playing track's tempo by an octave, or put it back.
+    FixTempo(playr_core::analysis::TempoFix),
     /// Show the directories the library covers.
     ShowRoots,
     /// Show what analysis measured about the track under the cursor.

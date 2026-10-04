@@ -4,6 +4,7 @@
 //! test reads them, so a control cannot perform one thing and be counted as
 //! another.
 
+use playr_core::analysis::TempoFix;
 use std::time::Duration;
 
 use playr_app::action::{Action, Nudge, Slicing, Zoom};
@@ -82,6 +83,13 @@ pub const SLICE_MENU: &[Control] = &[
     control("Slice the region", Action::Slice(Slicing::Region)),
     control("Slice at every mark", Action::Slice(Slicing::Marks)),
     control("Slice at onsets", Action::Slice(Slicing::Onsets(None))),
+];
+
+/// Sampler, Tempo: correcting the playing track's tempo by an octave.
+pub const TEMPO_MENU: &[Control] = &[
+    control("Double", Action::FixTempo(TempoFix::Double)),
+    control("Halve", Action::FixTempo(TempoFix::Halve)),
+    control("As analysed", Action::FixTempo(TempoFix::Reset)),
 ];
 
 pub const HELP_MENU: &[Control] = &[
@@ -239,6 +247,7 @@ pub const TABLES: &[&[Control]] = &[
     PLAYBACK_MENU,
     EQ,
     SLICE_MENU,
+    TEMPO_MENU,
     HELP_MENU,
     LIBRARY_ROW,
     SELECTION_ROW,

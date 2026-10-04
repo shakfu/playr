@@ -61,21 +61,25 @@ pub fn tone(path: &Path, rate: u32, secs: f32, dbfs: f32) {
 }
 
 /// Writes `secs` of 16-bit stereo clicks at `bpm`, at `rate`: a 10 ms burst
-/// of a decaying 1 kHz sine on each beat, from frame 0.
-pub fn clicks(path: &Path, rate: u32, bpm: f32, secs: f32) {
+/// of a decaying 1 kHz sine on each beat, the first `t0` seconds in.
+pub fn clicks(path: &Path, rate: u32, bpm: f32, t0: f32, secs: f32) {
     let period = rate as f64 * 60.0 / bpm as f64;
+    let first = t0 as f64 * rate as f64;
     let burst = rate as usize / 100;
-    let pcm: Vec<u8> = (0..(rate as f32 * secs) as usize)
-        .flat_map(|i| {
-            let k = i - (((i as f64 / period).floor() * period).round() as usize).min(i);
-            let v = match k < burst {
-                true => {
-                    let t = k as f32 / rate as f32;
-                    0.5 * (1.0 - k as f32 / burst as f32)
-                        * (std::f32::consts::TAU * 1000.0 * t).sin()
-                }
-                false => 0.0,
-            };
+    let mut out = vec![0.0f32; (rate as f32 * secs) as usize];
+    for beat in 0.. {
+        let at = (first + beat as f64 * period).round() as usize;
+        if at >= out.len() {
+            break;
+        }
+        for (k, o) in out[at..].iter_mut().take(burst).enumerate() {
+            let t = k as f32 / rate as f32;
+            *o = 0.5 * (1.0 - k as f32 / burst as f32) * (std::f32::consts::TAU * 1000.0 * t).sin();
+        }
+    }
+    let pcm: Vec<u8> = out
+        .iter()
+        .flat_map(|v| {
             let sample = ((v * i16::MAX as f32).round() as i16).to_le_bytes();
             [sample, sample].concat()
         })

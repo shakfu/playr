@@ -1567,4 +1567,21 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
     let s = *harness.state().model().deck().state().unwrap();
     assert!(s.voices[1].ping && s.voices[2].solo);
     assert_eq!(s.voices[0].filter, playr_app::tape::Filter::High);
+
+    // Digits typed into a number field go to it, not to the keys that show
+    // a view by its number.
+    harness.get_by_label("Voice 1 slew").click();
+    harness.run_steps(2);
+    for c in "500".chars() {
+        harness.event(egui::Event::Text(c.to_string()));
+        harness.run_steps(1);
+    }
+    harness.key_press(egui::Key::Enter);
+    harness.run_steps(2);
+    assert!(
+        harness.query_by_label("Tape waveform").is_some(),
+        "a digit left the Tape tab"
+    );
+    let slew = harness.state().model().deck().state().unwrap().voices[0].slew;
+    assert_eq!(slew, 500.0);
 }

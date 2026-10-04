@@ -1,6 +1,7 @@
 //! `:` commands: parsing a command line into an [`Action`], and the prompt
 //! that edits one, with Tab completion and a history recalled by the arrows.
 
+use playr_core::analysis::TempoFix;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -178,6 +179,11 @@ pub const COMMANDS: &[Command] = &[
         "write samples; :slice alone lists all",
     ),
     any("loop", "off", "stop looping"),
+    any(
+        "bpm",
+        "x2|/2|reset",
+        "correct the playing track's tempo an octave",
+    ),
     any(
         "tape",
         "load|play|stop|save|...",
@@ -494,6 +500,14 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Scan(dir) => format!("scan {}", dir.display()),
         Rescan => "rescan".into(),
         Analyze(None) => "analyze".into(),
+        FixTempo(fix) => format!(
+            "bpm {}",
+            match fix {
+                TempoFix::Double => "x2",
+                TempoFix::Halve => "/2",
+                TempoFix::Reset => "reset",
+            }
+        ),
         Analyze(Some(dir)) => format!("analyze {}", dir.display()),
         ShowRoots => "roots".into(),
         ShowInfo => "info".into(),
@@ -991,6 +1005,12 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         "rescan" => nothing(Action::Rescan),
         "analyze" if rest.is_empty() => Ok(Action::Analyze(None)),
         "analyze" => Ok(Action::Analyze(Some(path(rest)))),
+        "bpm" => match rest {
+            "x2" => Ok(Action::FixTempo(TempoFix::Double)),
+            "/2" => Ok(Action::FixTempo(TempoFix::Halve)),
+            "reset" => Ok(Action::FixTempo(TempoFix::Reset)),
+            _ => Err(usage()),
+        },
         // `:roots add DIR` is `:scan DIR`: recording a root without scanning
         // it would leave a root the library holds nothing for.
         "roots" if rest.is_empty() => Ok(Action::ShowRoots),

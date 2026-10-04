@@ -343,7 +343,9 @@ fn by_text(conn: &Connection, q: &str) -> Result<Vec<Track>> {
     rows.collect()
 }
 
-/// Tracks whose tempo is in the range `text` names, and that match `fts`.
+/// Tracks whose tempo is in the range `text` names, and that match `fts`: the
+/// tempo shown, as `analysis::bpm_of` gives it, or what the analysis read,
+/// at either level.
 fn by_tempo(conn: &Connection, text: &str, fts: Option<&str>) -> Result<Vec<Track>> {
     let number = |t: &str| t.parse::<f64>().ok();
     // A range that parses as nothing, such as `bpm:fast`, matches nothing.
@@ -357,13 +359,16 @@ fn by_tempo(conn: &Connection, text: &str, fts: Option<&str>) -> Result<Vec<Trac
     let sql = format!(
         "SELECT {COLS_T} FROM tracks t
            JOIN analysis a ON a.path = t.path AND a.mtime = t.mtime AND a.size = t.size
+           LEFT JOIN tempo_fix f ON f.path = a.path
           WHERE a.version = ?5
-            AND CASE
-                  WHEN a.bpm_tag IS NOT NULL THEN a.bpm_tag BETWEEN ?1 AND ?2
-                  WHEN a.bpm_conf >= ?3 THEN a.bpm BETWEEN ?1 AND ?2
-                                          OR a.bpm_alt BETWEEN ?1 AND ?2
-                  ELSE 0
-                END
+            AND (COALESCE(a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?3 THEN a.bpm END)
+                   * COALESCE(f.factor, 1) BETWEEN ?1 AND ?2
+                 OR CASE
+                      WHEN a.bpm_tag IS NOT NULL THEN a.bpm_tag BETWEEN ?1 AND ?2
+                      WHEN a.bpm_conf >= ?3 THEN a.bpm BETWEEN ?1 AND ?2
+                                              OR a.bpm_alt BETWEEN ?1 AND ?2
+                      ELSE 0
+                    END)
             {matching}
           {ORDER_T}"
     );

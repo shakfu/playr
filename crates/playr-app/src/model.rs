@@ -196,7 +196,9 @@ pub struct Model {
     /// The playing track's tempo, and which track it was read for. Read on
     /// each track change rather than every frame.
     bpm: Option<f32>,
-    bpm_for: Option<PathBuf>,
+    /// The track `bpm` was read for, and the session's tempo corrections
+    /// then, so a correction is read again.
+    bpm_for: (Option<PathBuf>, u64),
     /// The tape looper, which plays on its own stream.
     tape: crate::tape::Deck,
 }
@@ -283,7 +285,7 @@ impl Model {
             quit: false,
             peak_hold: None,
             bpm: None,
-            bpm_for: None,
+            bpm_for: (None, 0),
             tape: crate::tape::Deck::new(config.settings.device.clone()),
             snapshot: Snapshot::default(),
         };
@@ -350,9 +352,10 @@ impl Model {
             .iter()
             .map(Mark::time)
             .collect();
-        if current != self.bpm_for {
+        let bpm_for = (current.clone(), self.session.tempo_rev());
+        if bpm_for != self.bpm_for {
             self.bpm = current.as_deref().and_then(|p| self.session.bpm(p));
-            self.bpm_for = current.clone();
+            self.bpm_for = bpm_for;
         }
         self.drain_events(current.as_ref());
         crate::tape::poll(self);

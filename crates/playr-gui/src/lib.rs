@@ -159,13 +159,15 @@ impl Gui {
         self.shown = input;
     }
 
-    /// Turns key presses into actions, unless a text field has them.
+    /// Turns key presses into actions, unless a text field has them: the
+    /// named ones, or a number field being typed into, as a slice count.
     fn keys(&mut self, ctx: &egui::Context) {
-        let typing = ctx.memory(|m| m.focused()).is_some_and(|id| {
+        let named = ctx.memory(|m| m.focused()).is_some_and(|id| {
             [SEARCH, COMMAND, NAME]
                 .iter()
                 .any(|name| id == egui::Id::new(name))
         });
+        let typing = named || ctx.text_edit_focused();
         let events = ctx.input(|i| i.events.clone());
         // Indices of the events a binding, an answer or a closed list took.
         let mut used = Vec::new();

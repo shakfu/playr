@@ -165,6 +165,7 @@ pub fn text(message: &Message) -> String {
                 Task::Analyze => "analysis failed",
                 Task::Prune => "prune failed",
                 Task::Open => "could not open",
+                Task::FixTempo => "could not correct the tempo",
             };
             format!("{what}: {error}")
         }
@@ -367,6 +368,14 @@ fn outcome_text(outcome: &Outcome) -> String {
             format!("analysing {}", home_as_tilde(dir))
         }
         Outcome::FindingTempo => "analysing the track for its tempo".into(),
+        Outcome::TempoFixed { bpm, factor } => {
+            let by = match *factor {
+                1.0 => "as analysed".to_string(),
+                f if f > 1.0 => format!("x{} the analysis", f as u32),
+                f => format!("/{} the analysis", (1.0 / f) as u32),
+            };
+            format!("tempo {bpm:.1} BPM, {by}")
+        }
         Outcome::Analysing { done, total } => format!("analysing: {done}/{total} tracks"),
         Outcome::Analysed { analysed: 0, .. } => {
             "nothing to analyse; every track is up to date".into()
@@ -459,6 +468,8 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::AlreadyMarked { at } => format!("already marked at {}", fmt_time(*at)),
         Refusal::NoMarks => "no marks in this track".into(),
         Refusal::NoTempo => "no clear pulse in this track to cut beats at".into(),
+        Refusal::NoTempoToFix => "no tempo for this track to correct; :analyze it first".into(),
+        Refusal::TempoFixLimit => "a tempo is corrected by at most 2 octaves either way".into(),
         Refusal::NoLoops => "no loops saved in this track".into(),
         Refusal::NoLaterMark => "no later mark".into(),
         Refusal::NoEarlierMark => "no earlier mark".into(),

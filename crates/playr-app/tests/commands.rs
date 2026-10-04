@@ -1345,6 +1345,29 @@ fn stop_takes_after_or_a_sleep_time_and_round_trips() {
 }
 
 #[test]
+fn bpm_corrects_the_tempo_by_octaves() {
+    use playr_core::analysis::TempoFix;
+    for (text, fix) in [
+        ("bpm x2", TempoFix::Double),
+        ("bpm /2", TempoFix::Halve),
+        ("bpm reset", TempoFix::Reset),
+    ] {
+        let action = Action::FixTempo(fix);
+        for view in [Library, Sampler] {
+            assert_eq!(parse(text, view), Ok(action.clone()), "{text}");
+        }
+        assert_eq!(line(&action, None), text);
+    }
+    for text in ["bpm", "bpm x3", "bpm 120"] {
+        assert_eq!(
+            parse(text, Library),
+            Err("usage: :bpm x2|/2|reset".into()),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn tape_commands_parse_in_any_view_and_round_trip() {
     use playr_app::tape::{Filter, Pos, TapeAction as T, VoiceSetting as V};
     let pct = Pos::Percent;

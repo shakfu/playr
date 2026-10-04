@@ -161,7 +161,18 @@ CREATE TABLE IF NOT EXISTS analysis (
   bpm           REAL,
   bpm_alt       REAL,              -- half or double bpm, where it pulses there
   bpm_conf      REAL,
-  bpm_tag       REAL
+  bpm_tag       REAL,
+  grid_bpm      REAL,              -- the beat grid's tempo, to 0.01 BPM
+  grid_t0       REAL               -- its first beat, in seconds
+);
+
+-- A tempo corrected by hand, by octaves: what the analysis shows times
+-- `factor`, a power of 2 from 1/4 to 4. Keyed by path, as marks are, and
+-- apart from `analysis`, whose rows are replaced when a track is analysed
+-- again. Compatible with older libraries, as `analysis` is.
+CREATE TABLE IF NOT EXISTS tempo_fix (
+  path   TEXT PRIMARY KEY,
+  factor REAL NOT NULL
 );
 
 -- Loudness of each album, pooled from its tracks' histograms. `tracks` short

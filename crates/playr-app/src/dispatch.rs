@@ -455,6 +455,10 @@ fn act(action: Action, f: &mut impl Frontend) {
             Ok(_) => f.notify(Outcome::ScanStarted { dir: None }.into()),
             Err(refusal) => f.notify(refusal.into()),
         },
+        Action::FixTempo(fix) => {
+            let notice = f.session_mut().fix_tempo(fix);
+            f.notify(notice.into());
+        }
         Action::Analyze(dir) => match f.session_mut().analyze(dir.clone()) {
             Ok(_) => f.notify(Outcome::AnalysisStarted { dir }.into()),
             Err(refusal) => f.notify(refusal.into()),
@@ -1877,8 +1881,8 @@ fn beats(f: &mut impl Frontend, n: u32) -> Option<Cut> {
             return None;
         }
     };
-    if let Some(bpm) = f.session().bpm(&path) {
-        return Some(Cut::Beats(n, bpm));
+    if let Some(cut) = beat_cut(f, &path, n) {
+        return Some(cut);
     }
     match f.session_mut().analyze(Some(path.clone())) {
         Ok(job) => {
@@ -1897,14 +1901,20 @@ pub(crate) fn tempo_found(f: &mut impl Frontend, path: &std::path::Path, n: u32)
     if playing.as_deref() != Some(path) {
         return;
     }
-    let Some(bpm) = f.session().bpm(path) else {
+    let Some(cut) = beat_cut(f, path, n) else {
         return f.notify(Refusal::NoTempo.into());
     };
     let range = {
         let status = f.session().player().status();
         f.sampler().range(status.current())
     };
-    cut_with(f, Cut::Beats(n, bpm), range);
+    cut_with(f, cut, range);
+}
+
+/// The cut every `n` beats at `path`'s tempo, its grid's when it has one.
+fn beat_cut(f: &impl Frontend, path: &std::path::Path, n: u32) -> Option<Cut> {
+    let bpm = f.session().bpm(path)?;
+    Some(Cut::Beats { beats: n, bpm })
 }
 
 /// Plans `cut` in the sampler, or exports it from any other view.

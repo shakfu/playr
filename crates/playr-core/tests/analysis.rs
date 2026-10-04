@@ -524,3 +524,159 @@ fn a_path_through_a_link_selects_tracks_stored_by_either_path() {
     let (chosen, missing) = analysis::select(&by_real, &paths);
     assert_eq!((chosen.len(), missing.len()), (1, 0));
 }
+
+/// Mono clicks at `bpm` from `t0` seconds: 5 ms noise bursts, `secs` long,
+/// each placed at its exact beat rounded to a frame.
+fn clicks_from(rate: u32, bpm: f64, t0: f64, secs: f64) -> Vec<f32> {
+    let burst = noise((rate as f32 * 0.005) as usize, 7);
+    let mut out = vec![0.0; (rate as f64 * secs) as usize];
+    for k in 0.. {
+        let at = ((t0 + k as f64 * 60.0 / bpm) * rate as f64).round() as usize;
+        if at >= out.len() {
+            break;
+        }
+        for (o, v) in out[at..].iter_mut().zip(&burst) {
+            *o = v * 0.5;
+        }
+    }
+    out
+}
+
+fn grid_of(samples: &[f32], rate: u32, near: f32) -> playr_core::analysis::tempo::Grid {
+    let mut t = Tempo::new(rate);
+    t.feed(samples, 1);
+    t.grid(near).expect("a grid")
+}
+
+#[test]
+fn the_grid_finds_the_tempo_and_the_first_beat_at_any_rate() {
+    for rate in [22_050, 44_100, 48_000, 96_000] {
+        for (bpm, t0) in [(128.0, 0.137), (123.45, 0.401), (174.0, 0.02), (90.0, 0.6)] {
+            // Searched from 0.3 BPM off, as an estimate may be.
+            let g = grid_of(&clicks_from(rate, bpm, t0, 60.0), rate, bpm as f32 + 0.3);
+            let what = format!("{bpm} BPM from {t0} s at {rate} Hz: {g:?}");
+            assert!((g.bpm - bpm).abs() < 0.01, "{what}");
+            assert!((g.t0 - t0).abs() < 0.003, "{what}");
+        }
+    }
+}
+
+#[test]
+fn the_grid_stays_on_the_kicks_for_five_minutes() {
+    let rate = 44_100;
+    for (bpm, t0) in [(128.0f64, 0.137f64), (95.5, 0.2)] {
+        // A kick on the beat, a hat half a beat later at a third of its
+        // level, and a noise floor.
+        let secs = 300.0;
+        let mut x = clicks_from(rate, bpm, t0, secs);
+        let hats = clicks_from(rate, bpm, t0 + 30.0 / bpm, secs);
+        let floor = noise(x.len(), 99);
+        for ((x, h), n) in x.iter_mut().zip(&hats).zip(&floor) {
+            *x += h / 3.0 + n * 0.02;
+        }
+        let mut t = Tempo::new(rate);
+        t.feed(&x, 1);
+        let g = t.grid(t.estimate().unwrap().bpm).unwrap();
+        // The beat nearest 290 s, as the grid puts it and as it is.
+        let k = ((290.0 - t0) * bpm / 60.0).round();
+        let drift = (g.t0 + k * 60.0 / g.bpm) - (t0 + k * 60.0 / bpm);
+        assert!((g.t0 - t0).abs() < 0.005, "{bpm}: {g:?}");
+        assert!(drift.abs() < 0.005, "{bpm}: {drift} s off at 290 s");
+    }
+}
+
+#[test]
+fn a_file_with_a_pulse_gets_a_grid_stored_and_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.wav");
+    // `noise` reaches 3, so a burst at half of it is scaled to fit 16 bits.
+    let quiet = |x: Vec<f32>| x.iter().map(|v| v * 0.3).collect::<Vec<_>>();
+    wav(&path, 16, &quiet(clicks_from(44_100, 126.0, 0.3, 20.0)));
+    let a = analyse(&path);
+    let g = a.grid.expect("a grid");
+    assert!(
+        (g.bpm - 126.0).abs() < 0.02 && (g.t0 - 0.3).abs() < 0.003,
+        "{g:?}"
+    );
+
+    let conn = playr_core::db::open_memory().unwrap();
+    let meta = std::fs::metadata(&path).unwrap();
+    let t = Track {
+        path: path.to_string_lossy().into_owned(),
+        mtime: 1,
+        size: meta.len() as i64,
+        ..Default::default()
+    };
+    playr_core::db::upsert(&conn, &t).unwrap();
+    playr_core::db::analysis::put(&conn, &t, a).unwrap();
+    assert_eq!(
+        playr_core::db::analysis::grid_of(&conn, &t.path).unwrap(),
+        Some(g)
+    );
+    // Noise pulses at nothing, so it gets no grid.
+    let noisy = dir.path().join("n.wav");
+    wav(
+        &noisy,
+        16,
+        &noise(44_100 * 20, 3)
+            .iter()
+            .map(|x| x * 0.3)
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(analyse(&noisy).grid, None);
+}
+
+/// Mono clicks at `bpm` with every other one at `weak` of the level, which
+/// reads at half the tempo with the tempo itself recorded, as house often does.
+fn accented(rate: u32, bpm: f64, weak: f32, secs: f64) -> Vec<f32> {
+    let n = (f64::from(rate) * secs) as usize;
+    let mut x = vec![0.0f32; n];
+    for k in 0.. {
+        let at = (k as f64 * 60.0 / bpm * f64::from(rate)) as usize;
+        if at >= n {
+            break;
+        }
+        let amp = if k % 2 == 0 { 0.3 } else { 0.3 * weak };
+        for (i, v) in x[at..].iter_mut().take(220).enumerate() {
+            *v = amp * (1.0 - i as f32 / 220.0) * (i as f32 * 0.7).sin();
+        }
+    }
+    x
+}
+
+#[test]
+fn a_reading_under_80_gets_its_grid_at_the_faster_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.wav");
+    wav(&path, 16, &accented(44_100, 150.0, 0.3, 30.0));
+    let a = analyse(&path);
+    let e = a.tempo.unwrap();
+    assert!((e.bpm - 75.0).abs() < 0.5 && e.alt.is_some(), "{e:?}");
+    let g = a.grid.expect("a grid");
+    assert!((g.bpm - 150.0).abs() < 0.02, "{g:?}");
+}
+
+#[test]
+fn a_reading_over_80_keeps_its_grid_at_its_own_level() {
+    // Read at 90 with 180 recorded, as hip hop often is: the double is
+    // rarely what is heard, so the grid stays at 90.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.wav");
+    let x: Vec<f32> = clicks(44_100, 180.0, 30.0)
+        .iter()
+        .map(|v| v * 0.3)
+        .collect();
+    wav(&path, 16, &x);
+    let a = analyse(&path);
+    let e = a.tempo.unwrap();
+    assert!((e.bpm - 90.0).abs() < 0.5 && e.alt.is_some(), "{e:?}");
+    let g = a.grid.expect("a grid");
+    assert!((g.bpm - 90.0).abs() < 0.02, "{g:?}");
+}
+
+#[test]
+fn no_grid_for_a_track_under_8_seconds() {
+    let mut t = Tempo::new(44_100);
+    t.feed(&clicks_from(44_100, 120.0, 0.0, 6.0), 1);
+    assert_eq!(t.grid(120.0), None);
+}

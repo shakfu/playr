@@ -122,6 +122,8 @@ pub struct Session {
     /// Set while an analysis runs. Separate from `scanning`: an analysis
     /// writes only its own tables, so the two may run together.
     analysing: Arc<AtomicBool>,
+    /// Tempo corrections made, for [`Session::tempo_rev`].
+    tempo_rev: u64,
     replaygain: ReplayGain,
     /// What every track list is sorted by. It orders the library and every
     /// search, so the list a frontend shows is the list it plays.
@@ -169,6 +171,7 @@ impl Session {
             library,
             scanning: Arc::default(),
             analysing: Arc::default(),
+            tempo_rev: 0,
             replaygain: ReplayGain::Off,
             sort: Vec::new(),
             measures: HashMap::new(),
@@ -1796,7 +1799,57 @@ impl Session {
             .unwrap_or_default()
     }
 
-    /// The tempo to show for `path`, from `playr analyze`.
+    /// The beat grid of `path`, from `playr analyze`.
+    pub fn grid(&self, path: &Path) -> Option<analysis::tempo::Grid> {
+        db::analysis::grid_of(&self.conn, path.to_str()?)
+            .ok()
+            .flatten()
+    }
+
+    /// Corrects the playing track's tempo by an octave, or puts it back. The
+    /// correction is kept apart from the analysis, so analysing the track
+    /// again keeps it.
+    pub fn fix_tempo(&mut self, fix: analysis::TempoFix) -> Notice {
+        use analysis::{TempoFix, MAX_TEMPO_FIX};
+        let path = match self.playing_track() {
+            Ok((path, _)) => path,
+            Err(refusal) => return refusal.into(),
+        };
+        let (Some(key), Some(shown)) = (path.to_str(), self.bpm(&path)) else {
+            return Refusal::NoTempoToFix.into();
+        };
+        let was = db::analysis::tempo_fix(&self.conn, key).unwrap_or(1.0);
+        let factor = match fix {
+            TempoFix::Double => was * 2.0,
+            TempoFix::Halve => was / 2.0,
+            TempoFix::Reset => 1.0,
+        };
+        if !(1.0 / MAX_TEMPO_FIX..=MAX_TEMPO_FIX).contains(&factor) {
+            return Refusal::TempoFixLimit.into();
+        }
+        if let Err(e) = db::analysis::set_tempo_fix(&self.conn, key, factor) {
+            return Notice::Failed {
+                task: Task::FixTempo,
+                error: e.to_string(),
+            };
+        }
+        self.tempo_rev += 1;
+        self.measures = db::analysis::measures(&self.conn, &self.tracks).unwrap_or_default();
+        Outcome::TempoFixed {
+            bpm: shown / was * factor,
+            factor,
+        }
+        .into()
+    }
+
+    /// Counts tempo corrections, so a frontend holding a tempo knows to read
+    /// it again.
+    pub fn tempo_rev(&self) -> u64 {
+        self.tempo_rev
+    }
+
+    /// The tempo to show for `path`, from `playr analyze`: its grid's when it
+    /// has one, times any correction made by hand.
     pub fn bpm(&self, path: &Path) -> Option<f32> {
         db::analysis::bpm_of(&self.conn, path.to_str()?)
             .ok()

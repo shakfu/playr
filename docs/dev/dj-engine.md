@@ -108,7 +108,7 @@ New columns in the `analysis` table: `grid_bpm REAL`, `grid_t0 REAL` and `grid_e
 
 A grid edited by hand is kept across re-analysis, as `bpm_tag` overrides `bpm` today. Hand edits:
 
-- x2 and /2.
+- x2 and /2. Built 2026-10-04 as `:bpm x2|/2|reset`, in `tempo_fix`; a deck would use the same.
 - Shift `t0` by one beat either way, to set the downbeat.
 - Nudge `t0` by 1 ms steps.
 - Tap tempo, for a track the analysis misses.
@@ -228,7 +228,7 @@ On real music, a report like `playr analyze --report`: the grid against librosa'
 ## Build order
 
 1. `playr-dsp`: move the looper's read head, `Ramp`, `Svf` and one-pole filters into it. The looper's tests still pass.
-2. Grid analysis in `playr-core`, its columns and its tests. `:slice beats N` can then take its phase from the grid when no mark is set.
+2. Grid analysis in `playr-core`, its columns and its tests. Built 2026-10-04 as the comb search in "Analysis", with the onset refinement replaced by a 2.9 ms envelope in the same pass, at the faster level where the estimate was halved. `:slice beats N` takes its tempo from it, not its phase. See "A beat grid" in `docs/dev/analyze.md`.
 3. `playr-dj`: `Deck` (load, play, rate, cue), the mixer, `Engine` and `Handle`, the cpal stream, split cue. Offline tests.
 4. Sync, phase sync and quantize, with their tests.
 5. `playr-app`: `Decks`, `DjAction`, the `:dj` commands, and the parity test.

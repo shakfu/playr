@@ -36,9 +36,9 @@ pub enum Cut {
     Equal(usize),
     /// The region, at onsets found with this sensitivity, from 0 to 1.
     Onsets(f32),
-    /// The region, every this many beats at this tempo in BPM, in phase with
-    /// the first mark inside it, else from its start.
-    Beats(u32, f32),
+    /// The region, every `beats` beats at `bpm`, in phase with the first mark
+    /// inside it, else from its start.
+    Beats { beats: u32, bpm: f32 },
 }
 
 /// What an export does at each slice's edges, against clicks.
@@ -205,9 +205,11 @@ pub fn equal_spans(len: u64, n: usize) -> Vec<(u64, u64)> {
 }
 
 /// Slice edges every `beats` beats at `bpm` across `len` frames from `start`,
-/// as offsets from `start`, from 0 to `len`. The grid falls on the first of
-/// `marks` inside, so a slice before it may be short; without one, on 0.
-/// Each edge is rounded from its exact position, so none drifts.
+/// as offsets from `start`, from 0 to `len`. The edges fall on the first of
+/// `marks` inside, else on 0; a slice before that mark may be short. An edge
+/// within half a beat of either end is dropped, so no sliver is written: a
+/// range a few frames longer than 2 bars cuts as 2 bars. Each edge is
+/// rounded from its exact position, so none drifts.
 pub fn beat_points(
     marks: &[u64],
     start: u64,
@@ -216,7 +218,8 @@ pub fn beat_points(
     beats: u32,
     bpm: f32,
 ) -> Result<Vec<u64>, String> {
-    let step = f64::from(rate) * 60.0 * f64::from(beats) / f64::from(bpm);
+    let beat = f64::from(rate) * 60.0 / f64::from(bpm);
+    let step = beat * f64::from(beats);
     if !(step >= 1.0 && step.is_finite()) {
         return Err(format!("{bpm} BPM is not a tempo to cut at"));
     }
@@ -226,10 +229,12 @@ pub fn beat_points(
         .min()
         .map_or(0.0, |&m| (m - start) as f64);
     let first = anchor - (anchor / step).floor() * step;
+    let half = beat / 2.0;
     let inner = (0u64..)
-        .map(|k| (first + k as f64 * step).round() as u64)
-        .skip_while(|&p| p == 0)
-        .take_while(|&p| p < len);
+        .map(|k| first + k as f64 * step)
+        .take_while(|&p| p < len as f64)
+        .filter(|&p| p >= half && len as f64 - p >= half)
+        .map(|p| p.round() as u64);
     let mut points: Vec<u64> = std::iter::once(0).chain(inner).collect();
     if len > 0 {
         points.push(len);
@@ -450,7 +455,7 @@ pub fn plan_with(job: &Job, audio: &OnsetAudio) -> Result<Vec<Span>, String> {
                     .map(|(s, e)| (start + s, Some(start + e)))
                     .collect()
             }
-            Cut::Beats(beats, bpm) => {
+            Cut::Beats { beats, bpm } => {
                 let len = match end {
                     Some(end) => end - start,
                     None => Reader::open(&job.path, job.rate, start)?.count_to(None)?,

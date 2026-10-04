@@ -50,6 +50,7 @@ fn every_action() -> Vec<Action> {
         Action::Scan("/m".into()),
         Action::Rescan,
         Action::Analyze(None),
+        Action::FixTempo(playr_core::analysis::TempoFix::Double),
         Action::ShowRoots,
         Action::ShowInfo,
         Action::ForgetRoot("/m".into()),
@@ -158,6 +159,7 @@ fn every_action() -> Vec<Action> {
             | Action::Scan(_)
             | Action::Rescan
             | Action::Analyze(_)
+            | Action::FixTempo(_)
             | Action::ShowRoots
             | Action::ShowInfo
             | Action::ForgetRoot(_)

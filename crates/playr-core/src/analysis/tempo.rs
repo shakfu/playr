@@ -1,4 +1,5 @@
-//! Tempo: one BPM estimate for a whole track, and how clear its pulse is.
+//! Tempo: one BPM estimate for a whole track, how clear its pulse is, and a
+//! beat grid: the tempo to 0.01 BPM and where one beat falls.
 //!
 //! The novelty curve is spectral flux: the rise in log magnitude, summed over
 //! bins, once per hop of about 11.6 ms. Its autocorrelation peaks at the beat
@@ -32,6 +33,15 @@ const MIN_SECONDS: f32 = 8.0;
 /// Bins above this frequency add little to onsets and much to noise.
 const TOP_HZ: f32 = 11_000.0;
 
+/// The grid's onset envelope takes a level every `size / FINE` samples:
+/// about 2.9 ms, a quarter of the novelty curve's hop.
+const FINE: usize = 16;
+
+/// How far either side of the tempo given the grid searches, as a fraction
+/// of it, and in what steps, in BPM.
+const GRID_SPAN: f64 = 0.005;
+const GRID_STEP: f64 = 0.01;
+
 /// Accumulates the novelty curve of one track.
 pub struct Tempo {
     rate: u32,
@@ -47,6 +57,22 @@ pub struct Tempo {
     /// Last frame's log magnitudes, up to `TOP_HZ`.
     last: Vec<f32>,
     novelty: Vec<f32>,
+    /// Samples a level of the onset envelope takes, the sum of squares of
+    /// those taken so far, and how many.
+    fine_hop: usize,
+    fine_sum: f64,
+    fine_n: usize,
+    /// Log level of each `fine_hop` samples, for [`Tempo::grid`].
+    levels: Vec<f32>,
+}
+
+/// A track's beats, at a constant tempo: beat `n` is at `t0 + n * 60 / bpm`
+/// seconds. `t0` is the first beat, within one beat of the start; it need not
+/// be a downbeat.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grid {
+    pub bpm: f64,
+    pub t0: f64,
 }
 
 /// How strongly a track must pulse at twice the tempo chosen, against the
@@ -92,17 +118,31 @@ impl Tempo {
             pending: Vec::new(),
             last: vec![0.0; bins],
             novelty: Vec::new(),
+            fine_hop: size / FINE,
+            fine_sum: 0.0,
+            fine_n: 0,
+            levels: Vec::new(),
         }
     }
 
     /// Takes interleaved samples of `channels` channels.
     pub fn feed(&mut self, interleaved: &[f32], channels: usize) {
         let channels = channels.max(1);
+        let from = self.pending.len();
         self.pending.extend(
             interleaved
                 .chunks_exact(channels)
                 .map(|f| f.iter().sum::<f32>() / channels as f32),
         );
+        for &x in &self.pending[from..] {
+            self.fine_sum += f64::from(x * x);
+            self.fine_n += 1;
+            if self.fine_n == self.fine_hop {
+                let mean = self.fine_sum / self.fine_n as f64;
+                self.levels.push((mean + 1e-10).ln() as f32);
+                (self.fine_sum, self.fine_n) = (0.0, 0);
+            }
+        }
         let mut start = 0;
         while self.pending.len() - start >= self.size {
             self.transform(start);
@@ -135,7 +175,103 @@ impl Tempo {
 
     /// The estimate, or `None` for a track under about 8 s.
     pub fn finish(self) -> Option<Estimate> {
+        self.estimate()
+    }
+
+    /// As [`Tempo::finish`], leaving the curves for [`Tempo::grid`].
+    pub fn estimate(&self) -> Option<Estimate> {
         estimate(&self.novelty, self.rate as f32 / self.hop as f32)
+    }
+
+    /// The grid near `bpm`, or `None` for a track under about 8 s.
+    ///
+    /// Each tempo within [`GRID_SPAN`] of `bpm`, [`GRID_STEP`] apart, is tried
+    /// at every phase: the score is the mean of the onset envelope at its
+    /// beats. The best tempo and phase are refined between steps by a
+    /// parabola. The comb spans the whole track, so a tempo off by 0.01 BPM
+    /// puts its beats 23 ms off the music 5 minutes in, and scores lower.
+    pub fn grid(&self, bpm: f32) -> Option<Grid> {
+        let fps = f64::from(self.rate) / self.fine_hop as f64;
+        if bpm.is_nan() || bpm <= 0.0 || (self.levels.len() as f64) < f64::from(MIN_SECONDS) * fps {
+            return None;
+        }
+        // Rises in level, smoothed over three levels so a beat that falls
+        // between two still scores whole.
+        let rises: Vec<f32> = self
+            .levels
+            .windows(2)
+            .map(|w| (w[1] - w[0]).max(0.0))
+            .collect();
+        let env: Vec<f32> = (0..rises.len())
+            .map(|i| {
+                let at = |k: usize| rises.get(k).copied().unwrap_or(0.0);
+                0.25 * at(i.wrapping_sub(1)) + 0.5 * at(i) + 0.25 * at(i + 1)
+            })
+            .collect();
+        // Rise `i` is the change into level `i + 1`. An onset falls anywhere
+        // in that level's samples, so on average halfway through it.
+        let offset = 1.5;
+
+        let centre = f64::from(bpm);
+        let steps = (centre * GRID_SPAN / GRID_STEP).ceil() as i64;
+        let tempo_at = |k: i64| centre + k as f64 * GRID_STEP;
+        let best_phase = |period: f64| -> (f64, f64, [f64; 3]) {
+            let phases = period.ceil() as usize;
+            let scores: Vec<f64> = (0..phases).map(|p| comb(&env, p as f64, period)).collect();
+            let (at, &top) = scores
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .expect("a period of at least one level");
+            let around = |d: isize| scores[(at as isize + d).rem_euclid(phases as isize) as usize];
+            (at as f64, top, [around(-1), top, around(1)])
+        };
+        let tried: Vec<(f64, f64, [f64; 3])> = (-steps..=steps)
+            .map(|k| best_phase(fps * 60.0 / tempo_at(k)))
+            .collect();
+        let best = (0..tried.len()).max_by(|&a, &b| tried[a].1.total_cmp(&tried[b].1))?;
+        let score = |i: usize| tried[i].1;
+        let tempo_shift = match (best.checked_sub(1), tried.get(best + 1)) {
+            (Some(l), Some(_)) => vertex(score(l), score(best), score(best + 1)),
+            _ => 0.0,
+        };
+        let tempo = tempo_at(best as i64 - steps) + tempo_shift * GRID_STEP;
+        let (phase, _, [l, c, r]) = tried[best];
+        let period = fps * 60.0 / tempo;
+        let first = (phase + vertex(l, c, r) + offset).rem_euclid(period);
+        Some(Grid {
+            bpm: tempo,
+            t0: first / fps,
+        })
+    }
+}
+
+/// The mean of `env` at `phase`, `phase + period` and so on, each read
+/// between levels by linear interpolation.
+fn comb(env: &[f32], phase: f64, period: f64) -> f64 {
+    let mut sum = 0.0;
+    let mut n = 0;
+    let mut at = phase;
+    while at + 1.0 < env.len() as f64 {
+        let i = at as usize;
+        let t = (at - i as f64) as f32;
+        sum += f64::from(env[i] * (1.0 - t) + env[i + 1] * t);
+        n += 1;
+        at += period;
+    }
+    match n {
+        0 => 0.0,
+        n => sum / n as f64,
+    }
+}
+
+/// Where a parabola through `(-1, l)`, `(0, c)` and `(1, r)` peaks, within
+/// half a step of 0; 0 when it does not curve down.
+fn vertex(l: f64, c: f64, r: f64) -> f64 {
+    let curve = l - 2.0 * c + r;
+    match curve < 0.0 {
+        true => (0.5 * (l - r) / curve).clamp(-0.5, 0.5),
+        false => 0.0,
     }
 }
 
