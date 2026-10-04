@@ -99,6 +99,15 @@ CREATE TABLE IF NOT EXISTS loops (
   PRIMARY KEY (path, slot)
 );
 
+-- A DJ deck's hot cues in a track, by slot, in seconds, so they hold at
+-- any rate the deck plays it at. Keyed by path, as loops are.
+CREATE TABLE IF NOT EXISTS hot_cues (
+  path TEXT NOT NULL,
+  slot INTEGER NOT NULL,  -- 1 to 4
+  at   REAL NOT NULL,
+  PRIMARY KEY (path, slot)
+);
+
 -- Directories given to a scan. A bare `playr scan`, or `:rescan`, covers them
 -- all. Compatible with older libraries: CREATE IF NOT EXISTS needs no version bump.
 CREATE TABLE IF NOT EXISTS roots (
@@ -173,6 +182,15 @@ CREATE TABLE IF NOT EXISTS analysis (
 CREATE TABLE IF NOT EXISTS tempo_fix (
   path   TEXT PRIMARY KEY,
   factor REAL NOT NULL
+);
+
+-- A beat grid set by hand, as a DJ deck edits it: tempo before any
+-- `tempo_fix`, and the time of one beat in seconds. It replaces the
+-- analysis's grid, and is kept apart from `analysis` as `tempo_fix` is.
+CREATE TABLE IF NOT EXISTS grid_edit (
+  path TEXT PRIMARY KEY,
+  bpm  REAL NOT NULL,
+  t0   REAL NOT NULL
 );
 
 -- Loudness of each album, pooled from its tracks' histograms. `tracks` short

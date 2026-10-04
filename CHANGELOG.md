@@ -6,6 +6,25 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
+- Two DJ decks. Each plays a library track at its own varispeed rate (fader ranges +/-8, 16 and 50%, a held nudge of 4%), with a CDJ-style cue. Sync follows the other deck's tempo at half, the same or double, and moves into phase with it once; quantize starts play and cue in phase. The mixer has a trim, channel faders, a constant-power crossfader and a split headphone cue: the main mix in one ear, the cued deck in the other. Each track's beat grid comes from `playr analyze`; a track never analysed is analysed on load. Grid edits (octave, a beat earlier or later, an offset in ms, tap tempo) are kept with the track across analyses. The decks play on their own output stream, as the tape does, and pause the player. The terminal has the commands; the window adds a DJ tab with a waveform and an overview per deck, and a library or selection row's menu loads a deck. The server has neither. On click tracks the beats stay within 1 frame of each other 5 minutes after sync. Library API: the new crate `playr-dj`; `Action::Dj`, `playr_app::dj`, `Frontend::dj`, `Model::decks` and `set_decks`, `command::side_name`, `Session::set_grid` and `fix_tempo_of`, `db::analysis::grid_edit` and `set_grid_edit`.
+
+  ```
+  :dj a load            the cursor row onto deck A
+  :dj a play|pause|cue  :dj a cue down|up     :dj b sync [off]
+  :dj b rate 2.5        :dj a range 8|16|50   :dj b nudge +|-|off
+  :dj a gain G          :dj a level L         :dj xfade X
+  :dj quantize on|off   :dj cue a|b|off
+  :dj a grid x2|/2|<|>|reset                  :dj a grid offset MS
+  :dj a tap
+  :dj a eq low|mid|high DB                    :dj a kill low|mid|high on|off
+  :dj a filter K        :dj a hot N [clear]   :dj a jump BEATS
+  :dj a loop BEATS|off  :dj cue-out split|3-4 :dj curve smooth|sharp
+  ```
+
+  Each deck also has a 3-band isolator EQ with kills, a one-knob filter, four hot cues kept with the track, beat jumps and loops of 1/4 to 32 beats. A synced deck stays in phase: a rate trim of up to 5% pulls it back if it drifts, and a nudge moves the phase it holds. The cue can go to channels 3 and 4 of a 4-channel device, and the crossfader has a sharp curve for cuts. The looper and the decks share their ramps and filters in the new crate `playr-dsp`. More library API: `Band`, `CueOut`, `Curve`, `EQ_DB`, `HOT_CUES`, `LOOP_BEATS`, `Mixer::process_channels`, `Engine::process_channels`; `Session::hot_cues` and `set_hot_cue`, `db::query::hot_cues` and `set_hot_cue`.
+
+  The design, and where the build departs from it, is in `docs/dev/dj-engine.md`.
+
 - A tape looper over the sampler's range. Three voices read one loop, each at its own rate (-4 to 4, negative in reverse), over its own window, with its own level, pan, crossfade, rate slew, drive, filter, and a low-pass on what it sends; a voice can turn at its window's edges instead of wrapping, and can be soloed. A write head records the sends back into the loop with feedback, a darkening low-pass and a thinning high-pass of its own, so each pass changes the loop. The load keeps up to a second of the track either side of the range as pre-roll and post-roll, so a crossfade fades into the audio that followed the window and the loop repeats exactly one window long. While the write window is the range, the write head writes the rolls as the range's continuation, so they keep the loop's level and carry its sends; frozen rolls played the track at full level at every wrap once feedback had faded the loop. On a stereo loop, pan folds the far channel into the near one rather than dropping it. The loop or the mix saves as a 32-bit float WAV under `samples/<track>-tape/` and is added to the library. It plays on its own output stream, on the player's device, and pauses the player. The terminal has the commands; the window adds a Tape tab with the waveform, the windows and heads, the selected voice's window dragged on the waveform by its edges or whole, and a strip of controls per voice and one for the write head. The server has neither. Library API: the new crate `playr-looper`, with `Loop::with_range`, `Setting` (including `VoiceWear`, `Ping`, `Slew`, `Drive`, `Cutoff`, `Filter`, `Solo` and `Thin`), `Filter`, `crossfade`, `fade_frames`, `DEFAULT_SLEW_MS` and `MAX_SLEW_MS`; `Action::Tape`, `playr_app::tape` with `no_effect`, `message::idle_text`, `Frontend::tape`, `Model::deck`, `Session::add_to_library`; `samples::read_frames`, `unused_dir` and `name_for` are public.
 
   ```
@@ -30,6 +49,12 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 - A range cut whole while it loops gets a `smpl` chunk in its WAV files, the slice file and `sliced/NAME.wav`, looping the whole file. Before, only `samples.json` and the `.sfz` file held the loop, and samplers that load a bare WAV read neither. The root note is middle C, as for a lone sample; the kit's key 36 is a drum-pad convention. Library API: `sliced::smpl_chunk`, `sliced::append_chunk`.
 
 ### Changed
+
+- Opus is on by default, in `cargo build` and `cargo install` as in the release archives, so building needs cmake. `--no-default-features` leaves it out. `make test` and `make clippy` run once, with Opus, not once with and once without.
+
+- The tests that ask the machine for its audio devices, and the smoke test that plays the default one, run only with `PLAYR_DEVICE_TESTS` set, as `make test-devices` and CI set it. Listing devices takes about 14 s a test on macOS. Tests build `playr-core`, the DSP crates and the FFT and decoding crates under them at `opt-level` 1, which takes the analysis tests from 25 s to 3.3 s. Optimising every dependency took them to 1.3 s, but a cold test build from about 5 to 27 minutes.
+
+- `Session::grid` gives the grid a DJ deck uses: one set by hand, else the analysis's, at its tempo times any `:bpm` correction. The tempo shown, sorted and searched takes a hand-set grid's tempo first.
 
 - The analyser is version 5, for the grid, so `playr analyze` measures every track again. Until it does, tempos are not shown or searched, as on the move to version 2.
 

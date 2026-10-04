@@ -72,8 +72,9 @@ pub fn allowed(action: &Action) -> bool {
         | WriteSlices
         | DiscardSlices
         | Convert(..)
-        // Not in the first version: it would play on the server's device.
-        | Tape(_) => false,
+        // Not in the first version: they would play on the server's device.
+        | Tape(_)
+        | Dj(_) => false,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection

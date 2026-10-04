@@ -358,6 +358,9 @@ fn previous_with_only_unplayable_tracks_before_restarts_the_track() {
 #[test]
 fn the_default_output_device_plays() {
     use cpal::traits::DeviceTrait;
+    if !common::device_tests() {
+        return;
+    }
     // ALSA reports a default device on a machine with no sound card, such as
     // a CI runner, but it offers no formats. One that offers formats playr
     // cannot use is a failure, not a skip.

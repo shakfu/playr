@@ -1,21 +1,16 @@
 [package]
-name = "playr-looper"
+name = "playr-dj"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "A three-voice tape looper that rewrites its own loop, for playr"
-keywords = ["audio", "looper", "tape", "sampler"]
+description = "Two beat-matched decks and a mixer with a split headphone cue, for playr"
+keywords = ["audio", "dj", "beatmatching", "mixer"]
 categories = ["multimedia::audio"]
 
 [dependencies]
 playr-dsp.workspace = true
 cpal.workspace = true
 rtrb.workspace = true
-hound.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
-hound.workspace = true

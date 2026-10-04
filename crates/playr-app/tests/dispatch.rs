@@ -34,6 +34,7 @@ struct Headless {
     planning: bool,
     sampler: playr_app::sampler::Sampler,
     tape: playr_app::tape::Deck,
+    dj: playr_app::dj::Decks,
 }
 
 fn slot(view: View) -> Option<usize> {
@@ -111,6 +112,9 @@ impl Frontend for Headless {
     fn tape(&mut self) -> &mut playr_app::tape::Deck {
         &mut self.tape
     }
+    fn dj(&mut self) -> &mut playr_app::dj::Decks {
+        &mut self.dj
+    }
 }
 
 /// A headless frontend over a library file of tracks a, b and c, and
@@ -147,6 +151,7 @@ fn headless() -> (Headless, tempfile::TempDir) {
         planning: false,
         sampler: Default::default(),
         tape: playr_app::tape::Deck::manual(),
+        dj: playr_app::dj::Decks::manual(),
     };
     (frontend, dir)
 }
@@ -848,4 +853,205 @@ fn tape_controls_say_when_they_have_no_effect() {
     assert_eq!(idle(&s, C::Fade(0)), None);
     s.voices[0].ping = true;
     assert_eq!(idle(&s, C::Fade(0)), Some(Idle::Turns));
+}
+
+/// Runs `f`'s manual decks for `blocks` blocks of 512 frames, then takes
+/// in what they finished.
+fn run_decks(f: &mut Headless, blocks: usize) {
+    let mut out = vec![0.0; 512 * 2];
+    for _ in 0..blocks {
+        f.dj.process(&mut out);
+    }
+    playr_app::dj::poll(f);
+}
+
+/// Runs `f`'s decks until `done` holds of the last message.
+fn decks_until(f: &mut Headless, done: impl Fn(&Message) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !last(f).is_some_and(&done) {
+        assert!(std::time::Instant::now() < deadline, "{:?}", last(f));
+        run_decks(f, 1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// A click track at `bpm` in the library, with its grid set by hand.
+fn click_track(f: &mut Headless, dir: &std::path::Path, name: &str, bpm: f64, t0: f64) -> Track {
+    use playr_core::analysis::tempo::Grid;
+    let file = dir.join(name);
+    common::clicks(&file, 8000, bpm as f32, t0 as f32, 20.0);
+    let track = Track {
+        path: file.to_string_lossy().into(),
+        sample_rate: Some(8000),
+        ..Default::default()
+    };
+    f.session.set_grid(&file, Some(Grid { bpm, t0 })).unwrap();
+    track
+}
+
+#[test]
+fn the_decks_load_from_the_cursor_sync_and_keep_grid_edits() {
+    use playr_app::dj::{DjAction as D, DjMessage as M, GridEdit as G, Side::*};
+    use playr_core::audio::State;
+    let dj = |f: &mut Headless, d| dispatch(Action::Dj(d), f);
+    let said = |f: &Headless, m: M| assert_eq!(last(f), Some(&Message::Dj(m)));
+
+    let (mut f, dir) = headless();
+    dj(&mut f, D::Play(A));
+    said(&f, M::Empty(A));
+    f.view = Sampler;
+    dj(&mut f, D::Load(A));
+    said(&f, M::NoTrack);
+    f.view = Library;
+
+    let a = click_track(&mut f, dir.path(), "a.wav", 128.0, 0.1);
+    let b = click_track(&mut f, dir.path(), "b.wav", 125.0, 0.3);
+    f.results = Some(vec![a.clone(), b.clone()]);
+    f.cursors[0] = Some(0);
+    dj(&mut f, D::Load(A));
+    said(&f, M::Loading(A));
+    decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    said(
+        &f,
+        M::Loaded {
+            side: A,
+            title: "a".into(),
+            bpm: Some(128.0),
+        },
+    );
+    f.cursors[0] = Some(1);
+    dj(&mut f, D::Load(B));
+    decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    assert_eq!(f.dj.loaded(B).unwrap().frames, 160_000);
+    assert_eq!(f.dj.rate(), Some(8000));
+
+    // Playing a deck pauses the player.
+    f.session.play(std::slice::from_ref(&a), 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.player().status().state != State::Playing {
+        assert!(std::time::Instant::now() < deadline, "never played");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    dj(&mut f, D::Play(A));
+    said(&f, M::Done(D::Play(A)));
+    while f.session.player().status().state != State::Paused {
+        assert!(std::time::Instant::now() < deadline, "never paused");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // A playing deck refuses a track, whether the engine has played a block
+    // since or not.
+    dj(&mut f, D::Load(A));
+    said(&f, M::Loading(A));
+    decks_until(&mut f, |m| m != &Message::Dj(M::Loading(A)));
+    said(&f, M::Playing(A));
+    dj(&mut f, D::Load(A));
+    said(&f, M::Playing(A));
+    assert_eq!(f.dj.loaded(A).unwrap().title, "a");
+
+    // Sync follows deck A's tempo.
+    dj(&mut f, D::Sync(B, true));
+    said(&f, M::Done(D::Sync(B, true)));
+    run_decks(&mut f, 4);
+    let status = f.dj.status().unwrap().deck(B);
+    assert!(status.synced());
+    assert!((status.pct() - (128.0 / 125.0 - 1.0) * 100.0).abs() < 1e-9);
+
+    // Grid edits move the engine's grid and stay with the track.
+    dj(&mut f, D::Grid(B, G::Double));
+    said(
+        &f,
+        M::Grid {
+            side: B,
+            bpm: 250.0,
+            t0: 0.3,
+        },
+    );
+    dj(&mut f, D::Grid(B, G::Later));
+    dj(&mut f, D::Grid(B, G::Offset(10.0)));
+    let g = f.session.grid(std::path::Path::new(&b.path)).unwrap();
+    assert_eq!(g.bpm, 250.0);
+    assert!(
+        (g.t0 - (0.3 + 60.0 / 250.0 + 0.01)).abs() < 1e-9,
+        "{}",
+        g.t0
+    );
+    assert_eq!(f.dj.loaded(B).unwrap().grid, Some(g));
+    // Doubled, deck B still follows deck A at half its new tempo.
+    run_decks(&mut f, 1);
+    assert!(f.dj.status().unwrap().deck(B).synced());
+
+    // 500 BPM, halved, is 69% faster than 128 at -40%: beyond any range.
+    dj(&mut f, D::Grid(B, G::Double));
+    dj(&mut f, D::Sync(B, false));
+    dj(&mut f, D::Range(A, playr_app::dj::Range::Wide));
+    dj(&mut f, D::Rate(A, -40.0));
+    run_decks(&mut f, 1);
+    dj(&mut f, D::Sync(B, true));
+    said(&f, M::OutOfReach(B));
+
+    // Taps on deck A, 15 blocks apart at rate 0.6: 0.576 track seconds, or
+    // 104.17 BPM. The first two keep the grid's tempo and move its beat.
+    dj(&mut f, D::Grid(A, G::Tap));
+    said(&f, M::Tapped(A));
+    let mut taps = vec![f.dj.status().unwrap().deck(A).pos()];
+    for _ in 0..3 {
+        run_decks(&mut f, 15);
+        taps.push(f.dj.status().unwrap().deck(A).pos());
+        dj(&mut f, D::Grid(A, G::Tap));
+    }
+    let g = f.session.grid(std::path::Path::new(&a.path)).unwrap();
+    assert!((g.bpm - 60.0 / 0.576).abs() < 1e-6, "{}", g.bpm);
+    assert_eq!(g.t0, taps[3] / 8000.0);
+
+    dj(&mut f, D::Grid(A, G::Reset));
+    assert_eq!(f.session.grid(std::path::Path::new(&a.path)), None);
+    said(&f, M::NoGrid(A));
+}
+
+#[test]
+fn hot_cues_are_kept_with_the_track_and_loops_need_a_grid() {
+    use playr_app::dj::{CueOut, DjAction as D, DjMessage as M, Side::*};
+    let dj = |f: &mut Headless, d| dispatch(Action::Dj(d), f);
+    let said = |f: &Headless, m: M| assert_eq!(last(f), Some(&Message::Dj(m)));
+    let (mut f, dir) = headless();
+    let a = click_track(&mut f, dir.path(), "a.wav", 120.0, 0.0);
+    let file = std::path::PathBuf::from(&a.path);
+    f.results = Some(vec![a]);
+    f.cursors[0] = Some(0);
+    let load = |f: &mut Headless| {
+        dj(f, D::Load(A));
+        decks_until(f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    };
+    load(&mut f);
+
+    // Set at the head, 10 blocks in: 5120 frames at 8 kHz.
+    dj(&mut f, D::Play(A));
+    run_decks(&mut f, 10);
+    dj(&mut f, D::HotCue(A, 2));
+    run_decks(&mut f, 1);
+    assert_eq!(f.session.hot_cues(&file), [(2, 0.64)]);
+    assert_eq!(f.dj.loaded(A).unwrap().hot[1], Some(5120.0));
+
+    // Loaded again, the deck has it back.
+    dj(&mut f, D::Pause(A));
+    run_decks(&mut f, 2);
+    load(&mut f);
+    run_decks(&mut f, 1);
+    assert_eq!(f.dj.status().unwrap().deck(A).hot_cues()[1], Some(5120.0));
+    dj(&mut f, D::HotClear(A, 2));
+    run_decks(&mut f, 1);
+    assert!(f.session.hot_cues(&file).is_empty());
+
+    dj(&mut f, D::Loop(A, Some(4.0)));
+    run_decks(&mut f, 1);
+    assert!(f.dj.status().unwrap().deck(A).looping().is_some());
+    dj(&mut f, D::CueOut(CueOut::Channels));
+    said(&f, M::NoCueChannels(2));
+
+    // Without a grid, a jump or a loop in beats has nothing to count.
+    dj(&mut f, D::Grid(A, playr_app::dj::GridEdit::Reset));
+    dj(&mut f, D::Jump(A, 4.0));
+    said(&f, M::NoGrid(A));
+    dj(&mut f, D::Loop(A, Some(4.0)));
+    said(&f, M::NoGrid(A));
 }

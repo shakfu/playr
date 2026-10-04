@@ -201,6 +201,8 @@ pub struct Model {
     bpm_for: (Option<PathBuf>, u64),
     /// The tape looper, which plays on its own stream.
     tape: crate::tape::Deck,
+    /// The DJ decks, which play on their own stream.
+    dj: crate::dj::Decks,
 }
 
 impl Model {
@@ -287,6 +289,7 @@ impl Model {
             bpm: None,
             bpm_for: (None, 0),
             tape: crate::tape::Deck::new(config.settings.device.clone()),
+            dj: crate::dj::Decks::new(config.settings.device.clone()),
             snapshot: Snapshot::default(),
         };
         model.session.send(Cmd::SetVolume(values.volume));
@@ -359,6 +362,7 @@ impl Model {
         }
         self.drain_events(current.as_ref());
         crate::tape::poll(self);
+        crate::dj::poll(self);
         // After the events, so what the panel asks for acts on this frame.
         for action in self
             .media
@@ -683,6 +687,17 @@ impl Model {
         self.tape = deck;
     }
 
+    /// The DJ decks, to draw.
+    pub fn decks(&self) -> &crate::dj::Decks {
+        &self.dj
+    }
+
+    /// Plays the DJ decks through `decks` from now on, as a test does
+    /// through [`crate::dj::Decks::manual`].
+    pub fn set_decks(&mut self, decks: crate::dj::Decks) {
+        self.dj = decks;
+    }
+
     pub fn sampler(&self) -> &Sampler {
         &self.sampler
     }
@@ -1004,6 +1019,9 @@ impl Model {
                 }
                 Event::Analysed { job, result } => {
                     self.session.analysed();
+                    if crate::dj::analysed(self, job) {
+                        continue;
+                    }
                     let wanted = self.sampler.tempo_for.take_if(|(id, ..)| *id == job);
                     if let (Some((_, path, n)), Ok(_)) = (wanted, &result) {
                         dispatch::tempo_found(self, &path, n);
@@ -1222,6 +1240,10 @@ impl Model {
 impl Frontend for Model {
     fn tape(&mut self) -> &mut crate::tape::Deck {
         &mut self.tape
+    }
+
+    fn dj(&mut self) -> &mut crate::dj::Decks {
+        &mut self.dj
     }
 
     fn session(&self) -> &Session {

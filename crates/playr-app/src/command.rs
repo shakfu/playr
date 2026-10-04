@@ -190,6 +190,11 @@ pub const COMMANDS: &[Command] = &[
         "the tape looper; :tape alone lists all",
     ),
     any(
+        "dj",
+        "a|b load|play|cue|sync|...",
+        "the DJ decks; :dj alone lists all",
+    ),
+    any(
         "map",
         "[VIEW] KEY COMMAND",
         "bind a key, in one view or in all",
@@ -601,6 +606,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
         Tape(t) => format!("tape {}", tape_line(t)),
+        Dj(d) => format!("dj {}", dj_line(d)),
         Convert(format, None) => format!("convert {format}"),
         Convert(format, Some(dir)) => format!("convert {format} {}", dir.display()),
         Theme(t) => format!("theme {}", t.name()),
@@ -710,6 +716,184 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
             Ok(T::Voice(n, s))
         }
         _ => Err(usage()),
+    }
+}
+
+const DJ_USAGE: &str = "usage: :dj a|b load | play | pause | cue [down|up] | \
+     sync [on|off] | rate PCT | range 8|16|50 | nudge +|-|off | gain DB | level L | \
+     eq low|mid|high DB | kill low|mid|high on|off | filter K | hot N [clear] | \
+     jump BEATS | loop BEATS|off | grid x2|/2|<|>|reset | grid offset MS | tap; \
+     :dj quantize on|off | cue a|b|off | cue-out split|3-4 | curve smooth|sharp | xfade X";
+
+/// A deck's letter.
+pub fn side_name(side: crate::dj::Side) -> &'static str {
+    match side {
+        crate::dj::Side::A => "a",
+        crate::dj::Side::B => "b",
+    }
+}
+
+/// Parses what follows `:dj`.
+fn dj(rest: &str) -> Result<crate::dj::DjAction, String> {
+    use crate::dj::{Band, CueOut, Curve, DjAction as D, GridEdit as G, Nudge, Range, Side};
+    let usage = || DJ_USAGE.to_string();
+    let band = |w: &str| match w {
+        "low" => Ok(Band::Low),
+        "mid" => Ok(Band::Mid),
+        "high" => Ok(Band::High),
+        _ => Err(usage()),
+    };
+    let hot = |w: &str| match w.parse::<u8>() {
+        Ok(n) if (1..=crate::dj::HOT_CUES as u8).contains(&n) => Ok(n),
+        _ => Err(format!("hot cues are 1 to {}", crate::dj::HOT_CUES)),
+    };
+    let value = |w: &str, what: &str, lo: f32, hi: f32| {
+        w.parse::<f32>()
+            .ok()
+            .filter(|v| (lo..=hi).contains(v))
+            .ok_or_else(|| format!("{what} is {} to {}", number(lo.into()), number(hi.into())))
+    };
+    let on = |w: &str| match w {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(usage()),
+    };
+    let side = |w: &str| match w {
+        "a" => Some(Side::A),
+        "b" => Some(Side::B),
+        _ => None,
+    };
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    match words.as_slice() {
+        ["quantize", w] => on(w).map(D::Quantize),
+        ["cue", "off"] => Ok(D::CueBus(None)),
+        ["cue", w] if side(w).is_some() => Ok(D::CueBus(side(w))),
+        ["xfade", x] => value(x, "xfade", 0.0, 1.0).map(D::Xfade),
+        ["cue-out", "split"] => Ok(D::CueOut(CueOut::Split)),
+        ["cue-out", "3-4"] => Ok(D::CueOut(CueOut::Channels)),
+        ["curve", "smooth"] => Ok(D::Curve(Curve::Smooth)),
+        ["curve", "sharp"] => Ok(D::Curve(Curve::Sharp)),
+        [s, setting @ ..] if side(s).is_some() => {
+            let s = side(s).expect("checked");
+            Ok(match setting {
+                ["load"] => D::Load(s),
+                ["play"] => D::Play(s),
+                ["pause"] => D::Pause(s),
+                ["cue"] => D::Cue(s),
+                ["cue", "down"] => D::CueHold(s, true),
+                ["cue", "up"] => D::CueHold(s, false),
+                ["sync"] => D::Sync(s, true),
+                ["sync", w] => D::Sync(s, on(w)?),
+                ["rate", r] => D::Rate(s, value(r, "rate", -50.0, 50.0)?),
+                ["range", "8"] => D::Range(s, Range::Narrow),
+                ["range", "16"] => D::Range(s, Range::Medium),
+                ["range", "50"] => D::Range(s, Range::Wide),
+                ["nudge", "+"] => D::Nudge(s, Nudge::Ahead),
+                ["nudge", "-"] => D::Nudge(s, Nudge::Behind),
+                ["nudge", "off"] => D::Nudge(s, Nudge::Off),
+                ["gain", g] => D::Gain(s, value(g, "gain", -12.0, 12.0)?),
+                ["level", l] => D::Level(s, value(l, "level", 0.0, 1.0)?),
+                ["grid", "x2"] => D::Grid(s, G::Double),
+                ["grid", "/2"] => D::Grid(s, G::Halve),
+                ["grid", "<"] => D::Grid(s, G::Earlier),
+                ["grid", ">"] => D::Grid(s, G::Later),
+                ["grid", "reset"] => D::Grid(s, G::Reset),
+                ["grid", "offset", ms] => {
+                    D::Grid(s, G::Offset(value(ms, "offset", -1000.0, 1000.0)?))
+                }
+                ["tap"] => D::Grid(s, G::Tap),
+                ["eq", b, db] => {
+                    let (lo, hi) = crate::dj::EQ_DB;
+                    D::Eq(s, band(b)?, value(db, "eq", lo as f32, hi as f32)?)
+                }
+                ["kill", b, w] => D::Kill(s, band(b)?, on(w)?),
+                ["filter", k] => D::Filter(s, value(k, "filter", -1.0, 1.0)?),
+                ["hot", n] => D::HotCue(s, hot(n)?),
+                ["hot", n, "clear"] => D::HotClear(s, hot(n)?),
+                ["jump", b] => D::Jump(s, value(b, "jump", -64.0, 64.0)?),
+                ["loop", "off"] => D::Loop(s, None),
+                ["loop", b] => match b.parse::<f32>() {
+                    Ok(b) if crate::dj::LOOP_BEATS.contains(&f64::from(b)) => D::Loop(s, Some(b)),
+                    _ => return Err("loops are 0.25, 0.5, 1, 2, 4, 8, 16 or 32 beats".into()),
+                },
+                _ => return Err(usage()),
+            })
+        }
+        _ => Err(usage()),
+    }
+}
+
+/// What follows `dj ` in the command line for `d`.
+fn dj_line(d: &crate::dj::DjAction) -> String {
+    use crate::dj::{Band, CueOut, Curve, DjAction as D, GridEdit as G, Nudge, Range};
+    let band = |b: &Band| match b {
+        Band::Low => "low",
+        Band::Mid => "mid",
+        Band::High => "high",
+    };
+    let n = |v: &f32| number(f64::from(*v));
+    let on = |b: &bool| if *b { "on" } else { "off" };
+    let deck = side_name;
+    match d {
+        D::Quantize(b) => format!("quantize {}", on(b)),
+        D::CueBus(None) => "cue off".into(),
+        D::CueBus(Some(s)) => format!("cue {}", deck(*s)),
+        D::Xfade(x) => format!("xfade {}", n(x)),
+        D::Load(s) => format!("{} load", deck(*s)),
+        D::Play(s) => format!("{} play", deck(*s)),
+        D::Pause(s) => format!("{} pause", deck(*s)),
+        D::Cue(s) => format!("{} cue", deck(*s)),
+        D::CueHold(s, true) => format!("{} cue down", deck(*s)),
+        D::CueHold(s, false) => format!("{} cue up", deck(*s)),
+        D::Sync(s, true) => format!("{} sync", deck(*s)),
+        D::Sync(s, false) => format!("{} sync off", deck(*s)),
+        D::Rate(s, r) => format!("{} rate {}", deck(*s), n(r)),
+        D::Range(s, r) => format!(
+            "{} range {}",
+            deck(*s),
+            match r {
+                Range::Narrow => 8,
+                Range::Medium => 16,
+                Range::Wide => 50,
+            }
+        ),
+        D::Nudge(s, k) => format!(
+            "{} nudge {}",
+            deck(*s),
+            match k {
+                Nudge::Ahead => "+",
+                Nudge::Behind => "-",
+                Nudge::Off => "off",
+            }
+        ),
+        D::Gain(s, g) => format!("{} gain {}", deck(*s), n(g)),
+        D::Level(s, l) => format!("{} level {}", deck(*s), n(l)),
+        D::Grid(s, G::Tap) => format!("{} tap", deck(*s)),
+        D::Eq(s, b, db) => format!("{} eq {} {}", deck(*s), band(b), n(db)),
+        D::Kill(s, b, k) => format!("{} kill {} {}", deck(*s), band(b), on(k)),
+        D::Filter(s, k) => format!("{} filter {}", deck(*s), n(k)),
+        D::HotCue(s, h) => format!("{} hot {h}", deck(*s)),
+        D::HotClear(s, h) => format!("{} hot {h} clear", deck(*s)),
+        D::Jump(s, b) => format!("{} jump {}", deck(*s), n(b)),
+        D::Loop(s, None) => format!("{} loop off", deck(*s)),
+        D::Loop(s, Some(b)) => format!("{} loop {}", deck(*s), n(b)),
+        D::CueOut(CueOut::Split) => "cue-out split".into(),
+        D::CueOut(CueOut::Channels) => "cue-out 3-4".into(),
+        D::Curve(Curve::Smooth) => "curve smooth".into(),
+        D::Curve(Curve::Sharp) => "curve sharp".into(),
+        D::Grid(s, g) => format!(
+            "{} grid {}",
+            deck(*s),
+            match g {
+                G::Double => "x2".into(),
+                G::Halve => "/2".into(),
+                G::Earlier => "<".into(),
+                G::Later => ">".into(),
+                G::Reset => "reset".into(),
+                G::Offset(ms) => format!("offset {}", n(ms)),
+                G::Tap => unreachable!("matched above"),
+            }
+        ),
     }
 }
 
@@ -1196,6 +1380,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             }
         },
         "tape" => tape(rest).map(Action::Tape),
+        "dj" => dj(rest).map(Action::Dj),
         "loops" => match rest {
             "clear" => Ok(Action::ClearLoops),
             _ => Err(usage()),

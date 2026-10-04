@@ -3,17 +3,17 @@ VERSION := $(shell sed -n 's/^version = "\(.*\)"$$/\1/p' Cargo.toml | head -1)
 UNAME := $(shell uname -s)
 DIAGRAMS := $(patsubst %.d2,%.svg,$(wildcard docs/media/*.d2))
 
-.PHONY: all build release debug test fmt clippy run gui app clean install install-dev diagrams icons touchosc touchosc-test page-test install-service
+.PHONY: all build release debug test test-devices fmt clippy run gui app clean install install-dev diagrams icons touchosc touchosc-test page-test install-service
 
 all: build
 
 build:
 	@cargo build
 
-# The terminal, the desktop window and the server, as they ship, with Opus;
-# building libopus needs cmake.
+# The terminal, the desktop window and the server, as they ship. Opus is a
+# default feature; building libopus needs cmake.
 release:
-	@cargo build --profile dist -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
+	@cargo build --profile dist -p playr -p playr-gui -p playr-server
 
 # The same three, unoptimized, for install-dev.
 debug:
@@ -22,14 +22,17 @@ debug:
 test:
 	@cargo fmt --check
 	@cargo test --workspace
-	@cargo test --workspace --features opus
+
+# The tests that ask the machine for its audio devices, and the smoke test
+# that plays the default one; about 40 s on macOS, so not part of `test`.
+test-devices:
+	@PLAYR_DEVICE_TESTS=1 cargo test -p playr-core --test devices --test engine
 
 fmt:
 	@cargo fmt
 
 clippy:
 	@cargo clippy --workspace --all-targets -- -D warnings
-	@cargo clippy --workspace --all-targets --features opus -- -D warnings
 
 run:
 	@cargo run --release

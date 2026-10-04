@@ -88,6 +88,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:loop off`                           |                         | stop looping                                |
 | `:bpm x2\|/2\|reset`                  |                         | correct the playing track's tempo an octave |
 | `:tape load\|play\|stop\|save\|...`   |                         | the tape looper; `:tape` alone lists all    |
+| `:dj a\|b load\|play\|cue\|sync\|...`  |                         | the DJ decks; `:dj` alone lists all         |
 | `:map [VIEW] KEY COMMAND`             |                         | bind a key, in one view or in all           |
 | `:unmap [VIEW] KEY`                   |                         | remove a key binding                        |
 | `:theme THEME`                        |                         | system, light or dark colours               |

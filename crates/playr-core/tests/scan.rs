@@ -660,8 +660,36 @@ fn forgetting_a_root_removes_the_loops_under_it() {
     let outside = "/elsewhere/b.wav";
     query::save_loop(&conn, &inside, 2, (100, 200), 8000).unwrap();
     query::save_loop(&conn, outside, 2, (100, 200), 8000).unwrap();
+    query::set_hot_cue(&conn, &inside, 1, Some(1.5)).unwrap();
+    query::set_hot_cue(&conn, outside, 1, Some(1.5)).unwrap();
 
     db::forget_root(&conn, &music).unwrap().expect("a root");
     assert!(query::loops(&conn, &inside).unwrap().is_empty());
     assert_eq!(query::loops(&conn, outside).unwrap(), [(2, 100, 200)]);
+    assert!(query::hot_cues(&conn, &inside).unwrap().is_empty());
+    assert_eq!(query::hot_cues(&conn, outside).unwrap(), [(1, 1.5)]);
+}
+
+#[test]
+fn prune_removes_the_hot_cues_of_missing_files_under_the_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().canonicalize().unwrap().join("music");
+    std::fs::create_dir(&music).unwrap();
+    let here = music.join("here.wav");
+    common::silence(&here, 8000, 0.1);
+    let gone = music.join("gone.flac");
+    let conn = db::open_memory().unwrap();
+    db::upsert(&conn, &untagged(&here)).unwrap();
+    db::upsert(&conn, &untagged(&gone)).unwrap();
+    for path in [&here, &gone] {
+        query::set_hot_cue(&conn, &path.to_string_lossy(), 4, Some(2.25)).unwrap();
+    }
+    db::prune_missing(&conn, &music).unwrap();
+    assert!(query::hot_cues(&conn, &gone.to_string_lossy())
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        query::hot_cues(&conn, &here.to_string_lossy()).unwrap(),
+        [(4, 2.25)]
+    );
 }

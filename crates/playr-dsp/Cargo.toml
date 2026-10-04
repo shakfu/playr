@@ -1,0 +1,13 @@
+[package]
+name = "playr-dsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Ramps, filters and interpolation shared by playr's looper and DJ decks"
+keywords = ["audio", "dsp", "filter"]
+categories = ["multimedia::audio"]
+
+[dependencies]

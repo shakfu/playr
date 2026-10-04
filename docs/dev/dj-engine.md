@@ -1,6 +1,6 @@
 # DJ engine
 
-Status: proposed. Nothing is built. Claims marked (inference) were not checked against a source or a test.
+Status: built, through tier 1; see "Build order". Claims marked (inference) were not checked against a source or a test.
 
 Two decks play library tracks at once, each at its own rate. A beat grid per track lets one deck follow the other's tempo and phase. A small mixer blends them to one output. The engine lives in a new crate, `playr-dj`; the window shows it in a DJ tab, and `:dj` commands reach every setting.
 
@@ -70,7 +70,7 @@ A `Deck` holds a whole track in memory as interleaved `f32` at the device's rate
 
 ### Shared DSP
 
-`playr-looper` already has the pieces a deck needs: a fractional read head with cubic Hermite interpolation (`Loop::read`), linear ramps (`Ramp`), a state-variable filter (`Svf`) and one-pole filters. All are private. Rather than copy them, move them to a small `playr-dsp` crate that both depend on (open question 2).
+Built as step 1; see "Build order". `playr-looper` already had the pieces a deck needs: a fractional read head with cubic Hermite interpolation (`Loop::read`), linear ramps (`Ramp`), a state-variable filter (`Svf`) and one-pole filters. All are private. Rather than copy them, move them to a small `playr-dsp` crate that both depend on (open question 2).
 
 ## Output device
 
@@ -137,7 +137,7 @@ Per deck, with native tempo `bpm_n`, rate `r` and position `p` in track seconds:
 - effective tempo `bpm_e = bpm_n * r`;
 - phase `phi = frac((p - t0) / T)`, in [0, 1).
 
-**Tempo sync** sets the follower's rate to `r_F = m * bpm_e,L / bpm_n,F`. `m` is 0.5, 1 or 2, whichever brings `m * bpm_n,F` nearest the leader's tempo in log terms, so a 87 BPM track can follow a 174 BPM one. If `r_F` lies outside the fader's range, the range widens to the next one, or sync refuses if none fits.
+**Tempo sync** sets the follower's rate to `r_F = bpm_e,L / (m * bpm_n,F)`. `m` is 0.5, 1 or 2, whichever brings `m * bpm_n,F` nearest the leader's tempo in log terms, so a 87 BPM track can follow a 174 BPM one. If `r_F` lies outside the fader's range, the range widens to the next one, or sync refuses if none fits.
 
 **Phase sync** happens once, on SYNC. The phase error is `e = wrap(phi_L - phi_F)`, in [-0.5, 0.5) beats. The follower moves by `e * T_F` track seconds, at most half a beat, with a 5 ms declick crossfade. While the follower's rate then equals the leader's, the two stay aligned as long as both grids are right.
 
@@ -227,13 +227,29 @@ On real music, a report like `playr analyze --report`: the grid against librosa'
 
 ## Build order
 
-1. `playr-dsp`: move the looper's read head, `Ramp`, `Svf` and one-pole filters into it. The looper's tests still pass.
+1. `playr-dsp`: move the looper's read head, `Ramp`, `Svf` and one-pole filters into it. The looper's tests still pass. Built 2026-10-04, after step 6, as `Ramp` (over `f32` and `f64`), `Svf` (tuned in Hz, any Q, with its all-pass), `one_pole`, `clip` and the Hermite kernel. Each read head stays in its crate: the looper's wraps at the loop's ends, the deck's reads silence past the track's.
 2. Grid analysis in `playr-core`, its columns and its tests. Built 2026-10-04 as the comb search in "Analysis", with the onset refinement replaced by a 2.9 ms envelope in the same pass, at the faster level where the estimate was halved. `:slice beats N` takes its tempo from it, not its phase. See "A beat grid" in `docs/dev/analyze.md`.
 3. `playr-dj`: `Deck` (load, play, rate, cue), the mixer, `Engine` and `Handle`, the cpal stream, split cue. Offline tests.
-4. Sync, phase sync and quantize, with their tests.
+4. Sync, phase sync and quantize, with their tests. Steps 3 and 4 built 2026-10-04, before step 1, with these departures:
+   - `playr-dj` has its own `Ramp`, read head and soft clip. Its read head gives silence outside the track; the looper's wraps. The filters that should stay one are tier 1, so the move to `playr-dsp` waits for tier 1.
+   - Tempo sync stays on: the follower tracks the leader's fader, not its nudge, until its own fader moves. One deck is synced at a time. Phase sync is still one-shot.
+   - Rate and gain changes take 10 ms, not one block. Sync and quantize align the heads as if every rate ramp had finished. Aligning the current heads left a 512-frame ramp's half-sum, several frames, as phase error.
+   - A playing deck refuses a load.
+   - With quantize on, a cue point set while paused falls on the deck's own nearest beat.
 5. `playr-app`: `Decks`, `DjAction`, the `:dj` commands, and the parity test.
-6. The DJ tab, with its fit test at 800 by 592.
-7. Tier 1, item by item.
+6. The DJ tab, with its fit test at 800 by 592. Steps 5 and 6 built 2026-10-04, with these departures:
+   - Hand edits go in a `grid_edit` table beside `tempo_fix`, not in `grid_*` columns of `analysis`, whose rows analysis replaces. x2 and /2 write `tempo_fix`, so the tempo column follows. `Session::grid` gives the grid a deck uses: the edit, else the analysis's, times the octave fix.
+   - A track never analysed starts a background analysis on load, as `:slice beats` does, rather than analysing on the load thread. The deck plays meanwhile and takes the grid when it lands.
+   - Tap: two taps keep the grid's tempo and put a beat at the last; four or more set the tempo from the mean interval, in track time.
+   - The app takes a track as loaded once the engine accepts it. Checking the status first missed a deck started since the last callback.
+   - Added: `pause`, `cue down|up` for a held CUE, `sync off`, `grid reset`. Load reads the cursor row of the library or the selection.
+7. Tier 1, item by item. Built 2026-10-04, with these departures:
+   - The EQ's crossovers are Linkwitz-Riley 8th order, not 4th. With LR4, a mid kill leaves the low and high bands about 40 dB down each at the band's centre, about 34 dB summed, short of the 40 dB the tests ask. The low band passes the high crossover's all-pass, so the bands sum flat. While every band is at unity the EQ does not run; moving one fades it in over 10 ms.
+   - Hot cues are kept with the track in a `hot_cues` table, in seconds, so they hold at any device rate.
+   - A synced deck that starts, by Play or a hot cue, starts in phase, as with quantize on. The lock then holds the phase it starts at, or where a nudge leaves it.
+   - Beat-jump moves a loop playing with the head. Loops take 1/4 to 32 beats, from the beat before the head with quantize on.
+   - The sharp curve holds both decks at full level and fades one out over the last 5% of the travel.
+   - The stream takes 4 channels or more where the device offers them, so `:dj cue-out 3-4` needs no reopening. On a stereo device it is refused.
 
 Steps 1 and 2 are useful on their own, so the work can stop after either.
 

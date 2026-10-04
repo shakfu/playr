@@ -186,7 +186,7 @@ cargo install --git https://github.com/shakfu/playr playr-gui    # the window, f
 cargo install --git https://github.com/shakfu/playr playr-server # the server, from GitHub
 ```
 
-`playr-gui` and `playr-server` are not on crates.io yet. `cargo install` builds only the program, without the macOS bundle or the Linux desktop entry. Add `--features opus` to either for Opus.
+`playr-gui` and `playr-server` are not on crates.io yet. `cargo install` builds only the program, without the macOS bundle or the Linux desktop entry. Each builds with Opus, so it needs cmake; see "Opus".
 
 ### Building
 
@@ -200,14 +200,14 @@ sudo apt install libxkbcommon-dev libwayland-dev \
 
 ### Opus
 
-Opus is off by default. It needs libopus, which is vendored and built with **cmake** -- the only part of playr that needs it. To include it:
+Opus is on by default. It needs libopus, which is vendored and built with **cmake** -- the only part of playr that needs it. To build without it, and without cmake:
 
 ```sh
-cargo build --release --features opus                                        # the terminal
-cargo build --release -p playr -p playr-gui --features playr/opus,playr-gui/opus   # both
+cargo build --release --no-default-features                       # the terminal
+cargo build --release -p playr-gui --no-default-features          # the window
 ```
 
-Without it, Opus files are reported as undecodable and skipped, the same as WMA or DSD. `playr formats` says which build you have. `make install` and `make app` build with Opus, so they need cmake; `make install-dev` builds without it.
+Without it, Opus files are reported as undecodable and skipped, the same as WMA or DSD. `playr formats` says which build you have.
 
 ## Use
 
@@ -581,6 +581,35 @@ The waveform glyphs are the view's only characters outside ASCII. Marks are plac
 
 The load also reads up to a second of the track before the range, the pre-roll, and after it, the post-roll, which the window draws dimmed. Windows start as the range and take a time from its start, `1.5`, or a part of it, `25%`; below 0% or past 100% reaches into the pre-roll or post-roll. At each wrap a voice crossfades, equal power over the fade time: the leaving head fades out into the audio that follows its window, or, where the post-roll is too short, the new head fades in from the pre-roll. Either way the loop repeats every window's length exactly, and a fade with no room either side is cut short. The lanes draw both curves where they read. A voice under Ping turns at its window's edges instead, with no jump and so no crossfade. Drive feeds up to 24 dB into a soft clip and takes half of it back, so quiet material gains up to 12 dB and loud material is held under a quarter of full scale; the filter follows it, so a low-pass can take off the edge drive adds. Both shape what is heard and what is sent. A low-pass at 1 or a high-pass at 0 passes the voice unchanged. In the window, the waveform shows the selected voice's window, chosen by clicking its name or its lane: drag an edge to move it, or between the edges to move the window whole. A drag in a voice's lane edits that voice. The write window has its own strip above the waveform and drags the same way. What the write head cannot change, outside its window or all of the loop while writing is off, is tinted and hatched, and labelled frozen in the strip: it plays as loaded, untouched by feedback and wear. While the write window is the range, the write head also writes the pre-roll and post-roll as the loop's continuation, so a crossfade past the range's edges fades into the loop as it now is, not as loaded. A control that does nothing as the tape is set, such as a voice's Wear while its Send is 0, is dimmed, and its tooltip says why; it can still be set ahead. An edge dropped near the range's edge lands on it. On a stereo loop, pan keeps the near channel and folds the far one into it, so a hard pan keeps both; a mono loop pans with equal power. Writing is off until turned on, and with feedback at 1 and no sends it leaves the loop exactly as it was. A loop saves its range, without pre-roll or post-roll, as `samples/<track>-tape/<track>-tape-loop.wav` and a recording as `-mix.wav`, both 32-bit float, in a new directory each time, and both are added to the library. The tape plays on its own output stream on the player's device, which fails on a device held exclusively, such as an ALSA `hw:` device. Loading again starts from the default settings.
 
+### DJ
+
+Two decks play library tracks at once, each at its own rate. Each track gets a beat grid: its tempo and where a beat falls, from `playr analyze`. A deck loading a track never analysed analyses it first. With grids on both decks, sync matches one deck's tempo to the other's, at half, the same or double, and moves it into phase. A mixer blends the decks to one output. The terminal has the commands; the window has a DJ tab with a waveform per deck, centred on the playhead and marked with the grid, and the same controls. A library or selection row's menu loads it onto a deck.
+
+| command | does |
+|-|-|
+| `:dj a load` | load the track under the cursor onto deck A; `b` for deck B |
+| `:dj a play`, `:dj a pause` | play the deck, pausing the player, or pause it |
+| `:dj a cue` | playing: back to the cue point, paused; paused: set the cue point here |
+| `:dj a cue down`, `:dj a cue up` | hold CUE: paused, plays from the cue point until released |
+| `:dj b sync`, `:dj b sync off` | deck B follows deck A's tempo, and moves into phase once |
+| `:dj a rate PCT`, `:dj a range 8\|16\|50` | the rate fader, in percent, and its travel |
+| `:dj a nudge +\|-\|off` | bend the rate 4% to move the deck's beats later or earlier by ear |
+| `:dj a gain DB`, `:dj a level L`, `:dj xfade X` | trim, -12 to 12 dB; channel fader, 0 to 1; crossfader, 0 for A to 1 for B |
+| `:dj quantize on` | play and cue start in phase with the other deck |
+| `:dj cue a\|b\|off` | split cue: the main mix in the left ear, the deck in the right |
+| `:dj a grid x2\|/2` | correct the grid's tempo an octave, as `:bpm` does |
+| `:dj a grid <\|>`, `:dj a grid offset MS` | move the grid a beat, to set the downbeat, or by MS |
+| `:dj a tap` | tap on the beat: two taps move the grid's beat, four set its tempo |
+| `:dj a grid reset` | the analysed grid again |
+| `:dj a eq low\|mid\|high DB`, `:dj a kill low\|mid\|high on` | the isolator EQ: a band's gain, -24 to 6 dB, or silence |
+| `:dj a filter K` | one knob, -1 to 1: a low-pass left of centre, a high-pass right |
+| `:dj a hot N`, `:dj a hot N clear` | hot cue 1 to 4: set it at the head, or jump there and play |
+| `:dj a jump BEATS`, `:dj a loop BEATS`, `:dj a loop off` | jump, or loop 0.25 to 32 beats |
+| `:dj cue-out split\|3-4` | the cue in the second ear, or in stereo on channels 3 and 4 |
+| `:dj curve smooth\|sharp` | the crossfader: constant power, or full level until the last 5% |
+
+Rate is varispeed: pitch moves with tempo, as on a turntable. A synced deck stays in phase: the other deck's rate changes follow, and a small rate trim pulls it back if it drifts. A nudge on it moves the phase it holds. Grid edits and hot cues are kept with the track, across analyses. With quantize on, hot cues and loops fall on beats. A playing deck refuses a new track. The decks play on their own output stream on the player's device, as the tape does.
+
 ### Varispeed
 
 `(` and `)` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
@@ -685,13 +714,13 @@ Any error stops playr before it starts, and every bad setting is listed with its
 
 ## Formats
 
-Decoded: FLAC, ALAC, MP3, MP1, MP2, AAC-LC, Vorbis, PCM and ADPCM, in WAV, AIFF, CAF, MP4/M4A, MKV/WebM, OGG and raw FLAC containers. Opus as well, when built with `--features opus`.
+Decoded: FLAC, ALAC, MP3, MP1, MP2, AAC-LC, Vorbis, PCM and ADPCM, in WAV, AIFF, CAF, MP4/M4A, MKV/WebM, OGG and raw FLAC containers. Opus as well, unless built with `--no-default-features`.
 
 Opus is decoded by playr itself, in both OGG and WebM. Symphonia 0.6 demuxes Opus but ships no decoder, so `crates/playr-core/src/audio/opus.rs` supplies one on top of libopus via the `opus` crate and registers it in a custom codec registry. Mono and stereo only; multistream surround is not handled.
 
 Tags are not read from CAF, MKV or WebM files. Those are indexed under their file names, and MKV and WebM files also show no duration.
 
-Not decoded: WavPack, WMA, Musepack, APE, DSD, TTA, TAK, and Opus unless the feature is enabled. playr reports such a file and moves to the next track rather than stopping. Run `playr formats` for the current list.
+Not decoded: WavPack, WMA, Musepack, APE, DSD, TTA, TAK, and Opus in a build without it. playr reports such a file and moves to the next track rather than stopping. Run `playr formats` for the current list.
 
 ## Audio quality
 
@@ -715,9 +744,9 @@ Volume is a float gain applied before quantisation. ReplayGain, when on, is a se
 make test
 ```
 
-`make test` runs the suite for all five crates in the workspace, `playr-core`, `playr-app`, `playr`, `playr-gui` and `playr-server`, twice: with and without the `opus` feature, so neither build can rot unnoticed. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, and the window's tests drive it headless with `egui_kittest`, so neither needs a display or an audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. One smoke test plays to the real default device at zero volume, and skips without one. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
+`make test` runs the suite for every crate in the workspace once, with Opus, the default build. The format and scanner tests generate real audio with `ffmpeg` when it is present and skip themselves when it is not. The rendering tests draw into a headless terminal, and the window's tests drive it headless with `egui_kittest`, so neither needs a display or an audio device. The engine, key-handling and device-failure tests play to a fake output device, so they need no audio device. The tests that ask the machine for its audio devices, and one smoke test that plays to the real default device at zero volume, run only with `PLAYR_DEVICE_TESTS` set, as `make test-devices` sets it: listing devices takes about 14 s a test on macOS. The smoke test skips without a device. Set `PLAYR_REQUIRE_FFMPEG=1` or `PLAYR_REQUIRE_DEVICE=1` to fail instead of skip, so a CI run cannot pass by testing nothing.
 
-`.github/workflows/test.yml` runs both builds' tests on Linux, macOS and Windows on every branch push and pull request, with `PLAYR_REQUIRE_FFMPEG=1` and ffmpeg 9.0 on every runner, and checks formatting and clippy on Linux. Runners have no audio device, so only the real-device smoke test skips there.
+`.github/workflows/test.yml` runs the tests on Linux, macOS and Windows on every branch push and pull request, with `PLAYR_REQUIRE_FFMPEG=1` and ffmpeg 9.0 on every runner, and checks formatting and clippy on Linux. Runners have no audio device, so only the real-device smoke test skips there.
 
 `.github/workflows/release.yml` builds and packages the three programs for every platform when a version tag is pushed, builds the TouchOSC layout, and publishes the release. Run by hand from the Actions tab with no tag, it builds and packages the chosen branch and keeps the archives as the run's artifacts without publishing, to try every platform's build before tagging.
 

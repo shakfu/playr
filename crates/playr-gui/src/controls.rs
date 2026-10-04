@@ -8,6 +8,7 @@ use playr_core::analysis::TempoFix;
 use std::time::Duration;
 
 use playr_app::action::{Action, Nudge, Slicing, Zoom};
+use playr_app::dj::{DjAction, GridEdit, Side};
 use playr_app::sampler::Edge;
 use playr_app::tape::TapeAction;
 use playr_app::{Display, Theme, View};
@@ -105,6 +106,8 @@ pub const LIBRARY_ROW: &[Control] = &[
     control("Play next", Action::Enqueue(true)),
     control("Add to queue", Action::Enqueue(false)),
     control("Track info", Action::ShowInfo),
+    control("Load to deck A", Action::Dj(DjAction::Load(Side::A))),
+    control("Load to deck B", Action::Dj(DjAction::Load(Side::B))),
 ];
 
 pub const SELECTION_ROW: &[Control] = &[
@@ -113,6 +116,8 @@ pub const SELECTION_ROW: &[Control] = &[
     control("Play next", Action::Enqueue(true)),
     control("Add to queue", Action::Enqueue(false)),
     control("Track info", Action::ShowInfo),
+    control("Load to deck A", Action::Dj(DjAction::Load(Side::A))),
+    control("Load to deck B", Action::Dj(DjAction::Load(Side::B))),
     control("Move up", Action::MoveTrack(-1)),
     control("Move down", Action::MoveTrack(1)),
 ];
@@ -237,6 +242,28 @@ pub const TAPE_BAR: &[Control] = &[
     control("Save loop", Action::Tape(TapeAction::Save)),
 ];
 
+/// A deck's buttons on the DJ tab. Cue and the nudges are held: pressing
+/// sends `CueHold` or `Nudge`, and releasing ends it. Its sliders send
+/// `Action::Dj` with their values.
+const fn deck(s: Side) -> [Control; 11] {
+    [
+        control("Load", Action::Dj(DjAction::Load(s))),
+        control("Play", Action::Dj(DjAction::Play(s))),
+        control("Pause", Action::Dj(DjAction::Pause(s))),
+        control("Cue", Action::Dj(DjAction::Cue(s))),
+        control("Sync", Action::Dj(DjAction::Sync(s, true))),
+        control("x2", Action::Dj(DjAction::Grid(s, GridEdit::Double))),
+        control("/2", Action::Dj(DjAction::Grid(s, GridEdit::Halve))),
+        control("<", Action::Dj(DjAction::Grid(s, GridEdit::Earlier))),
+        control(">", Action::Dj(DjAction::Grid(s, GridEdit::Later))),
+        control("Tap", Action::Dj(DjAction::Grid(s, GridEdit::Tap))),
+        control("Reset", Action::Dj(DjAction::Grid(s, GridEdit::Reset))),
+    ]
+}
+
+pub const DECK_A: &[Control] = &deck(Side::A);
+pub const DECK_B: &[Control] = &deck(Side::B);
+
 /// Every table above.
 pub const TABLES: &[&[Control]] = &[
     TRANSPORT,
@@ -266,6 +293,8 @@ pub const TABLES: &[&[Control]] = &[
     PLAN_BAR,
     LOOP_MENU,
     TAPE_BAR,
+    DECK_A,
+    DECK_B,
 ];
 
 /// Actions whose value comes from how a control is used, by name: a slider's

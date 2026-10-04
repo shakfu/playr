@@ -199,6 +199,8 @@ pub enum Action {
     Convert(String, Option<PathBuf>),
     /// Drive the tape looper.
     Tape(crate::tape::TapeAction),
+    /// Drive the DJ decks.
+    Dj(crate::dj::DjAction),
     /// Draw in these colours.
     Theme(crate::Theme),
     /// Show these columns, in this order, until playr exits.

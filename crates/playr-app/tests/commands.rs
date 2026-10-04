@@ -1444,3 +1444,78 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         assert!(got.contains(error), "{text}: {got}");
     }
 }
+
+#[test]
+fn dj_commands_parse_in_any_view_and_round_trip() {
+    use playr_app::dj::{Band, CueOut, Curve, DjAction as D, GridEdit as G, Nudge, Range, Side::*};
+    for (text, action) in [
+        ("dj a load", D::Load(A)),
+        ("dj b play", D::Play(B)),
+        ("dj a pause", D::Pause(A)),
+        ("dj a cue", D::Cue(A)),
+        ("dj a cue down", D::CueHold(A, true)),
+        ("dj a cue up", D::CueHold(A, false)),
+        ("dj b sync", D::Sync(B, true)),
+        ("dj b sync off", D::Sync(B, false)),
+        ("dj b rate 2.5", D::Rate(B, 2.5)),
+        ("dj a range 16", D::Range(A, Range::Medium)),
+        ("dj a range 50", D::Range(A, Range::Wide)),
+        ("dj b nudge +", D::Nudge(B, Nudge::Ahead)),
+        ("dj b nudge -", D::Nudge(B, Nudge::Behind)),
+        ("dj b nudge off", D::Nudge(B, Nudge::Off)),
+        ("dj a gain -3", D::Gain(A, -3.0)),
+        ("dj a level 0.8", D::Level(A, 0.8)),
+        ("dj xfade 0.25", D::Xfade(0.25)),
+        ("dj quantize on", D::Quantize(true)),
+        ("dj cue b", D::CueBus(Some(B))),
+        ("dj cue off", D::CueBus(None)),
+        ("dj a grid x2", D::Grid(A, G::Double)),
+        ("dj a grid /2", D::Grid(A, G::Halve)),
+        ("dj a grid <", D::Grid(A, G::Earlier)),
+        ("dj a grid >", D::Grid(A, G::Later)),
+        ("dj a grid reset", D::Grid(A, G::Reset)),
+        ("dj b grid offset -12.5", D::Grid(B, G::Offset(-12.5))),
+        ("dj b tap", D::Grid(B, G::Tap)),
+        ("dj a eq low -24", D::Eq(A, Band::Low, -24.0)),
+        ("dj b eq high 6", D::Eq(B, Band::High, 6.0)),
+        ("dj a kill mid on", D::Kill(A, Band::Mid, true)),
+        ("dj a filter -0.4", D::Filter(A, -0.4)),
+        ("dj b hot 3", D::HotCue(B, 3)),
+        ("dj b hot 4 clear", D::HotClear(B, 4)),
+        ("dj a jump -4", D::Jump(A, -4.0)),
+        ("dj a loop 0.5", D::Loop(A, Some(0.5))),
+        ("dj a loop off", D::Loop(A, None)),
+        ("dj cue-out 3-4", D::CueOut(CueOut::Channels)),
+        ("dj cue-out split", D::CueOut(CueOut::Split)),
+        ("dj curve sharp", D::Curve(Curve::Sharp)),
+        ("dj curve smooth", D::Curve(Curve::Smooth)),
+    ] {
+        let action = Action::Dj(action);
+        for view in [Library, Sampler] {
+            assert_eq!(parse(text, view), Ok(action.clone()), "{text}");
+        }
+        assert_eq!(line(&action, None), text);
+    }
+    for (text, error) in [
+        ("dj", "usage: :dj"),
+        ("dj c play", "usage: :dj"),
+        ("dj a", "usage: :dj"),
+        ("dj a rate 60", "rate is -50 to 50"),
+        ("dj a range 10", "usage: :dj"),
+        ("dj a gain 13", "gain is -12 to 12"),
+        ("dj a level 2", "level is 0 to 1"),
+        ("dj xfade -1", "xfade is 0 to 1"),
+        ("dj a grid offset 5000", "offset is -1000 to 1000"),
+        ("dj a sync maybe", "usage: :dj"),
+        ("dj a eq low 7", "eq is -24 to 6"),
+        ("dj a eq bass 0", "usage: :dj"),
+        ("dj a filter 2", "filter is -1 to 1"),
+        ("dj a hot 5", "hot cues are 1 to 4"),
+        ("dj a loop 3", "loops are 0.25"),
+        ("dj a jump 100", "jump is -64 to 64"),
+        ("dj cue-out 5-6", "usage: :dj"),
+    ] {
+        let got = parse(text, Library).unwrap_err();
+        assert!(got.contains(error), "{text}: {got}");
+    }
+}

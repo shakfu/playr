@@ -3766,6 +3766,7 @@ dependencies = [
  "cpal",
  "hound",
  "playr-core",
+ "playr-dj",
  "playr-looper",
  "rtrb",
  "rusqlite",
@@ -3790,6 +3791,19 @@ dependencies = [
  "toml",
  "walkdir",
 ]
+
+[[package]]
+name = "playr-dj"
+version = "0.17.0"
+dependencies = [
+ "cpal",
+ "playr-dsp",
+ "rtrb",
+]
+
+[[package]]
+name = "playr-dsp"
+version = "0.17.0"
 
 [[package]]
 name = "playr-gui"
@@ -3817,6 +3831,7 @@ version = "0.17.0"
 dependencies = [
  "cpal",
  "hound",
+ "playr-dsp",
  "rtrb",
  "tempfile",
 ]

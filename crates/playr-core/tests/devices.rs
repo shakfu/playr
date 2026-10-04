@@ -1,5 +1,8 @@
 //! Choosing an output device by ID. Lookups run against the machine's own
-//! devices, so they assert only what holds with none.
+//! devices, so they assert only what holds with none, and run only with
+//! `PLAYR_DEVICE_TESTS` set; see `common::device_tests`.
+
+mod common;
 
 use cpal::traits::DeviceTrait;
 use playr_core::audio::output::{by_index, device, devices, OutputError};
@@ -16,6 +19,9 @@ fn alsa_card_indices_are_duplicates_and_names_are_not() {
 
 #[test]
 fn an_unknown_device_is_an_error_naming_it_and_the_command_that_lists_them() {
+    if !common::device_tests() {
+        return;
+    }
     for want in ["alsa:no-such-pcm", "no-such-host:x", "no-such-pcm"] {
         let Err(e) = device(Some(want)) else {
             panic!("{want} was found");
@@ -30,6 +36,9 @@ fn an_unknown_device_is_an_error_naming_it_and_the_command_that_lists_them() {
 
 #[test]
 fn every_listed_device_is_found_by_its_id_with_or_without_its_host() {
+    if !common::device_tests() {
+        return;
+    }
     let host = cpal::default_host().id().to_string();
     for listed in devices().unwrap() {
         let found = device(Some(&listed.id)).unwrap();
@@ -44,6 +53,9 @@ fn every_listed_device_is_found_by_its_id_with_or_without_its_host() {
 
 #[test]
 fn the_listing_holds_no_card_index_duplicates_and_one_default_at_most() {
+    if !common::device_tests() {
+        return;
+    }
     let listed = devices().unwrap();
     assert!(listed.iter().all(|d| !by_index(&d.id)));
     assert!(listed.iter().filter(|d| d.default).count() <= 1);

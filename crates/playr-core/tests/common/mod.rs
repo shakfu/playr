@@ -30,6 +30,17 @@ pub fn skip(var: &str, what: &str) {
     eprintln!("skipping: {what}");
 }
 
+/// Whether to run a test that asks the machine for its audio devices. On
+/// macOS each such test spends about 14 s listing them, so they run only
+/// when `PLAYR_DEVICE_TESTS` is set; the calling test skips otherwise.
+pub fn device_tests() -> bool {
+    let on = std::env::var_os("PLAYR_DEVICE_TESTS").is_some();
+    if !on {
+        eprintln!("skipping: asks for the machine's audio devices; set PLAYR_DEVICE_TESTS to run");
+    }
+    on
+}
+
 /// Whether ffmpeg can be run; skips the calling test when it cannot.
 pub fn have_ffmpeg() -> bool {
     let ok = Command::new("ffmpeg")

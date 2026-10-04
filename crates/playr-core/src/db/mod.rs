@@ -399,8 +399,8 @@ pub(crate) fn stored_root(conn: &Connection, root: &Path) -> Result<Option<Strin
 }
 
 /// Forgets `root` and removes everything the library held under it: the
-/// tracks, with their places in playlists, and the marks, loops, analysis and
-/// tempo corrections of every file under it, in the library or not. `None` if no root matches.
+/// tracks, with their places in playlists, and the marks, loops, hot cues,
+/// analysis and tempo and grid corrections of every file under it, in the library or not. `None` if no root matches.
 ///
 /// Unlike [`prune_missing`] this does not ask the filesystem anything. A
 /// directory that is no longer a root is no longer part of the library,
@@ -428,7 +428,15 @@ pub fn forget_root(conn: &Connection, root: &Path) -> Result<Option<Pruned>> {
         [&prefix],
     )?;
     tx.execute(
+        "DELETE FROM grid_edit WHERE substr(path, 1, length(?1)) = ?1",
+        [&prefix],
+    )?;
+    tx.execute(
         "DELETE FROM loops WHERE substr(path, 1, length(?1)) = ?1",
+        [&prefix],
+    )?;
+    tx.execute(
+        "DELETE FROM hot_cues WHERE substr(path, 1, length(?1)) = ?1",
         [&prefix],
     )?;
     let mut marks = 0;
@@ -492,6 +500,13 @@ pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
         .into_iter()
         .filter(|p| gone(p))
         .collect();
+    let cued: Vec<String> = conn
+        .prepare("SELECT DISTINCT path FROM hot_cues WHERE substr(path, 1, length(?1)) = ?1")?
+        .query_map([&prefix], |r| r.get(0))?
+        .collect::<Result<Vec<String>>>()?
+        .into_iter()
+        .filter(|p| gone(p))
+        .collect();
     let analysed: Vec<String> = conn
         .prepare("SELECT path FROM analysis WHERE substr(path, 1, length(?1)) = ?1")?
         .query_map([&prefix], |r| r.get(0))?
@@ -506,6 +521,9 @@ pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
     analysis::delete(&tx, &analysed)?;
     for path in &looped {
         tx.execute("DELETE FROM loops WHERE path = ?1", [path])?;
+    }
+    for path in &cued {
+        tx.execute("DELETE FROM hot_cues WHERE path = ?1", [path])?;
     }
     let mut marks = 0;
     for path in marked.iter().filter(|p| gone(p)) {

@@ -1585,3 +1585,90 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
     let slew = harness.state().model().deck().state().unwrap().voices[0].slew;
     assert_eq!(slew, 500.0);
 }
+
+#[test]
+fn the_dj_tab_loads_the_cursor_row_fits_the_smallest_window_and_a_view_key_leaves_it() {
+    use playr_app::dj::{Decks, Side};
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 592.0));
+    let dir = tempfile::tempdir().unwrap();
+    // The selection, whose cursor row is the track playing.
+    let mut harness = smallest(dir.path(), "3", false);
+    harness.state_mut().model_mut().set_decks(Decks::manual());
+    harness.get_by_label("DJ").click();
+    harness.run_steps(2);
+    harness.get_by_label("Deck A Load").click();
+    // Manual decks play only as the test runs them.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while harness.state().model().decks().loaded(Side::A).is_none() {
+        assert!(std::time::Instant::now() < deadline, "never loaded");
+        harness
+            .state_mut()
+            .model_mut()
+            .dj()
+            .process(&mut [0.0; 1024]);
+        harness.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    harness.run_steps(2);
+    let loaded = harness.state().model().decks().loaded(Side::A).unwrap();
+    assert_eq!(loaded.frames, 96_000);
+    for label in [
+        "Deck A waveform",
+        "Deck B waveform",
+        "Deck A Play",
+        "Deck A Cue",
+        "Deck A Sync",
+        "Deck A rate",
+        "Deck A range 50%",
+        "Deck A nudge +",
+        "Deck B phase",
+        "Deck A x2",
+        "Deck B Tap",
+        "Deck B grid +1 ms",
+        "Deck A gain",
+        "Deck B level",
+        "Crossfader",
+        "Quantize",
+        "Cue B",
+        "Deck A hot cue 4",
+        "Deck B loop 8",
+        "Deck A jump -4",
+        "Deck B high",
+        "Deck A low kill",
+        "Deck B filter",
+        "Cue out 3-4",
+        "Curve Sharp",
+    ] {
+        harness.get_by_label(label);
+    }
+    assert_fits(&harness, window, "the DJ tab");
+
+    // Deck B is empty, so its controls are refused as :dj b play is.
+    harness.get_by_label("Quantize").click();
+    harness.run_steps(2);
+    assert!(harness.state().model().decks().state().quantize);
+    harness.get_by_label("Cue B").click();
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().model().decks().state().cue_bus,
+        Some(Side::B)
+    );
+
+    // A hot cue set from the head, stored with the track.
+    harness.get_by_label("Deck A hot cue 1").click();
+    harness.run_steps(1);
+    harness
+        .state_mut()
+        .model_mut()
+        .dj()
+        .process(&mut [0.0; 1024]);
+    harness.run_steps(2);
+    assert!(harness.state().model().decks().loaded(Side::A).unwrap().hot[0].is_some());
+    harness.get_by_label("Deck A mid kill").click();
+    harness.run_steps(2);
+    assert!(harness.state().model().decks().state().kill[0][1]);
+
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(2);
+    assert!(harness.query_by_label("Deck A waveform").is_none());
+}

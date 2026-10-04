@@ -11,7 +11,7 @@ keywords = ["music", "audio", "player", "flac"]
 categories = ["multimedia::audio"]
 
 [features]
-default = []
+default = ["opus"]
 # Opus decoding via libopus, which needs cmake to build. See the playr crate.
 opus = ["dep:opus"]
 

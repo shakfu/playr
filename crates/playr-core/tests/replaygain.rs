@@ -772,3 +772,29 @@ fn pruning_a_gone_file_removes_its_tempo_correction() {
     db::prune_missing(&conn, &root).unwrap();
     assert_eq!(db::analysis::tempo_fix(&conn, &t.path).unwrap(), 1.0);
 }
+
+#[test]
+fn a_grid_set_by_hand_is_shown_kept_through_analysis_and_pruned() {
+    use analysis::tempo::Grid;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("live.flac");
+    std::fs::write(&path, b"").unwrap();
+    let conn = db::open_memory().unwrap();
+    let t = with_tempo(&conn, path.to_str().unwrap(), None, Some((140.0, 0.9)));
+    db::analysis::set_grid_edit(&conn, &t.path, Some(Grid { bpm: 96.5, t0: 0.2 })).unwrap();
+    assert_eq!(db::analysis::bpm_of(&conn, &t.path).unwrap(), Some(96.5));
+    // An octave fix applies on top of it.
+    db::analysis::set_tempo_fix(&conn, &t.path, 2.0).unwrap();
+    assert_eq!(db::analysis::bpm_of(&conn, &t.path).unwrap(), Some(193.0));
+    let measured = db::analysis::measures(&conn, std::slice::from_ref(&t)).unwrap();
+    assert_eq!(measured[&t.path].bpm, Some(193.0));
+    db::analysis::put(&conn, &t, Analysis::default()).unwrap();
+    assert_eq!(
+        db::analysis::grid_edit(&conn, &t.path).unwrap(),
+        Some(Grid { bpm: 96.5, t0: 0.2 })
+    );
+    std::fs::remove_file(&path).unwrap();
+    db::prune_missing(&conn, &root).unwrap();
+    assert_eq!(db::analysis::grid_edit(&conn, &t.path).unwrap(), None);
+}

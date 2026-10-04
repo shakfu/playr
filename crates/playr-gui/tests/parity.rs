@@ -111,6 +111,7 @@ fn every_action() -> Vec<Action> {
         Action::DiscardSlices,
         Action::Convert("sf2".into(), None),
         Action::Tape(playr_app::tape::TapeAction::Play),
+        Action::Dj(playr_app::dj::DjAction::Play(playr_app::dj::Side::A)),
         Action::Theme(Theme::System),
         Action::SetColumns(vec![playr_core::columns::Column::Title]),
         Action::SetSort(Vec::new()),
@@ -220,6 +221,7 @@ fn every_action() -> Vec<Action> {
             | Action::DiscardSlices
             | Action::Convert(..)
             | Action::Tape(_)
+            | Action::Dj(_)
             | Action::Theme(_)
             | Action::SetColumns(_)
             | Action::SetSort(_)

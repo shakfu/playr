@@ -65,7 +65,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Test, with and without Opus
+      - name: Test
         run: make test
 
   build:
@@ -99,7 +99,7 @@ jobs:
       # The terminal, the desktop window and the server. Opus needs cmake,
       # which every runner image has.
       - name: Build
-        run: cargo build --profile dist --locked --target ${{ matrix.target }} -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
+        run: cargo build --profile dist --locked --target ${{ matrix.target }} -p playr -p playr-gui -p playr-server
 
       - name: Package
         shell: bash

@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cargo build --profile dist --locked -p playr -p playr-gui -p playr-server --features playr/opus,playr-gui/opus,playr-server/opus
+        run: cargo build --profile dist --locked -p playr -p playr-gui -p playr-server
 
       - uses: actions/upload-artifact@v7
         with:

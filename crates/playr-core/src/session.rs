@@ -1799,23 +1799,69 @@ impl Session {
             .unwrap_or_default()
     }
 
-    /// The beat grid of `path`, from `playr analyze`.
+    /// The beat grid of `path`: set by hand, else from `playr analyze`, at
+    /// its tempo times any octave correction.
     pub fn grid(&self, path: &Path) -> Option<analysis::tempo::Grid> {
-        db::analysis::grid_of(&self.conn, path.to_str()?)
-            .ok()
-            .flatten()
+        let key = path.to_str()?;
+        let grid = match db::analysis::grid_edit(&self.conn, key).ok().flatten() {
+            Some(g) => g,
+            None => db::analysis::grid_of(&self.conn, key).ok().flatten()?,
+        };
+        let factor = db::analysis::tempo_fix(&self.conn, key).unwrap_or(1.0);
+        Some(analysis::tempo::Grid {
+            bpm: grid.bpm * f64::from(factor),
+            ..grid
+        })
+    }
+
+    /// Sets `path`'s beat grid by hand, as [`Session::grid`] gives it, or
+    /// with `None` goes back to the analysis's. Analysing the track again
+    /// keeps it.
+    pub fn set_grid(
+        &mut self,
+        path: &Path,
+        grid: Option<analysis::tempo::Grid>,
+    ) -> Result<(), String> {
+        let key = path.to_str().ok_or("the path is not UTF-8")?;
+        let factor = db::analysis::tempo_fix(&self.conn, key).unwrap_or(1.0);
+        let stored = grid.map(|g| analysis::tempo::Grid {
+            bpm: g.bpm / f64::from(factor),
+            ..g
+        });
+        db::analysis::set_grid_edit(&self.conn, key, stored).map_err(|e| e.to_string())?;
+        self.tempo_rev += 1;
+        self.measures = db::analysis::measures(&self.conn, &self.tracks).unwrap_or_default();
+        Ok(())
+    }
+
+    /// The DJ hot cues set in `path`: slot, from 1, and time in seconds.
+    pub fn hot_cues(&self, path: &Path) -> Vec<(u8, f64)> {
+        query::hot_cues(&self.conn, &path.to_string_lossy()).unwrap_or_default()
+    }
+
+    /// Sets DJ hot cue `slot`, from 1, of `path` to `at` seconds, or empties it.
+    pub fn set_hot_cue(&mut self, path: &Path, slot: u8, at: Option<f64>) -> Result<(), String> {
+        query::set_hot_cue(&self.conn, &path.to_string_lossy(), slot, at).map_err(|e| e.to_string())
     }
 
     /// Corrects the playing track's tempo by an octave, or puts it back. The
     /// correction is kept apart from the analysis, so analysing the track
     /// again keeps it.
     pub fn fix_tempo(&mut self, fix: analysis::TempoFix) -> Notice {
+        match self.playing_track() {
+            Ok((path, _)) => self.fix_tempo_of(&path, fix),
+            Err(refusal) => refusal.into(),
+        }
+    }
+
+    /// Corrects `path`'s tempo by an octave, as [`Session::fix_tempo`] does
+    /// the playing track's.
+    pub fn fix_tempo_of(&mut self, path: &Path, fix: analysis::TempoFix) -> Notice {
         use analysis::{TempoFix, MAX_TEMPO_FIX};
-        let path = match self.playing_track() {
-            Ok((path, _)) => path,
-            Err(refusal) => return refusal.into(),
-        };
-        let (Some(key), Some(shown)) = (path.to_str(), self.bpm(&path)) else {
+        let shown = self
+            .bpm(path)
+            .or_else(|| self.grid(path).map(|g| g.bpm as f32));
+        let (Some(key), Some(shown)) = (path.to_str(), shown) else {
             return Refusal::NoTempoToFix.into();
         };
         let was = db::analysis::tempo_fix(&self.conn, key).unwrap_or(1.0);

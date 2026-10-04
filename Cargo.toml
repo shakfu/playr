@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/playr-core", "crates/playr-app", "crates/playr-gui", "crates/playr-server", "crates/playr-looper"]
+members = ["crates/playr-core", "crates/playr-app", "crates/playr-gui", "crates/playr-server", "crates/playr-looper", "crates/playr-dj", "crates/playr-dsp"]
 
 [workspace.package]
 version = "0.17.0"
@@ -11,9 +11,13 @@ homepage = "https://github.com/shakfu/playr"
 
 # Versions shared by more than one crate, so the crates cannot drift apart.
 [workspace.dependencies]
-playr-core = { path = "crates/playr-core", version = "0.17.0" }
+# Without its default features, so `--no-default-features` on a program
+# leaves Opus out; see `opus` below.
+playr-core = { path = "crates/playr-core", version = "0.17.0", default-features = false }
 playr-app = { path = "crates/playr-app", version = "0.17.0" }
 playr-looper = { path = "crates/playr-looper", version = "0.17.0" }
+playr-dj = { path = "crates/playr-dj", version = "0.17.0" }
+playr-dsp = { path = "crates/playr-dsp", version = "0.17.0" }
 cpal = "0.18.2"
 hound = "3.5"
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }
@@ -40,11 +44,10 @@ categories = ["multimedia::audio", "command-line-utilities"]
 exclude = ["docs/dev/"]
 
 [features]
-default = []
-# Opus playback, via libopus. Off by default because building libopus needs
-# cmake, which nothing else here requires. Without it playr reports Opus files
-# as undecodable and moves on, exactly as it does for WMA or DSD.
-# Enable with: cargo build --features opus
+default = ["opus"]
+# Opus playback, via libopus, whose build needs cmake. Without it playr
+# reports Opus files as undecodable and moves on, exactly as it does for WMA
+# or DSD. Leave it out with: cargo build --no-default-features
 opus = ["playr-core/opus"]
 
 [dependencies]
@@ -66,6 +69,50 @@ hound.workspace = true
 # The fake audio device in playr-core's test helpers, which the app tests share.
 cpal.workspace = true
 rtrb.workspace = true
+
+# Tests run analysis and DSP over seconds of audio, which is several times
+# slower unoptimised: about 25 s against 1.3 s for playr-core's analysis
+# tests. Only these crates, since optimising every dependency, the window's
+# included, took a cold build from about 5 to 27 minutes. opt-level 1 keeps
+# debug info and assertions.
+[profile.test.package.playr-core]
+opt-level = 1
+
+[profile.test.package.playr-dsp]
+opt-level = 1
+
+[profile.test.package.playr-dj]
+opt-level = 1
+
+[profile.test.package.playr-looper]
+opt-level = 1
+
+[profile.test.package.rustfft]
+opt-level = 1
+
+[profile.test.package.realfft]
+opt-level = 1
+
+[profile.test.package.num-complex]
+opt-level = 1
+
+[profile.test.package.transpose]
+opt-level = 1
+
+[profile.test.package.strength_reduce]
+opt-level = 1
+
+[profile.test.package.symphonia-core]
+opt-level = 1
+
+[profile.test.package.symphonia-format-riff]
+opt-level = 1
+
+[profile.test.package.symphonia-codec-pcm]
+opt-level = 1
+
+[profile.test.package.rubato]
+opt-level = 1
 
 [profile.release]
 opt-level = 3

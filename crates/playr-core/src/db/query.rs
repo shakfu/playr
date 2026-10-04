@@ -691,6 +691,28 @@ pub fn clear_loop(conn: &Connection, path: &str, slot: u8) -> Result<bool> {
     )? > 0)
 }
 
+/// The hot cues set in the track at `path`: slot and time in seconds.
+pub fn hot_cues(conn: &Connection, path: &str) -> Result<Vec<(u8, f64)>> {
+    let mut stmt = conn.prepare("SELECT slot, at FROM hot_cues WHERE path = ?1 ORDER BY slot")?;
+    let rows = stmt.query_map([path], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
+/// Sets hot cue `slot` of the track at `path` to `at` seconds, or empties it.
+pub fn set_hot_cue(conn: &Connection, path: &str, slot: u8, at: Option<f64>) -> Result<()> {
+    match at {
+        Some(at) => conn.execute(
+            "INSERT OR REPLACE INTO hot_cues (path, slot, at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![path, slot, at],
+        )?,
+        None => conn.execute(
+            "DELETE FROM hot_cues WHERE path = ?1 AND slot = ?2",
+            rusqlite::params![path, slot],
+        )?,
+    };
+    Ok(())
+}
+
 /// Empties every loop slot of the track at `path`, returning how many held one.
 pub fn clear_loops(conn: &Connection, path: &str) -> Result<usize> {
     conn.execute("DELETE FROM loops WHERE path = ?1", [path])

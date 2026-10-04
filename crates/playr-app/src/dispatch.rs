@@ -225,6 +225,8 @@ pub trait Frontend {
 
     /// The tape looper's state.
     fn tape(&mut self) -> &mut crate::tape::Deck;
+    /// The DJ decks' state.
+    fn dj(&mut self) -> &mut crate::dj::Decks;
 }
 
 /// What to do with the tracks a `:sql` statement names, once it finishes.
@@ -836,6 +838,7 @@ fn act(action: Action, f: &mut impl Frontend) {
             Err(refusal) => f.notify(refusal.into()),
         },
         Action::Tape(t) => crate::tape::act(f, t),
+        Action::Dj(d) => crate::dj::act(f, d),
         Action::DiscardSlices => {
             // Edits set by hand would otherwise be lost for good.
             let then = before(f).filter(|b| edited(&b.plan));
@@ -1078,6 +1081,19 @@ fn playlist_under_cursor(f: &impl Frontend) -> Option<Playlist> {
 /// The library view's track under the cursor, for keeping it there.
 fn library_track(f: &impl Frontend) -> Option<Track> {
     f.listed().get(f.cursor(View::Library)?).cloned()
+}
+
+/// The track under the cursor in the library or the selection.
+pub(crate) fn cursor_track(f: &impl Frontend) -> Option<Track> {
+    match f.view() {
+        View::Library => library_track(f),
+        View::Selection => f
+            .session()
+            .selection()
+            .get(f.cursor(View::Selection)?)
+            .cloned(),
+        _ => None,
+    }
 }
 
 fn activate(f: &mut impl Frontend) {

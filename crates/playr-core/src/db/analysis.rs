@@ -173,9 +173,10 @@ pub fn loudness_of(conn: &Connection, path: &str) -> Result<Option<(Histogram, f
 pub fn measures(conn: &Connection, library: &[Track]) -> Result<HashMap<String, Measures>> {
     let mut stmt = conn.prepare(
         "SELECT a.path, a.mtime, a.size, a.version, a.loudness, a.peak,
-                COALESCE(a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?1 THEN a.bpm END)
+                COALESCE(e.bpm, a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?1 THEN a.bpm END)
                   * COALESCE(f.factor, 1)
            FROM analysis a LEFT JOIN tempo_fix f ON f.path = a.path
+           LEFT JOIN grid_edit e ON e.path = a.path
           WHERE a.error IS NULL",
     )?;
     let rows = stmt.query_map([tempo::MIN_CONFIDENCE], |r| {
@@ -224,17 +225,18 @@ pub fn grid_of(conn: &Connection, path: &str) -> Result<Option<tempo::Grid>> {
     Ok(row.and_then(|(bpm, t0)| Some(tempo::Grid { bpm: bpm?, t0: t0? })))
 }
 
-/// The tempo to show for `path`: its grid's, else its BPM tag, else a
+/// The tempo to show for `path`: its grid's, set by hand or analysed, else its BPM tag, else a
 /// confident estimate, times any correction made by hand. A grid is measured
 /// to 0.01 BPM near the tag or the estimate, at the faster level where the
 /// estimate read half the tempo, so a house track read at 62 shows 124.
 /// `None` unless the row describes the file as the library knows it.
 pub fn bpm_of(conn: &Connection, path: &str) -> Result<Option<f32>> {
     conn.query_row(
-        "SELECT COALESCE(a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?2 THEN a.bpm END)
+        "SELECT COALESCE(e.bpm, a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?2 THEN a.bpm END)
                   * COALESCE(f.factor, 1)
            FROM analysis a
            LEFT JOIN tempo_fix f ON f.path = a.path
+           LEFT JOIN grid_edit e ON e.path = a.path
            JOIN tracks t ON t.path = a.path AND t.mtime = a.mtime AND t.size = a.size
           WHERE a.path = ?1 AND a.version = ?3",
         params![path, tempo::MIN_CONFIDENCE, crate::analysis::VERSION],
@@ -269,6 +271,33 @@ pub fn tempo_fix(conn: &Connection, path: &str) -> Result<f32> {
     .map(|f| f.unwrap_or(1.0))
 }
 
+/// The grid set by hand for `path`, before any tempo correction.
+pub fn grid_edit(conn: &Connection, path: &str) -> Result<Option<tempo::Grid>> {
+    conn.query_row(
+        "SELECT bpm, t0 FROM grid_edit WHERE path = ?1",
+        [path],
+        |r| {
+            Ok(tempo::Grid {
+                bpm: r.get(0)?,
+                t0: r.get(1)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// Stores `grid` as set by hand for `path`; `None` removes it.
+pub fn set_grid_edit(conn: &Connection, path: &str, grid: Option<tempo::Grid>) -> Result<()> {
+    match grid {
+        None => conn.execute("DELETE FROM grid_edit WHERE path = ?1", [path])?,
+        Some(g) => conn.execute(
+            "INSERT OR REPLACE INTO grid_edit (path, bpm, t0) VALUES (?1, ?2, ?3)",
+            params![path, g.bpm, g.t0],
+        )?,
+    };
+    Ok(())
+}
+
 /// Stores `factor` as `path`'s tempo correction; 1 removes it.
 pub fn set_tempo_fix(conn: &Connection, path: &str, factor: f32) -> Result<()> {
     match factor == 1.0 {
@@ -281,13 +310,14 @@ pub fn set_tempo_fix(conn: &Connection, path: &str, factor: f32) -> Result<()> {
     Ok(())
 }
 
-/// Removes the rows of `paths`, and their tempo corrections, as pruning
-/// removes their tracks.
+/// Removes the rows of `paths`, and their tempo and grid corrections, as
+/// pruning removes their tracks.
 pub(crate) fn delete(conn: &Connection, paths: &[String]) -> Result<usize> {
     let mut n = 0;
     for p in paths {
         n += conn.execute("DELETE FROM analysis WHERE path = ?1", [p])?;
         conn.execute("DELETE FROM tempo_fix WHERE path = ?1", [p])?;
+        conn.execute("DELETE FROM grid_edit WHERE path = ?1", [p])?;
     }
     Ok(n)
 }

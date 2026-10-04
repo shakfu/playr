@@ -116,6 +116,7 @@ pub enum Message {
     /// The sleep timer ran out and stopped playback.
     Slept,
     Tape(crate::tape::TapeMessage),
+    Dj(crate::dj::DjMessage),
 }
 
 impl From<Notice> for Message {
@@ -193,6 +194,7 @@ pub fn text(message: &Message) -> String {
         Message::StopIn(None) => "sleep timer off".into(),
         Message::Slept => "sleep timer ran out; stopped".into(),
         Message::Tape(m) => tape_text(m),
+        Message::Dj(m) => dj_text(m),
         Message::NoPlaylistUnderCursor => {
             "no playlist under the cursor in the playlists view".into()
         }
@@ -581,6 +583,53 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
             }
         }
         TapeMessage::Failed(e) => format!("tape: {e}"),
+    }
+}
+
+fn dj_text(m: &crate::dj::DjMessage) -> String {
+    use crate::dj::{DjAction, DjMessage};
+    let deck = |s: &crate::dj::Side| crate::command::side_name(*s);
+    match m {
+        DjMessage::Loading(s) => format!("reading the track for deck {}", deck(s)),
+        DjMessage::Loaded {
+            side,
+            title,
+            bpm: Some(bpm),
+        } => format!("deck {}: {title}, {bpm:.2} BPM", deck(side)),
+        DjMessage::Loaded {
+            side,
+            title,
+            bpm: None,
+        } => format!("deck {}: {title}, no beat grid", deck(side)),
+        DjMessage::FindingGrid(s) => {
+            format!("deck {}: analysing the track for its beat grid", deck(s))
+        }
+        DjMessage::NoGrid(s) => format!(
+            "deck {} has no beat grid; :dj {} tap sets one",
+            deck(s),
+            deck(s)
+        ),
+        DjMessage::Done(DjAction::Play(s)) => format!("deck {} playing", deck(s)),
+        DjMessage::Done(DjAction::Pause(s)) => format!("deck {} paused", deck(s)),
+        DjMessage::Done(a) => command::line(&Action::Dj(*a), None),
+        DjMessage::Empty(s) => format!("deck {} is empty; :dj {} load first", deck(s), deck(s)),
+        DjMessage::NoTrack => "no track under the cursor to load".into(),
+        DjMessage::Playing(s) => format!("deck {} is playing; pause it first", deck(s)),
+        DjMessage::OutOfReach(s) => format!(
+            "deck {} cannot reach the other deck's tempo within 50%",
+            deck(s)
+        ),
+        DjMessage::NoCueChannels(n) => {
+            format!("the output device has {n} channels; the cue on 3 and 4 needs 4")
+        }
+        DjMessage::Tapped(s) => format!("deck {}: tap again on the beat", deck(s)),
+        DjMessage::Grid { side, bpm, t0 } => {
+            format!(
+                "deck {} grid: {bpm:.2} BPM, a beat at {t0:.3} s",
+                deck(side)
+            )
+        }
+        DjMessage::Failed(e) => format!("dj: {e}"),
     }
 }
 

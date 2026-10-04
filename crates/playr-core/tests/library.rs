@@ -656,6 +656,22 @@ fn loops_are_saved_by_slot_replaced_and_cleared() {
     assert_eq!(query::loops(&conn, "/m/b.flac").unwrap(), [(1, 5, 6)]);
 }
 
+#[test]
+fn hot_cues_are_kept_by_slot_and_emptied() {
+    let conn = db::open_memory().unwrap();
+    let path = "/m/a.flac";
+    assert!(query::hot_cues(&conn, path).unwrap().is_empty());
+    query::set_hot_cue(&conn, path, 3, Some(12.5)).unwrap();
+    query::set_hot_cue(&conn, path, 1, Some(0.25)).unwrap();
+    query::set_hot_cue(&conn, path, 3, Some(14.0)).unwrap();
+    assert_eq!(
+        query::hot_cues(&conn, path).unwrap(),
+        [(1, 0.25), (3, 14.0)]
+    );
+    query::set_hot_cue(&conn, path, 1, None).unwrap();
+    assert_eq!(query::hot_cues(&conn, path).unwrap(), [(3, 14.0)]);
+}
+
 fn seeded_for_columns() -> rusqlite::Connection {
     let conn = db::open_memory().unwrap();
     let with = |path: &str, title: &str, year: i32, genre: &str, ms: i64| Track {

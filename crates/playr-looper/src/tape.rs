@@ -3,7 +3,11 @@
 
 use std::f32::consts::FRAC_PI_2;
 
+use playr_dsp::{clip, hermite, one_pole};
+
 use crate::{Error, COLUMNS, VOICES};
+
+type Ramp = playr_dsp::Ramp<f32>;
 
 /// How long changes to level, pan, send, feedback and wear take.
 const SMOOTH_MS: f32 = 20.0;
@@ -36,11 +40,6 @@ fn wear_coefficient(wear: f32, sample_rate: u32) -> f32 {
     1.0 - (-std::f32::consts::TAU * fc / sample_rate as f32).exp()
 }
 
-/// A one-pole low-pass coefficient for a cutoff of `hz`.
-fn one_pole(hz: f32, sample_rate: u32) -> f32 {
-    1.0 - (-std::f32::consts::TAU * hz / sample_rate as f32).exp()
-}
-
 /// The thin high-pass's one-pole coefficient: 20 Hz at 0, rising on a log
 /// scale to 2 kHz at 1.
 fn thin_coefficient(thin: f32, sample_rate: u32) -> f32 {
@@ -68,26 +67,19 @@ pub enum Filter {
     Band,
 }
 
-/// A state-variable filter, Butterworth damped, per channel, in its
-/// topology-preserving form, which stays stable as the cutoff moves.
+/// A voice's filter: a Butterworth state-variable filter over a cutoff of
+/// 0 to 1, on a log scale across [`FILTER_HZ`].
 #[derive(Debug, Clone, Copy)]
 struct Svf {
-    ic1: [f32; 2],
-    ic2: [f32; 2],
-    a: [f32; 3],
+    svf: playr_dsp::Svf,
     /// The cutoff, 0 to 1, the coefficients were computed for.
     at: f32,
 }
 
-/// The damping, 1/Q, for a Butterworth response.
-const SVF_K: f32 = std::f32::consts::SQRT_2;
-
 impl Svf {
     fn new() -> Self {
         Svf {
-            ic1: [0.0; 2],
-            ic2: [0.0; 2],
-            a: [0.0; 3],
+            svf: playr_dsp::Svf::butterworth(),
             at: f32::NAN,
         }
     }
@@ -99,28 +91,21 @@ impl Svf {
         self.at = cutoff;
         let (lo, hi) = FILTER_HZ;
         let hz = (lo * (hi / lo).powf(cutoff)).min(0.45 * sample_rate as f32);
-        let g = (std::f32::consts::PI * hz / sample_rate as f32).tan();
-        let a1 = 1.0 / (1.0 + g * (g + SVF_K));
-        self.a = [a1, g * a1, g * g * a1];
+        self.svf.tune(hz, sample_rate);
     }
 
     /// Filters `x` in place as `kind` at the tuned cutoff. Low at 1 and high
     /// at 0 pass it unchanged; the state runs on, so moving off either end
     /// does not start from silence.
     fn process(&mut self, x: &mut [f32; 2], kind: Filter, cutoff: f32) {
-        let [a1, a2, a3] = self.a;
         for (ch, x) in x.iter_mut().enumerate() {
-            let v3 = *x - self.ic2[ch];
-            let v1 = a1 * self.ic1[ch] + a2 * v3;
-            let v2 = self.ic2[ch] + a2 * self.ic1[ch] + a3 * v3;
-            self.ic1[ch] = 2.0 * v1 - self.ic1[ch];
-            self.ic2[ch] = 2.0 * v2 - self.ic2[ch];
+            let t = self.svf.tick(ch, *x);
             *x = match kind {
                 Filter::Low if cutoff >= 1.0 => *x,
                 Filter::High if cutoff <= 0.0 => *x,
-                Filter::Low => v2,
-                Filter::High => *x - SVF_K * v1 - v2,
-                Filter::Band => SVF_K * v1,
+                Filter::Low => t.low,
+                Filter::High => t.high,
+                Filter::Band => t.band,
             };
         }
     }
@@ -331,53 +316,8 @@ impl Loop {
                 *o = x0;
                 continue;
             }
-            let (xm, x1, x2) = (at(i - 1, ch), at(i + 1, ch), at(i + 2, ch));
-            let c1 = 0.5 * (x1 - xm);
-            let c2 = xm - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
-            let c3 = 0.5 * (x2 - xm) + 1.5 * (x0 - x1);
-            *o = ((c3 * t + c2) * t + c1) * t + x0;
+            *o = hermite(at(i - 1, ch), x0, at(i + 1, ch), at(i + 2, ch), t);
         }
-    }
-}
-
-/// A value that moves linearly to its target over a set number of frames.
-#[derive(Debug, Clone, Copy)]
-struct Ramp {
-    value: f32,
-    target: f32,
-    step: f32,
-    left: u32,
-}
-
-impl Ramp {
-    fn new(value: f32) -> Self {
-        Ramp {
-            value,
-            target: value,
-            step: 0.0,
-            left: 0,
-        }
-    }
-
-    fn set(&mut self, target: f32, frames: u32) {
-        self.target = target;
-        self.left = frames;
-        match frames {
-            0 => self.value = target,
-            n => self.step = (target - self.value) / n as f32,
-        }
-    }
-
-    /// Advances one frame and returns the value there.
-    fn next(&mut self) -> f32 {
-        if self.left > 0 {
-            self.left -= 1;
-            self.value = match self.left {
-                0 => self.target,
-                _ => self.value + self.step,
-            };
-        }
-        self.value
     }
 }
 
@@ -495,7 +435,7 @@ impl Voice {
 
     /// Where a head starts in `w`: its first frame, or its last in reverse.
     fn home(&self, w: Window) -> f64 {
-        match self.rate.target < 0.0 {
+        match self.rate.target() < 0.0 {
             true => (w.end - 1) as f64,
             false => w.start as f64,
         }
@@ -521,7 +461,7 @@ impl Voice {
         } else {
             self.window = w;
             self.next = None;
-            self.jump(self.home(w), self.rate.value, sample_rate);
+            self.jump(self.home(w), self.rate.value(), sample_rate);
         }
     }
 
@@ -645,7 +585,7 @@ impl Voice {
             self.window = to;
             if !to.contains(self.pos) {
                 let at = self.pos.clamp(to.start as f64, (to.end - 1) as f64);
-                self.jump(at, self.rate.value, sample_rate);
+                self.jump(at, self.rate.value(), sample_rate);
             }
         }
     }
@@ -904,15 +844,6 @@ impl Writer {
         if self.pos >= self.window.end {
             self.pos = self.window.start;
         }
-    }
-}
-
-/// Passes `|x| <= 0.5` unchanged and bends larger values towards 1.
-fn clip(x: f32) -> f32 {
-    let a = x.abs();
-    match a <= 0.5 {
-        true => x,
-        false => (0.5 + 0.5 * ((a - 0.5) / 0.5).tanh()).copysign(x),
     }
 }
 

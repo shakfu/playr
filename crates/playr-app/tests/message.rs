@@ -647,3 +647,59 @@ fn idle_tape_controls_say_why() {
         assert_eq!(idle_text(idle), words);
     }
 }
+
+#[test]
+fn dj_messages_are_worded() {
+    use playr_app::dj::{DjAction as D, DjMessage as M, Side::*};
+    for (message, words) in [
+        (M::Loading(A), "reading the track for deck a"),
+        (
+            M::Loaded {
+                side: B,
+                title: "Amen".into(),
+                bpm: Some(136.0),
+            },
+            "deck b: Amen, 136.00 BPM",
+        ),
+        (
+            M::Loaded {
+                side: A,
+                title: "Drone".into(),
+                bpm: None,
+            },
+            "deck a: Drone, no beat grid",
+        ),
+        (
+            M::FindingGrid(A),
+            "deck a: analysing the track for its beat grid",
+        ),
+        (M::NoGrid(B), "deck b has no beat grid; :dj b tap sets one"),
+        (M::Done(D::Play(A)), "deck a playing"),
+        (M::Done(D::Pause(B)), "deck b paused"),
+        (M::Done(D::Rate(B, 2.5)), "dj b rate 2.5"),
+        (M::Empty(A), "deck a is empty; :dj a load first"),
+        (M::NoTrack, "no track under the cursor to load"),
+        (M::Playing(A), "deck a is playing; pause it first"),
+        (
+            M::OutOfReach(B),
+            "deck b cannot reach the other deck's tempo within 50%",
+        ),
+        (M::Tapped(B), "deck b: tap again on the beat"),
+        (
+            M::NoCueChannels(2),
+            "the output device has 2 channels; the cue on 3 and 4 needs 4",
+        ),
+        (M::Done(D::Loop(A, Some(4.0))), "dj a loop 4"),
+        (
+            M::Grid {
+                side: A,
+                bpm: 128.0,
+                t0: 0.1234,
+            },
+            "deck a grid: 128.00 BPM, a beat at 0.123 s",
+        ),
+        (M::Failed("no device".into()), "dj: no device"),
+    ] {
+        assert_eq!(text(&Message::Dj(message)), words);
+    }
+}

@@ -6,6 +6,7 @@
 //! key does. `docs/dev/gui.md` sets out the design.
 
 pub mod controls;
+mod dj;
 pub mod keys;
 pub mod palette;
 mod sampler;
@@ -56,6 +57,9 @@ pub struct Gui {
     /// `View`: the terminal has no Tape view, so keys keep acting in this one.
     tape: Option<View>,
     tape_tab: tape::State,
+    /// The view the DJ tab was opened over, while it shows, as for `tape`.
+    dj: Option<View>,
+    dj_tab: dj::State,
 }
 
 impl Gui {
@@ -72,6 +76,8 @@ impl Gui {
             eq_open: false,
             tape: None,
             tape_tab: tape::State::default(),
+            dj: None,
+            dj_tab: dj::State::default(),
         }
     }
 
@@ -90,9 +96,12 @@ impl Gui {
         self.follow_theme(ui.ctx());
         self.follow_input(ui.ctx());
         self.keys(ui.ctx());
-        // A key that changed the view leaves the Tape tab for it.
+        // A key that changed the view leaves the Tape or DJ tab for it.
         if self.tape.is_some_and(|v| v != self.model.view()) {
             self.tape = None;
+        }
+        if self.dj.is_some_and(|v| v != self.model.view()) {
+            self.dj = None;
         }
 
         self.dropped(ui.ctx());
@@ -107,7 +116,8 @@ impl Gui {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         let tape_playing = self.model.deck().status().is_some_and(|s| s.playing());
-        if self.model.snapshot().status.state == State::Playing || tape_playing {
+        let decks_playing = self.model.decks().playing();
+        if self.model.snapshot().status.state == State::Playing || tape_playing || decks_playing {
             ui.ctx().request_repaint_after(FRAME);
         } else if self.model.message().is_some() {
             ui.ctx().request_repaint_after(Duration::from_secs(1));
@@ -370,15 +380,24 @@ impl Gui {
                     View::Sampler => view.title().to_string(),
                 };
                 if ui
-                    .selectable_label(self.tape.is_none() && self.model.view() == view, title)
+                    .selectable_label(
+                        self.tape.is_none() && self.dj.is_none() && self.model.view() == view,
+                        title,
+                    )
                     .clicked()
                 {
                     self.tape = None;
+                    self.dj = None;
                     self.perform(Action::ShowView(view));
                 }
             }
             if ui.selectable_label(self.tape.is_some(), "Tape").clicked() {
                 self.tape = Some(self.model.view());
+                self.dj = None;
+            }
+            if ui.selectable_label(self.dj.is_some(), "DJ").clicked() {
+                self.dj = Some(self.model.view());
+                self.tape = None;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.search_field(ui)
@@ -504,6 +523,12 @@ impl Gui {
     }
 
     fn view(&mut self, ui: &mut egui::Ui) {
+        if self.dj.is_some() {
+            for action in dj::show(&self.model, ui, &mut self.dj_tab) {
+                self.perform(action);
+            }
+            return;
+        }
         if self.tape.is_some() {
             for action in tape::show(&self.model, ui, &mut self.tape_tab) {
                 self.perform(action);
