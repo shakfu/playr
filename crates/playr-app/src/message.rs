@@ -619,6 +619,10 @@ fn dj_text(m: &crate::dj::DjMessage) -> String {
             "deck {} cannot reach the other deck's tempo within 50%",
             deck(s)
         ),
+        DjMessage::NoMark(s) => format!("deck {}: no mark that way", deck(s)),
+        DjMessage::Queued { side, title } => {
+            format!("deck {}: {title} loads when the deck stops", deck(side))
+        }
         DjMessage::NoCueChannels(n) => {
             format!("the output device has {n} channels; the cue on 3 and 4 needs 4")
         }

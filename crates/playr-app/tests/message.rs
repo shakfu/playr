@@ -690,6 +690,14 @@ fn dj_messages_are_worded() {
             "the output device has 2 channels; the cue on 3 and 4 needs 4",
         ),
         (M::Done(D::Loop(A, Some(4.0))), "dj a loop 4"),
+        (M::NoMark(A), "deck a: no mark that way"),
+        (
+            M::Queued {
+                side: B,
+                title: "Amen".into(),
+            },
+            "deck b: Amen loads when the deck stops",
+        ),
         (
             M::Grid {
                 side: A,

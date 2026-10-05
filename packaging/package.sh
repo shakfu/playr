@@ -5,7 +5,7 @@
 #   packaging/package.sh TARGET TAG
 #
 # Every archive holds playr, playr-gui and playr-server with README.md,
-# CHANGELOG.md, LICENSE and docs/server-guide.md. On macOS playr-gui is inside
+# CHANGELOG.md, LICENSE and docs/guide-server.md. On macOS playr-gui is inside
 # playr.app; on Linux playr.desktop, playr.png and playr-server.service come
 # with them.
 set -euo pipefail
@@ -20,7 +20,7 @@ mkdir "$name"
 mkdir "$name/docs"
 cp "$root/README.md" "$root/CHANGELOG.md" "$root/LICENSE" "$name/"
 # Where README.md links to it.
-cp "$root/docs/server-guide.md" "$name/docs/"
+cp "$root/docs/guide-server.md" "$name/docs/"
 
 case "$target" in
   *windows*)

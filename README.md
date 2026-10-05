@@ -272,11 +272,11 @@ The page cannot name a path, so it cannot open, scan or prune one, and it cannot
 
 `--osc ADDR:PORT` receives OSC for playback, volume, speed, mode and playlists by index, and `--osc-reply ADDR:PORT` sends the title, position and level back. `playr-server osc-schema` prints every address as JSON, and each release has a TouchOSC layout built from it.
 
-[docs/server-guide.md](docs/server-guide.md) covers access from other devices, a QR code for a phone, running behind a proxy, and running it as a systemd service on a Raspberry Pi.
+[docs/guide-server.md](docs/guide-server.md) covers access from other devices, a QR code for a phone, running behind a proxy, and running it as a systemd service on a Raspberry Pi.
 
 ### The library
 
-One library file serves all three interfaces and the `playr` subcommands.
+One library file serves all three interfaces and the `playr` subcommands. [`docs/guide-library.md`](docs/guide-library.md) explains how scanning, searching, the selection, the queue and playlists fit together, and how to lose nothing.
 
 It lives at `$XDG_DATA_HOME/playr/library.db`, or `~/.local/share/playr/library.db`. Override it with `--db <path>`. Only `playr scan`, or `:scan` inside playr, creates it. Until then the other commands run without a library, and `s` cannot save a playlist. Paths are stored in full, so a scan run from any directory finds the same rows. A path that is not valid UTF-8 is skipped and counted as unreadable.
 
@@ -486,11 +486,11 @@ An edge that falls where the signal is far from zero clicks when the slice plays
 
 For MP3 and AAC, frame positions follow playr's decoder. Another decoder can count the codec's encoder delay differently and place the same slice up to a few thousand frames away.
 
-[docs/sampler.md](docs/sampler.md) shows how regions and cuts fit together, what `samples.json` holds, and how precise a mark is.
+[docs/guide-sampler.md](docs/guide-sampler.md) shows how regions and cuts fit together, what `samples.json` holds, and how precise a mark is.
 
 ### Sampler view
 
-`4` opens a view of the playing track's waveform, read from the file the first time the view opens for that track. Marks show as `|` under it, the selected mark reversed, the playhead as `^`, and the region between the marks either side of the playhead in the accent colour. The detail line gives the region's times to the millisecond.
+`5` opens a view of the playing track's waveform, read from the file the first time the view opens for that track. Marks show as `|` under it, the selected mark reversed, the playhead as `^`, and the region between the marks either side of the playhead in the accent colour. The detail line gives the region's times to the millisecond.
 
 | key     | command                 | does                                              |
 |---------|-------------------------|---------------------------------------------------|
@@ -555,7 +555,7 @@ The waveform glyphs are the view's only characters outside ASCII. Marks are plac
 
 ### Tape
 
-`:tape load` copies the sampler's range of the playing track into a loop, or `:tape load N` copies loop slot N. Three voices read it at once, each at its own rate and over its own window. A write head records what the voices send back into the loop, with feedback, so a reversed or half-speed voice is printed into it and every voice reads that on the next pass. The terminal has the commands; the window has a Tape tab with the same controls.
+`:tape load` copies the sampler's range of the playing track into a loop, or `:tape load N` copies loop slot N. Three voices read it at once, each at its own rate and over its own window. A write head records what the voices send back into the loop, with feedback, so a reversed or half-speed voice is printed into it and every voice reads that on the next pass. The terminal has the commands; the window has a Tape tab with the same controls. [`docs/guide-tape.md`](docs/guide-tape.md) explains the tab and how the voices and the write head work together.
 
 | command | does |
 |-|-|
@@ -583,11 +583,16 @@ The load also reads up to a second of the track before the range, the pre-roll, 
 
 ### DJ
 
-Two decks play library tracks at once, each at its own rate. Each track gets a beat grid: its tempo and where a beat falls, from `playr analyze`. A deck loading a track never analysed analyses it first. With grids on both decks, sync matches one deck's tempo to the other's, at half, the same or double, and moves it into phase. A mixer blends the decks to one output. The terminal has the commands; the window has a DJ tab with a waveform per deck, centred on the playhead and marked with the grid, and the same controls. A library or selection row's menu loads it onto a deck.
+Two decks play library tracks at once, each at its own rate. Each track gets a beat grid: its tempo and where a beat falls, from `playr analyze`. A deck loading a track never analysed analyses it first. With grids on both decks, sync matches one deck's tempo to the other's, at half, the same or double, and moves it into phase. A mixer blends the decks to one output. [`docs/guide-dj.md`](docs/guide-dj.md) explains the tab and how to mix with it. The terminal has the commands; the window has a DJ tab with a waveform per deck, centred on the playhead and marked with the grid, and the same controls. A click or drag on a deck's overview, the strip under its waveform, seeks there. The tab lists the library, following the search field, with A and B on each row to load it onto a deck; a library or selection row's menu does the same. A deck shows the track's marks on both its waveforms, and a click near one on the overview lands on it. The grid's edits are under each deck's Grid menu, and A, Centre and B glide the crossfader to that point over 400 ms, as a double click on it glides it to the middle.
 
 | command | does |
 |-|-|
-| `:dj a load` | load the track under the cursor onto deck A; `b` for deck B |
+| `:dj a load` | load the track under the cursor onto deck A; `b` for deck B. A playing deck fades out, takes it and plays it; with strict on, it keeps it as its next track and loads it once it stops |
+| `:dj strict on\|off` | strict: a track picked for a playing deck waits until the deck stops, so a mis-click cannot cut into a mix. Off until set |
+| `:dj a mark next\|prev` | jump to the next or previous mark, as the sampler set them |
+| `:dj a unqueue` | forget the next track |
+| `:dj a seek TIME\|PCT%` | move the head to a time, `1:30`, or part of the track, `25%` |
+| `:dj a mute on\|off` | silence the deck in the main mix; the cue still hears it |
 | `:dj a play`, `:dj a pause` | play the deck, pausing the player, or pause it |
 | `:dj a cue` | playing: back to the cue point, paused; paused: set the cue point here |
 | `:dj a cue down`, `:dj a cue up` | hold CUE: paused, plays from the cue point until released |
@@ -595,6 +600,7 @@ Two decks play library tracks at once, each at its own rate. Each track gets a b
 | `:dj a rate PCT`, `:dj a range 8\|16\|50` | the rate fader, in percent, and its travel |
 | `:dj a nudge +\|-\|off` | bend the rate 4% to move the deck's beats later or earlier by ear |
 | `:dj a gain DB`, `:dj a level L`, `:dj xfade X` | trim, -12 to 12 dB; channel fader, 0 to 1; crossfader, 0 for A to 1 for B |
+| `:dj xfade a\|b\|centre` | glide the crossfader to deck A's end, deck B's, or the middle, over 400 ms |
 | `:dj quantize on` | play and cue start in phase with the other deck |
 | `:dj cue a\|b\|off` | split cue: the main mix in the left ear, the deck in the right |
 | `:dj a grid x2\|/2` | correct the grid's tempo an octave, as `:bpm` does |

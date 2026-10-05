@@ -722,8 +722,9 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
 const DJ_USAGE: &str = "usage: :dj a|b load | play | pause | cue [down|up] | \
      sync [on|off] | rate PCT | range 8|16|50 | nudge +|-|off | gain DB | level L | \
      eq low|mid|high DB | kill low|mid|high on|off | filter K | hot N [clear] | \
-     jump BEATS | loop BEATS|off | grid x2|/2|<|>|reset | grid offset MS | tap; \
-     :dj quantize on|off | cue a|b|off | cue-out split|3-4 | curve smooth|sharp | xfade X";
+     jump BEATS | loop BEATS|off | seek TIME|PCT% | mute on|off | unqueue | mark prev|next | \
+     grid x2|/2|<|>|reset | grid offset MS | tap; \
+     :dj quantize on|off | strict on|off | cue a|b|off | cue-out split|3-4 | curve smooth|sharp | xfade X|a|b|centre";
 
 /// A deck's letter.
 pub fn side_name(side: crate::dj::Side) -> &'static str {
@@ -768,7 +769,11 @@ fn dj(rest: &str) -> Result<crate::dj::DjAction, String> {
         ["quantize", w] => on(w).map(D::Quantize),
         ["cue", "off"] => Ok(D::CueBus(None)),
         ["cue", w] if side(w).is_some() => Ok(D::CueBus(side(w))),
+        ["xfade", "a"] => Ok(D::XfadeTo(Some(Side::A))),
+        ["xfade", "b"] => Ok(D::XfadeTo(Some(Side::B))),
+        ["xfade", "centre"] => Ok(D::XfadeTo(None)),
         ["xfade", x] => value(x, "xfade", 0.0, 1.0).map(D::Xfade),
+        ["strict", w] => on(w).map(D::Strict),
         ["cue-out", "split"] => Ok(D::CueOut(CueOut::Split)),
         ["cue-out", "3-4"] => Ok(D::CueOut(CueOut::Channels)),
         ["curve", "smooth"] => Ok(D::Curve(Curve::Smooth)),
@@ -811,6 +816,11 @@ fn dj(rest: &str) -> Result<crate::dj::DjAction, String> {
                 ["hot", n] => D::HotCue(s, hot(n)?),
                 ["hot", n, "clear"] => D::HotClear(s, hot(n)?),
                 ["jump", b] => D::Jump(s, value(b, "jump", -64.0, 64.0)?),
+                ["seek", at] => D::Seek(s, tape_pos(at)?),
+                ["mute", w] => D::Mute(s, on(w)?),
+                ["unqueue"] => D::Unqueue(s),
+                ["mark", "next"] => D::Mark(s, true),
+                ["mark", "prev"] => D::Mark(s, false),
                 ["loop", "off"] => D::Loop(s, None),
                 ["loop", b] => match b.parse::<f32>() {
                     Ok(b) if crate::dj::LOOP_BEATS.contains(&f64::from(b)) => D::Loop(s, Some(b)),
@@ -839,6 +849,8 @@ fn dj_line(d: &crate::dj::DjAction) -> String {
         D::CueBus(None) => "cue off".into(),
         D::CueBus(Some(s)) => format!("cue {}", deck(*s)),
         D::Xfade(x) => format!("xfade {}", n(x)),
+        D::XfadeTo(None) => "xfade centre".into(),
+        D::XfadeTo(Some(s)) => format!("xfade {}", deck(*s)),
         D::Load(s) => format!("{} load", deck(*s)),
         D::Play(s) => format!("{} play", deck(*s)),
         D::Pause(s) => format!("{} pause", deck(*s)),
@@ -877,6 +889,15 @@ fn dj_line(d: &crate::dj::DjAction) -> String {
         D::Jump(s, b) => format!("{} jump {}", deck(*s), n(b)),
         D::Loop(s, None) => format!("{} loop off", deck(*s)),
         D::Loop(s, Some(b)) => format!("{} loop {}", deck(*s), n(b)),
+        D::Seek(s, crate::tape::Pos::Percent(p)) => format!("{} seek {}%", deck(*s), n(p)),
+        D::Seek(s, crate::tape::Pos::Time(t)) => {
+            format!("{} seek {}", deck(*s), number(t.as_secs_f64()))
+        }
+        D::Mute(s, m) => format!("{} mute {}", deck(*s), on(m)),
+        D::Unqueue(s) => format!("{} unqueue", deck(*s)),
+        D::Mark(s, true) => format!("{} mark next", deck(*s)),
+        D::Mark(s, false) => format!("{} mark prev", deck(*s)),
+        D::Strict(b) => format!("strict {}", on(b)),
         D::CueOut(CueOut::Split) => "cue-out split".into(),
         D::CueOut(CueOut::Channels) => "cue-out 3-4".into(),
         D::Curve(Curve::Smooth) => "curve smooth".into(),

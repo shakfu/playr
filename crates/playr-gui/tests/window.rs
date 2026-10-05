@@ -1587,26 +1587,39 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
 }
 
 #[test]
-fn the_dj_tab_loads_the_cursor_row_fits_the_smallest_window_and_a_view_key_leaves_it() {
+fn the_dj_tab_loads_from_its_library_fits_the_smallest_window_and_a_view_key_leaves_it() {
     use playr_app::dj::{Decks, Side};
     let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 592.0));
     let dir = tempfile::tempdir().unwrap();
-    // The selection, whose cursor row is the track playing.
-    let mut harness = smallest(dir.path(), "3", false);
-    harness.state_mut().model_mut().set_decks(Decks::manual());
+    // Resolved, as the library stores it, so the mark set on the playing
+    // track is the library row's: macOS's temporary directory is a link.
+    let root = dir.path().canonicalize().unwrap();
+    let mut harness = smallest(&root, "1", false);
+    let file = root.join("Boards of Canada - Inferno - 10 The Word Becomes Flesh.wav");
+    let model = harness.state_mut().model_mut();
+    model.session_mut().add_to_library(&file).unwrap();
+    model.set_decks(Decks::manual());
+    // A mark at 3 s of the track, set as the sampler sets one.
+    model
+        .session_mut()
+        .add_mark(Some(std::time::Duration::from_secs(3)));
     harness.get_by_label("DJ").click();
     harness.run_steps(2);
-    harness.get_by_label("Deck A Load").click();
+    // The tab lists the library, and a row's A loads it onto deck A.
+    harness.get_by_label("Row 1 deck A").click();
     // Manual decks play only as the test runs them.
+    let run = |h: &mut Harness<'_, Gui>| {
+        h.state_mut().model_mut().dj().process(&mut [0.0; 1024]);
+        h.run_steps(1);
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while harness.state().model().decks().loaded(Side::A).is_none() {
-        assert!(std::time::Instant::now() < deadline, "never loaded");
-        harness
-            .state_mut()
-            .model_mut()
-            .dj()
-            .process(&mut [0.0; 1024]);
-        harness.run_steps(1);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never loaded: {:?}",
+            harness.state().model().message()
+        );
+        run(&mut harness);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     harness.run_steps(2);
@@ -1622,9 +1635,6 @@ fn the_dj_tab_loads_the_cursor_row_fits_the_smallest_window_and_a_view_key_leave
         "Deck A range 50%",
         "Deck A nudge +",
         "Deck B phase",
-        "Deck A x2",
-        "Deck B Tap",
-        "Deck B grid +1 ms",
         "Deck A gain",
         "Deck B level",
         "Crossfader",
@@ -1633,11 +1643,19 @@ fn the_dj_tab_loads_the_cursor_row_fits_the_smallest_window_and_a_view_key_leave
         "Deck A hot cue 4",
         "Deck B loop 8",
         "Deck A jump -4",
+        "Deck A grid",
         "Deck B high",
         "Deck A low kill",
         "Deck B filter",
         "Cue out 3-4",
         "Curve Sharp",
+        "Deck B mute",
+        "Crossfader centre",
+        "Crossfader A",
+        "Crossfader B",
+        "Strict",
+        "Deck A loop 32",
+        "Deck B mark next",
     ] {
         harness.get_by_label(label);
     }
@@ -1667,6 +1685,96 @@ fn the_dj_tab_loads_the_cursor_row_fits_the_smallest_window_and_a_view_key_leave
     harness.get_by_label("Deck A mid kill").click();
     harness.run_steps(2);
     assert!(harness.state().model().decks().state().kill[0][1]);
+    harness.get_by_label("Deck B mute").click();
+    harness.run_steps(2);
+    assert!(harness.state().model().decks().state().mute[1]);
+    harness
+        .state_mut()
+        .model_mut()
+        .perform(playr_app::action::Action::Dj(
+            playr_app::dj::DjAction::Xfade(0.2),
+        ));
+    harness.get_by_label("Crossfader centre").click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().model().decks().state().xfade, 0.5);
+    // B glides the crossfader to deck B's end, over 400 ms.
+    harness.get_by_label("Crossfader B").click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().model().decks().state().xfade, 1.0);
+    assert!(harness.state().model().decks().gliding());
+    for _ in 0..8 {
+        run(&mut harness);
+    }
+    let x = harness.state().model().decks().status().unwrap().xfade();
+    assert_eq!(x, 1.0);
+    assert!(!harness.state().model().decks().gliding());
+
+    // A click on the overview, half way along, seeks there.
+    let rect = harness.get_by_label("Deck A waveform").rect();
+    harness.hover_at(egui::pos2(rect.center().x, rect.bottom() - 4.0));
+    harness.run_steps(1);
+    harness.drag_at(egui::pos2(rect.center().x, rect.bottom() - 4.0));
+    harness.run_steps(1);
+    harness.drop_at(egui::pos2(rect.center().x, rect.bottom() - 4.0));
+    harness.run_steps(2);
+    run(&mut harness);
+    let pos = harness
+        .state()
+        .model()
+        .decks()
+        .status()
+        .unwrap()
+        .deck(Side::A)
+        .pos();
+    assert!((pos - 48_000.0).abs() < 1_000.0, "{pos}");
+
+    // A click a few points from the mark lands on it.
+    let marks = harness
+        .state()
+        .model()
+        .decks()
+        .loaded(Side::A)
+        .unwrap()
+        .marks
+        .clone();
+    assert_eq!(marks, [24_000.0]);
+    let x = rect.left() + rect.width() * 24_000.0 / 96_000.0 + 3.0;
+    harness.drag_at(egui::pos2(x, rect.bottom() - 4.0));
+    harness.run_steps(1);
+    harness.drop_at(egui::pos2(x, rect.bottom() - 4.0));
+    harness.run_steps(2);
+    run(&mut harness);
+    let pos = harness
+        .state()
+        .model()
+        .decks()
+        .status()
+        .unwrap()
+        .deck(Side::A)
+        .pos();
+    assert_eq!(pos, 24_000.0);
+
+    // Strict, a row picked again while deck A plays waits as its next track.
+    harness.get_by_label("Strict").click();
+    harness.run_steps(2);
+    assert!(harness.state().model().decks().state().strict);
+    harness.get_by_label("Deck A Play").click();
+    harness.run_steps(1);
+    run(&mut harness);
+    harness.get_by_label("Row 1 deck A").click();
+    harness.run_steps(2);
+    assert!(harness.state().model().decks().next(Side::A).is_some());
+    harness.get_by_label("Deck A unqueue").click();
+    harness.run_steps(2);
+    assert!(harness.state().model().decks().next(Side::A).is_none());
+
+    // The grid's edits wait in a menu.
+    harness.get_by_label("Deck A grid").click();
+    harness.run_steps(2);
+    harness.get_by_label("Deck A Tap");
+    harness.get_by_label("Deck A grid +1 ms");
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(2);
 
     harness.key_press(egui::Key::Tab);
     harness.run_steps(2);

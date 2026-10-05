@@ -163,11 +163,17 @@ impl DeckStatus {
 pub struct Status {
     decks: [DeckStatus; 2],
     peak: AtomicU32,
+    xfade: AtomicU64,
 }
 
 impl Status {
     pub fn deck(&self, side: Side) -> &DeckStatus {
         &self.decks[side.index()]
+    }
+
+    /// The crossfader where it is now, moving or not.
+    pub fn xfade(&self) -> f64 {
+        load(&self.xfade)
     }
 
     /// The largest output magnitude since the last call, which resets it.
@@ -192,6 +198,7 @@ pub fn new(sample_rate: u32) -> (Engine, Handle) {
     let status = Arc::new(Status {
         decks: [DeckStatus::new(), DeckStatus::new()],
         peak: AtomicU32::new(0),
+        xfade: AtomicU64::new(0.5f64.to_bits()),
     });
     let engine = Engine {
         mixer: Mixer::new(sample_rate),
@@ -223,6 +230,7 @@ impl Engine {
         for side in [Side::A, Side::B] {
             self.status.deck(side).publish(self.mixer.deck(side));
         }
+        store(&self.status.xfade, self.mixer.xfade());
         // The reader resets it, so a plain store could undo a higher peak.
         // A magnitude is never negative, and such floats order as their bits.
         let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));

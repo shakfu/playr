@@ -133,8 +133,8 @@ jobs:
               file_info: { mode: 0755 }
             - src: staged/playr-server.service
               dst: /usr/lib/systemd/user/playr-server.service
-            - src: docs/server-guide.md
-              dst: /usr/share/doc/playr-server/server-guide.md
+            - src: docs/guide-server.md
+              dst: /usr/share/doc/playr-server/guide-server.md
             - src: LICENSE
               dst: /usr/share/licenses/playr-server/LICENSE
           overrides:

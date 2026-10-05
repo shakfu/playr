@@ -110,7 +110,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 - **Seeks are coalesced.** A fader drag sends dozens of positions. The owner runs only the last seek received since its previous refresh.
 
-- **`/playr/progress`, not `/playr/position`.** `docs/sampler.md` proposes `/playr/position` for marks, in frames.
+- **`/playr/progress`, not `/playr/position`.** `docs/guide-sampler.md` proposes `/playr/position` for marks, in frames.
 
 - **`playr-server osc-schema`** prints both tables as JSON. A py2tosc script generates the TouchOSC layout from it. A test checks that each address maps to an action.
 
@@ -227,7 +227,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 - **No `playr-server url`.** `--open` serves a trusted network without a token, and the guide builds the address over SSH from `server.token`.
 
-- **The user's guide.** `docs/server-guide.md`, shipped in every archive.
+- **The user's guide.** `docs/guide-server.md`, shipped in every archive.
 
 ### Step 7: the web page as a frontend
 

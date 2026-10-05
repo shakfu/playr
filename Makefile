@@ -94,7 +94,7 @@ else ifeq ($(UNAME),Linux)
 endif
 
 # Linux: playr-server's systemd user unit. It enables and starts nothing; see
-# docs/server-guide.md.
+# docs/guide-server.md.
 install-service:
 	@[ "$(UNAME)" = Linux ] || { echo "install-service is for Linux, with systemd"; exit 1; }
 	@install -Dm 644 packaging/linux/playr-server.service $(HOME)/.config/systemd/user/playr-server.service

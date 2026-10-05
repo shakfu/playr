@@ -116,7 +116,7 @@ impl Gui {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         let tape_playing = self.model.deck().status().is_some_and(|s| s.playing());
-        let decks_playing = self.model.decks().playing();
+        let decks_playing = self.model.decks().playing() || self.model.decks().gliding();
         if self.model.snapshot().status.state == State::Playing || tape_playing || decks_playing {
             ui.ctx().request_repaint_after(FRAME);
         } else if self.model.message().is_some() {
@@ -395,8 +395,10 @@ impl Gui {
                 self.tape = Some(self.model.view());
                 self.dj = None;
             }
+            // Over the library, which the tab lists for loading.
             if ui.selectable_label(self.dj.is_some(), "DJ").clicked() {
-                self.dj = Some(self.model.view());
+                self.perform(Action::ShowView(View::Library));
+                self.dj = Some(View::Library);
                 self.tape = None;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -524,7 +526,11 @@ impl Gui {
 
     fn view(&mut self, ui: &mut egui::Ui) {
         if self.dj.is_some() {
-            for action in dj::show(&self.model, ui, &mut self.dj_tab) {
+            let (actions, row) = dj::show(&self.model, ui, &mut self.dj_tab);
+            if row.is_some() {
+                self.model.set_cursor(View::Library, row);
+            }
+            for action in actions {
                 self.perform(action);
             }
             return;

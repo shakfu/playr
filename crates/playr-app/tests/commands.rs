@@ -1448,6 +1448,7 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
 #[test]
 fn dj_commands_parse_in_any_view_and_round_trip() {
     use playr_app::dj::{Band, CueOut, Curve, DjAction as D, GridEdit as G, Nudge, Range, Side::*};
+    use playr_app::tape::Pos;
     for (text, action) in [
         ("dj a load", D::Load(A)),
         ("dj b play", D::Play(B)),
@@ -1489,6 +1490,19 @@ fn dj_commands_parse_in_any_view_and_round_trip() {
         ("dj cue-out split", D::CueOut(CueOut::Split)),
         ("dj curve sharp", D::Curve(Curve::Sharp)),
         ("dj curve smooth", D::Curve(Curve::Smooth)),
+        ("dj a seek 25%", D::Seek(A, Pos::Percent(25.0))),
+        (
+            "dj b seek 90",
+            D::Seek(B, Pos::Time(std::time::Duration::from_secs(90))),
+        ),
+        ("dj a mute on", D::Mute(A, true)),
+        ("dj b unqueue", D::Unqueue(B)),
+        ("dj a mark next", D::Mark(A, true)),
+        ("dj b mark prev", D::Mark(B, false)),
+        ("dj strict on", D::Strict(true)),
+        ("dj xfade a", D::XfadeTo(Some(A))),
+        ("dj xfade b", D::XfadeTo(Some(B))),
+        ("dj xfade centre", D::XfadeTo(None)),
     ] {
         let action = Action::Dj(action);
         for view in [Library, Sampler] {

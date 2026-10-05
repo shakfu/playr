@@ -50,7 +50,7 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 ## The sampler view
 
-`4` opens the sampler view. It draws the playing track's waveform, its marks as `|`, the playhead as `^`, and the region in the accent colour. The detail line gives the region's times to the millisecond.
+`5` opens the sampler view. It draws the playing track's waveform, its marks as `|`, the playhead as `^`, and the region in the accent colour. The detail line gives the region's times to the millisecond.
 
 - **Peaks.** The waveform is read from the file on a background thread while the view is open, the first time the view opens for a track. playr keeps the minimum, maximum and mean square of every 32 frames, and coarser levels built from them, so any zoom draws from exact values. The same pass keeps the spectrogram: 128 bands for every 512 frames, about 2.6 MB for a 4-minute track at 44.1 kHz, and adds about 90 ms to the read (one machine, release build).
 
@@ -149,4 +149,4 @@ A slice is exact to the frame for the marks it was given. How close a mark is to
   {"path":"/music/breaks/amen.flac","frame":52920,"rate":44100,"channels":2,"semitones":0,"title":"Amen, Brother","artist":"The Winstons","at":"2026-09-13T21:04:11.382Z"}
   ```
 
-  Questions still open: which tools receive this, whether a region needs separate in and out marks, and whether a region taken at +3 semitones should carry the pitch shift. Network code is settled: `playr` and `playr-gui` have none, and `playr-server` holds it; its OSC leaves `/playr/position` free for this ([server guide](server-guide.md#osc-and-touchosc)).
+  Questions still open: which tools receive this, whether a region needs separate in and out marks, and whether a region taken at +3 semitones should carry the pitch shift. Network code is settled: `playr` and `playr-gui` have none, and `playr-server` holds it; its OSC leaves `/playr/position` free for this ([server guide](guide-server.md#osc-and-touchosc)).

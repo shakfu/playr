@@ -63,6 +63,9 @@ pub enum DjAction {
     Level(Side, f32),
     /// The crossfader, 0 for deck A to 1 for deck B.
     Xfade(f32),
+    /// The crossfader glides to deck A's end, deck B's, or with `None` the
+    /// centre.
+    XfadeTo(Option<Side>),
     Quantize(bool),
     /// The deck heard on the cue side of the output, or none.
     CueBus(Option<Side>),
@@ -81,6 +84,17 @@ pub enum DjAction {
     Loop(Side, Option<f32>),
     CueOut(CueOut),
     Curve(Curve),
+    /// Move the head to a time, or a percentage of the track.
+    Seek(Side, crate::tape::Pos),
+    /// Silence the deck in the main mix; the cue still hears it.
+    Mute(Side, bool),
+    /// Forget the track waiting to load onto a playing deck.
+    Unqueue(Side),
+    /// Jump to the next mark (`true`) or the previous one.
+    Mark(Side, bool),
+    /// On: a track picked for a playing deck waits until it stops. Off: it
+    /// replaces the playing track, which fades out, and plays.
+    Strict(bool),
 }
 
 /// What the decks report.
@@ -110,6 +124,13 @@ pub enum DjMessage {
     Tapped(Side),
     /// The cue on channels 3 and 4 with a device of this many channels.
     NoCueChannels(u16),
+    /// No mark that way from the head.
+    NoMark(Side),
+    /// A track picked for a playing deck; it loads once the deck stops.
+    Queued {
+        side: Side,
+        title: String,
+    },
     /// A grid edit took effect; the grid now.
     Grid {
         side: Side,
@@ -157,6 +178,10 @@ struct Loading {
     result: Receiver<Result<Read, String>>,
 }
 
+/// A queued track's load, kept until the engine takes it, so a deck that
+/// starts again first leaves it queued.
+type Sent = [Option<Track>; 2];
+
 /// A track on a deck.
 #[derive(Debug, Clone)]
 pub struct Loaded {
@@ -167,6 +192,8 @@ pub struct Loaded {
     pub grid: Option<tempo::Grid>,
     /// The hot cues, in frames, as last stored.
     pub hot: [Option<f64>; HOT_CUES],
+    /// The track's marks, as the sampler set them, in frames, earliest first.
+    pub marks: Vec<f64>,
 }
 
 /// The mixer's settings as last sent. Rate, range, sync and the transport
@@ -184,6 +211,8 @@ pub struct DjState {
     pub filter: [f32; 2],
     pub cue_out: CueOut,
     pub curve: Curve,
+    pub mute: [bool; 2],
+    pub strict: bool,
 }
 
 impl Default for DjState {
@@ -199,6 +228,8 @@ impl Default for DjState {
             filter: [0.0; 2],
             cue_out: CueOut::default(),
             curve: Curve::default(),
+            mute: [false; 2],
+            strict: false,
         }
     }
 }
@@ -220,6 +251,11 @@ pub struct Decks {
     taps: [Vec<f64>; 2],
     /// Tracks each deck's engine has taken, to match against its status.
     loads: [u64; 2],
+    /// The track picked for each deck while it played, to load once it stops.
+    next: [Option<Track>; 2],
+    sent: Sent,
+    /// Plays the next track once it loads: it replaced one playing.
+    autoplay: [bool; 2],
     state: DjState,
     errors: (Sender<String>, Receiver<String>),
 }
@@ -252,6 +288,9 @@ impl Decks {
             analysing: Vec::new(),
             taps: [Vec::new(), Vec::new()],
             loads: [0; 2],
+            next: [None, None],
+            sent: [None, None],
+            autoplay: [false; 2],
             state: DjState::default(),
             errors: channel(),
         }
@@ -270,6 +309,11 @@ impl Decks {
         &self.state
     }
 
+    /// The track waiting to load onto `side` once it stops.
+    pub fn next(&self, side: Side) -> Option<&Track> {
+        self.next[i(side)].as_ref()
+    }
+
     /// What the engine publishes: each deck's transport, rate and phase.
     pub fn status(&self) -> Option<&playr_dj::Status> {
         self.live.as_ref().map(|l| &**l.handle.status())
@@ -278,6 +322,12 @@ impl Decks {
     /// The engine's rate, which every deck's frames count at.
     pub fn rate(&self) -> Option<u32> {
         self.live.as_ref().map(|l| l.rate)
+    }
+
+    /// Whether the crossfader is still moving to where it was last set.
+    pub fn gliding(&self) -> bool {
+        self.status()
+            .is_some_and(|s| (s.xfade() - f64::from(self.state.xfade)).abs() > 1e-6)
     }
 
     pub fn playing(&self) -> bool {
@@ -417,8 +467,16 @@ pub fn poll(f: &mut impl Frontend) {
         let message = match r {
             Returned::Replaced(side, _) => taken(f, side),
             Returned::Refused(side, _) => {
-                f.dj().arriving[i(side)] = None;
-                Some(DjMessage::Playing(side))
+                let d = f.dj();
+                d.arriving[i(side)] = None;
+                match d.sent[i(side)].take() {
+                    // Started again before the queued track arrived: it waits on.
+                    Some(t) => {
+                        d.next[i(side)] = Some(t);
+                        None
+                    }
+                    None => Some(DjMessage::Playing(side)),
+                }
             }
         };
         if let Some(m) = message {
@@ -432,6 +490,32 @@ pub fn poll(f: &mut impl Frontend) {
         if let Err(e) = keep_hot_cues(f, side) {
             f.notify(DjMessage::Failed(e).into());
         }
+        load_next(f, side);
+    }
+}
+
+/// Loads the track queued for `side` once the deck has stopped and nothing
+/// else is on its way to it.
+fn load_next(f: &mut impl Frontend, side: Side) {
+    let d = f.dj();
+    let k = i(side);
+    let stopped = d.status().is_some_and(|s| {
+        let s = s.deck(side);
+        !s.playing() && s.loads() == d.loads[k]
+    });
+    let busy = d.loading[k].is_some() || d.arriving[k].is_some() || d.sent[k].is_some();
+    if !stopped || busy {
+        return;
+    }
+    let Some(track) = d.next[k].take() else {
+        return;
+    };
+    match d.load(side, &track) {
+        Ok(()) => {
+            d.sent[k] = Some(track);
+            f.notify(DjMessage::Loading(side).into());
+        }
+        Err(e) => f.notify(DjMessage::Failed(e).into()),
     }
 }
 
@@ -473,6 +557,7 @@ fn start(f: &mut impl Frontend, side: Side, loading: Loading, read: Read) -> Res
         peaks: Arc::new(read.peaks),
         grid,
         hot: [None; HOT_CUES],
+        marks: Vec::new(),
     });
     Ok(())
 }
@@ -480,8 +565,15 @@ fn start(f: &mut impl Frontend, side: Side, loading: Loading, read: Read) -> Res
 /// The engine has taken the track sent to `side`: the deck holds it, and a
 /// track never analysed is analysed for its grid.
 fn taken(f: &mut impl Frontend, side: Side) -> Option<DjMessage> {
+    f.dj().sent[i(side)] = None;
     let mut loaded = f.dj().arriving[i(side)].take()?;
     let rate = f64::from(f.dj().rate()?);
+    loaded.marks = f
+        .session()
+        .marks_of(&loaded.path)
+        .iter()
+        .map(|m| m.time().as_secs_f64() * rate)
+        .collect();
     for (slot, at) in f.session().hot_cues(&loaded.path) {
         if let Some(h) = loaded.hot.get_mut(usize::from(slot).wrapping_sub(1)) {
             *h = Some(at * rate);
@@ -494,6 +586,11 @@ fn taken(f: &mut impl Frontend, side: Side) -> Option<DjMessage> {
     d.taps[i(side)].clear();
     d.loads[i(side)] += 1;
     d.loaded[i(side)] = Some(loaded.clone());
+    if std::mem::take(&mut d.autoplay[i(side)]) {
+        if let Err(e) = d.set(Setting::Play(side)) {
+            return Some(DjMessage::Failed(e));
+        }
+    }
     let analysed = f.session().analysis_of(&loaded.path).is_some();
     if loaded.grid.is_none() && !analysed {
         if let Ok(job) = f.session_mut().analyze(Some(loaded.path.clone())) {
@@ -564,9 +661,22 @@ fn load(f: &mut impl Frontend, side: Side) {
     let Some(track) = crate::dispatch::cursor_track(f) else {
         return f.notify(DjMessage::NoTrack.into());
     };
-    if f.dj().status().is_some_and(|s| s.deck(side).playing()) {
-        return f.notify(DjMessage::Playing(side).into());
+    let d = f.dj();
+    if d.status().is_some_and(|s| s.deck(side).playing()) {
+        let title = track.display_title();
+        d.next[i(side)] = Some(track);
+        if d.state.strict {
+            return f.notify(DjMessage::Queued { side, title }.into());
+        }
+        // Not strict: the deck fades out, takes the track, and plays it.
+        d.autoplay[i(side)] = true;
+        if let Err(e) = d.set(Setting::Pause(side)) {
+            return f.notify(DjMessage::Failed(e).into());
+        }
+        return f.notify(DjMessage::Loading(side).into());
     }
+    d.next[i(side)] = None;
+    d.autoplay[i(side)] = false;
     match f.dj().load(side, &track) {
         Ok(()) => f.notify(DjMessage::Loading(side).into()),
         Err(e) => f.notify(DjMessage::Failed(e).into()),
@@ -595,8 +705,18 @@ fn deck_of(action: DjAction) -> Option<Side> {
         | D::HotCue(s, _)
         | D::HotClear(s, _)
         | D::Jump(s, _)
-        | D::Loop(s, _) => Some(s),
-        D::Xfade(_) | D::Quantize(_) | D::CueBus(_) | D::CueOut(_) | D::Curve(_) => None,
+        | D::Loop(s, _)
+        | D::Seek(s, _)
+        | D::Mark(s, _) => Some(s),
+        D::Xfade(_)
+        | D::XfadeTo(_)
+        | D::Quantize(_)
+        | D::CueBus(_)
+        | D::CueOut(_)
+        | D::Curve(_)
+        | D::Mute(..)
+        | D::Unqueue(_)
+        | D::Strict(_) => None,
     }
 }
 
@@ -622,6 +742,36 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         _ => {}
     }
     let slot = |n: u8| usize::from(n) - 1;
+    if let D::Mark(side, next) = action {
+        let d = f.dj();
+        let (Some(l), Some(s), Some(rate)) = (d.loaded(side), d.status(), d.rate()) else {
+            return Err(DjMessage::Empty(side));
+        };
+        let pos = s.deck(side).pos();
+        // Back past a mark just left, as a CDJ's previous does.
+        let back = pos - 0.5 * f64::from(rate);
+        let to = match next {
+            true => l.marks.iter().find(|&&m| m > pos + 1.0),
+            false => l.marks.iter().rev().find(|&&m| m < back),
+        };
+        let Some(&to) = to else {
+            return Err(DjMessage::NoMark(side));
+        };
+        return d.set(Setting::Seek(side, to)).map_err(DjMessage::Failed);
+    }
+    let seek;
+    let seek_to = match action {
+        D::Seek(s, pos) => {
+            let d = f.dj();
+            let frames = d.loaded(s).map_or(0, |l| l.frames) as f64;
+            let rate = f64::from(d.rate().unwrap_or(1));
+            match pos {
+                crate::tape::Pos::Percent(p) => frames * f64::from(p) / 100.0,
+                crate::tape::Pos::Time(t) => t.as_secs_f64() * rate,
+            }
+        }
+        _ => 0.0,
+    };
     let settings: &[Setting] = match action {
         D::Play(s) => &[Setting::Play(s)],
         D::Pause(s) => &[Setting::Pause(s)],
@@ -634,6 +784,9 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         D::Gain(s, db) => &[Setting::Gain(s, f64::from(db))],
         D::Level(s, l) => &[Setting::Level(s, f64::from(l))],
         D::Xfade(x) => &[Setting::Xfade(f64::from(x))],
+        D::XfadeTo(None) => &[Setting::XfadeGlide(0.5)],
+        D::XfadeTo(Some(Side::A)) => &[Setting::XfadeGlide(0.0)],
+        D::XfadeTo(Some(Side::B)) => &[Setting::XfadeGlide(1.0)],
         D::Quantize(on) => &[Setting::Quantize(on)],
         D::CueBus(c) => &[Setting::CueBus(c)],
         D::Eq(s, b, db) => &[Setting::Eq(s, b, f64::from(db))],
@@ -645,6 +798,21 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         D::Loop(s, beats) => &[Setting::Loop(s, beats.map(f64::from))],
         D::CueOut(c) => &[Setting::CueOut(c)],
         D::Curve(c) => &[Setting::Curve(c)],
+        D::Seek(s, _) => {
+            seek = [Setting::Seek(s, seek_to)];
+            &seek
+        }
+        D::Mute(s, on) => &[Setting::Mute(s, on)],
+        D::Unqueue(s) => {
+            f.dj().next[i(s)] = None;
+            f.dj().autoplay[i(s)] = false;
+            &[]
+        }
+        D::Strict(on) => {
+            f.dj().state.strict = on;
+            &[]
+        }
+        D::Mark(..) => &[],
         D::Load(_) | D::Grid(..) => &[],
     };
     let d = f.dj();
@@ -656,6 +824,13 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         D::Gain(s, db) => st.gain[i(s)] = db,
         D::Level(s, l) => st.level[i(s)] = l,
         D::Xfade(x) => st.xfade = x,
+        D::XfadeTo(to) => {
+            st.xfade = match to {
+                None => 0.5,
+                Some(Side::A) => 0.0,
+                Some(Side::B) => 1.0,
+            }
+        }
         D::Quantize(on) => st.quantize = on,
         D::CueBus(c) => st.cue_bus = c,
         D::Eq(s, b, db) => st.eq[i(s)][b as usize] = db,
@@ -663,6 +838,7 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         D::Filter(s, k) => st.filter[i(s)] = k,
         D::CueOut(c) => st.cue_out = c,
         D::Curve(c) => st.curve = c,
+        D::Mute(s, on) => st.mute[i(s)] = on,
         _ => {}
     }
     // The decks play alone; the player stays paused until asked.

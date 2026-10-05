@@ -1,4 +1,4 @@
-# playr-server as a systemd user service; see docs/server-guide.md.
+# playr-server as a systemd user service; see docs/guide-server.md.
 #
 #   install -Dm 644 playr-server.service ~/.config/systemd/user/playr-server.service
 #   systemctl --user daemon-reload
@@ -9,7 +9,7 @@
 
 [Unit]
 Description=playr, controlled from a web page and OSC
-Documentation=https://github.com/shakfu/playr/blob/main/docs/server-guide.md
+Documentation=https://github.com/shakfu/playr/blob/main/docs/guide-server.md
 # Music on a separate disk: name its mount point here, so the server does not
 # start before it is mounted and read an empty directory.
 #RequiresMountsFor=%h/Music

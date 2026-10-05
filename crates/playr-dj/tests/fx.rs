@@ -326,3 +326,67 @@ fn the_sharp_curve_holds_both_decks_until_the_ends() {
     assert!((gains(0.98) - 0.4).abs() < 1e-5, "{}", gains(0.98));
     assert!(gains(1.0).abs() < 1e-6);
 }
+
+#[test]
+fn a_seek_moves_the_head_keeping_phase_with_quantize() {
+    let beat = 60.0 / 120.0 * SR as f64;
+    let mut m = Mixer::new(SR);
+    m.load(Side::A, gridded(60.0, 120.0, 0.1)).unwrap();
+    m.set(Setting::Seek(Side::A, 100_000.0));
+    assert_eq!(m.deck(Side::A).pos(), 100_000.0);
+
+    m.set(Setting::Quantize(true));
+    m.set(Setting::Play(Side::A));
+    run(&mut m, 21);
+    let before = phase(&m, Side::A);
+    m.set(Setting::Seek(Side::A, 1_000_000.0));
+    assert!((phase(&m, Side::A) - before).abs() < 1e-9);
+    assert!((m.deck(Side::A).pos() - 1_000_000.0).abs() < beat);
+
+    // Inside a loop it stays; outside, the loop ends.
+    m.set(Setting::Loop(Side::A, Some(4.0)));
+    let (start, _) = m.deck(Side::A).looping().unwrap();
+    m.set(Setting::Seek(Side::A, start + beat));
+    assert!(m.deck(Side::A).looping().is_some());
+    m.set(Setting::Seek(Side::A, 100_000.0));
+    assert_eq!(m.deck(Side::A).looping(), None);
+}
+
+#[test]
+fn a_mute_silences_the_main_mix_but_not_the_cue() {
+    let mut m = playing(vec![0.2; SR as usize], None);
+    m.set(Setting::Mute(Side::A, true));
+    run(&mut m, SETTLE);
+    assert!(run(&mut m, 1).iter().all(|s| s.abs() < 1e-7));
+    m.set(Setting::CueBus(Some(Side::A)));
+    let out = run(&mut m, 1);
+    for f in out.chunks(2) {
+        assert!(f[0].abs() < 1e-7 && (f[1] - 0.2).abs() < 1e-6, "{f:?}");
+    }
+    m.set(Setting::Mute(Side::A, false));
+    m.set(Setting::CueBus(None));
+    run(&mut m, SETTLE);
+    assert!(run(&mut m, 1).iter().all(|s| (s - 0.2).abs() < 1e-6));
+}
+
+#[test]
+fn the_crossfader_glides_to_a_point_over_400_ms() {
+    let mut m = Mixer::new(SR);
+    m.set(Setting::XfadeGlide(0.0));
+    // 18 blocks, 192 ms in: 0.48 of the way from the centre.
+    run(&mut m, 18);
+    let done = 18.0 * BLOCK as f64 / (0.4 * SR as f64);
+    assert!(
+        (m.xfade() - 0.5 * (1.0 - done)).abs() < 1e-9,
+        "{}",
+        m.xfade()
+    );
+    run(&mut m, (0.21 * SR as f64) as usize / BLOCK + 1);
+    assert_eq!(m.xfade(), 0.0);
+    // A move by hand takes over from wherever the glide is.
+    m.set(Setting::XfadeGlide(1.0));
+    run(&mut m, 10);
+    m.set(Setting::Xfade(0.3));
+    run(&mut m, 2);
+    assert_eq!(m.xfade(), 0.3);
+}

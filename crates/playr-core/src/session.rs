@@ -1265,6 +1265,12 @@ impl Session {
         &self.marks
     }
 
+    /// The marks in the track at `path`, earliest first, read afresh: for a
+    /// track other than the one [`Session::marks_for`] keeps, as a DJ deck's.
+    pub fn marks_of(&self, path: &Path) -> Vec<Mark> {
+        query::marks(&self.conn, &path.to_string_lossy()).unwrap_or_default()
+    }
+
     /// The loops saved in the track at `path`, by slot from 1, in source frames.
     pub fn loops_for(&mut self, path: Option<&PathBuf>) -> Loops {
         if self.loops_for.as_ref() != path {

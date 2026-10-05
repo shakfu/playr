@@ -897,6 +897,8 @@ fn the_decks_load_from_the_cursor_sync_and_keep_grid_edits() {
     let said = |f: &Headless, m: M| assert_eq!(last(f), Some(&Message::Dj(m)));
 
     let (mut f, dir) = headless();
+    // Strict: a track picked for a playing deck waits.
+    dj(&mut f, D::Strict(true));
     dj(&mut f, D::Play(A));
     said(&f, M::Empty(A));
     f.view = Sampler;
@@ -938,15 +940,23 @@ fn the_decks_load_from_the_cursor_sync_and_keep_grid_edits() {
         assert!(std::time::Instant::now() < deadline, "never paused");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    // A playing deck refuses a track, whether the engine has played a block
-    // since or not.
+    // A deck started since the engine last ran refuses a track; one known
+    // to play keeps it for when it stops.
     dj(&mut f, D::Load(A));
     said(&f, M::Loading(A));
     decks_until(&mut f, |m| m != &Message::Dj(M::Loading(A)));
     said(&f, M::Playing(A));
     dj(&mut f, D::Load(A));
-    said(&f, M::Playing(A));
+    said(
+        &f,
+        M::Queued {
+            side: A,
+            title: "b".into(),
+        },
+    );
     assert_eq!(f.dj.loaded(A).unwrap().title, "a");
+    dj(&mut f, D::Unqueue(A));
+    assert!(f.dj.next(A).is_none());
 
     // Sync follows deck A's tempo.
     dj(&mut f, D::Sync(B, true));
@@ -1054,4 +1064,98 @@ fn hot_cues_are_kept_with_the_track_and_loops_need_a_grid() {
     said(&f, M::NoGrid(A));
     dj(&mut f, D::Loop(A, Some(4.0)));
     said(&f, M::NoGrid(A));
+}
+
+#[test]
+fn a_track_queued_for_a_playing_deck_loads_when_it_stops() {
+    use playr_app::dj::{DjAction as D, DjMessage as M, Side::*};
+    use playr_app::tape::Pos;
+    let dj = |f: &mut Headless, d| dispatch(Action::Dj(d), f);
+    let said = |f: &Headless, m: M| assert_eq!(last(f), Some(&Message::Dj(m)));
+    let (mut f, dir) = headless();
+    // Strict: a track picked for a playing deck waits.
+    dj(&mut f, D::Strict(true));
+    let a = click_track(&mut f, dir.path(), "a.wav", 120.0, 0.0);
+    let b = click_track(&mut f, dir.path(), "b.wav", 124.0, 0.0);
+    f.results = Some(vec![a, b]);
+    f.cursors[0] = Some(0);
+    dj(&mut f, D::Load(A));
+    decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    dj(&mut f, D::Play(A));
+    run_decks(&mut f, 1);
+
+    f.cursors[0] = Some(1);
+    dj(&mut f, D::Load(A));
+    said(
+        &f,
+        M::Queued {
+            side: A,
+            title: "b".into(),
+        },
+    );
+    run_decks(&mut f, 4);
+    assert_eq!(
+        f.dj.loaded(A).unwrap().title,
+        "a",
+        "a playing deck keeps its track"
+    );
+
+    // A seek, by percentage, while it plays; then a pause lets b load.
+    dj(&mut f, D::Seek(A, Pos::Percent(50.0)));
+    run_decks(&mut f, 1);
+    let pos = f.dj.status().unwrap().deck(A).pos();
+    assert!((pos - 80_000.0).abs() < 1024.0, "{pos}");
+    dj(&mut f, D::Pause(A));
+    decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    assert_eq!(f.dj.loaded(A).unwrap().title, "b");
+    assert!(f.dj.next(A).is_none());
+
+    dj(&mut f, D::Mute(B, true));
+    assert!(f.dj.state().mute[1]);
+}
+
+#[test]
+fn not_strict_a_pick_replaces_the_playing_track_and_marks_are_jumped_to() {
+    use playr_app::dj::{DjAction as D, DjMessage as M, Side::*};
+    let dj = |f: &mut Headless, d| dispatch(Action::Dj(d), f);
+    let said = |f: &Headless, m: M| assert_eq!(last(f), Some(&Message::Dj(m)));
+    let (mut f, dir) = headless();
+    let a = click_track(&mut f, dir.path(), "a.wav", 120.0, 0.0);
+    let b = click_track(&mut f, dir.path(), "b.wav", 124.0, 0.0);
+    // Marks at 2 s and 5 s of b, set as the sampler sets them.
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    for frame in [16_000, 40_000] {
+        query::add_mark(&conn, &b.path, query::Mark { frame, rate: 8000 }).unwrap();
+    }
+    f.results = Some(vec![a, b]);
+    f.cursors[0] = Some(0);
+    dj(&mut f, D::Load(A));
+    decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    dj(&mut f, D::Play(A));
+    run_decks(&mut f, 2);
+
+    f.cursors[0] = Some(1);
+    dj(&mut f, D::Load(A));
+    said(&f, M::Loading(A));
+    decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    run_decks(&mut f, 1);
+    assert_eq!(f.dj.loaded(A).unwrap().title, "b");
+    assert!(f.dj.status().unwrap().deck(A).playing(), "it plays on");
+    assert_eq!(f.dj.loaded(A).unwrap().marks, [16_000.0, 40_000.0]);
+
+    dj(&mut f, D::Mark(A, true));
+    run_decks(&mut f, 1);
+    let pos = f.dj.status().unwrap().deck(A).pos();
+    assert!((16_000.0..16_600.0).contains(&pos), "{pos}");
+    dj(&mut f, D::Mark(A, true));
+    run_decks(&mut f, 1);
+    let pos = f.dj.status().unwrap().deck(A).pos();
+    assert!((40_000.0..40_600.0).contains(&pos), "{pos}");
+    dj(&mut f, D::Mark(A, true));
+    said(&f, M::NoMark(A));
+    // Within half a second of a mark, previous goes to the one before.
+    dj(&mut f, D::Mark(A, false));
+    run_decks(&mut f, 1);
+    let pos = f.dj.status().unwrap().deck(A).pos();
+    assert!((16_000.0..16_600.0).contains(&pos), "{pos}");
 }

@@ -1,25 +1,34 @@
 //! The DJ tab: a zoomed waveform and an overview per deck, a strip of
-//! controls per deck and the mixer between them. The terminal has the `:dj`
-//! commands only; see `docs/dev/dj-engine.md`.
+//! controls per deck, the mixer between them, and the library under them,
+//! each row loading onto either deck. The terminal has the `:dj` commands
+//! only; see `docs/dev/dj-engine.md`.
 
 use eframe::egui;
 use playr_app::action::Action;
+use playr_app::dispatch::Frontend;
 use playr_app::dj::{
     Band, CueOut, Curve, DjAction as D, GridEdit, Loaded, Nudge, Range, Side, EQ_DB, HOT_CUES,
 };
 use playr_app::model::Model;
+use playr_app::tape::Pos;
 
 use crate::controls::{self, Control};
 use crate::palette::Palette;
 
 /// A zoomed waveform's height, and an overview's.
-const WAVE: f32 = 64.0;
-const OVERVIEW: f32 = 14.0;
+const WAVE: f32 = 44.0;
+const OVERVIEW: f32 = 12.0;
 /// Seconds of output either side of the playhead a zoomed waveform shows,
 /// the same for both decks so beats in phase line up.
 const SPAN: f64 = 3.0;
 /// The phase meter's size.
 const METER: egui::Vec2 = egui::vec2(120.0, 10.0);
+/// Each deck strip's share of the width; the mixer takes the rest.
+const DECK_SHARE: f32 = 0.29;
+/// A library row's height.
+const ROW: f32 = 20.0;
+/// How near a mark, in points, a click on the overview lands on it.
+const MARK_REACH: f32 = 5.0;
 
 /// What the tab keeps between frames: the held buttons, so a release is
 /// sent once.
@@ -43,32 +52,53 @@ fn letter(side: Side) -> &'static str {
     }
 }
 
-/// Draws the tab and returns what its controls ask for.
-pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
+/// Draws the tab. Returns what its controls ask for, and the library row a
+/// click put the cursor on, which the caller sets before the actions run.
+pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> (Vec<Action>, Option<usize>) {
     let mut actions = Vec::new();
-    let decks = model.decks();
-    if decks.loaded(Side::A).is_none() && decks.loaded(Side::B).is_none() {
-        ui.weak("Choose a track in the library, then Load, or a row's Load to deck A or B.");
-    }
     for side in [Side::A, Side::B] {
-        waveform(ui, model, side);
+        actions.extend(waveform(ui, model, side));
     }
     ui.add_space(4.0);
-    ui.columns(4, |columns| {
-        deck(&mut columns[0], model, Side::A, tab, &mut actions);
-        channel(&mut columns[1], model, Side::A, &mut actions);
-        channel(&mut columns[2], model, Side::B, &mut actions);
-        deck(&mut columns[3], model, Side::B, tab, &mut actions);
+    ui.horizontal_top(|ui| {
+        let width = ui.available_width();
+        let deck_w = width * DECK_SHARE;
+        let mid_w = width - 2.0 * deck_w - 2.0 * ui.spacing().item_spacing.x;
+        let column = |ui: &mut egui::Ui, w: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(w, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(w);
+                    add(ui)
+                },
+            );
+        };
+        column(ui, deck_w, &mut |ui| {
+            deck(ui, model, Side::A, tab, &mut actions)
+        });
+        column(ui, mid_w, &mut |ui| {
+            ui.columns(2, |c| {
+                channel(&mut c[0], model, Side::A, &mut actions);
+                channel(&mut c[1], model, Side::B, &mut actions);
+            });
+            mixer(ui, model, &mut actions);
+        });
+        column(ui, deck_w, &mut |ui| {
+            deck(ui, model, Side::B, tab, &mut actions)
+        });
     });
-    mixer(ui, model, &mut actions);
-    actions
+    ui.separator();
+    let row = browser(ui, model, &mut actions);
+    (actions, row)
 }
 
 /// The deck's track around the playhead, fixed at the centre, with its beat
 /// grid, bars heavier; under it the whole track, with the cue point.
-fn waveform(ui: &mut egui::Ui, model: &Model, side: Side) {
+/// A click or drag on the overview seeks there.
+fn waveform(ui: &mut egui::Ui, model: &Model, side: Side) -> Option<Action> {
     let size = egui::vec2(ui.available_width(), WAVE + OVERVIEW);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
     let name = format!("Deck {} waveform", letter(side));
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, &name));
     let visuals = ui.visuals();
@@ -79,7 +109,7 @@ fn waveform(ui: &mut egui::Ui, model: &Model, side: Side) {
     let (Some(loaded), Some(status), Some(rate)) =
         (decks.loaded(side), decks.status(), decks.rate())
     else {
-        return;
+        return None;
     };
     let s = status.deck(side);
     let (pos, speed) = (s.pos(), s.rate().max(0.01));
@@ -121,7 +151,7 @@ fn waveform(ui: &mut egui::Ui, model: &Model, side: Side) {
             }
             let bar = n.rem_euclid(4.0) == 0.0;
             let colour = match bar {
-                true => palette.yellow,
+                true => palette.bar,
                 false => visuals.weak_text_color().gamma_multiply(0.6),
             };
             let bx = x(frame);
@@ -132,6 +162,13 @@ fn waveform(ui: &mut egui::Ui, model: &Model, side: Side) {
             n += 1.0;
         }
     }
+    for &m in loaded.marks.iter().filter(|&&m| (m - pos).abs() <= half) {
+        let mx = x(m);
+        painter.line_segment(
+            [egui::pos2(mx, wave.top()), egui::pos2(mx, wave.bottom())],
+            egui::Stroke::new(2.0, palette.edge),
+        );
+    }
     painter.line_segment(
         [
             egui::pos2(wave.center().x, wave.top()),
@@ -141,6 +178,32 @@ fn waveform(ui: &mut egui::Ui, model: &Model, side: Side) {
     );
 
     overview(&painter, over, loaded, s.pos(), s.cue(), palette, visuals);
+    // A drag that began on the overview follows the pointer off it.
+    let dragging = response.dragged()
+        && ui
+            .input(|i| i.pointer.press_origin())
+            .is_some_and(|p| over.contains(p));
+    let at = response.interact_pointer_pos();
+    let clicked = response.clicked() && at.is_some_and(|p| over.contains(p));
+    let mark_x = |m: f64| over.left() + (m / loaded.frames.max(1) as f64) as f32 * over.width();
+    at.filter(|_| clicked || dragging).map(|p| {
+        // A click within reach of a mark lands on it exactly.
+        let near = loaded
+            .marks
+            .iter()
+            .copied()
+            .filter(|&m| (mark_x(m) - p.x).abs() <= MARK_REACH)
+            .min_by(|a, b| {
+                (mark_x(*a) - p.x)
+                    .abs()
+                    .total_cmp(&(mark_x(*b) - p.x).abs())
+            });
+        let to = match near.filter(|_| clicked) {
+            Some(m) => Pos::Time(std::time::Duration::from_secs_f64(m / rate)),
+            None => Pos::Percent(((p.x - over.left()) / over.width()).clamp(0.0, 1.0) * 100.0),
+        };
+        Action::Dj(D::Seek(side, to))
+    })
 }
 
 /// The whole track's peaks, the cue point and the playhead.
@@ -169,6 +232,15 @@ fn overview(
         }
     }
     let x = |f: f64| over.left() + (f / frames) as f32 * over.width();
+    for &m in &loaded.marks {
+        painter.line_segment(
+            [
+                egui::pos2(x(m), over.top()),
+                egui::pos2(x(m), over.bottom()),
+            ],
+            egui::Stroke::new(1.5, palette.edge),
+        );
+    }
     painter.line_segment(
         [
             egui::pos2(x(cue), over.top()),
@@ -279,6 +351,18 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
         };
         ui.add(egui::Label::new(title).truncate());
     });
+    if let Some(t) = decks.next(side) {
+        ui.horizontal(|ui| {
+            ui.weak("Next").on_hover_text("loads when the deck stops");
+            let r = ui.small_button("x").on_hover_text("forget it");
+            let name = format!("Deck {k} unqueue");
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+            if r.clicked() {
+                actions.push(Action::Dj(D::Unqueue(side)));
+            }
+            ui.add(egui::Label::new(t.display_title()).truncate());
+        });
+    }
     ui.horizontal(|ui| {
         let bpm = status.and_then(|s| s.bpm());
         ui.monospace(match bpm {
@@ -347,6 +431,17 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
                 actions.push(Action::Dj(D::HotClear(side, n as u8 + 1)));
             }
         }
+        let marked = loaded.is_some_and(|l| !l.marks.is_empty());
+        ui.weak("Mark")
+            .on_hover_text("jump to the previous or next mark set in the sampler");
+        for (next, text) in [(false, "<"), (true, ">")] {
+            let name = format!("Deck {k} mark {}", if next { "next" } else { "prev" });
+            let r = ui.add_enabled(marked, egui::Button::new(text));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, marked, &name));
+            if r.clicked() {
+                actions.push(Action::Dj(D::Mark(side, next)));
+            }
+        }
     });
     let looping = status.and_then(|s| s.looping());
     let beat = loaded
@@ -357,7 +452,7 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
     ui.horizontal(|ui| {
         ui.weak("Loop")
             .on_hover_text("loop this many beats; the lit one again ends it");
-        for beats in [1.0f32, 2.0, 4.0, 8.0] {
+        for beats in [1.0f32, 2.0, 4.0, 8.0, 16.0, 32.0] {
             let lit = looping
                 .zip(beat)
                 .is_some_and(|((_, len), b)| (len / b - f64::from(beats)).abs() < 1e-6);
@@ -379,23 +474,33 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
                 actions.push(Action::Dj(D::Jump(side, beats)));
             }
         }
-    });
-    ui.horizontal(|ui| {
-        ui.weak("Grid");
-        for label in ["x2", "/2", "<", ">", "Tap"] {
-            actions.extend(button(ui, side, label, on));
-        }
-    });
-    ui.horizontal(|ui| {
-        for (text, ms) in [("-1 ms", -1.0), ("+1 ms", 1.0)] {
-            let name = format!("Deck {k} grid {text}");
-            let r = ui.add_enabled(on, egui::Button::new(text));
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &name));
-            if r.clicked() {
-                actions.push(Action::Dj(D::Grid(side, GridEdit::Offset(ms))));
-            }
-        }
-        actions.extend(button(ui, side, "Reset", on));
+        // Grid edits are occasional, so they wait in a menu.
+        let menu = ui.add_enabled_ui(on, |ui| {
+            ui.menu_button("Grid", |ui| {
+                ui.horizontal(|ui| {
+                    for label in ["x2", "/2", "<", ">", "Tap"] {
+                        actions.extend(button(ui, side, label, on));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    for (text, ms) in [("-1 ms", -1.0), ("+1 ms", 1.0)] {
+                        let name = format!("Deck {k} grid {text}");
+                        let r = ui.button(text);
+                        r.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
+                        });
+                        if r.clicked() {
+                            actions.push(Action::Dj(D::Grid(side, GridEdit::Offset(ms))));
+                        }
+                    }
+                    actions.extend(button(ui, side, "Reset", on));
+                });
+            })
+        });
+        let name = format!("Deck {k} grid");
+        menu.inner
+            .response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &name));
     });
 }
 
@@ -404,7 +509,13 @@ fn channel(ui: &mut egui::Ui, model: &Model, side: Side, actions: &mut Vec<Actio
     let state = *model.decks().state();
     let k = letter(side);
     let s = i(side);
-    ui.strong(format!("Channel {k}"));
+    ui.horizontal(|ui| {
+        ui.strong(format!("Channel {k}"));
+        let muted = state.mute[s];
+        if toggle(ui, muted, "Mute", format!("Deck {k} mute"), true) {
+            actions.push(Action::Dj(D::Mute(side, !muted)));
+        }
+    });
     egui::Grid::new(format!("dj channel {k}"))
         .num_columns(2)
         .spacing([4.0, 2.0])
@@ -503,24 +614,56 @@ fn phase(ui: &mut egui::Ui, model: &Model, side: Side) {
 }
 
 /// The crossfader, and what applies to both decks: quantize, the cue, where
-/// the cue goes, and the crossfader's curve.
+/// the cue goes, and the crossfader's curve. Centre, or a double click on
+/// the crossfader, puts it in the middle.
 fn mixer(ui: &mut egui::Ui, model: &Model, actions: &mut Vec<Action>) {
-    let state = *model.decks().state();
+    let decks = model.decks();
+    let state = *decks.state();
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.weak("A - B").on_hover_text("the crossfader");
-        ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(40.0);
-        let mut x = state.xfade;
+        // A, Centre and B glide the crossfader there; the slider follows it.
+        let glide = |ui: &mut egui::Ui, text: &str, name: &str| {
+            let r = ui.button(text).on_hover_text("glide the crossfader here");
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+            r.clicked()
+        };
+        let to_a = glide(ui, "A", "Crossfader A");
+        let centre = glide(ui, "Centre", "Crossfader centre");
+        // Room for B beside it.
+        ui.spacing_mut().slider_width = (ui.available_width() - 28.0).max(40.0);
+        let mut x = decks.status().map_or(state.xfade, |s| s.xfade() as f32);
         let r = ui.add(egui::Slider::new(&mut x, 0.0..=1.0).show_value(false));
         r.widget_info(|| egui::WidgetInfo::slider(true, f64::from(x), "Crossfader"));
-        if r.changed() {
-            actions.push(Action::Dj(D::Xfade(x)));
-        }
+        let to_b = glide(ui, "B", "Crossfader B");
+        let to = match (to_a, centre || r.double_clicked(), to_b) {
+            (true, _, _) => Some(D::XfadeTo(Some(Side::A))),
+            (_, true, _) => Some(D::XfadeTo(None)),
+            (_, _, true) => Some(D::XfadeTo(Some(Side::B))),
+            _ => r.changed().then_some(D::Xfade(x)),
+        };
+        actions.extend(to.map(Action::Dj));
     });
     ui.horizontal(|ui| {
         if toggle(ui, state.quantize, "Quantize", "Quantize".into(), true) {
             actions.push(Action::Dj(D::Quantize(!state.quantize)));
         }
-        ui.separator();
+        // As Quantize, with what it does on hover.
+        let r = ui.add(egui::Button::selectable(state.strict, "Strict"));
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::SelectableLabel,
+                true,
+                state.strict,
+                "Strict",
+            )
+        });
+        let r = r.on_hover_text(
+            "on: a track picked for a playing deck waits until the deck stops; \
+             off: it replaces the playing track at once",
+        );
+        if r.clicked() {
+            actions.push(Action::Dj(D::Strict(!state.strict)));
+        }
         ui.weak("Cue")
             .on_hover_text("the deck heard in the headphones");
         for (c, text) in [(None, "Off"), (Some(Side::A), "A"), (Some(Side::B), "B")] {
@@ -528,7 +671,8 @@ fn mixer(ui: &mut egui::Ui, model: &Model, actions: &mut Vec<Action>) {
                 actions.push(Action::Dj(D::CueBus(c)));
             }
         }
-        ui.separator();
+    });
+    ui.horizontal(|ui| {
         ui.weak("Out").on_hover_text(
             "Split: the main mix in the left ear, the cue in the right; \
              3-4: the cue in stereo on channels 3 and 4 of a 4-channel device",
@@ -544,7 +688,6 @@ fn mixer(ui: &mut egui::Ui, model: &Model, actions: &mut Vec<Action>) {
                 actions.push(Action::Dj(D::CueOut(c)));
             }
         }
-        ui.separator();
         ui.weak("Curve");
         for (c, text) in [(Curve::Smooth, "Smooth"), (Curve::Sharp, "Sharp")] {
             if toggle(ui, state.curve == c, text, format!("Curve {text}"), true) {
@@ -552,4 +695,93 @@ fn mixer(ui: &mut egui::Ui, model: &Model, actions: &mut Vec<Action>) {
             }
         }
     });
+}
+
+/// The library as listed, with the search, a row each: A and B load it onto
+/// a deck, or queue it for one that plays. Lit where the deck holds it or
+/// waits for it. A click on a row puts the cursor there.
+fn browser(ui: &mut egui::Ui, model: &Model, actions: &mut Vec<Action>) -> Option<usize> {
+    let decks = model.decks();
+    let tracks = model.listed();
+    if tracks.is_empty() {
+        ui.weak(match model.results() {
+            Some(_) => "No matches. Esc in the search field clears it.",
+            None => "The library is empty. File, Add folder to library adds one.",
+        });
+        return None;
+    }
+    let holds = |side: Side, path: &str| {
+        let loaded = decks
+            .loaded(side)
+            .is_some_and(|l| l.path.to_str() == Some(path));
+        let next = decks.next(side).is_some_and(|t| t.path == path);
+        (loaded, next)
+    };
+    let cursor = model.cursor(playr_app::View::Library);
+    let measures = model.measures_map();
+    let mut row_clicked = None;
+    ui.style_mut().interaction.selectable_labels = false;
+    egui_extras::TableBuilder::new(ui)
+        .id_salt("dj library")
+        .striped(true)
+        .sense(egui::Sense::click())
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(egui_extras::Column::exact(52.0))
+        .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
+        .column(
+            egui_extras::Column::initial(180.0)
+                .clip(true)
+                .resizable(true),
+        )
+        .column(egui_extras::Column::exact(56.0))
+        .header(ROW, |mut h| {
+            h.col(|ui| _ = ui.weak("Deck"));
+            h.col(|ui| _ = ui.strong("Title"));
+            h.col(|ui| _ = ui.strong("Artist"));
+            h.col(|ui| _ = ui.strong("BPM"));
+        })
+        .body(|body| {
+            body.rows(ROW, tracks.len(), |mut row| {
+                let n = row.index();
+                let t = &tracks[n];
+                row.set_selected(cursor == Some(n));
+                row.col(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for side in [Side::A, Side::B] {
+                        let (loaded, next) = holds(side, &t.path);
+                        let k = letter(side);
+                        let text = if next { format!("{k}>") } else { k.to_string() };
+                        let r = ui.add(egui::Button::selectable(loaded || next, text));
+                        let name = format!("Row {} deck {k}", n + 1);
+                        r.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::Button,
+                                true,
+                                loaded,
+                                &name,
+                            )
+                        });
+                        let r = r.on_hover_text(match next {
+                            true => "waits to load when the deck stops",
+                            false => "load onto the deck, or queue it while the deck plays",
+                        });
+                        if r.clicked() {
+                            row_clicked = Some(n);
+                            actions.push(Action::Dj(D::Load(side)));
+                        }
+                    }
+                });
+                row.col(|ui| _ = ui.label(t.display_title()));
+                row.col(|ui| _ = ui.label(t.display_artist()));
+                row.col(|ui| {
+                    if let Some(b) = measures.get(&t.path).and_then(|m| m.bpm) {
+                        ui.monospace(format!("{b:6.2}"));
+                    }
+                });
+                if row.response().clicked() {
+                    row_clicked = Some(n);
+                }
+            });
+        });
+    row_clicked
 }

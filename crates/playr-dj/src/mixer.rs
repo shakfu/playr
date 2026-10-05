@@ -20,6 +20,9 @@ const MULTIPLES: [f64; 3] = [0.5, 1.0, 2.0];
 const LOCK_DEAD: f64 = 0.01;
 const LOCK_K: f64 = 0.7;
 const LOCK_MAX: f64 = 0.05;
+/// How long the crossfader takes to glide to a point, as to an end or the
+/// centre by a button.
+const GLIDE_MS: f64 = 400.0;
 /// The sharp crossfader curve cuts a deck within this much of the far end.
 const SHARP_EDGE: f64 = 0.05;
 /// The loop lengths offered, in beats.
@@ -72,6 +75,8 @@ pub enum Setting {
     Level(Side, f64),
     /// The crossfader, 0 for deck A only to 1 for deck B only.
     Xfade(f64),
+    /// The crossfader moved over 400 ms rather than at once.
+    XfadeGlide(f64),
     /// Play and cue start in phase with the other deck when it plays; a
     /// cue point set while paused falls on the deck's own nearest beat.
     Quantize(bool),
@@ -102,6 +107,11 @@ pub enum Setting {
     Loop(Side, Option<f64>),
     CueOut(CueOut),
     Curve(Curve),
+    /// Moves the head to this frame. With quantize on, a playing deck keeps
+    /// its phase. A loop playing ends unless the frame is inside it.
+    Seek(Side, f64),
+    /// Silences the deck in the main mix; the cue still hears it.
+    Mute(Side, bool),
 }
 
 impl Setting {
@@ -111,11 +121,13 @@ impl Setting {
             | Setting::Gain(_, v)
             | Setting::Level(_, v)
             | Setting::Xfade(v)
+            | Setting::XfadeGlide(v)
             | Setting::Volume(v)
             | Setting::Eq(_, _, v)
             | Setting::Filter(_, v)
             | Setting::BeatJump(_, v)
-            | Setting::Loop(_, Some(v)) => v.is_finite(),
+            | Setting::Loop(_, Some(v))
+            | Setting::Seek(_, v) => v.is_finite(),
             Setting::HotCues(_, cues) => cues.iter().flatten().all(|c| c.is_finite()),
             _ => true,
         }
@@ -137,6 +149,7 @@ pub struct Mixer {
     bands: [[(f64, bool); 3]; 2],
     cue_out: CueOut,
     curve: Curve,
+    mutes: [Ramp; 2],
 }
 
 impl Mixer {
@@ -152,6 +165,7 @@ impl Mixer {
             bands: [[(0.0, false); 3]; 2],
             cue_out: CueOut::default(),
             curve: Curve::default(),
+            mutes: [Ramp::new(1.0); 2],
         }
     }
 
@@ -169,6 +183,11 @@ impl Mixer {
 
     pub fn quantize(&self) -> bool {
         self.quantize
+    }
+
+    /// The crossfader where it is now, moving or not.
+    pub fn xfade(&self) -> f64 {
+        self.xfade.value()
     }
 
     fn smooth(&self) -> u32 {
@@ -230,6 +249,10 @@ impl Mixer {
                 let n = self.smooth();
                 self.xfade.set(x.clamp(0.0, 1.0), n);
             }
+            Setting::XfadeGlide(x) => {
+                let n = (GLIDE_MS * self.sample_rate as f64 / 1000.0) as u32;
+                self.xfade.set(x.clamp(0.0, 1.0), n);
+            }
             Setting::Quantize(on) => self.quantize = on,
             Setting::CueBus(d) => self.cue_bus = d,
             Setting::CueSwap(on) => self.cue_swap = on,
@@ -254,7 +277,28 @@ impl Mixer {
             Setting::Loop(d, beats) => self.set_loop(d, beats),
             Setting::CueOut(c) => self.cue_out = c,
             Setting::Curve(c) => self.curve = c,
+            Setting::Seek(d, to) => self.seek(d, to),
+            Setting::Mute(d, on) => {
+                let n = self.smooth();
+                self.mutes[d.index()].set(if on { 0.0 } else { 1.0 }, n);
+            }
         }
+    }
+
+    fn seek(&mut self, side: Side, to: f64) {
+        let d = self.deck(side);
+        let to = to.clamp(0.0, d.track().frames() as f64);
+        let to = match (self.quantize, d.playing()) {
+            (true, true) => self.snap(side, to) + d.pos() - self.snap(side, d.pos()),
+            _ => to,
+        };
+        let d = self.deck_mut(side);
+        if d.looping()
+            .is_some_and(|(start, len)| !(start..start + len).contains(&to))
+        {
+            d.set_loop(None);
+        }
+        d.seek(to);
     }
 
     /// Sends `side`'s EQ bands to its deck as gains.
@@ -518,7 +562,7 @@ impl Mixer {
                 if self.cue_bus.is_some_and(|c| c.index() == i) {
                     cue = s;
                 }
-                let g = d.level.next() as f32 * gains[i];
+                let g = d.level.next() as f32 * gains[i] * self.mutes[i].next() as f32;
                 main[0] += s[0] * g;
                 main[1] += s[1] * g;
             }

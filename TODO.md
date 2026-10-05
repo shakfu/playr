@@ -48,7 +48,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **Planned edges to marks.** One action turns a plan's edges into marks, which are kept in the library and already drag, nudge and snap. It matters once a WAV is exported with cue points (as a looped range now carries its loop in a `smpl` chunk): the marks would then carry the slice points into the file for a hardware sampler. Open: whether the edges replace the marks in the range or join them, and whether the cue export should read the plan's edges directly and skip this step.
 
-- [ ] **Mark labels and export.** `marks` has `path`, `frame` and `rate`, and no text. A label column would allow notes such as "solo" or "break". Export as an Audacity label file or a cue sheet; `docs/sampler.md` already designs a `marks.jsonl` line. Since slices serve any sampler (decision 3), SFZ output may reach the most samplers (inference, not researched).
+- [ ] **Mark labels and export.** `marks` has `path`, `frame` and `rate`, and no text. A label column would allow notes such as "solo" or "break". Export as an Audacity label file or a cue sheet; `docs/guide-sampler.md` already designs a `marks.jsonl` line. Since slices serve any sampler (decision 3), SFZ output may reach the most samplers (inference, not researched).
 
 - [ ] **OP-XY frame counts at other rates.** ConvertWithMoss 20.3.0 resamples a 48 or 96 kHz slice to 44.1 kHz for the OP-XY, but `patch.json` keeps the old counts: `framecount`, `sample.end` and `loop.end` say 24,000 or 48,000 for a file of 22,050 frames. Every playr export keeps its source's rate, so a 48 kHz track hits it. What the device does with an end past the file is X6 in `docs/dev/device_tests.md`. Fix upstream: the report is drafted in `docs/dev/issues/convertwithmoss-issue.md`. Until then `:convert opxy` could resample to 44.1 kHz first, or warn. Found 2026-10-01.
 
@@ -94,7 +94,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Server
 
-- [ ] **Tried on a Raspberry Pi.** The arm64 archive's glibc requirement, the ALSA default device from `~/.asoundrc`, the systemd user service with lingering, and the CPU cost of resampling are unchecked on a Pi. `docs/server-guide.md` assumes them.
+- [ ] **Tried on a Raspberry Pi.** The arm64 archive's glibc requirement, the ALSA default device from `~/.asoundrc`, the systemd user service with lingering, and the CPU cost of resampling are unchecked on a Pi. `docs/guide-server.md` assumes them.
 
 - [ ] **Tried in TouchOSC.** The generated layout rests on inference for three bindings: a radio sending its segment's index, a received speed scaled back onto the fader, and a dragged fader not moved by the progress sent back. See `docs/dev/server.md`.
 
@@ -132,7 +132,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Sampler
 
-- [ ] **Live marks for sampling tools.** Slices can be exported as files. Handing a marked passage to a running tool, such as SuperCollider, is not done: `docs/sampler.md` weighs a JSON Lines file against OSC.
+- [ ] **Live marks for sampling tools.** Slices can be exported as files. Handing a marked passage to a running tool, such as SuperCollider, is not done: `docs/guide-sampler.md` weighs a JSON Lines file against OSC.
 
 - [ ] **ConvertWithMoss options per format.** `:convert` passes none. Maschine writes nothing without `-pMaschineOutputFormat`; 0 and 2 write `.mxsnd`, and what they differ in is open. A fixed table in `convertwithmoss.rs`, not options typed by the user, who would have to learn ConvertWithMoss's names.
 

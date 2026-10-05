@@ -250,6 +250,13 @@ On real music, a report like `playr analyze --report`: the grid against librosa'
    - Beat-jump moves a loop playing with the head. Loops take 1/4 to 32 beats, from the beat before the head with quantize on.
    - The sharp curve holds both decks at full level and fades one out over the last 5% of the travel.
    - The stream takes 4 channels or more where the device offers them, so `:dj cue-out 3-4` needs no reopening. On a stereo device it is refused.
+8. After a first use, 2026-10-05: seek, a mute per deck, a next track per deck, and the library in the DJ tab.
+   - A load onto a playing deck no longer refuses: the track waits as the deck's next and loads once the deck stops, by pause or at the end. One slot per deck; a later pick replaces it. A per-deck list was the alternative, with editing and order to build.
+   - That proved unforgiving outside a set: a mis-click on a playing deck could only be undone by stopping it. So it is the strict mode, off by default; without it a pick for a playing deck pauses it, loads the track and plays it.
+   - The sampler's marks show on both waveforms, and `:dj a mark next|prev` and the deck's Mark buttons jump between them, as a seek does. They are read when the track loads.
+   - Seek keeps the deck's phase with quantize on, as a hot cue does; outside a playing loop it ends the loop.
+   - A mute is on the main mix only, so a muted deck can be cued.
+   - The tab opens over the library and lists it. At 800 by 592 the waveforms are 44 points high and the grid's edits sit in a menu, so the list keeps rows.
 
 Steps 1 and 2 are useful on their own, so the work can stop after either.
 
