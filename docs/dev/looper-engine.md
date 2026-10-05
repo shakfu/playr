@@ -100,7 +100,7 @@ buffer[w] = clip(dc(lowpass(buffer[w] * feedback + sum(send_i * voice_i))))
 
 - **Ordering.** Voices read before the write head writes. A voice at rate 1 on the write head's frame hears the loop as it was one pass ago.
 
-- **Runaway gain.** Three sends at 1 with feedback near 1 give a loop gain above 1. `clip` passes samples below 0.5 unchanged and bends larger ones towards 1 with a `tanh` curve, so the buffer stays within full scale.
+- **Runaway gain.** Three sends at 1 with feedback near 1 give a loop gain above 1. `clip` passes samples below its knee unchanged and bends larger ones towards 1 with a `tanh` curve, so the buffer stays within full scale. The knee is `tape_knee` in `settings.toml`, -6 dBFS (0.5) by default.
 
 - **DC.** Repeated writes accumulate any DC offset. `dc` is a one-pole high-pass at 10 Hz.
 
@@ -132,7 +132,7 @@ Two things can be saved:
 
 - **The mix.** What is heard, for as long as it runs.
 
-**The loop.** Copying 46 MB inside one callback would overrun it, so the copy is spread over many callbacks, into a buffer the `Handle` allocates and sends in with `Snapshot`. The copy starts at the write head and runs through the write window at 8 frames per output frame, faster than the head, then wraps to the window's start. Each frame is therefore copied before the head rewrites it in this pass. Frames outside the window are never written, so they are copied last. The copy is the buffer as it was when `Snapshot` arrived, with no seam, and needs no pause in writing.
+**The loop.** Copying 46 MB inside one callback would overrun it, so the copy is spread over many callbacks, into a buffer the `Handle` allocates and sends in with `Snapshot`. The copy starts at the write head and runs through the write window at 8 frames per output frame, faster than the head, then wraps to the window's start. Each frame is therefore copied before the head rewrites it in this pass. While the write window is the range, the head also writes the pre-roll and post-roll a range-length either side of it, so each step copies those two frames with its own. Frames the head never writes are copied last. The copy is the buffer as it was when `Snapshot` arrived, with no seam, and needs no pause in writing.
 
 **The mix.** While recording, the callback copies each block of the mix into a ring holding 2 s. A writer thread on the `Handle` side writes it to a WAV. If the writer falls behind, blocks are dropped and counted, rather than the callback waiting. The count is shown when recording stops.
 
@@ -186,7 +186,7 @@ Both are written as 32-bit float, to `samples/<track>-tape-N/`, as exports go un
 
 - After 10 passes, no step across a window edge is larger than the material's own largest step.
 
-- A snapshot taken while writing equals the buffer at the moment `Snapshot` arrived, with the write window at the buffer's end and at its middle.
+- A snapshot taken while writing equals the buffer at the moment `Snapshot` arrived, with the write window at the buffer's end, at its middle, and as the range with its rolls written.
 
 - A recording equals the blocks `process` produced, plus the count of dropped blocks.
 
@@ -246,7 +246,11 @@ The cpal layer needs an audio device, which CI runners lack. It is tested by han
 
 - **No `Cmd::Reset`.** `Handle::reset` sends `Load` with the copy it keeps, and `Load` puts every head at its window's start.
 
+- **Load fades.** While playing, a `Load` waits in the ring while the output fades out over 5 ms, and the output fades back in after it. The old loop goes back to the handle at once, so the two cannot be crossfaded. Commands behind the `Load` wait with it, keeping their order.
+
 - **More is smoothed.** Voice and write on/off, feedback and wear move over 20 ms as well. A feedback change otherwise leaves a step in the loop itself.
+
+- **Subnormals.** Filter states and the buffer flush to 0 below 1e-30 (-600 dB). Unflushed, a loop at feedback 0.5 with no sends reached subnormals at pass 106; they are slow on x86.
 
 - **Peak grid.** A column takes its new peak when the write head leaves it, not a reset when it enters, so the column does not dip while the head crosses it.
 
@@ -268,11 +272,11 @@ The cpal layer needs an audio device, which CI runners lack. It is tested by han
 
   - **Slew.** A rate change ramps over the voice's slew, 20 ms until set, up to 10 s; the other settings keep 20 ms.
 
-  - **Drive, then filter.** Drive is `clip(k x) / sqrt(k)` with `k` up to 16. A gain-compensated `tanh` was rejected because its level at 0 is not the input's; `clip` passes `|x| <= 0.5` unchanged. The filter is a state-variable filter, Butterworth damped, in its topology-preserving form, which stays stable while the cutoff moves. It runs while bypassed, so leaving low-pass 1 or high-pass 0 does not start from silence. Its band-pass is scaled to unity at the centre. Both come before Level and Send, so they shape what is printed; Wear stays the send's own darkening.
+  - **Drive, then filter.** Drive is `clip(k x) / sqrt(k)` with `k` up to 16. Its small-signal gain is `sqrt(k)`, up to 4 (+12 dB), not 1. It blends in from dry over drive 0 to 0.05: at drive 0.01 the clip already took a sample at 1.0 to 0.881, so dropping to 0 stepped. The filter is a state-variable filter, Butterworth damped, in its topology-preserving form, which stays stable while the cutoff moves. Low-pass 1 and high-pass 0 pass the input unchanged; reaching or leaving them, and changing the kind, crossfade over 20 ms. Switched at once, high-pass 0 to 0.001 stepped by 0.27 on a 40 Hz sine of 0.4. The filter runs while dry, so it does not start from silence. Its band-pass is scaled to unity at the centre. Both come before Level and Send, so they shape what is printed; Wear stays the send's own darkening.
 
   - **Solo.** A gain on what is heard alone, ramped. Turning other voices off was rejected: an off voice stops its head and its sends.
 
-  - **Thin.** A one-pole high-pass in the write path after Wear, 20 Hz to 2 kHz, as a filter in a delay's feedback path. Its low-pass runs at every setting, so leaving 0 does not step. One write-head control was preferred to a high-pass on every voice: it changes the loop itself.
+  - **Thin.** A one-pole high-pass in the write path after Wear, 20 Hz to 2 kHz, as a filter in a delay's feedback path. Its lowest setting, 20 Hz, is not transparent, so it fades in and out over 20 ms; switched at once, it wrote a step of 0.16 into a 40 Hz sine of 0.4. Its low-pass runs at every setting, so it does not start from silence. One write-head control was preferred to a high-pass on every voice: it changes the loop itself.
 
 - **Crossfades are drawn** in the Tape tab's lanes where `crossfade` puts them, with the pre-roll and post-roll dimmed, so what a wrap reads beyond the window shows.
 
@@ -281,6 +285,8 @@ The cpal layer needs an audio device, which CI runners lack. It is tested by han
 - **A head that has not moved** goes to its window's end when its rate turns negative, so a reversed voice starts at the end, not one frame into the start.
 
 - **Recording** takes blocks only while the tape plays. A snapshot is returned as aborted by a `Load` or a new write window.
+
+- **Device loss.** The loop lives in the stream's callback and goes with it. The app finishes any recording, drops the tape, and says so; a load opens a new stream. The decks do the same. Reopening with the loop as it was would need the callback to hand its state back, which a lost stream cannot.
 
 - **Returned memory.** The callback leaves a command in the ring until the return ring has room for what it returns, so it never has to drop one.
 

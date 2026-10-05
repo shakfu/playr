@@ -706,3 +706,109 @@ fn thin_takes_the_low_end_out_each_pass() {
         last = b;
     }
 }
+
+/// A 40 Hz sine of 0.4, whose own largest step is 0.0021, in a loop of whole
+/// cycles.
+fn low_sine() -> Vec<f32> {
+    sine(48_000, 40.0, 0.4)
+}
+
+/// The largest step round the loop, wrap included.
+fn max_step_round(x: &[f32]) -> f32 {
+    max_step(x).max((x[0] - x[x.len() - 1]).abs())
+}
+
+#[test]
+fn thin_leaving_and_reaching_0_writes_no_step() {
+    let mut t = tape(low_sine(), 1, &[Setting::Write(true)]);
+    run(&mut t, 4800);
+    // Its lowest setting is a 20 Hz high-pass; switched in at once, it wrote
+    // a step of 0.15.
+    t.set(Setting::Thin(0.001));
+    run(&mut t, 48_000);
+    t.set(Setting::Thin(0.0));
+    run(&mut t, 4800);
+    let step = max_step_round(&buffer(&t));
+    assert!(step < 0.003, "{step}");
+}
+
+#[test]
+fn the_voice_filter_leaving_its_ends_or_changing_kind_does_not_step() {
+    for (from, to) in [
+        // High at 0 and low at 1 pass the input unchanged.
+        (
+            [Setting::Filter(0, Filter::High), Setting::Cutoff(0, 0.0)],
+            [Setting::Cutoff(0, 0.001), Setting::Cutoff(0, 0.001)],
+        ),
+        (
+            [Setting::Filter(0, Filter::Low), Setting::Cutoff(0, 1.0)],
+            [Setting::Cutoff(0, 0.999), Setting::Cutoff(0, 0.999)],
+        ),
+        (
+            [Setting::Filter(0, Filter::Low), Setting::Cutoff(0, 0.3)],
+            [
+                Setting::Filter(0, Filter::High),
+                Setting::Filter(0, Filter::Band),
+            ],
+        ),
+    ] {
+        let mut t = tape(low_sine(), 1, &from);
+        let mut out = left(&run(&mut t, 4800));
+        t.set(to[0]);
+        out.extend(left(&run(&mut t, 4800)));
+        t.set(to[1]);
+        out.extend(left(&run(&mut t, 4800)));
+        let step = max_step(&out[2400..]);
+        assert!(step < 0.003, "{from:?} to {to:?}: {step}");
+    }
+}
+
+#[test]
+fn drive_reaching_0_does_not_step() {
+    // Above the clip's knee, drive 0.01 gave 0.881 of 1.0 and drive 0 all of it.
+    let mut t = tape(vec![1.0; 4800], 1, &[Setting::Drive(0, 0.01)]);
+    let mut out = left(&run(&mut t, 4800));
+    t.set(Setting::Drive(0, 0.0));
+    out.extend(left(&run(&mut t, 4800)));
+    assert_eq!(out.last(), Some(&1.0));
+    let step = max_step(&out[2400..]);
+    assert!(step < 0.001, "{step}");
+}
+
+#[test]
+fn a_fading_loop_reaches_0_without_subnormals() {
+    let mut t = tape(
+        noise(4800, 0.9),
+        1,
+        &[Setting::Write(true), Setting::Feedback(0.5)],
+    );
+    // Unflushed, they appeared at pass 106 and filled the loop by 140.
+    for pass in 0..200 {
+        let out = run(&mut t, 4800);
+        let b = buffer(&t);
+        assert!(
+            !b.iter().chain(&out).any(|s| s.is_subnormal()),
+            "pass {pass}"
+        );
+    }
+    assert!(buffer(&t).iter().all(|s| *s == 0.0));
+}
+
+#[test]
+fn the_knee_sets_where_the_write_head_starts_to_clip() {
+    let peak = |knee: Option<f32>| {
+        let mut settings = vec![
+            Setting::Write(true),
+            Setting::Feedback(0.0),
+            Setting::Send(0, 1.0),
+        ];
+        settings.extend(knee.map(Setting::Knee));
+        let mut t = tape(sine(4800, 1000.0, 0.8), 1, &settings);
+        run(&mut t, 4800);
+        buffer(&t).iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    };
+    let (default, high) = (peak(None), peak(Some(0.9)));
+    // 0.5 + 0.5 tanh(0.6) at the default knee, 0.5.
+    assert!((default - 0.768).abs() < 0.01, "{default}");
+    assert!((high - 0.8).abs() < 0.01, "{high}");
+}

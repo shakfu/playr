@@ -374,6 +374,10 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
     ui.horizontal(|ui| {
         actions.extend(button(ui, side, "Load", !decks.loading(side)));
         let playing = status.is_some_and(|s| s.playing());
+        // The player's track, from where it is; the player pauses.
+        let player = model.session().playing_track().is_ok();
+        let take = button(ui, side, "Take", player && !playing && !decks.loading(side));
+        actions.extend(take);
         let label = if playing { "Pause" } else { "Play" };
         actions.extend(button(ui, side, label, on));
         let (down, change) = held(ui, "Cue", format!("Deck {k} Cue"), tab.cue[i(side)], on);

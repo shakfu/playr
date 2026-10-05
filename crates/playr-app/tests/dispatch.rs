@@ -738,6 +738,103 @@ fn the_tape_loads_the_range_and_saves_the_loop_and_the_mix_to_the_library() {
     assert_ne!(lp.parent(), mix.parent(), "each save has its own directory");
 }
 
+/// A tape loaded with 8000 frames of a tone playing at 8 kHz.
+fn loaded_tape() -> (Headless, tempfile::TempDir) {
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    let (mut f, dir) = headless();
+    f.session.set_samples_dir(dir.path().join("samples"));
+    let file = dir.path().join("song.wav");
+    common::tone(&file, 8000, 2.0, -6.0);
+    let track = Track {
+        path: file.to_string_lossy().into(),
+        ..Default::default()
+    };
+    f.session.play(&[track], 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.playing_track().is_err() {
+        assert!(std::time::Instant::now() < deadline, "never played");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    f.sampler.range = Some(playr_app::sampler::Range {
+        path: file.clone(),
+        start: Some(4000),
+        end: Some(12_000),
+    });
+    dispatch(Action::Tape(T::Load(None)), &mut f);
+    tape_until(&mut f, |m| m != &Message::Tape(M::Loading));
+    (f, dir)
+}
+
+#[test]
+fn a_save_cut_short_is_reported_and_does_not_block_the_next() {
+    use playr_app::tape::{Pos, TapeAction as T, TapeMessage as M};
+    let tape = |f: &mut Headless, t| dispatch(Action::Tape(t), f);
+    let (mut f, _dir) = loaded_tape();
+
+    // The new write window arrives with the snapshot and aborts it.
+    tape(&mut f, T::Save);
+    tape(
+        &mut f,
+        T::WriteWindow(Pos::Percent(0.0), Pos::Percent(50.0)),
+    );
+    run_tape(&mut f, 512);
+    assert_eq!(last(&f), Some(&Message::Tape(M::SaveAborted)));
+    tape(&mut f, T::Save);
+    tape_until(&mut f, |m| matches!(m, Message::Tape(M::Saved(_))));
+}
+
+#[test]
+fn a_recording_whose_stop_failed_can_be_stopped_again() {
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    let tape = |f: &mut Headless, t| dispatch(Action::Tape(t), f);
+    let (mut f, _dir) = loaded_tape();
+    tape(&mut f, T::Record);
+    assert!(f.tape.recording());
+    // A full command ring refuses the stop; the recording runs on.
+    while !matches!(last(&f), Some(Message::Tape(M::Failed(_)))) {
+        tape(&mut f, T::Feedback(0.5));
+    }
+    tape(&mut f, T::Record);
+    assert!(matches!(last(&f), Some(Message::Tape(M::Failed(_)))));
+    assert!(f.tape.recording());
+    run_tape(&mut f, 512);
+    tape(&mut f, T::Record);
+    assert!(matches!(last(&f), Some(Message::Tape(M::Recorded { .. }))));
+    assert!(!f.tape.recording());
+}
+
+#[test]
+fn a_lost_device_ends_the_tape_and_its_recording() {
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    use playr_core::audio::output::DeviceEvent;
+    let tape = |f: &mut Headless, t| dispatch(Action::Tape(t), f);
+    let (mut f, _dir) = loaded_tape();
+    tape(&mut f, T::Play);
+    tape(&mut f, T::Record);
+    let events = f.tape.device_events();
+    events.send(DeviceEvent::Rerouted).unwrap();
+    events.send(DeviceEvent::Lost("unplugged".into())).unwrap();
+    let before = f.messages.len();
+    run_tape(&mut f, 512);
+    let said: Vec<_> = f.messages[before..].to_vec();
+    assert!(
+        matches!(
+            said[..],
+            [
+                Message::Tape(M::Recorded { .. }),
+                Message::Tape(M::DeviceLost(_))
+            ]
+        ),
+        "{said:?}"
+    );
+    assert_eq!(f.tape.loaded(), None);
+    assert!(!f.tape.recording());
+    tape(&mut f, T::Play);
+    assert_eq!(last(&f), Some(&Message::Tape(M::NoTape)));
+    tape(&mut f, T::Load(None));
+    tape_until(&mut f, |m| matches!(m, Message::Tape(M::Loaded { .. })));
+}
+
 #[test]
 fn tape_windows_count_from_the_range_and_reach_into_the_rolls() {
     use playr_app::tape::{settings, Extent, Pos, TapeAction as T, TapeMessage, VoiceSetting as V};
@@ -1046,7 +1143,10 @@ fn hot_cues_are_kept_with_the_track_and_loops_need_a_grid() {
     dj(&mut f, D::Pause(A));
     run_decks(&mut f, 2);
     load(&mut f);
+    // Stored throughout: the status of the new load never lacks it.
+    assert_eq!(f.session.hot_cues(&file), [(2, 0.64)]);
     run_decks(&mut f, 1);
+    assert_eq!(f.session.hot_cues(&file), [(2, 0.64)]);
     assert_eq!(f.dj.status().unwrap().deck(A).hot_cues()[1], Some(5120.0));
     dj(&mut f, D::HotClear(A, 2));
     run_decks(&mut f, 1);
@@ -1064,6 +1164,94 @@ fn hot_cues_are_kept_with_the_track_and_loops_need_a_grid() {
     said(&f, M::NoGrid(A));
     dj(&mut f, D::Loop(A, Some(4.0)));
     said(&f, M::NoGrid(A));
+}
+
+#[test]
+fn a_lost_device_clears_the_decks_and_a_load_opens_them_again() {
+    use playr_app::dj::{DjAction as D, DjMessage as M, Side::*};
+    use playr_core::audio::output::DeviceEvent;
+    let dj = |f: &mut Headless, d| dispatch(Action::Dj(d), f);
+    let (mut f, dir) = headless();
+    let a = click_track(&mut f, dir.path(), "a.wav", 120.0, 0.0);
+    f.results = Some(vec![a]);
+    f.cursors[0] = Some(0);
+    dj(&mut f, D::Load(A));
+    decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    dj(&mut f, D::Play(A));
+    run_decks(&mut f, 2);
+
+    f.dj.device_events()
+        .send(DeviceEvent::Lost("unplugged".into()))
+        .unwrap();
+    run_decks(&mut f, 1);
+    assert_eq!(
+        last(&f),
+        Some(&Message::Dj(M::DeviceLost("unplugged".into())))
+    );
+    assert!(f.dj.loaded(A).is_none());
+    assert!(f.dj.status().is_none());
+    dj(&mut f, D::Load(A));
+    decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    assert!(f.dj.loaded(A).is_some());
+}
+
+#[test]
+fn a_deck_takes_over_the_player_s_track_where_it_is() {
+    use playr_app::dj::{DjAction as D, DjMessage as M, Range, Side::*};
+    use playr_core::audio::State;
+    let dj = |f: &mut Headless, d| dispatch(Action::Dj(d), f);
+    let (mut f, dir) = headless();
+    dj(&mut f, D::Take(A));
+    assert_eq!(last(&f), Some(&Refusal::NothingPlaying.into()));
+
+    // Outside the library, at -2 semitones and half volume.
+    let file = dir.path().join("song.wav");
+    common::tone(&file, 8000, 30.0, -6.0);
+    let track = Track {
+        path: file.to_string_lossy().into(),
+        ..Default::default()
+    };
+    f.session.play(&[track], 0);
+    dispatch(Action::SetSpeed(-2), &mut f);
+    dispatch(Action::SetVolume(0.5), &mut f);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.player().position().as_secs_f64() < 0.5 {
+        assert!(std::time::Instant::now() < deadline, "never played");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    dj(&mut f, D::Take(A));
+    assert_eq!(last(&f), Some(&Message::Dj(M::Loading(A))));
+    decks_until(&mut f, |m| m != &Message::Dj(M::Loading(A)));
+    let player_at = f.session.player().position().as_secs_f64();
+    assert_eq!(last(&f), Some(&Message::Dj(M::Took(A))));
+    run_decks(&mut f, 1);
+    let rate = f64::from(f.dj.rate().unwrap());
+    let deck = f.dj.status().unwrap().deck(A);
+    let deck_at = deck.pos() / rate;
+    assert!(deck.playing());
+    assert!(
+        (deck_at - player_at).abs() < 0.1,
+        "deck {deck_at} s, player {player_at} s"
+    );
+    assert_eq!(deck.range(), Range::Medium);
+    assert!((deck.pct() - (2f64.powf(-2.0 / 12.0) - 1.0) * 100.0).abs() < 1e-9);
+    while f.session.player().status().state != State::Paused {
+        assert!(std::time::Instant::now() < deadline, "the player played on");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // The player's volume is the decks' master: a -6 dBFS tone at half. The
+    // crossfader moved to deck A, so its centre takes nothing.
+    assert_eq!(f.dj.state().xfade, 0.0);
+    let mut out = vec![0.0; 4096 * 2];
+    f.dj.process(&mut out);
+    let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!((peak - 0.5 * 0.501).abs() < 0.01, "{peak}");
+
+    // A playing deck is not taken over.
+    f.session.send(playr_core::audio::Cmd::TogglePause);
+    dj(&mut f, D::Take(A));
+    assert_eq!(last(&f), Some(&Message::Dj(M::Playing(A))));
 }
 
 #[test]

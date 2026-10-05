@@ -12,6 +12,12 @@ mode = "normal"
 speed = 0
 # How readily :slice onsets finds hits, 0 to 1; higher finds more.
 onset_sensitivity = 0.5
+# The levels, in dBFS from -24 to -0.1, below which a soft clip passes the
+# signal unchanged; above, it bends peaks towards full scale. dj_knee is the DJ
+# master's. tape_knee is the clip on what the tape's write head records, which
+# keeps the loop within full scale when the sends and feedback add up past it.
+dj_knee = -0.9
+tape_knee = -6
 # Where :slice writes, one directory per slicing. ~ is your home. On Windows,
 # write 'C:\Music' in single quotes, or "C:/Music": in "...", \ is an escape.
 samples = "~/Music/playr/samples"

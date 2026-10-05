@@ -218,14 +218,14 @@ impl Deck {
         frames / self.sample_rate
     }
 
-    /// Swaps in `track` with the head and cue at its start.
+    /// Swaps in `track` with the head and cue at its start, and its hot cues.
     pub(crate) fn load(&mut self, track: Box<Track>) -> Box<Track> {
         self.pos = 0.0;
         self.cue = 0.0;
         self.pending = None;
         self.fade_left = 0;
         self.synced = None;
-        self.hot = [None; HOT_CUES];
+        self.hot = track.hot_cues();
         self.looping = None;
         self.loads += 1;
         self.set_lock(1.0);
@@ -241,6 +241,18 @@ impl Deck {
         if self.gate.value() > 0.0 {
             self.from = self.pos;
             self.fade_left = self.frames(DECLICK_MS);
+        }
+        self.place(to);
+    }
+
+    /// Puts the head at `to`, ending a loop it leaves; else the loop would
+    /// pull it back a loop length a frame.
+    fn place(&mut self, to: f64) {
+        if self
+            .looping
+            .is_some_and(|(start, len)| !(start..start + len).contains(&to))
+        {
+            self.looping = None;
         }
         self.pos = to;
     }
@@ -270,7 +282,7 @@ impl Deck {
     pub(crate) fn back_to_cue(&mut self) {
         self.pause();
         if self.gate.value() == 0.0 {
-            self.pos = self.cue;
+            self.place(self.cue);
         } else {
             self.pending = Some(self.cue);
         }
@@ -403,7 +415,7 @@ impl Deck {
         }
         if !self.playing && self.gate.value() == 0.0 {
             if let Some(p) = self.pending.take() {
-                self.pos = p;
+                self.place(p);
             }
         }
         if self.playing && self.pos >= self.track.frames() as f64 {

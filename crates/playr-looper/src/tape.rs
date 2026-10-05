@@ -3,7 +3,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use playr_dsp::{clip, hermite, one_pole};
+use playr_dsp::{clip, flush, hermite, one_pole, soft_clip};
 
 use crate::{Error, COLUMNS, VOICES};
 
@@ -29,6 +29,11 @@ const THIN_HZ: (f32, f32) = (20.0, 2000.0);
 const FILTER_HZ: (f32, f32) = (20.0, 20_000.0);
 /// The gain a voice's drive reaches at 1, as a ratio: 24 dB.
 const DRIVE_GAIN: f32 = 16.0;
+/// Drive blends in from dry over its first `DRIVE_BLEND`, so leaving 0 does
+/// not step on material above the clip's knee.
+const DRIVE_BLEND: f32 = 0.05;
+/// The knee of the clip on what the write head records, until set.
+pub const DEFAULT_KNEE: f32 = 0.5;
 /// The longest rate slew, in ms.
 pub const MAX_SLEW_MS: f32 = 10_000.0;
 
@@ -36,8 +41,7 @@ pub const MAX_SLEW_MS: f32 = 10_000.0;
 /// scale from the top of the band to [`WEAR_HZ`] at 1.
 fn wear_coefficient(wear: f32, sample_rate: u32) -> f32 {
     let top = WEAR_TOP_HZ.min(0.45 * sample_rate as f32);
-    let fc = top * (WEAR_HZ / top).powf(wear);
-    1.0 - (-std::f32::consts::TAU * fc / sample_rate as f32).exp()
+    one_pole(top * (WEAR_HZ / top).powf(wear), sample_rate)
 }
 
 /// The thin high-pass's one-pole coefficient: 20 Hz at 0, rising on a log
@@ -55,7 +59,8 @@ fn drive(x: f32, d: f32) -> f32 {
         return x;
     }
     let k = DRIVE_GAIN.powf(d);
-    clip(k * x) / k.sqrt()
+    let y = clip(k * x) / k.sqrt();
+    x + (y - x) * (d / DRIVE_BLEND).min(1.0)
 }
 
 /// What a voice's filter passes.
@@ -94,19 +99,18 @@ impl Svf {
         self.svf.tune(hz, sample_rate);
     }
 
-    /// Filters `x` in place as `kind` at the tuned cutoff. Low at 1 and high
-    /// at 0 pass it unchanged; the state runs on, so moving off either end
-    /// does not start from silence.
-    fn process(&mut self, x: &mut [f32; 2], kind: Filter, cutoff: f32) {
+    /// Filters `x` in place: `morph` of the way from `kinds[0]` to
+    /// `kinds[1]`, mixed `wet` with the input. The state runs while dry, so
+    /// the filter does not start from silence.
+    fn process(&mut self, x: &mut [f32; 2], kinds: [Filter; 2], morph: f32, wet: f32) {
         for (ch, x) in x.iter_mut().enumerate() {
             let t = self.svf.tick(ch, *x);
-            *x = match kind {
-                Filter::Low if cutoff >= 1.0 => *x,
-                Filter::High if cutoff <= 0.0 => *x,
+            let [a, b] = kinds.map(|k| match k {
                 Filter::Low => t.low,
                 Filter::High => t.high,
                 Filter::Band => t.band,
-            };
+            });
+            *x += wet * (a + morph * (b - a) - *x);
         }
     }
 }
@@ -357,6 +361,9 @@ pub enum Setting {
     Wear(f32),
     /// A high-pass on everything the write head records, 0 to 1.
     Thin(f32),
+    /// The level, 0 to 0.99, below which the clip on what the write head
+    /// records passes the signal unchanged.
+    Knee(f32),
 }
 
 /// One read head, and a second while a wrap crossfades.
@@ -376,6 +383,12 @@ struct Voice {
     drive: Ramp,
     cutoff: Ramp,
     filter: Filter,
+    /// The filter faded from, and how far the fade to `filter` is.
+    was: Filter,
+    morph: Ramp,
+    /// How much of the filter is heard: 0 where it would pass the input
+    /// unchanged, low at 1 or high at 0, so the switch is a crossfade.
+    wet: Ramp,
     svf: Svf,
     /// What is heard of the voice under solo, 0 or 1.
     heard: Ramp,
@@ -416,6 +429,9 @@ impl Voice {
             drive: Ramp::new(0.0),
             cutoff: Ramp::new(1.0),
             filter: Filter::Low,
+            was: Filter::Low,
+            morph: Ramp::new(1.0),
+            wet: Ramp::new(0.0),
             svf: Svf::new(),
             heard: Ramp::new(1.0),
             solo: false,
@@ -430,6 +446,21 @@ impl Voice {
             old: None,
             faded: 0,
             fade_len: 0,
+        }
+    }
+
+    /// Fades the filter in or out as its kind and cutoff's target make it
+    /// pass the input unchanged or not.
+    fn retarget_wet(&mut self, frames: u32) {
+        let c = self.cutoff.target();
+        let dry = match self.filter {
+            Filter::Low => c >= 1.0,
+            Filter::High => c <= 0.0,
+            Filter::Band => false,
+        };
+        let want = if dry { 0.0 } else { 1.0 };
+        if self.wet.target() != want {
+            self.wet.set(want, frames);
         }
     }
 
@@ -506,7 +537,9 @@ impl Voice {
         for s in s.iter_mut().take(lp.channels) {
             *s = drive(*s, drive_d);
         }
-        self.svf.process(&mut s, self.filter, cutoff);
+        let (morph, wet) = (self.morph.next(), self.wet.next());
+        self.svf
+            .process(&mut s, [self.was, self.filter], morph, wet);
 
         let [l, r] = pan_frame(s, lp.channels, pan);
         mix[0] += l * level;
@@ -514,7 +547,7 @@ impl Voice {
         // The send's low-pass tracks its input while off, so it resumes without a step.
         for ((o, s), y) in send.iter_mut().zip(s).zip(&mut self.wear_lp) {
             *y = match wear > 0.0 {
-                true => *y + self.wear_a * (s - *y),
+                true => flush(*y + self.wear_a * (s - *y)),
                 false => s,
             };
             *o += *y * sends;
@@ -622,8 +655,10 @@ struct Pass {
     feedback: f32,
     wear: f32,
     lp_a: f32,
-    thin: f32,
+    /// How much of the thin high-pass is applied, 0 to 1.
+    thin_mix: f32,
     hp_a: f32,
+    knee: f32,
     dc_g: f32,
     dc_r: f32,
     send: [f32; 2],
@@ -669,23 +704,21 @@ impl Lane {
                 f.lp[ch] = x;
             }
             // Its low-pass runs while off, so thin starts from where it is.
-            f.hp[ch] += p.hp_a * (x - f.hp[ch]);
-            if p.thin > 0.0 {
-                x -= f.hp[ch];
-            }
+            f.hp[ch] = flush(f.hp[ch] + p.hp_a * (x - f.hp[ch]));
+            x -= p.thin_mix * f.hp[ch];
             if p.sending {
-                let y = p.dc_g * (x - f.dc_x[ch]) + p.dc_r * f.dc_y[ch];
+                let y = flush(p.dc_g * (x - f.dc_x[ch]) + p.dc_r * f.dc_y[ch]);
                 f.dc_x[ch] = x;
                 f.dc_y[ch] = y;
-                x = clip(y);
+                x = soft_clip(y, p.knee);
             } else {
                 f.dc_x[ch] = x;
                 f.dc_y[ch] = x;
             }
-            *slot = match p.g {
+            *slot = flush(match p.g {
                 1.0 => x,
                 g => old + g * (x - old),
-            };
+            });
         }
         self.peak(lp, i, bound);
     }
@@ -721,6 +754,10 @@ struct Writer {
     feedback: Ramp,
     wear: Ramp,
     thin: Ramp,
+    /// Whether thin is on, 0 or 1, ramped: its lowest setting, 20 Hz, is
+    /// not transparent, so turning it on or off is a crossfade.
+    thin_on: Ramp,
+    knee: f32,
     window: Window,
     pos: usize,
     /// The wear low-pass's coefficient, and the wear it was computed for.
@@ -743,6 +780,8 @@ impl Writer {
             feedback: Ramp::new(1.0),
             wear: Ramp::new(0.0),
             thin: Ramp::new(0.0),
+            thin_on: Ramp::new(0.0),
+            knee: DEFAULT_KNEE,
             window: Window::new(0, 0),
             pos: 0,
             lp_a: 1.0,
@@ -794,6 +833,7 @@ impl Writer {
         let feedback = self.feedback.next();
         let wear = self.wear.next();
         let thin = self.thin.next();
+        let thin_mix = self.thin_on.next();
         if gate == 0.0 && !self.on {
             self.advance();
             return;
@@ -810,8 +850,9 @@ impl Writer {
             feedback,
             wear,
             lp_a: self.lp_a,
-            thin,
+            thin_mix,
             hp_a: self.hp_a,
+            knee: self.knee,
             dc_g: (1.0 + dc_r) / 2.0,
             dc_r,
             send,
@@ -914,7 +955,14 @@ impl Tape {
             }
             Setting::Feedback(v) if finite(v) => self.writer.feedback.set(v.clamp(0.0, 1.0), ramp),
             Setting::Wear(v) if finite(v) => self.writer.wear.set(v.clamp(0.0, 1.0), ramp),
-            Setting::Thin(v) if finite(v) => self.writer.thin.set(v.clamp(0.0, 1.0), ramp),
+            Setting::Thin(v) if finite(v) => {
+                let v = v.clamp(0.0, 1.0);
+                self.writer.thin.set(v, ramp);
+                self.writer
+                    .thin_on
+                    .set(if v > 0.0 { 1.0 } else { 0.0 }, ramp);
+            }
+            Setting::Knee(v) if finite(v) => self.writer.knee = v.clamp(0.0, 0.99),
             Setting::On(i, on) if i < VOICES => {
                 let v = &mut self.voices[i];
                 v.on = on;
@@ -957,10 +1005,21 @@ impl Tape {
             Setting::Drive(i, v) if i < VOICES && finite(v) => {
                 self.voices[i].drive.set(v.clamp(0.0, 1.0), ramp)
             }
-            Setting::Cutoff(i, v) if i < VOICES && finite(v) => {
-                self.voices[i].cutoff.set(v.clamp(0.0, 1.0), ramp)
+            Setting::Cutoff(i, c) if i < VOICES && finite(c) => {
+                let v = &mut self.voices[i];
+                v.cutoff.set(c.clamp(0.0, 1.0), ramp);
+                v.retarget_wet(ramp);
             }
-            Setting::Filter(i, kind) if i < VOICES => self.voices[i].filter = kind,
+            Setting::Filter(i, kind) if i < VOICES => {
+                let v = &mut self.voices[i];
+                if kind != v.filter {
+                    v.was = v.filter;
+                    v.filter = kind;
+                    v.morph = Ramp::new(0.0);
+                    v.morph.set(1.0, ramp);
+                }
+                v.retarget_wet(ramp);
+            }
             Setting::Solo(i, on) if i < VOICES => {
                 self.voices[i].solo = on;
                 let any = self.voices.iter().any(|v| v.solo);

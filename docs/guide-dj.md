@@ -8,7 +8,7 @@ playr has two decks and a mixer. Each deck plays a library track at its own rate
 
 - **Headphones.** Without a second output, the headphone cue shares your one stereo output: the main mix in the left ear, the cued deck in the right. See [Headphone cue](#headphone-cue).
 
-- **The player pauses.** The decks play on their own audio stream, on the player's device. Starting a deck pauses the player, as the tape does. A device held exclusively, such as an ALSA `hw:` device, cannot take a second stream, and the decks fail to open on it.
+- **The player pauses.** The decks play on their own audio stream, on the player's device. Starting a deck pauses the player, as the tape does. A device held exclusively, such as an ALSA `hw:` device, cannot take a second stream, and the decks fail to open on it. If the device goes away, the decks close; load them again.
 
 ## The tab
 
@@ -46,6 +46,22 @@ What happens when the deck is already playing depends on **Strict**, next to Qua
 Strict off suits listening to one track after another, and correcting a wrong pick by picking again. Strict on suits a set: a mis-click on the deck that is playing to the room cannot cut it. While a track waits, **x** beside it, or `:dj a unqueue`, forgets it.
 
 A library or selection row's right-click menu has **Load to deck A** and **Load to deck B** too. In the terminal, `:dj a load` loads the row under the cursor.
+
+### Taking over from the player
+
+**Take** on a deck moves the track the player is playing onto it, and carries on from where the player is. The player plays on while the deck reads the track, which takes a few seconds. Then the deck starts at the player's position and the player pauses. In the terminal, `:dj a take`.
+
+- **Carried over:** the speed, as the rate fader in the narrowest range that holds it, and the ReplayGain the player applied, as the trim. The volume slider is the decks' master already.
+
+- **The crossfader** moves to the taking deck if the other deck is silent; at its centre it would take 3 dB.
+
+- **Not carried over:** the player's EQ, whose curves differ from the deck's, and a loop or play-once range.
+
+- **Refused** while the deck plays, while nothing plays, or at +8 semitones or more, which no rate range reaches.
+
+- **A paused player** leaves the deck cued at its position. If the player has moved to another track by the time the deck has read this one, the deck just loads it.
+
+The switch is a cut, with the deck's 5 ms fade-in and the player's pause. The two streams are timed separately, so the deck can start a few milliseconds early or late (inference, not measured).
 
 ## Playing a deck
 
@@ -89,7 +105,7 @@ The marks set in the sampler view show on both waveforms. **Mark <** and **Mark 
 
 ### Seeking
 
-A click or drag on the overview seeks. With Quantize on and the deck playing, the deck keeps its phase: it lands on the beat nearest the point, as far past it as the head was past its own beat. A seek outside a loop playing ends the loop. In the terminal, `:dj a seek 1:30` or `:dj a seek 25%`.
+A click or drag on the overview seeks. With Quantize on and the deck playing, the deck keeps its phase: it lands on the beat nearest the point, as far past it as the head was past its own beat. A seek, hot cue or return to the cue outside a loop playing ends the loop. In the terminal, `:dj a seek 1:30` or `:dj a seek 25%`.
 
 ## Beatmatching
 
@@ -171,7 +187,7 @@ The **mixer**:
 
 - **Curve Smooth, Sharp.** Smooth keeps the level constant across the crossfader's travel, for blends. Sharp holds both decks at full level and fades one out only over the last 5% of the travel, for cuts.
 
-The main mix passes a soft clip, which leaves levels under half of full scale untouched. playr's volume slider does not reach the decks; set their level with the channel faders.
+The main mix passes a soft clip, which leaves levels under `dj_knee` in `settings.toml`, -0.9 dBFS by default, untouched. playr's volume slider is the decks' master volume, after the clip; it scales the headphone cue too.
 
 ### Headphone cue
 

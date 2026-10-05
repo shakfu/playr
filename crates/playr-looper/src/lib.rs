@@ -19,7 +19,7 @@ use std::path::Path;
 pub use looper::{new, Cmd, Handle, Looper, Recording, Returned, Status};
 pub use tape::{
     crossfade, fade_frames, Crossfade, Filter, Loop, Setting, Tape, Window, DEFAULT_FADE_MS,
-    DEFAULT_SLEW_MS, MAX_SLEW_MS,
+    DEFAULT_KNEE, DEFAULT_SLEW_MS, MAX_SLEW_MS,
 };
 
 /// Voices reading the loop.

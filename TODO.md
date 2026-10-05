@@ -24,9 +24,15 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Mixer
 
-- [ ] **A mixer section, with the volume as master.** The player, the tape and the DJ decks each play on their own stream, and only the player follows the volume slider. While the tape or a deck plays, the player is paused, so the slider does nothing. The DJ engine has a master volume, `Setting::Volume`, that the app never sends; the looper has none. The section holds the master volume, applied to the main mix of all three with the player's percent-to-gain law, and a level per source. The headphone cue keeps its own level, as on a DJ mixer, so turning the room down leaves the headphones alone. The level meter reads only the player; the decks already measure their peak, in `Status::take_peak`. Open: whether the section is a panel of its own, part of the transport, or the DJ tab's mixer grown; and whether the three streams become one, which both engines' designs rejected for the player's 2 s ring (open question 6 in `docs/dev/dj-engine.md`).
+- [ ] **A mixer section, with the volume as master.** The player, the tape and the DJ decks each play on their own stream, and only the player follows the volume slider. While the tape or a deck plays, the player is paused, so the slider does nothing. The DJ engine's master volume follows the slider; the looper has none. The section holds the master volume, applied to the main mix of all three with the player's percent-to-gain law, and a level per source. The headphone cue keeps its own level, as on a DJ mixer, so turning the room down leaves the headphones alone. The level meter reads only the player; the decks already measure their peak, in `Status::take_peak`. Open: whether the section is a panel of its own, part of the transport, or the DJ tab's mixer grown; and whether the three streams become one, which both engines' designs rejected for the player's 2 s ring (open question 6 in `docs/dev/dj-engine.md`).
 
 ## Medium
+
+### DJ decks and tape
+
+- [ ] **A crossfade when a deck's track is replaced.** With strict off, a track picked for a playing deck fades it out over 5 ms, then plays silence while the new track decodes and resamples, which takes seconds (inference). A crossfade needs the new track read before the old one stops, and both in memory. From the review in `docs/dev/261005-review.md`.
+
+- [ ] **Anti-aliasing in the read heads.** The deck and tape heads interpolate with a 4-point Hermite and no anti-alias filter. Above about +16% rate, bright material likely aliases (inference). Measure first: the aliased energy of a sweep at +16%, +50% and the tape's 4x. A fix filters ahead of the head by the rate, or uses a longer windowed-sinc kernel. From the review.
 
 ### Playlists
 
@@ -125,6 +131,12 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 - [ ] **Publishing to crates.io.** Manual, with `cargo publish --workspace`. `playr-gui` and `playr-server` have `publish = false`; decide whether they go to crates.io, and whether the release workflow publishes.
 
 ## Low
+
+### DJ decks and tape
+
+- [ ] **The cue on a 4-channel PipeWire or Pulse sink.** `cue-out 3-4` puts the cue on channels 3 and 4. A sound server advertising 4 or more channels for a stereo device may downmix them into the speakers (inference). Needs a test on such a sink; the fix may be to refuse `3-4` there. The cue's own level is in the Mixer item. From the review.
+
+- [ ] **Commands stuck behind a load.** A `Load` waits in the command ring until the return ring has room, and every command behind it waits too, Pause included, in both engines. It needs the UI to stop draining returns while the ring fills, 16 returns in the looper and 8 in the DJ engine, so it has not been seen. Letting commands pass a waiting `Load` would break their order. From the review.
 
 ### Playback
 

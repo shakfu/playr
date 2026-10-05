@@ -1,5 +1,6 @@
 //! A whole track in memory and its beat grid.
 
+use crate::deck::HOT_CUES;
 use crate::Error;
 
 /// A constant-tempo beat grid: beat `n` falls at `t0 + n * 60 / bpm`
@@ -34,12 +35,14 @@ impl Grid {
     }
 }
 
-/// Interleaved `f32` at the device's rate, with its grid if it has one.
+/// Interleaved `f32` at the device's rate, with its grid if it has one
+/// and the hot cues the deck starts with.
 #[derive(Debug, Clone)]
 pub struct Track {
     samples: Vec<f32>,
     channels: usize,
     grid: Option<Grid>,
+    hot: [Option<f64>; HOT_CUES],
 }
 
 impl Track {
@@ -57,7 +60,19 @@ impl Track {
             samples,
             channels: channels as usize,
             grid,
+            hot: [None; HOT_CUES],
         })
+    }
+
+    /// Sets the hot cues, in frames, dropping any not finite. They load with
+    /// the track, so the deck's status never shows it without them.
+    pub fn with_hot_cues(mut self, hot: [Option<f64>; HOT_CUES]) -> Self {
+        self.hot = hot.map(|c| c.filter(|c| c.is_finite()));
+        self
+    }
+
+    pub fn hot_cues(&self) -> [Option<f64>; HOT_CUES] {
+        self.hot
     }
 
     pub(crate) fn empty() -> Self {
@@ -65,6 +80,7 @@ impl Track {
             samples: Vec::new(),
             channels: 1,
             grid: None,
+            hot: [None; HOT_CUES],
         }
     }
 

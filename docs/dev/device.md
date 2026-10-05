@@ -22,7 +22,7 @@ Open decisions, with the recommendation first:
 
 - **A seam for tests.** The `Backend` trait already lets tests supply a fake device.
 
-- **Device loss.** `DeviceEvent::Lost` stops playback and reports it.
+- **Device loss.** `DeviceEvent::Lost` stops playback and reports it. The tape and the decks close and say so; a load opens them again.
 
 ## Design
 

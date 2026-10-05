@@ -54,6 +54,10 @@ pub struct Settings {
     pub convert_with_moss: ConvertWithMoss,
     /// The onset sensitivity `:slice onsets` uses when given none, 0 to 1.
     pub onset_sensitivity: f32,
+    /// The levels, in dBFS, below which the DJ master's and the tape's
+    /// write head's soft clips pass the signal unchanged.
+    pub dj_knee: f32,
+    pub tape_knee: f32,
     /// What an export does at slice edges, and how long a fade takes.
     pub slice_edges: crate::samples::Edges,
     pub slice_fades: crate::samples::Fades,
@@ -151,6 +155,8 @@ impl Default for Settings {
                 path: PathBuf::new(),
             },
             onset_sensitivity: 0.5,
+            dj_knee: 0.0,
+            tape_knee: 0.0,
             slice_edges: crate::samples::Edges::Exact,
             slice_fades: crate::samples::Fades::default(),
             slice_ot_file: false,
@@ -350,6 +356,13 @@ impl Settings {
                 ("onset_sensitivity", v) => match number(v) {
                     Some(n) if (0.0..=1.0).contains(&n) => self.onset_sensitivity = n as f32,
                     _ => errors.add(at, "onset_sensitivity is a number from 0 to 1"),
+                },
+                (name @ ("dj_knee" | "tape_knee"), v) => match number(v) {
+                    Some(n) if (-24.0..=-0.1).contains(&n) => match name {
+                        "dj_knee" => self.dj_knee = n as f32,
+                        _ => self.tape_knee = n as f32,
+                    },
+                    _ => errors.add(at, format!("{name} is a number from -24 to -0.1 dBFS")),
                 },
                 ("slice_edges", DeValue::String(s)) => {
                     let names = crate::samples::Edges::NAMES;

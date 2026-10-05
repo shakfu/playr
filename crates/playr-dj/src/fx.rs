@@ -10,6 +10,8 @@ const HIGH_HZ: f32 = 2500.0;
 const SMOOTH_MS: f32 = 10.0;
 /// The filter knob's span either side of centre where it passes everything.
 const DEAD: f32 = 0.05;
+/// How far past the deadband, 0 to 1, the filter takes to blend in.
+const BLEND: f32 = 0.1;
 /// The filter's cutoff range, on a log scale.
 const FILTER_HZ: (f32, f32) = (20.0, 20_000.0);
 /// The two sections of a 4th-order Butterworth filter, by Q.
@@ -166,12 +168,11 @@ impl Filter {
         self.knob.set(knob.clamp(-1.0, 1.0), self.smooth);
     }
 
+    /// Filters `x`. The state runs while dry, and the filter blends in over
+    /// [`BLEND`]: fully open, the high-pass is 20 Hz, not transparent.
     pub(crate) fn tick(&mut self, x: [f32; 2]) -> [f32; 2] {
         let knob = self.knob.next();
         let t = ((knob.abs() - DEAD) / (1.0 - DEAD)).max(0.0);
-        if t == 0.0 {
-            return x;
-        }
         let (lo, hi) = FILTER_HZ;
         // Fully open at the deadband's edge: 20 kHz for the low-pass, 20 Hz
         // for the high-pass.
@@ -181,14 +182,12 @@ impl Filter {
         };
         self.svf
             .tune(hz.min(0.45 * self.sample_rate as f32), self.sample_rate);
+        let w = (t / BLEND).min(1.0);
         let mut out = x;
         for (ch, o) in out.iter_mut().enumerate() {
             let taps = self.svf.tick(ch, x[ch]);
-            *o = match (t > 0.0, knob < 0.0) {
-                (false, _) => x[ch],
-                (true, true) => taps.low,
-                (true, false) => taps.high,
-            };
+            let y = if knob < 0.0 { taps.low } else { taps.high };
+            *o += w * (y - *o);
         }
         out
     }

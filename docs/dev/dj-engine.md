@@ -190,9 +190,9 @@ Per deck: read, rate, then gain (a trim, +/-12 dB), the EQ and filter (tier 1), 
 
 - **EQ**, tier 1: Linkwitz-Riley crossovers at 246 Hz and 2.5 kHz, Mixxx's defaults ([Mixxx equalizers](https://manual.mixxx.org/2.4/it/chapters/preferences/equalizers)). Each band is scaled, then the bands are summed; a kill sets a band's gain to 0. The bands sum flat in level, with an all-pass phase shift. The EQ is bypassed at unity, so a flat deck stays exact.
 
-- **Filter**, tier 1: the looper's state-variable filter, low-pass left of centre and high-pass right, bypassed in a deadband around the centre.
+- **Filter**, tier 1: the looper's state-variable filter, low-pass left of centre and high-pass right, bypassed in a deadband around the centre. Its state runs in the deadband, and it blends in over the first 0.1 of the knob past it: fully open, the high-pass is 20 Hz, not transparent. Stopped in the deadband, the low-pass started from silence and stepped by 0.15 on a 40 Hz sine.
 
-- **Master**: the sum, through the looper's soft clip, then playr's volume.
+- **Master**: the sum, through a soft clip with its knee at `dj_knee`, -0.9 dBFS by default, then playr's volume. The looper's knee, -6 dBFS, bent every peak of one deck at unity.
 
 `playr-core`'s player EQ (RBJ shelves at 100 Hz, 1 kHz and 10 kHz) is a listening EQ with no kill. The decks do not reuse it.
 

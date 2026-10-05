@@ -588,6 +588,11 @@ fn tape_messages_are_worded() {
             "the window is empty; its start must come before its end".into(),
         ),
         (T::AlreadySaving, "the tape is already being saved".into()),
+        (T::SaveAborted, "the save was cut short; save again".into()),
+        (
+            T::DeviceLost("gone".into()),
+            "audio device lost: gone; load the tape again".into(),
+        ),
         (T::Saving, "saving the tape".into()),
         (
             T::Saved(file.clone()),
@@ -706,6 +711,15 @@ fn dj_messages_are_worded() {
             },
             "deck a grid: 128.00 BPM, a beat at 0.123 s",
         ),
+        (
+            M::DeviceLost("gone".into()),
+            "audio device lost: gone; load the decks again",
+        ),
+        (
+            M::SpeedOutOfReach(8),
+            "a deck reaches +7 semitones at most; the player is at +8",
+        ),
+        (M::Took(A), "deck a took over from the player"),
         (M::Failed("no device".into()), "dj: no device"),
     ] {
         assert_eq!(text(&Message::Dj(message)), words);

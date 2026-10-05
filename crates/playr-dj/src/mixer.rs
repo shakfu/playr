@@ -2,7 +2,7 @@
 
 use std::f64::consts::FRAC_PI_2;
 
-use playr_dsp::clip;
+use playr_dsp::soft_clip;
 
 use crate::deck::{Deck, Nudge, Ramp, Range, HOT_CUES};
 use crate::fx::{Band, EQ_DB};
@@ -25,6 +25,9 @@ const LOCK_MAX: f64 = 0.05;
 const GLIDE_MS: f64 = 400.0;
 /// The sharp crossfader curve cuts a deck within this much of the far end.
 const SHARP_EDGE: f64 = 0.05;
+/// The master's soft clip passes levels below this unchanged, until set.
+/// A knee at 0.5 bent every peak of one deck at unity.
+pub const DEFAULT_KNEE: f32 = 0.9;
 /// The loop lengths offered, in beats.
 pub const LOOP_BEATS: [f64; 8] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 
@@ -54,6 +57,9 @@ pub enum Curve {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Setting {
     /// Plays from the head; during a cue preview, keeps playing on release.
+    /// Moves the head to these frames and plays, out of phase with the
+    /// other deck if need be: a handover from another player continues.
+    PlayFrom(Side, f64),
     Play(Side),
     Pause(Side),
     /// CUE pressed (`true`) or released, as on a CDJ: pressed while playing,
@@ -87,6 +93,9 @@ pub enum Setting {
     CueSwap(bool),
     /// The master volume, 0 to 1.
     Volume(f64),
+    /// The level, 0 to 0.99, below which the master's soft clip passes the
+    /// mix unchanged.
+    Knee(f32),
     /// An EQ band's gain in dB, -24 to 6.
     Eq(Side, Band, f64),
     /// Silences an EQ band, or brings it back at its gain.
@@ -98,8 +107,6 @@ pub enum Setting {
     /// while playing keeps the deck's phase.
     HotCue(Side, usize),
     HotClear(Side, usize),
-    /// Every hot cue, in frames, as a load restores them.
-    HotCues(Side, [Option<f64>; HOT_CUES]),
     /// Moves the head this many beats, and a loop playing with it.
     BeatJump(Side, f64),
     /// Loops this many beats from the head, from the beat before it with
@@ -127,8 +134,9 @@ impl Setting {
             | Setting::Filter(_, v)
             | Setting::BeatJump(_, v)
             | Setting::Loop(_, Some(v))
-            | Setting::Seek(_, v) => v.is_finite(),
-            Setting::HotCues(_, cues) => cues.iter().flatten().all(|c| c.is_finite()),
+            | Setting::Seek(_, v)
+            | Setting::PlayFrom(_, v) => v.is_finite(),
+            Setting::Knee(v) => v.is_finite(),
             _ => true,
         }
     }
@@ -145,6 +153,7 @@ pub struct Mixer {
     cue_bus: Option<Side>,
     cue_swap: bool,
     volume: Ramp,
+    knee: f32,
     /// Each deck's EQ bands, in dB, and whether each is killed.
     bands: [[(f64, bool); 3]; 2],
     cue_out: CueOut,
@@ -162,6 +171,7 @@ impl Mixer {
             cue_bus: None,
             cue_swap: false,
             volume: Ramp::new(1.0),
+            knee: DEFAULT_KNEE,
             bands: [[(0.0, false); 3]; 2],
             cue_out: CueOut::default(),
             curve: Curve::default(),
@@ -213,6 +223,12 @@ impl Mixer {
         }
         match s {
             Setting::Play(d) => self.play(d),
+            Setting::PlayFrom(d, at) => {
+                let deck = self.deck_mut(d);
+                let at = at.clamp(0.0, deck.track().frames() as f64);
+                deck.seek(at);
+                deck.play();
+            }
             Setting::Pause(d) => self.deck_mut(d).pause(),
             Setting::Cue(d, true) => self.cue_down(d),
             Setting::Cue(d, false) => {
@@ -260,6 +276,7 @@ impl Mixer {
                 let n = self.smooth();
                 self.volume.set(v.clamp(0.0, 1.0), n);
             }
+            Setting::Knee(v) => self.knee = v.clamp(0.0, 0.99),
             Setting::Eq(d, b, db) => {
                 self.bands[d.index()][b.index()].0 = db.clamp(EQ_DB.0, EQ_DB.1);
                 self.retune(d);
@@ -272,7 +289,6 @@ impl Mixer {
             Setting::HotCue(d, n) if n < HOT_CUES => self.hot_cue(d, n),
             Setting::HotClear(d, n) if n < HOT_CUES => self.deck_mut(d).hot[n] = None,
             Setting::HotCue(..) | Setting::HotClear(..) => {}
-            Setting::HotCues(d, cues) => self.deck_mut(d).hot = cues,
             Setting::BeatJump(d, beats) => self.beat_jump(d, beats),
             Setting::Loop(d, beats) => self.set_loop(d, beats),
             Setting::CueOut(c) => self.cue_out = c,
@@ -292,13 +308,8 @@ impl Mixer {
             (true, true) => self.snap(side, to) + d.pos() - self.snap(side, d.pos()),
             _ => to,
         };
-        let d = self.deck_mut(side);
-        if d.looping()
-            .is_some_and(|(start, len)| !(start..start + len).contains(&to))
-        {
-            d.set_loop(None);
-        }
-        d.seek(to);
+        let to = self.in_track(side, to);
+        self.deck_mut(side).seek(to);
     }
 
     /// Sends `side`'s EQ bands to its deck as gains.
@@ -323,6 +334,16 @@ impl Mixer {
         }
     }
 
+    /// `frames`, moved whole beats later if before the track's start, so a
+    /// quantized position keeps its phase without playing silence first.
+    fn in_track(&self, side: Side, frames: f64) -> f64 {
+        match (frames < 0.0, self.beat(side)) {
+            (true, Some(beat)) => frames + (-frames / beat).ceil() * beat,
+            (true, None) => 0.0,
+            (false, _) => frames,
+        }
+    }
+
     /// Frames per beat on `side`'s grid.
     fn beat(&self, side: Side) -> Option<f64> {
         let g = self.deck(side).grid()?;
@@ -332,7 +353,7 @@ impl Mixer {
     fn hot_cue(&mut self, side: Side, n: usize) {
         let d = self.deck(side);
         let Some(at) = d.hot[n] else {
-            let at = self.snap(side, d.resting());
+            let at = self.in_track(side, self.snap(side, d.resting()));
             self.deck_mut(side).hot[n] = Some(at);
             return;
         };
@@ -341,6 +362,7 @@ impl Mixer {
             true => at + d.pos() - self.snap(side, d.pos()),
             false => at,
         };
+        let to = self.in_track(side, to);
         self.deck_mut(side).seek(to);
         self.play(side);
     }
@@ -351,11 +373,12 @@ impl Mixer {
         };
         let by = beats * beat;
         let d = self.deck_mut(side);
-        let to = d.resting() + by;
-        d.seek(to);
+        // The loop moves first, so the head does not leave it.
         if let Some((start, len)) = d.looping() {
             d.set_loop(Some((start + by, len)));
         }
+        let to = d.resting() + by;
+        d.seek(to);
     }
 
     fn set_loop(&mut self, side: Side, beats: Option<f64>) {
@@ -398,7 +421,7 @@ impl Mixer {
             self.deck_mut(side).back_to_cue();
             return;
         }
-        let at = self.snap(side, d.resting());
+        let at = self.in_track(side, self.snap(side, d.resting()));
         self.deck_mut(side).preview(at);
         self.quantize_start(side);
     }
@@ -415,8 +438,13 @@ impl Mixer {
         };
         let m = multiple(gf.bpm * f.target(), gl.bpm * l.target());
         if let Some(by) = self.offset(side, m) {
-            let to = self.deck(side).pos() + by;
-            self.deck_mut(side).jump(to);
+            let d = self.deck_mut(side);
+            let to = match d.looping() {
+                // Kept in the loop: moving into phase does not leave it.
+                Some((start, len)) => start + (d.pos() + by - start).rem_euclid(len),
+                None => d.pos() + by,
+            };
+            d.jump(to);
         }
     }
 
@@ -436,8 +464,13 @@ impl Mixer {
             return;
         }
         if let Some(by) = self.offset(side, m) {
-            let to = self.deck(side).pos() + by;
-            self.deck_mut(side).jump(to);
+            let d = self.deck_mut(side);
+            let to = match d.looping() {
+                // Kept in the loop: moving into phase does not leave it.
+                Some((start, len)) => start + (d.pos() + by - start).rem_euclid(len),
+                None => d.pos() + by,
+            };
+            d.jump(to);
         }
     }
 
@@ -500,8 +533,9 @@ impl Mixer {
         let Some(by) = by.filter(|_| !nudging) else {
             let d = self.deck_mut(side);
             d.set_lock(1.0);
-            // Held from where the nudge leaves it.
-            d.lock_offset = f64::NAN;
+            // Held from where a nudge leaves it. A deck stopped holds none,
+            // or the phase the leader happens to start in would be held.
+            d.lock_offset = if nudging { f64::NAN } else { 0.0 };
             return;
         };
         let e = by / (g.period() / m * self.sample_rate as f64);
@@ -550,6 +584,7 @@ impl Mixer {
             true => (1, 0),
         };
         let split = self.cue_out == CueOut::Split || channels < 4;
+        let knee = self.knee;
         for o in out.chunks_exact_mut(channels.max(2)) {
             o.fill(0.0);
             let x = self.xfade.next();
@@ -568,15 +603,15 @@ impl Mixer {
             }
             match (self.cue_bus, split) {
                 (Some(_), true) => {
-                    o[left] = clip((main[0] + main[1]) / 2.0) * vol;
-                    o[right] = clip((cue[0] + cue[1]) / 2.0) * vol;
+                    o[left] = soft_clip((main[0] + main[1]) / 2.0, knee) * vol;
+                    o[right] = soft_clip((cue[0] + cue[1]) / 2.0, knee) * vol;
                 }
                 (bus, _) => {
-                    o[0] = clip(main[0]) * vol;
-                    o[1] = clip(main[1]) * vol;
+                    o[0] = soft_clip(main[0], knee) * vol;
+                    o[1] = soft_clip(main[1], knee) * vol;
                     if bus.is_some() {
-                        o[2] = clip(cue[0]) * vol;
-                        o[3] = clip(cue[1]) * vol;
+                        o[2] = soft_clip(cue[0], knee) * vol;
+                        o[3] = soft_clip(cue[1], knee) * vol;
                     }
                 }
             }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use playr_core::analysis::tempo;
 use playr_core::analysis::TempoFix;
+use playr_core::audio::output::DeviceEvent;
 use playr_core::audio::resample::Resample;
 use playr_core::audio::State;
 use playr_core::db::Track;
@@ -45,6 +46,9 @@ pub enum GridEdit {
 pub enum DjAction {
     /// Load the track under the cursor.
     Load(Side),
+    /// Take over the track the player is playing: load it, then play it
+    /// from where the player is, and pause the player.
+    Take(Side),
     /// Play, pausing the player; during a held cue, keep playing.
     Play(Side),
     Pause(Side),
@@ -120,6 +124,10 @@ pub enum DjMessage {
     Playing(Side),
     /// Sync to a tempo no rate range reaches.
     OutOfReach(Side),
+    /// A take while the player's speed, in semitones, is beyond any range.
+    SpeedOutOfReach(i32),
+    /// The deck took over from the player.
+    Took(Side),
     /// A tap that started a new count; one more sets the tempo.
     Tapped(Side),
     /// The cue on channels 3 and 4 with a device of this many channels.
@@ -137,6 +145,8 @@ pub enum DjMessage {
         bpm: f64,
         t0: f64,
     },
+    /// The output device went away, and the tracks with it.
+    DeviceLost(String),
     Failed(String),
 }
 
@@ -239,6 +249,8 @@ const TAP_GAP: f64 = 2.0;
 
 /// The decks' state on the interface's side.
 pub struct Decks {
+    /// The master's soft clip knee.
+    knee: f32,
     output: Output,
     live: Option<Live>,
     loaded: [Option<Loaded>; 2],
@@ -256,8 +268,12 @@ pub struct Decks {
     sent: Sent,
     /// Plays the next track once it loads: it replaced one playing.
     autoplay: [bool; 2],
+    /// Takes over from the player once the track loads.
+    handover: [bool; 2],
+    /// The master volume last sent: the player's.
+    volume: f32,
     state: DjState,
-    errors: (Sender<String>, Receiver<String>),
+    errors: (Sender<DeviceEvent>, Receiver<DeviceEvent>),
 }
 
 fn i(side: Side) -> usize {
@@ -268,18 +284,20 @@ fn i(side: Side) -> usize {
 }
 
 impl Decks {
-    /// Decks playing to the output device `device`, or the default.
-    pub fn new(device: Option<String>) -> Self {
-        Decks::with(Output::Device(device))
+    /// Decks playing to the output device `device`, or the default, with the
+    /// master's soft clip at `knee`.
+    pub fn new(device: Option<String>, knee: f32) -> Self {
+        Decks::with(Output::Device(device), knee)
     }
 
     /// Decks with no device, which play only as [`Decks::process`] is called.
     pub fn manual() -> Self {
-        Decks::with(Output::Manual)
+        Decks::with(Output::Manual, playr_dj::DEFAULT_KNEE)
     }
 
-    fn with(output: Output) -> Self {
+    fn with(output: Output, knee: f32) -> Self {
         Decks {
+            knee,
             output,
             live: None,
             loaded: [None, None],
@@ -291,6 +309,8 @@ impl Decks {
             next: [None, None],
             sent: [None, None],
             autoplay: [false; 2],
+            handover: [false; 2],
+            volume: f32::NAN,
             state: DjState::default(),
             errors: channel(),
         }
@@ -355,11 +375,14 @@ impl Decks {
                 }
                 Output::Manual => (rate, None),
             };
-            let (engine, handle) = playr_dj::new(rate);
+            let (engine, mut handle) = playr_dj::new(rate);
+            handle
+                .set(Setting::Knee(self.knee))
+                .map_err(|e| e.to_string())?;
             let stream = match device {
                 Some(device) => {
                     let errors = self.errors.0.clone();
-                    let on_error = move |e: cpal::Error| _ = errors.send(e.to_string());
+                    let on_error = move |e: cpal::Error| _ = errors.send(e.into());
                     let (stream, channels) = playr_dj::device::open(&device, engine, on_error)
                         .map_err(|e| e.to_string())?;
                     (Some(stream), None, channels)
@@ -395,6 +418,34 @@ impl Decks {
             result: rx,
         });
         Ok(())
+    }
+
+    /// Sends the player's volume as the master, when it changed. Once the
+    /// engine is open; a new engine starts at NaN, so it gets it too.
+    fn follow_volume(&mut self, volume: f32) {
+        if volume == self.volume {
+            return;
+        }
+        if let Some(live) = &mut self.live {
+            if live.handle.set(Setting::Volume(f64::from(volume))).is_ok() {
+                self.volume = volume;
+            }
+        }
+    }
+
+    /// Where the stream reports device events. Manual decks have no stream;
+    /// whatever drives them reports here.
+    pub fn device_events(&self) -> Sender<DeviceEvent> {
+        self.errors.0.clone()
+    }
+
+    /// Starts afresh after the device went: the next load opens a new
+    /// engine. Analyses under way still store their grids.
+    fn lose_device(&mut self) {
+        let output = std::mem::replace(&mut self.output, Output::Manual);
+        let analysing = std::mem::take(&mut self.analysing);
+        *self = Decks::with(output, self.knee);
+        self.analysing = analysing;
     }
 
     fn set(&mut self, s: Setting) -> Result<(), String> {
@@ -484,8 +535,18 @@ pub fn poll(f: &mut impl Frontend) {
         }
     }
     while let Ok(e) = f.dj().errors.1.try_recv() {
-        f.notify(DjMessage::Failed(e).into());
+        match e {
+            DeviceEvent::Rerouted => {}
+            DeviceEvent::Error(e) => f.notify(DjMessage::Failed(e).into()),
+            // The tracks played in the stream's callback, and went with it.
+            DeviceEvent::Lost(e) => {
+                f.dj().lose_device();
+                f.notify(DjMessage::DeviceLost(e).into());
+            }
+        }
     }
+    let volume = f.session().player().volume();
+    f.dj().follow_volume(volume);
     for side in [Side::A, Side::B] {
         if let Err(e) = keep_hot_cues(f, side) {
             f.notify(DjMessage::Failed(e).into());
@@ -545,9 +606,17 @@ fn keep_hot_cues(f: &mut impl Frontend, side: Side) -> Result<(), String> {
 /// the engine takes it, in [`taken`].
 fn start(f: &mut impl Frontend, side: Side, loading: Loading, read: Read) -> Result<(), String> {
     let grid = f.session().grid(&loading.path);
+    let rate = f64::from(f.dj().rate().ok_or("no engine")?);
+    let mut hot = [None; HOT_CUES];
+    for (slot, at) in f.session().hot_cues(&loading.path) {
+        if let Some(h) = hot.get_mut(usize::from(slot).wrapping_sub(1)) {
+            *h = Some(at * rate);
+        }
+    }
     let frames = read.samples.len() / usize::from(read.channels);
     let track = playr_dj::Track::new(read.samples, read.channels, grid.and_then(dj_grid))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .with_hot_cues(hot);
     let live = f.dj().live.as_mut().ok_or("no engine")?;
     live.handle.load(side, track).map_err(|e| e.to_string())?;
     f.dj().arriving[i(side)] = Some(Loaded {
@@ -556,7 +625,7 @@ fn start(f: &mut impl Frontend, side: Side, loading: Loading, read: Read) -> Res
         frames,
         peaks: Arc::new(read.peaks),
         grid,
-        hot: [None; HOT_CUES],
+        hot,
         marks: Vec::new(),
     });
     Ok(())
@@ -574,14 +643,6 @@ fn taken(f: &mut impl Frontend, side: Side) -> Option<DjMessage> {
         .iter()
         .map(|m| m.time().as_secs_f64() * rate)
         .collect();
-    for (slot, at) in f.session().hot_cues(&loaded.path) {
-        if let Some(h) = loaded.hot.get_mut(usize::from(slot).wrapping_sub(1)) {
-            *h = Some(at * rate);
-        }
-    }
-    if let Err(e) = f.dj().set(Setting::HotCues(side, loaded.hot)) {
-        return Some(DjMessage::Failed(e));
-    }
     let d = f.dj();
     d.taps[i(side)].clear();
     d.loads[i(side)] += 1;
@@ -590,6 +651,15 @@ fn taken(f: &mut impl Frontend, side: Side) -> Option<DjMessage> {
         if let Err(e) = d.set(Setting::Play(side)) {
             return Some(DjMessage::Failed(e));
         }
+    }
+    let took = match std::mem::take(&mut f.dj().handover[i(side)]) {
+        true => hand_over(f, side, &loaded.path),
+        false => Ok(false),
+    };
+    match took {
+        Ok(true) => return Some(DjMessage::Took(side)),
+        Ok(false) => {}
+        Err(m) => return Some(m),
     }
     let analysed = f.session().analysis_of(&loaded.path).is_some();
     if loaded.grid.is_none() && !analysed {
@@ -648,6 +718,7 @@ fn send_grid(f: &mut impl Frontend, side: Side, grid: Option<tempo::Grid>) -> Re
 pub fn act(f: &mut impl Frontend, action: DjAction) {
     let result = match action {
         DjAction::Load(side) => return load(f, side),
+        DjAction::Take(side) => return take(f, side),
         DjAction::Grid(side, edit) => return grid(f, side, edit),
         _ => send(f, action),
     };
@@ -677,10 +748,99 @@ fn load(f: &mut impl Frontend, side: Side) {
     }
     d.next[i(side)] = None;
     d.autoplay[i(side)] = false;
+    d.handover[i(side)] = false;
     match f.dj().load(side, &track) {
         Ok(()) => f.notify(DjMessage::Loading(side).into()),
         Err(e) => f.notify(DjMessage::Failed(e).into()),
     }
+}
+
+/// The deck rate, in percent, that plays as the player's speed of `semitones`,
+/// and the narrowest range that holds it; `None` past every range.
+fn rate_for(semitones: i32) -> Option<(f64, Range)> {
+    let pct = (2f64.powf(f64::from(semitones) / 12.0) - 1.0) * 100.0;
+    [Range::Narrow, Range::Medium, Range::Wide]
+        .into_iter()
+        .find(|r| pct.abs() <= r.percent() + 1e-9)
+        .map(|r| (pct, r))
+}
+
+/// Loads the player's track onto `side`, to take over once it is read. The
+/// player plays on meanwhile.
+fn take(f: &mut impl Frontend, side: Side) {
+    if f.dj().status().is_some_and(|s| s.deck(side).playing()) {
+        return f.notify(DjMessage::Playing(side).into());
+    }
+    let (path, rate) = match f.session().playing_track() {
+        Ok(track) => track,
+        Err(refusal) => return f.notify(refusal.into()),
+    };
+    let semitones = f.session().player().status().semitones;
+    if rate_for(semitones).is_none() {
+        return f.notify(DjMessage::SpeedOutOfReach(semitones).into());
+    }
+    // A track played from outside the library has no row.
+    let track = (f.session().tracks_at(std::slice::from_ref(&path)).pop()).unwrap_or(Track {
+        path: path.to_string_lossy().into(),
+        sample_rate: Some(rate),
+        ..Default::default()
+    });
+    let d = f.dj();
+    d.next[i(side)] = None;
+    d.autoplay[i(side)] = false;
+    match d.load(side, &track) {
+        Ok(()) => {
+            d.handover[i(side)] = true;
+            f.notify(DjMessage::Loading(side).into());
+        }
+        Err(e) => f.notify(DjMessage::Failed(e).into()),
+    }
+}
+
+/// Moves the player's track, now loaded on `side`, from the player to the
+/// deck: its rate as the player's speed, its trim as the ReplayGain the
+/// player applies, at the player's position. With the other deck silent,
+/// the crossfader moves to this one, which its centre would take 3 dB from.
+/// A playing player pauses as the deck starts; a paused one leaves the deck
+/// cued there. False when the player has moved on to another track.
+fn hand_over(f: &mut impl Frontend, side: Side, path: &Path) -> Result<bool, DjMessage> {
+    if f.session().playing_track().map(|(p, _)| p).as_deref() != Ok(path) {
+        return Ok(false);
+    }
+    let status = f.session().player().status();
+    let Some((pct, range)) = rate_for(status.semitones) else {
+        return Err(DjMessage::SpeedOutOfReach(status.semitones));
+    };
+    let trim = status.gain_db.unwrap_or(0.0);
+    let playing = status.state == State::Playing;
+    let rate = f64::from(f.dj().rate().ok_or(DjMessage::Empty(side))?);
+    let at = f.session().player().position().as_secs_f64() * rate;
+    let start = match playing {
+        true => Setting::PlayFrom(side, at),
+        false => Setting::Seek(side, at),
+    };
+    let d = f.dj();
+    let alone = !d.status().is_some_and(|s| s.deck(side.other()).playing());
+    let x = if side == Side::A { 0.0 } else { 1.0 };
+    let xfade = alone.then_some(Setting::Xfade(x));
+    let settings = [
+        Some(Setting::Range(side, range)),
+        Some(Setting::Rate(side, pct)),
+        Some(Setting::Gain(side, f64::from(trim))),
+        xfade,
+        Some(start),
+    ];
+    for s in settings.into_iter().flatten() {
+        d.set(s).map_err(DjMessage::Failed)?;
+    }
+    d.state.gain[i(side)] = trim;
+    if alone {
+        d.state.xfade = x as f32;
+    }
+    if playing {
+        f.session().send(playr_core::audio::Cmd::TogglePause);
+    }
+    Ok(true)
 }
 
 /// The deck an action acts on, if it acts on one.
@@ -688,6 +848,7 @@ fn deck_of(action: DjAction) -> Option<Side> {
     use DjAction as D;
     match action {
         D::Load(s)
+        | D::Take(s)
         | D::Play(s)
         | D::Pause(s)
         | D::Cue(s)
@@ -813,7 +974,7 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
             &[]
         }
         D::Mark(..) => &[],
-        D::Load(_) | D::Grid(..) => &[],
+        D::Load(_) | D::Take(_) | D::Grid(..) => &[],
     };
     let d = f.dj();
     for s in settings {

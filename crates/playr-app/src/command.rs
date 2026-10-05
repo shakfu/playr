@@ -742,7 +742,7 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
     }
 }
 
-const DJ_USAGE: &str = "usage: :dj a|b load | play | pause | cue [down|up] | \
+const DJ_USAGE: &str = "usage: :dj a|b load | take | play | pause | cue [down|up] | \
      sync [on|off] | rate PCT | range 8|16|50 | nudge +|-|off | gain DB | level L | \
      eq low|mid|high DB | kill low|mid|high on|off | filter K | hot N [clear] | \
      jump BEATS | loop BEATS|off | seek TIME|PCT% | mute on|off | unqueue | mark prev|next | \
@@ -805,6 +805,7 @@ fn dj(rest: &str) -> Result<crate::dj::DjAction, String> {
             let s = side(s).expect("checked");
             Ok(match setting {
                 ["load"] => D::Load(s),
+                ["take"] => D::Take(s),
                 ["play"] => D::Play(s),
                 ["pause"] => D::Pause(s),
                 ["cue"] => D::Cue(s),
@@ -875,6 +876,7 @@ fn dj_line(d: &crate::dj::DjAction) -> String {
         D::XfadeTo(None) => "xfade centre".into(),
         D::XfadeTo(Some(s)) => format!("xfade {}", deck(*s)),
         D::Load(s) => format!("{} load", deck(*s)),
+        D::Take(s) => format!("{} take", deck(*s)),
         D::Play(s) => format!("{} play", deck(*s)),
         D::Pause(s) => format!("{} pause", deck(*s)),
         D::Cue(s) => format!("{} cue", deck(*s)),

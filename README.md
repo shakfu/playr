@@ -589,6 +589,7 @@ Two decks play library tracks at once, each at its own rate. Each track gets a b
 | command | does |
 |-|-|
 | `:dj a load` | load the track under the cursor onto deck A; `b` for deck B. A playing deck fades out, takes it and plays it; with strict on, it keeps it as its next track and loads it once it stops |
+| `:dj a take` | load the track the player is playing onto deck A and play it from where the player is, at its speed and ReplayGain; the player pauses. See [the DJ guide](docs/guide-dj.md#taking-over-from-the-player) |
 | `:dj strict on\|off` | strict: a track picked for a playing deck waits until the deck stops, so a mis-click cannot cut into a mix. Off until set |
 | `:dj a mark next\|prev` | jump to the next or previous mark, as the sampler set them |
 | `:dj a unqueue` | forget the next track |
@@ -663,6 +664,8 @@ mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in f
 after_queue = "stop"               # after the queue: resume the library, or stop
 speed = -3                         # semitones, -12 to 12
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
+dj_knee = -0.5                     # dBFS where the DJ master's soft clip starts, -24 to -0.1
+tape_knee = -3                     # and the tape write head's
 samples = "~/Music/playr/samples"  # where :slice writes; on Windows, 'C:\Music'
 slice_edges = "zero"               # exact, zero or fade; see Samples
 slice_fade_in = 1                  # ms, for slice_edges = "fade", 0 to 100

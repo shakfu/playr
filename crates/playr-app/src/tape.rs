@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
+use playr_core::audio::output::DeviceEvent;
 use playr_core::audio::resample::Resample;
 use playr_core::audio::State;
 use playr_core::samples;
@@ -92,6 +93,10 @@ pub enum TapeMessage {
     EmptyWindow,
     /// A save started while another runs.
     AlreadySaving,
+    /// A save cut short by a load, a reset or a new write window.
+    SaveAborted,
+    /// The output device went away, and the tape with it.
+    DeviceLost(String),
     Saving,
     Saved(PathBuf),
     Recording(PathBuf),
@@ -139,7 +144,6 @@ struct Live {
     /// The source track's name, for the directories saves go in.
     name: String,
     extent: Extent,
-    recording: bool,
     /// Where the snapshot asked for is to be saved.
     save_to: Option<PathBuf>,
     state: TapeState,
@@ -245,6 +249,8 @@ impl TapeState {
             Setting::Filter(i, f) => self.voices[i].filter = f,
             Setting::Solo(i, on) => self.voices[i].solo = on,
             Setting::Thin(x) => self.thin = x,
+            // From the settings file, not a control.
+            Setting::Knee(_) => {}
         }
     }
 }
@@ -261,27 +267,31 @@ type Saved = Result<PathBuf, String>;
 
 /// The looper's state on the interface's side.
 pub struct Deck {
+    /// The knee of the clip on what the write head records.
+    knee: f32,
     output: Output,
     live: Option<Live>,
     loading: Option<Loading>,
-    /// Saves finishing on their threads, and the stream's errors.
+    /// Saves finishing on their threads, and the stream's events.
     saved: (Sender<Saved>, Receiver<Saved>),
-    errors: (Sender<String>, Receiver<String>),
+    errors: (Sender<DeviceEvent>, Receiver<DeviceEvent>),
 }
 
 impl Deck {
-    /// A deck playing to the output device `device`, or the default.
-    pub fn new(device: Option<String>) -> Self {
-        Deck::with(Output::Device(device))
+    /// A deck playing to the output device `device`, or the default, with
+    /// the write head's clip at `knee`.
+    pub fn new(device: Option<String>, knee: f32) -> Self {
+        Deck::with(Output::Device(device), knee)
     }
 
     /// A deck with no device, which plays only as [`Deck::process`] is called.
     pub fn manual() -> Self {
-        Deck::with(Output::Manual)
+        Deck::with(Output::Manual, playr_looper::DEFAULT_KNEE)
     }
 
-    fn with(output: Output) -> Self {
+    fn with(output: Output, knee: f32) -> Self {
         Deck {
+            knee,
             output,
             live: None,
             loading: None,
@@ -311,7 +321,7 @@ impl Deck {
     }
 
     pub fn recording(&self) -> bool {
-        self.live.as_ref().is_some_and(|l| l.recording)
+        self.live.as_ref().is_some_and(|l| l.handle.recording())
     }
 
     pub fn saving(&self) -> bool {
@@ -370,18 +380,19 @@ impl Deck {
         }
         if let Some(live) = &mut self.live {
             while let Some(r) = live.handle.poll() {
-                if let Returned::Snapshot(s) = r {
-                    found.push(Found::Note(match live.save_to.take() {
-                        Some(dir) => {
-                            let to = (live.name.clone(), live.extent, live.handle.channels());
-                            let tx = self.saved.0.clone();
-                            std::thread::spawn(move || _ = tx.send(save(&dir, to, &s)));
-                            TapeMessage::Saving
-                        }
-                        None => continue,
-                    }));
+                match (r, live.save_to.take()) {
+                    (Returned::Snapshot(s), Some(dir)) => {
+                        let to = (live.name.clone(), live.extent, live.handle.channels());
+                        let tx = self.saved.0.clone();
+                        std::thread::spawn(move || _ = tx.send(save(&dir, to, &s)));
+                        found.push(Found::Note(TapeMessage::Saving));
+                    }
+                    (Returned::Aborted(_), Some(_)) => {
+                        found.push(Found::Note(TapeMessage::SaveAborted));
+                    }
+                    // An old loop is dropped here.
+                    (_, dir) => live.save_to = dir,
                 }
-                // An old loop, or a snapshot cut short, is dropped here.
             }
         }
         while let Ok(r) = self.saved.1.try_recv() {
@@ -391,9 +402,26 @@ impl Deck {
             });
         }
         while let Ok(e) = self.errors.1.try_recv() {
-            found.push(Found::Note(TapeMessage::Failed(e)));
+            match e {
+                DeviceEvent::Rerouted => {}
+                DeviceEvent::Error(e) => found.push(Found::Note(TapeMessage::Failed(e))),
+                // The loop played in the stream's callback, and went with it.
+                DeviceEvent::Lost(e) => {
+                    if let Some(f) = self.live.as_mut().and_then(stop_recording) {
+                        found.push(f);
+                    }
+                    self.live = None;
+                    found.push(Found::Note(TapeMessage::DeviceLost(e)));
+                }
+            }
         }
         found
+    }
+
+    /// Where the stream reports device events. A manual deck has no stream;
+    /// whatever drives it reports here.
+    pub fn device_events(&self) -> Sender<DeviceEvent> {
+        self.errors.0.clone()
     }
 
     /// Plays `loaded` on a new looper, in place of the old one.
@@ -405,10 +433,15 @@ impl Deck {
         };
         let (looper, mut handle) = playr_looper::new(extent.rate);
         handle.load(loaded.lp).map_err(|e| e.to_string())?;
+        handle
+            .set(Setting::Knee(self.knee))
+            .map_err(|e| e.to_string())?;
         let (stream, looper) = match loading.device {
             Some(device) => {
                 let errors = self.errors.0.clone();
-                let on_error = move |e: cpal::Error| _ = errors.send(e.to_string());
+                let on_error = move |e: cpal::Error| _ = errors.send(e.into());
+                // An exclusive device takes one stream at a time.
+                self.live = None;
                 let stream = playr_looper::device::open(&device, looper, on_error)
                     .map_err(|e| e.to_string())?;
                 (Some(stream), None)
@@ -421,7 +454,6 @@ impl Deck {
             looper,
             name: loading.name,
             extent,
-            recording: false,
             save_to: None,
             state: TapeState::new(extent.range),
         });
@@ -491,7 +523,7 @@ fn save(
 
 /// Stops `live`'s recording, if it has one, and reports it.
 fn stop_recording(live: &mut Live) -> Option<Found> {
-    if !std::mem::take(&mut live.recording) {
+    if !live.handle.recording() {
         return None;
     }
     Some(match live.handle.stop_recording() {
@@ -611,10 +643,7 @@ fn record(f: &mut impl Frontend) {
             }
         });
     match started {
-        Ok(path) => {
-            live.recording = true;
-            f.notify(TapeMessage::Recording(path).into());
-        }
+        Ok(path) => f.notify(TapeMessage::Recording(path).into()),
         Err(e) => f.notify(TapeMessage::Failed(e).into()),
     }
 }

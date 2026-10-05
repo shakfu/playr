@@ -86,9 +86,7 @@ fn build_error(e: cpal::Error) -> Error {
     }
 }
 
-/// The stream, mapping the engine's 4 channels to the device's: the first
-/// two's mean on a mono device, the first two on a stereo one, silence past
-/// the fourth.
+/// The stream, playing `engine` through [`render`].
 fn build<T: cpal::SizedSample + Send + 'static>(
     device: &Device,
     config: &StreamConfig,
@@ -101,27 +99,40 @@ fn build<T: cpal::SizedSample + Send + 'static>(
     device
         .build_output_stream::<T, _, _>(
             *config,
-            move |out: &mut [T], _| {
-                for block in out.chunks_mut(CHUNK * ch) {
-                    let frames = block.len() / ch;
-                    let stride = ch.clamp(2, 4);
-                    let mix = &mut four[..frames * stride];
-                    engine.process_channels(mix, stride);
-                    for (o, s) in block.chunks_exact_mut(ch).zip(mix.chunks_exact(stride)) {
-                        match ch {
-                            1 => o[0] = conv((s[0] + s[1]) / 2.0),
-                            _ => {
-                                for (o, s) in o.iter_mut().zip(s) {
-                                    *o = conv(*s);
-                                }
-                                o[stride..].fill(conv(0.0));
-                            }
-                        }
-                    }
-                }
-            },
+            move |out: &mut [T], _| render(&mut engine, out, ch, &mut four, conv),
             on_error,
             None,
         )
         .map_err(build_error)
+}
+
+/// Fills `out`, `channels` interleaved, from `engine`, as the stream does:
+/// the first two channels' mean on a mono device, the first two on a stereo
+/// one, silence past the fourth. `four` is the engine's scratch, 4 samples
+/// a frame; a longer `out` takes several calls of the engine.
+pub fn render<T: Copy>(
+    engine: &mut Engine,
+    out: &mut [T],
+    channels: usize,
+    four: &mut [f32],
+    conv: fn(f32) -> T,
+) {
+    let ch = channels;
+    let stride = ch.clamp(2, 4);
+    for block in out.chunks_mut(four.len() / 4 * ch) {
+        let frames = block.len() / ch;
+        let mix = &mut four[..frames * stride];
+        engine.process_channels(mix, stride);
+        for (o, s) in block.chunks_exact_mut(ch).zip(mix.chunks_exact(stride)) {
+            match ch {
+                1 => o[0] = conv((s[0] + s[1]) / 2.0),
+                _ => {
+                    for (o, s) in o.iter_mut().zip(s) {
+                        *o = conv(*s);
+                    }
+                    o[stride..].fill(conv(0.0));
+                }
+            }
+        }
+    }
 }

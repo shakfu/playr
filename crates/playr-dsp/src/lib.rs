@@ -27,6 +27,8 @@ impl Value for f64 {
 }
 
 /// A value that moves linearly to its target over a set number of frames.
+/// Each value is computed back from the target, not accumulated, so an
+/// `f32` ramp of many frames neither drifts nor stalls.
 #[derive(Debug, Clone, Copy)]
 pub struct Ramp<T> {
     value: T,
@@ -59,10 +61,7 @@ impl<T: Value> Ramp<T> {
     pub fn next(&mut self) -> T {
         if self.left > 0 {
             self.left -= 1;
-            self.value = match self.left {
-                0 => self.target,
-                _ => self.value + self.step,
-            };
+            self.value = self.target - self.step * T::of(self.left);
         }
         self.value
     }
@@ -137,30 +136,53 @@ impl Svf {
         Svf::new(std::f32::consts::FRAC_1_SQRT_2)
     }
 
-    /// Sets the cutoff to `hz`, which must be below half of `sample_rate`.
+    /// Sets the cutoff to `hz`, kept within 1 Hz to 0.49 of `sample_rate`:
+    /// at 0 the state freezes, and past Nyquist it diverges. A cutoff not
+    /// finite is ignored.
     pub fn tune(&mut self, hz: f32, sample_rate: u32) {
-        if hz == self.at {
+        if hz == self.at || !hz.is_finite() {
             return;
         }
         self.at = hz;
+        let hz = hz.clamp(1.0, 0.49 * sample_rate as f32);
         let g = (std::f32::consts::PI * hz / sample_rate as f32).tan();
         let a1 = 1.0 / (1.0 + g * (g + self.k));
         self.a = [a1, g * a1, g * g * a1];
     }
 
-    /// Filters `x` on channel `ch`, 0 or 1.
+    /// Clears the state, as of silence.
+    pub fn reset(&mut self) {
+        self.ic1 = [0.0; 2];
+        self.ic2 = [0.0; 2];
+    }
+
+    /// Filters `x` on channel `ch`, 0 or 1. A state made not finite, as by
+    /// an input not finite, starts again from silence.
     pub fn tick(&mut self, ch: usize, x: f32) -> Taps {
         let [a1, a2, a3] = self.a;
         let v3 = x - self.ic2[ch];
         let v1 = a1 * self.ic1[ch] + a2 * v3;
         let v2 = self.ic2[ch] + a2 * self.ic1[ch] + a3 * v3;
-        self.ic1[ch] = 2.0 * v1 - self.ic1[ch];
-        self.ic2[ch] = 2.0 * v2 - self.ic2[ch];
+        self.ic1[ch] = flush(2.0 * v1 - self.ic1[ch]);
+        self.ic2[ch] = flush(2.0 * v2 - self.ic2[ch]);
+        if !(self.ic1[ch] + self.ic2[ch]).is_finite() {
+            self.ic1[ch] = 0.0;
+            self.ic2[ch] = 0.0;
+        }
         Taps {
             low: v2,
             band: self.k * v1,
             high: x - self.k * v1 - v2,
         }
+    }
+}
+
+/// `x`, or 0 below -600 dB. A decaying state would otherwise reach
+/// subnormals, which are slow on x86.
+pub fn flush(x: f32) -> f32 {
+    match x.abs() < 1e-30 {
+        true => 0.0,
+        false => x,
     }
 }
 
@@ -171,10 +193,17 @@ pub fn one_pole(hz: f32, sample_rate: u32) -> f32 {
 
 /// Passes `|x| <= 0.5` unchanged and bends larger values towards 1.
 pub fn clip(x: f32) -> f32 {
+    soft_clip(x, 0.5)
+}
+
+/// Passes `|x| <= knee` unchanged and bends larger values towards 1, with
+/// slope 1 at the knee. `knee` is below 1.
+pub fn soft_clip(x: f32, knee: f32) -> f32 {
     let a = x.abs();
-    match a <= 0.5 {
+    let room = 1.0 - knee;
+    match a <= knee {
         true => x,
-        false => (0.5 + 0.5 * ((a - 0.5) / 0.5).tanh()).copysign(x),
+        false => (knee + room * ((a - knee) / room).tanh()).copysign(x),
     }
 }
 

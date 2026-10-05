@@ -26,8 +26,12 @@ fn block(l: &mut Looper) -> Vec<f32> {
 
 /// A looper playing `samples`, writing with all three voices sending.
 fn writing(samples: Vec<f32>, channels: u16) -> (Looper, Handle) {
+    writing_loop(Loop::new(samples, channels).unwrap())
+}
+
+fn writing_loop(lp: Loop) -> (Looper, Handle) {
     let (mut l, mut h) = playr_looper::new(SR);
-    h.load(Loop::new(samples, channels).unwrap()).unwrap();
+    h.load(lp).unwrap();
     for s in [
         Setting::Write(true),
         Setting::Feedback(0.6),
@@ -89,6 +93,34 @@ fn a_snapshot_is_the_loop_when_it_arrived() {
         assert_ne!(l.tape().buffer().samples(), want, "the loop kept changing");
         assert_eq!(*got, *want, "window {w:?}");
     }
+}
+
+#[test]
+fn a_snapshot_is_the_loop_when_it_arrived_with_the_rolls_written() {
+    // The write window is the range, so the head writes the pre-roll and
+    // post-roll as well.
+    let range = Window::new(12_000, 36_000);
+    let lp = Loop::new(noise(48_000 * 2, 0.8), 2)
+        .unwrap()
+        .with_range(range)
+        .unwrap();
+    let (mut l, mut h) = writing_loop(lp);
+    h.set(Setting::WriteWindow(range)).unwrap();
+    for _ in 0..20 {
+        block(&mut l);
+    }
+    let want = l.tape().buffer().samples().to_vec();
+    h.snapshot().unwrap();
+    let got = loop {
+        block(&mut l);
+        match h.poll() {
+            Some(Returned::Snapshot(s)) => break s,
+            Some(other) => panic!("{other:?}"),
+            None => {}
+        }
+    };
+    assert_ne!(l.tape().buffer().samples(), want, "the loop kept changing");
+    assert_eq!(*got, *want);
 }
 
 #[test]
@@ -171,7 +203,33 @@ fn reset_restores_the_loop_as_loaded() {
     assert_ne!(l.tape().buffer().samples(), src);
     h.reset().unwrap();
     h.set(Setting::Stop).unwrap();
+    // Playing, the load waits for a 5 ms fade-out.
+    block(&mut l);
+    assert_ne!(l.tape().buffer().samples(), src);
     block(&mut l);
     assert_eq!(l.tape().buffer().samples(), src);
     assert_eq!(l.tape().voice(0), 0.0);
+}
+
+#[test]
+fn a_load_while_playing_fades_out_and_in() {
+    // DC, so any jump in the heads shows as a step.
+    let (mut l, mut h) = playr_looper::new(SR);
+    h.load(Loop::new(vec![0.5; 4800], 1).unwrap()).unwrap();
+    h.set(Setting::Play).unwrap();
+    let mut out = Vec::new();
+    for _ in 0..4 {
+        out.extend(block(&mut l));
+    }
+    h.load(Loop::new(vec![-0.5; 4800], 1).unwrap()).unwrap();
+    for _ in 0..4 {
+        out.extend(block(&mut l));
+    }
+    let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+    let step = left
+        .windows(2)
+        .skip(BLOCK)
+        .fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
+    assert!(step < 0.01, "{step}");
+    assert!(*left.last().unwrap() < -0.3);
 }

@@ -229,6 +229,25 @@ fn a_windows_path_in_double_quotes_says_to_use_single_quotes() {
 }
 
 #[test]
+fn the_knees_are_in_dbfs_and_stay_in_range() {
+    let s = Settings::default();
+    assert_eq!((s.dj_knee, s.tape_knee), (-0.9, -6.0));
+    let s = parse("dj_knee = -3\ntape_knee = -0.5").unwrap();
+    assert_eq!((s.dj_knee, s.tape_knee), (-3.0, -0.5));
+    for (bad, name) in [
+        ("dj_knee = 0", "dj_knee"),
+        ("tape_knee = -30", "tape_knee"),
+        ("dj_knee = \"soft\"", "dj_knee"),
+    ] {
+        assert_eq!(
+            parse(bad).unwrap_err(),
+            [format!("line 1: {name} is a number from -24 to -0.1 dBFS")],
+            "{bad}"
+        );
+    }
+}
+
+#[test]
 fn onset_sensitivity_defaults_to_the_middle_and_stays_in_range() {
     assert_eq!(Settings::default().onset_sensitivity, 0.5);
     assert_eq!(

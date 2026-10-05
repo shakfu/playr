@@ -302,8 +302,14 @@ impl Model {
             peak_hold: None,
             bpm: None,
             bpm_for: (None, 0),
-            tape: crate::tape::Deck::new(config.settings.device.clone()),
-            dj: crate::dj::Decks::new(config.settings.device.clone()),
+            tape: crate::tape::Deck::new(
+                config.settings.device.clone(),
+                10f32.powf(config.settings.tape_knee / 20.0),
+            ),
+            dj: crate::dj::Decks::new(
+                config.settings.device.clone(),
+                10f32.powf(config.settings.dj_knee / 20.0),
+            ),
             snapshot: Snapshot::default(),
         };
         model.session.send(Cmd::SetVolume(values.volume));

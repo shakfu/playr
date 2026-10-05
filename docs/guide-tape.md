@@ -93,7 +93,7 @@ the loop's old content times **Feedback**, plus every voice's Send.
 | Wear | 0 to 1 | 0 | a low-pass on everything recorded, so the loop darkens each pass |
 | Thin | 0 to 1 | 0 | a high-pass on everything recorded, 20 Hz to 2 kHz, so the loop thins each pass |
 
-With Feedback at 1, Wear and Thin at 0, and every Send at 0, writing changes nothing. A soft clip keeps the loop within full scale when the sends and feedback add up past it.
+With Feedback at 1, Wear and Thin at 0, and every Send at 0, writing changes nothing. A soft clip keeps the loop within full scale when the sends and feedback add up past it. It leaves levels under `tape_knee` in `settings.toml`, -6 dBFS by default, untouched.
 
 The voices read before the write head writes, so on the next pass every voice reads what was printed: a reversed or half-speed voice printed into the loop is played back by the others at their own rates.
 
@@ -124,6 +124,8 @@ Both are 32-bit float WAV, in a new directory each time, and both are added to t
 - **Remembering a tape.** The settings last until the next load; only saved files are kept.
 
 - **A device held exclusively**, such as an ALSA `hw:` device: the tape opens its own audio stream beside the player's, and that fails there.
+
+- **Surviving a lost device.** If the device goes away, the tape closes, a recording under way is finished, and the loop as written is lost. Load it again.
 
 - **The server.** Its web page does not reach the tape.
 

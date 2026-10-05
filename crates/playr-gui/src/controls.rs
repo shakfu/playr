@@ -247,9 +247,10 @@ pub const TAPE_BAR: &[Control] = &[
 /// A deck's buttons on the DJ tab. Cue and the nudges are held: pressing
 /// sends `CueHold` or `Nudge`, and releasing ends it. Its sliders send
 /// `Action::Dj` with their values.
-const fn deck(s: Side) -> [Control; 11] {
+const fn deck(s: Side) -> [Control; 12] {
     [
         control("Load", Action::Dj(DjAction::Load(s))),
+        control("Take", Action::Dj(DjAction::Take(s))),
         control("Play", Action::Dj(DjAction::Play(s))),
         control("Pause", Action::Dj(DjAction::Pause(s))),
         control("Cue", Action::Dj(DjAction::Cue(s))),

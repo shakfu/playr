@@ -1481,6 +1481,7 @@ fn dj_commands_parse_in_any_view_and_round_trip() {
     use playr_app::tape::Pos;
     for (text, action) in [
         ("dj a load", D::Load(A)),
+        ("dj b take", D::Take(B)),
         ("dj b play", D::Play(B)),
         ("dj a pause", D::Pause(A)),
         ("dj a cue", D::Cue(A)),

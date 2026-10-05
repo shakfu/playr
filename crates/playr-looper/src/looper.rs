@@ -21,6 +21,9 @@ const RECORD_SECONDS: usize = 2;
 /// How many loop frames a snapshot copies per output frame. Faster than the
 /// write head, so each frame is copied before the head rewrites it.
 const SNAPSHOT_SPEED: usize = 8;
+/// How long the output fades out before a load while playing, and back in
+/// after: the heads jump.
+const LOAD_FADE_MS: f32 = 5.0;
 /// How long a stopped recorder waits for the callback to acknowledge it.
 const RECORD_STOP_WAIT: Duration = Duration::from_secs(1);
 
@@ -141,6 +144,9 @@ pub struct Looper {
     record: Producer<f32>,
     recording: bool,
     snapshot: Option<Snapshot>,
+    /// The output's gain, faded out round a load.
+    gain: playr_dsp::Ramp<f32>,
+    fade: u32,
 }
 
 /// A looper at `sample_rate` and the handle that controls it.
@@ -157,6 +163,8 @@ pub fn new(sample_rate: u32) -> (Looper, Handle) {
         record: rec_tx,
         recording: false,
         snapshot: None,
+        gain: playr_dsp::Ramp::new(1.0),
+        fade: (LOAD_FADE_MS * sample_rate as f32 / 1000.0) as u32,
     };
     let handle = Handle {
         commands: cmd_tx,
@@ -178,6 +186,12 @@ impl Looper {
         self.commands();
         self.copy(out.len() / 2 * SNAPSHOT_SPEED);
         self.tape.process(out);
+        if !(self.gain.settled() && self.gain.value() == 1.0) {
+            for frame in out.as_chunks_mut::<2>().0 {
+                let g = self.gain.next();
+                frame.iter_mut().for_each(|s| *s *= g);
+            }
+        }
         if self.recording && self.tape.playing() {
             match self.record.slots() >= out.len() {
                 true => out.iter().for_each(|&s| _ = self.record.push(s)),
@@ -195,6 +209,13 @@ impl Looper {
         while let Ok(cmd) = self.commands.peek() {
             // Left in the ring until the handle has drained room for what it returns.
             if self.returns.slots() < cmd.returns() {
+                return;
+            }
+            // Left in the ring, holding back what follows, until faded out.
+            if matches!(cmd, Cmd::Load(_)) && self.tape.playing() && self.gain.value() > 0.0 {
+                if self.gain.target() != 0.0 {
+                    self.gain.set(0.0, self.fade);
+                }
                 return;
             }
             let Ok(cmd) = self.commands.pop() else { return };
@@ -234,6 +255,7 @@ impl Looper {
                         a.store(p.to_bits(), Ordering::Relaxed);
                     }
                     _ = self.returns.push(Returned::Loop(old));
+                    self.gain.set(1.0, self.fade);
                 }
             }
         }
@@ -245,9 +267,11 @@ impl Looper {
         }
     }
 
-    /// Copies up to `budget` frames of the snapshot: from the write head
-    /// round the write window, then the frames outside it, which are never
-    /// written.
+    /// Copies up to `budget` steps of the snapshot. Each step of the first
+    /// `n` copies a frame of the write window, from the write head round,
+    /// ahead of the head. While the window is the range, the head also
+    /// writes the frames `n` before and after, so the step copies those too.
+    /// The rest are never written, and follow one a step.
     fn copy(&mut self, budget: usize) {
         let Some(snap) = &mut self.snapshot else {
             return;
@@ -256,17 +280,34 @@ impl Looper {
         let (frames, c) = (lp.frames(), lp.channels() as usize);
         let w = self.tape.write_window();
         let n = w.len();
-        let end = (snap.done + budget).min(frames);
-        for j in snap.done..end {
-            let i = match j < n {
-                true => w.start + (snap.from - w.start + j) % n,
-                false if j - n < w.start => j - n,
-                false => w.end + (j - n - w.start),
-            };
+        let rolls = w == lp.range();
+        // The frames the head writes are `lo..hi`.
+        let (lo, hi) = match rolls {
+            true => (w.start.saturating_sub(n), frames.min(w.end + n)),
+            false => (w.start, w.end),
+        };
+        let steps = n + lo + (frames - hi);
+        let mut take = |i: usize| {
             snap.dest[i * c..i * c + c].copy_from_slice(&lp.samples()[i * c..i * c + c]);
+        };
+        let end = (snap.done + budget).min(steps);
+        for j in snap.done..end {
+            if j >= n {
+                let k = j - n;
+                take(if k < lo { k } else { hi + (k - lo) });
+                continue;
+            }
+            let i = w.start + (snap.from - w.start + j) % n;
+            take(i);
+            if rolls && i + n < frames {
+                take(i + n);
+            }
+            if rolls && i >= n {
+                take(i - n);
+            }
         }
         snap.done = end;
-        if snap.done == frames && self.returns.slots() > 0 {
+        if snap.done == steps && self.returns.slots() > 0 {
             let snap = self.snapshot.take().expect("checked above");
             _ = self.returns.push(Returned::Snapshot(snap.dest));
         }
@@ -419,6 +460,12 @@ impl Handle {
     }
 
     /// Stops recording and finishes the WAV.
+    /// Whether a recording runs: started, and not yet stopped by
+    /// [`Handle::stop_recording`].
+    pub fn recording(&self) -> bool {
+        self.recorder.is_some()
+    }
+
     pub fn stop_recording(&mut self) -> Result<Recording, Error> {
         if self.recorder.is_none() {
             return Err(Error::NotRecording);

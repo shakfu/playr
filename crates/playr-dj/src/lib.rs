@@ -19,7 +19,7 @@ mod track;
 pub use deck::{Deck, Nudge, Range, HOT_CUES};
 pub use engine::{new, Cmd, DeckStatus, Engine, Handle, Returned, Status};
 pub use fx::{Band, EQ_DB};
-pub use mixer::{sync_pct, CueOut, Curve, Mixer, Setting, LOOP_BEATS};
+pub use mixer::{sync_pct, CueOut, Curve, Mixer, Setting, DEFAULT_KNEE, LOOP_BEATS};
 pub use track::{Grid, Track};
 
 /// One of the two decks.

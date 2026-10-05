@@ -570,6 +570,8 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
             "the window is empty; its start must come before its end".into()
         }
         TapeMessage::AlreadySaving => "the tape is already being saved".into(),
+        TapeMessage::SaveAborted => "the save was cut short; save again".into(),
+        TapeMessage::DeviceLost(e) => format!("audio device lost: {e}; load the tape again"),
         TapeMessage::Saving => "saving the tape".into(),
         TapeMessage::Saved(path) => format!("saved the tape to {}", home_as_tilde(path)),
         TapeMessage::Recording(path) => format!("recording the tape to {}", home_as_tilde(path)),
@@ -622,6 +624,10 @@ fn dj_text(m: &crate::dj::DjMessage) -> String {
         DjMessage::Empty(s) => format!("deck {} is empty; :dj {} load first", deck(s), deck(s)),
         DjMessage::NoTrack => "no track under the cursor to load".into(),
         DjMessage::Playing(s) => format!("deck {} is playing; pause it first", deck(s)),
+        DjMessage::SpeedOutOfReach(st) => {
+            format!("a deck reaches +7 semitones at most; the player is at {st:+}")
+        }
+        DjMessage::Took(s) => format!("deck {} took over from the player", deck(s)),
         DjMessage::OutOfReach(s) => format!(
             "deck {} cannot reach the other deck's tempo within 50%",
             deck(s)
@@ -640,6 +646,7 @@ fn dj_text(m: &crate::dj::DjMessage) -> String {
                 deck(side)
             )
         }
+        DjMessage::DeviceLost(e) => format!("audio device lost: {e}; load the decks again"),
         DjMessage::Failed(e) => format!("dj: {e}"),
     }
 }

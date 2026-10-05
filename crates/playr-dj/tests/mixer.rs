@@ -83,6 +83,27 @@ fn at_rate_1_a_deck_plays_its_buffer_exactly() {
 }
 
 #[test]
+fn the_master_passes_a_deck_at_unity_up_to_near_full_scale() {
+    let play = |amp| {
+        let src = noise(SR as usize * 2, amp, 0x1234_5678);
+        let mut m = Mixer::new(SR);
+        m.load(Side::A, Box::new(Track::new(src.clone(), 2, None).unwrap()))
+            .unwrap();
+        m.set(Setting::Xfade(0.0));
+        m.set(Setting::Play(Side::A));
+        let out: Vec<f32> = (0..20).flat_map(|_| block(&mut m)).collect();
+        (src, out)
+    };
+    let from = 2 * BLOCK;
+    let (src, out) = play(0.9);
+    assert_eq!(out[from..], src[from..out.len()]);
+    // Full-scale peaks lose under 0.25 dB and stay within it.
+    let (_, out) = play(1.0);
+    let peak = out[from..].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!((0.972..=1.0).contains(&peak), "{peak}");
+}
+
+#[test]
 fn at_rate_r_a_deck_covers_r_frames_a_frame() {
     let mut m = mixer(gridded(10.0, 120.0, 0.0), gridded(10.0, 120.0, 0.0));
     m.set(Setting::Rate(Side::A, 6.0));
@@ -504,4 +525,39 @@ fn loading_the_leader_ends_sync() {
     run(&mut m, 1);
     assert!(!m.deck(Side::B).synced());
     assert!((m.deck(Side::B).pct() - (128.0 / 125.0 - 1.0) * 100.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_knee_sets_where_the_master_starts_to_clip() {
+    let peak = |knee: Option<f32>| {
+        let src = noise(SR as usize, 0.8, 0x1234_5678);
+        let mut m = Mixer::new(SR);
+        m.load(Side::A, Box::new(Track::new(src, 2, None).unwrap()))
+            .unwrap();
+        m.set(Setting::Xfade(0.0));
+        knee.into_iter().for_each(|k| m.set(Setting::Knee(k)));
+        m.set(Setting::Play(Side::A));
+        let out: Vec<f32> = (0..20).flat_map(|_| block(&mut m)).collect();
+        out.iter().fold(0.0f32, |m, x| m.max(x.abs()))
+    };
+    assert!((peak(None) - 0.8).abs() < 1e-3, "{}", peak(None));
+    // 0.5 + 0.5 tanh(0.6), and a knee not finite is ignored.
+    assert!((peak(Some(0.5)) - 0.768).abs() < 1e-3);
+    assert_eq!(peak(Some(f32::NAN)), peak(None));
+}
+
+#[test]
+fn a_leader_started_after_its_follower_is_locked_in_phase() {
+    let mut m = mixer(gridded(60.0, 128.0, 0.137), gridded(60.0, 125.0, 0.52));
+    m.set(Setting::Play(Side::B));
+    m.set(Setting::Sync(Side::B, true));
+    run(&mut m, 37);
+    // Quantize is off, so the leader starts out of phase.
+    m.set(Setting::Play(Side::A));
+    run(&mut m, 2);
+    let start = phase_error(&m, Side::B, 1.0);
+    run(&mut m, 20 * SR as usize / BLOCK);
+    let e = phase_error(&m, Side::B, 1.0);
+    // Within the lock's dead band, 0.01 beat: 225 frames at 128 BPM.
+    assert!(e.abs() < 230.0, "from {start} to {e}");
 }

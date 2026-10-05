@@ -170,10 +170,16 @@ fn a_hot_cue_is_set_on_a_beat_and_jumps_back_in_phase() {
 
     m.set(Setting::HotClear(Side::A, 2));
     assert_eq!(m.deck(Side::A).hot()[2], None);
-    m.set(Setting::HotCues(
-        Side::A,
-        [Some(1.0), None, None, Some(2.0)],
-    ));
+
+    // A load brings the track's own, finite ones.
+    m.set(Setting::Pause(Side::A));
+    let track = Track::new(vec![0.0; 100], 1, None).unwrap().with_hot_cues([
+        Some(1.0),
+        None,
+        Some(f64::NAN),
+        Some(2.0),
+    ]);
+    m.load(Side::A, Box::new(track)).unwrap();
     assert_eq!(m.deck(Side::A).hot(), [Some(1.0), None, None, Some(2.0)]);
 }
 
@@ -217,6 +223,33 @@ fn an_auto_loop_repeats_whole_beats_from_a_beat() {
     m.set(Setting::Loop(Side::A, None));
     run(&mut m, 200);
     assert!(m.deck(Side::A).pos() > start + 8.0 * beat + len);
+}
+
+#[test]
+fn jumping_out_of_a_loop_ends_it() {
+    let later = 10.0 * SR as f64;
+    let mut m = Mixer::new(SR);
+    let track = (*gridded(60.0, 128.0, 0.0)).with_hot_cues([Some(later), None, None, None]);
+    m.load(Side::A, Box::new(track)).unwrap();
+    m.set(Setting::Play(Side::A));
+    run(&mut m, 100);
+    m.set(Setting::Loop(Side::A, Some(1.0)));
+
+    // A hot cue past the loop plays on from it, and is not pulled back.
+    m.set(Setting::HotCue(Side::A, 0));
+    assert_eq!(m.deck(Side::A).looping(), None);
+    run(&mut m, 10);
+    let pos = m.deck(Side::A).pos();
+    assert!((pos - later - 10.0 * BLOCK as f64).abs() < 1.0, "{pos}");
+
+    // So does a return to the cue point, before the loop.
+    m.set(Setting::Loop(Side::A, Some(1.0)));
+    assert!(m.deck(Side::A).looping().is_some());
+    m.set(Setting::Cue(Side::A, true));
+    m.set(Setting::Cue(Side::A, false));
+    run(&mut m, 4);
+    assert_eq!(m.deck(Side::A).pos(), 0.0);
+    assert_eq!(m.deck(Side::A).looping(), None);
 }
 
 /// Deck B synced to deck A, both playing.
@@ -389,4 +422,86 @@ fn the_crossfader_glides_to_a_point_over_400_ms() {
     m.set(Setting::Xfade(0.3));
     run(&mut m, 2);
     assert_eq!(m.xfade(), 0.3);
+}
+
+#[test]
+fn a_paused_deck_s_eq_and_filter_decay_to_0_without_subnormals() {
+    let mut m = playing(noise(SR as usize, 0.5), None);
+    m.set(Setting::Eq(Side::A, Band::Low, 6.0));
+    m.set(Setting::Filter(Side::A, 0.3));
+    run(&mut m, 20);
+    m.set(Setting::Pause(Side::A));
+    let out = run(&mut m, 10 * SR as usize / BLOCK);
+    assert!(!out.iter().any(|s| s.is_subnormal()));
+    assert!(out[out.len() - BLOCK..].iter().all(|s| *s == 0.0));
+}
+
+#[test]
+fn a_quantized_position_near_the_start_stays_in_the_track() {
+    // The first beat is 0.4 s in, more than half a beat: frame 0's nearest
+    // beat is at -0.1 s.
+    let first = 0.4 * SR as f64;
+    let mut m = Mixer::new(SR);
+    m.load(Side::A, gridded(60.0, 120.0, 0.4)).unwrap();
+    m.set(Setting::Quantize(true));
+    m.set(Setting::HotCue(Side::A, 0));
+    assert_eq!(m.deck(Side::A).hot()[0], Some(first));
+    m.set(Setting::Cue(Side::A, true));
+    assert_eq!(m.deck(Side::A).pos(), first);
+    m.set(Setting::Cue(Side::A, false));
+    run(&mut m, 4);
+
+    // Playing, a seek to 0 lands a whole beat later, in phase.
+    m.set(Setting::Play(Side::A));
+    run(&mut m, 30);
+    let before = phase(&m, Side::A);
+    m.set(Setting::Seek(Side::A, 0.0));
+    let pos = m.deck(Side::A).pos();
+    assert!(pos >= 0.0, "{pos}");
+    assert!((phase(&m, Side::A) - before).abs() < 1e-9);
+}
+
+#[test]
+fn the_filter_leaving_or_crossing_centre_does_not_step() {
+    // A 40 Hz sine of 0.4, whose own largest step is 0.0021. Leaving centre
+    // to the low-pass stepped by 0.15: its state had stopped at 0. Crossing
+    // centre, the knob's 10 ms ramp sweeps the high-pass past 40 Hz twice as
+    // fast as from centre, which moves the output by up to 0.009 itself.
+    for (from, to, most) in [
+        (0.0, 0.3, 0.005),
+        (0.0, -0.3, 0.005),
+        (-0.5, 0.5, 0.01),
+        (0.5, -0.5, 0.01),
+    ] {
+        let mut m = playing(sine(40.0, 4.0, 0.4), None);
+        m.set(Setting::Filter(Side::A, from));
+        let mut out = run(&mut m, 40);
+        m.set(Setting::Filter(Side::A, to));
+        out.extend(run(&mut m, 40));
+        let l: Vec<f32> = out.iter().step_by(2).copied().collect();
+        let step = l[2000..]
+            .windows(2)
+            .fold(0.0f32, |a, w| a.max((w[1] - w[0]).abs()));
+        assert!(step < most, "{from} to {to}: {step}");
+    }
+}
+
+#[test]
+fn play_from_starts_where_asked_even_with_quantize_on() {
+    let mut m = Mixer::new(SR);
+    m.load(Side::A, gridded(60.0, 120.0, 0.0)).unwrap();
+    m.load(Side::B, gridded(60.0, 123.0, 0.21)).unwrap();
+    m.set(Setting::Quantize(true));
+    m.set(Setting::Play(Side::A));
+    run(&mut m, 10);
+    let at = 12_345.6;
+    m.set(Setting::PlayFrom(Side::B, at));
+    assert!(m.deck(Side::B).playing());
+    assert_eq!(m.deck(Side::B).pos(), at);
+    // A plain Play would have moved it into phase with deck A.
+    m.set(Setting::Pause(Side::B));
+    run(&mut m, 2);
+    m.set(Setting::Seek(Side::B, at));
+    m.set(Setting::Play(Side::B));
+    assert_ne!(m.deck(Side::B).pos(), at);
 }
