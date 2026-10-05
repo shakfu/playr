@@ -21,7 +21,7 @@ playr scan ~/Music                   # once, to build the library
 playr-server                         # prints the address to open
 ```
 
-It prints `playr-server: http://127.0.0.1:8080/?token=...`. Open that address on the same machine. It stops on Ctrl-C.
+It prints `playr-server: http://127.0.0.1:8080/?token=...`. Open that address on the same machine. It stops on Ctrl-C. Run as a service, its output goes to a log, so it names the token's file there rather than printing the token.
 
 The page's Menu has Rescan library, which re-scans the directories `playr scan` recorded. The page cannot name a directory of its own, so it re-scans those and nothing else. It appears only once the library has a recorded directory; `playr scan DIR` adds one.
 
@@ -68,6 +68,15 @@ playr-server --listen 0.0.0.0:8080 --open
 ### Behind a proxy
 
 A reverse proxy in front can add TLS and authentication. Pass the name it serves with `--host music.example.com`. Origins with `https` are accepted.
+
+The proxy must pass the browser's `Host` header through unchanged; otherwise every command is refused as coming from another site. Caddy does by default. nginx replaces it with the upstream's address unless told:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+}
+```
 
 ## The page
 
@@ -126,7 +135,7 @@ With music on a separate disk, uncomment `RequiresMountsFor=` in the unit and na
 | to | run |
 |-|-|
 | change the flags, such as adding `--open` | `systemctl --user edit --full playr-server` |
-| see its output and the address | `journalctl --user -u playr-server` |
+| see its output and the address, without the token | `journalctl --user -u playr-server` |
 | stop or start it | `systemctl --user stop playr-server`, `systemctl --user start playr-server` |
 
 ### Using the terminal over SSH

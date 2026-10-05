@@ -662,8 +662,11 @@ fn an_analysis_reports_each_file_then_what_it_measured() {
     }
 
     // The tracks are measured, so a second run has nothing to do, and the
-    // session can read a tempo and the gains back.
+    // session can read a tempo and the gains back. The columns show the
+    // measurements without a reload.
     session.analysed();
+    let a = songs.join("a.wav").to_string_lossy().into_owned();
+    assert!(session.measures_of(&a).loudness.is_some(), "not measured");
     session.analyze(None).unwrap();
     let seen = until(&events, |e| matches!(e, Event::Analysed { .. }));
     match seen.last().unwrap() {

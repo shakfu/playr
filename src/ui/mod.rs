@@ -344,12 +344,9 @@ impl App {
             // Anything but `y` cancels, so a stray key cannot confirm.
             Input::Confirm(_) => self.model.answer(typed(&key) == Some('y')),
             // As a confirmation: anything but an answer leaves the draft alone.
-            Input::Draft(_) => self.model.answer_draft(match typed(&key) {
-                Some('o') => Some(DraftAnswer::Overwrite),
-                Some('a') => Some(DraftAnswer::Append),
-                Some('s') => Some(DraftAnswer::Save),
-                _ => None,
-            }),
+            Input::Draft(_) => self
+                .model
+                .answer_draft(key_of(&key).and_then(DraftAnswer::of_key)),
             Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_) => {
                 // The lists can be longer than the screen.
                 match key.code {

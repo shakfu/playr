@@ -780,21 +780,8 @@ fn act(action: Action, f: &mut impl Frontend) {
             }
             f.notify(Message::Fit(on));
         }
-        Action::RangeIn | Action::RangeOut => {
-            let (path, rate) = match f.session().playing_track() {
-                Ok(track) => track,
-                Err(refusal) => return f.notify(refusal.into()),
-            };
-            let at = sampler::frame_of(snapped(f, f.session().player().position()), rate);
-            if action == Action::RangeIn {
-                f.sampler_mut().set_range_start(&path, at);
-            } else {
-                f.sampler_mut().set_range_end(&path, at);
-            }
-            let (start, end) = f.sampler().range_ends(Some(&path));
-            follow_loop(f);
-            f.notify(Message::Range { start, end, rate });
-        }
+        Action::RangeIn(at) => range_end_at(f, sampler::Edge::Start, at),
+        Action::RangeOut(at) => range_end_at(f, sampler::Edge::End, at),
         Action::SetRange(times) => {
             let (path, rate) = match f.session().playing_track() {
                 Ok(track) => track,
@@ -839,6 +826,7 @@ fn act(action: Action, f: &mut impl Frontend) {
         },
         Action::Tape(t) => crate::tape::act(f, t),
         Action::Dj(d) => crate::dj::act(f, d),
+        Action::MarkSlices => mark_slices(f),
         Action::DiscardSlices => {
             // Edits set by hand would otherwise be lost for good.
             let then = before(f).filter(|b| edited(&b.plan));
@@ -1598,38 +1586,20 @@ fn move_selected_mark(f: &mut impl Frontend, from: u64, to: u64) {
 fn planned_slice(f: &impl Frontend, start: u64) -> Option<(Plan, usize)> {
     let path = f.session().player().status().current().cloned()?;
     let plan = f.sampler().pending.clone().filter(|p| p.job.path == path)?;
-    let i = plan.spans.iter().position(|s| s.0 == start)?;
+    let i = plan.index_of(start)?;
     Some((plan, i))
 }
 
-/// Shows `plan` with its slices starting at `starts`, kept on its job so a
-/// plan made again keeps them, and the slice starting at `selected` selected.
-fn edit_plan(f: &mut impl Frontend, mut plan: Plan, starts: Vec<u64>, selected: Option<u64>) {
-    let end = plan.spans.last().and_then(|s| s.1);
-    plan.spans = playr_core::samples::spans_from(&starts, end);
-    plan.job.cuts = Some(starts);
-    let path = plan.job.path.clone();
-    f.sampler_mut().pending = Some(plan);
-    f.sampler_mut().selected = selected.map(|s| (path, Selected::Slice(s)));
-}
-
-/// Moves the start of the planned slice starting at `from` to `to`, which
-/// moves the end of the slice before it too. It stays a frame inside its
-/// neighbours, and the first slice's start stays inside the range or region.
+/// Moves the start of the planned slice starting at `from` to `to`, as
+/// [`Plan::move_start`] does, keeping it selected.
 pub fn move_slice(f: &mut impl Frontend, from: u64, to: u64) {
-    let Some((plan, i)) = planned_slice(f, from) else {
+    let Some((mut plan, i)) = planned_slice(f, from) else {
         return f.notify(Message::NothingSelected);
     };
-    let lowest = match i {
-        0 => playr_core::samples::extent(&plan.job).0,
-        _ => plan.spans[i - 1].0 + 1,
-    };
-    let highest = (plan.spans[i].1).map_or(u64::MAX, |end| end.saturating_sub(1));
-    let to = to.clamp(lowest, highest.max(lowest));
-    let rate = plan.job.rate;
-    let mut starts: Vec<u64> = plan.spans.iter().map(|s| s.0).collect();
-    starts[i] = to;
-    edit_plan(f, plan, starts, Some(to));
+    let to = plan.move_start(i, to, peaks(f).as_deref());
+    let (path, rate) = (plan.job.path.clone(), plan.job.rate);
+    f.sampler_mut().pending = Some(plan);
+    f.sampler_mut().selected = Some((path, Selected::Slice(to)));
     f.notify(Message::SliceMoved {
         slice: i + 1,
         at: to,
@@ -1637,19 +1607,55 @@ pub fn move_slice(f: &mut impl Frontend, from: u64, to: u64) {
     });
 }
 
-/// Joins the planned slice starting at `start` to the one before it. The
-/// first slice has none before it, so its start stays.
+/// Joins the planned slice starting at `start` to the one before it.
 fn remove_slice(f: &mut impl Frontend, start: u64) {
-    let Some((plan, i)) = planned_slice(f, start) else {
+    let Some((mut plan, i)) = planned_slice(f, start) else {
         return f.notify(Message::NothingSelected);
     };
-    if i == 0 {
+    if !plan.join(i) {
         return f.notify(Message::FirstSlice);
     }
-    let mut starts: Vec<u64> = plan.spans.iter().map(|s| s.0).collect();
-    starts.remove(i);
-    edit_plan(f, plan, starts, None);
+    f.sampler_mut().pending = Some(plan);
+    f.sampler_mut().selected = None;
     f.notify(Message::SlicesJoined { slice: i });
+}
+
+/// Sets `edge` of the range at `at`, or at the playhead, snapped when snap is on.
+fn range_end_at(f: &mut impl Frontend, edge: sampler::Edge, at: Option<Duration>) {
+    let (path, rate) = match f.session().playing_track() {
+        Ok(track) => track,
+        Err(refusal) => return f.notify(refusal.into()),
+    };
+    let at = at.unwrap_or(f.session().player().position());
+    let at = sampler::frame_of(snapped(f, at), rate);
+    match edge {
+        sampler::Edge::Start => f.sampler_mut().set_range_start(&path, at),
+        sampler::Edge::End => f.sampler_mut().set_range_end(&path, at),
+    }
+    let (start, end) = f.sampler().range_ends(Some(&path));
+    follow_loop(f);
+    f.notify(Message::Range { start, end, rate });
+}
+
+/// Marks the start of each planned slice on the playing track, but the
+/// track's own start, in one step for undo.
+fn mark_slices(f: &mut impl Frontend) {
+    let Ok((path, _)) = f.session().playing_track() else {
+        return f.notify(Refusal::NothingPlaying.into());
+    };
+    let Some(plan) = f.sampler().pending.clone().filter(|p| p.job.path == path) else {
+        return f.notify(Message::NoSlicesPlanned);
+    };
+    let mut frames = mark_frames(f, &path);
+    let before = frames.len();
+    frames.extend(plan.spans.iter().map(|s| s.0).filter(|&s| s > 0));
+    frames.sort_unstable();
+    frames.dedup();
+    let added = frames.len() - before;
+    match f.session_mut().set_marks(&frames) {
+        Ok(()) => f.notify(Message::SlicesMarked { added }),
+        Err(notice) => f.notify(notice.into()),
+    }
 }
 
 /// Moves `edge` of the range, as a nudge moves the playhead.
@@ -1790,8 +1796,8 @@ fn undo(f: &mut impl Frontend, redo: bool) {
         false => (Message::NothingToUndo, Message::Undone),
         true => (Message::NothingToRedo, Message::Redone),
     };
-    let (path, rate) = match f.session().playing_track() {
-        Ok(track) => track,
+    let path = match f.session().playing_track() {
+        Ok((path, _)) => path,
         Err(refusal) => return f.notify(refusal.into()),
     };
     let Some(then) = stacks(f.sampler_mut(), redo).0.pop() else {
@@ -1803,8 +1809,8 @@ fn undo(f: &mut impl Frontend, redo: bool) {
         return f.notify(none);
     }
     let now = before(f).expect("a track is playing");
-    if let Err(notice) = restore(f, &then, rate) {
-        // Kept, so the step can be tried again; marks put back so far stay.
+    if let Err(notice) = restore(f, &then) {
+        // Kept, so the step can be tried again: nothing of it was done.
         stacks(f.sampler_mut(), redo).0.push(then);
         return f.notify(notice.into());
     }
@@ -1823,21 +1829,8 @@ fn stacks(s: &mut Sampler, redo: bool) -> (&mut Vec<Before>, &mut Vec<Before>) {
 }
 
 /// Makes the playing track's marks and range `state`'s.
-fn restore(f: &mut impl Frontend, state: &Before, rate: u32) -> Result<(), Notice> {
-    let now = mark_frames(f, &state.path);
-    for &frame in now.iter().filter(|m| !state.marks.contains(m)) {
-        if let notice @ Notice::Failed { .. } = f.session_mut().remove_mark(frame) {
-            return Err(notice);
-        }
-    }
-    for &frame in state.marks.iter().filter(|m| !now.contains(m)) {
-        let at = sampler::time_of(frame, rate);
-        if let notice @ Notice::Failed { .. } =
-            f.session_mut().add_mark_within(Some(at), Duration::ZERO)
-        {
-            return Err(notice);
-        }
-    }
+fn restore(f: &mut impl Frontend, state: &Before) -> Result<(), Notice> {
+    f.session_mut().set_marks(&state.marks)?;
     f.sampler_mut().range = state.range.clone();
     follow_loop(f);
     // The plan shown, if it is still the cut `state` edited, or if this step
@@ -1889,7 +1882,7 @@ fn slice(f: &mut impl Frontend, slicing: Slicing) {
 
 /// The cut every `n` beats at the playing track's tempo. A track with none
 /// is analysed first and cut by [`tempo_found`] when that lands.
-fn beats(f: &mut impl Frontend, n: u32) -> Option<Cut> {
+fn beats(f: &mut impl Frontend, n: f32) -> Option<Cut> {
     let path = match f.session().playing_track() {
         Ok((path, _)) => path,
         Err(refusal) => {
@@ -1912,7 +1905,7 @@ fn beats(f: &mut impl Frontend, n: u32) -> Option<Cut> {
 
 /// Cuts every `n` beats once the analysis [`beats`] started has landed, if
 /// `path` still plays. Analysed and still without a tempo, it is refused.
-pub(crate) fn tempo_found(f: &mut impl Frontend, path: &std::path::Path, n: u32) {
+pub(crate) fn tempo_found(f: &mut impl Frontend, path: &std::path::Path, n: f32) {
     let playing = f.session().playing_track().ok().map(|(p, _)| p);
     if playing.as_deref() != Some(path) {
         return;
@@ -1928,7 +1921,7 @@ pub(crate) fn tempo_found(f: &mut impl Frontend, path: &std::path::Path, n: u32)
 }
 
 /// The cut every `n` beats at `path`'s tempo, its grid's when it has one.
-fn beat_cut(f: &impl Frontend, path: &std::path::Path, n: u32) -> Option<Cut> {
+fn beat_cut(f: &impl Frontend, path: &std::path::Path, n: f32) -> Option<Cut> {
     let bpm = f.session().bpm(path)?;
     Some(Cut::Beats { beats: n, bpm })
 }

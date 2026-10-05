@@ -192,6 +192,24 @@ fn the_screen_has_views_counts_input_and_playback() {
 }
 
 #[test]
+fn the_lists_revision_changes_when_an_analysis_lands() {
+    let (mut model, dir) = model();
+    let revision = |m: &Model| web::screen(m)["lists"].clone();
+    let before = revision(&model);
+    // An analysis writes through its own connection, as the job does.
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    for track in model.session().tracks() {
+        let measured = playr_core::analysis::Analysis {
+            loudness: Some(-14.0),
+            ..Default::default()
+        };
+        db::analysis::put(&conn, track, measured).unwrap();
+    }
+    model.session_mut().analysed();
+    assert_ne!(revision(&model), before);
+}
+
+#[test]
 fn the_lists_revision_changes_with_what_the_lists_hold() {
     let (mut model, _dir) = model();
     let revision = |m: &Model| web::screen(m)["lists"].clone();
@@ -208,11 +226,11 @@ fn the_lists_revision_changes_with_what_the_lists_hold() {
 #[test]
 fn a_command_line_is_checked_in_the_view_shown() {
     let (mut model, _dir) = model();
-    assert_eq!(web::check(&model, "pause"), Ok(()));
+    assert_eq!(web::check(&model, "pause"), Ok(Action::TogglePause));
     assert_eq!(web::check(&model, "quit").unwrap_err().0, 403);
     assert_eq!(web::check(&model, "delete").unwrap_err().0, 400);
     model.perform(Action::ShowView(View::Playlists));
-    assert_eq!(web::check(&model, "delete"), Ok(()));
+    assert_eq!(web::check(&model, "delete"), Ok(Action::DeletePlaylist));
     assert_eq!(web::view_named("sampler"), None);
     assert_eq!(web::view_named("selection"), Some(View::Selection));
 }

@@ -683,6 +683,34 @@ fn counting(path: &Path, frames: i32) {
     w.finalize().unwrap();
 }
 
+#[test]
+fn a_held_device_plays_only_what_the_test_advances() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("count.wav");
+    counting(&file, 8_000);
+    let (player, control) = fake_player();
+    control.hold();
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing);
+    let frame = |player: &Player| (player.position().as_secs_f64() * 8_000.0).round() as u64;
+
+    // The seek lands, and the playhead stays there.
+    player.send(Cmd::Seek(Duration::from_millis(250)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while frame(&player) != 2_000 {
+        assert!(Instant::now() < deadline, "at frame {}", frame(&player));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(frame(&player), 2_000);
+    assert!(heard(&control, 0).is_empty());
+
+    // An advance plays exactly as far as it says, from the seek.
+    control.advance(Duration::from_millis(100));
+    assert_eq!(frame(&player), 2_800);
+    assert_eq!(heard(&control, 0), (2_001..=2_800).collect::<Vec<i64>>());
+}
+
 /// The frames the device has played since sample `from`, as the counting
 /// track names them, without silence.
 fn heard(control: &common::Control, from: usize) -> Vec<i64> {

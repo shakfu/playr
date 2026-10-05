@@ -431,7 +431,7 @@ An instrument file holding the audio and its slices. [polyend/tracker-lib](https
 
 - **ConvertWithMoss's install paths on macOS and Windows.**
 
-- **Where the cue points come from.** The plan's edges directly, or marks made from them. See "Planned edges to marks" in `TODO.md`.
+- **Where the cue points come from.** Settled: the plan's edges, as written. `:mark-slices` keeps them as marks, so a plan lost to a track change can be made again.
 
 ## Decided
 

@@ -118,7 +118,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 - **Listening.** HTTP binds to `127.0.0.1` unless `--listen` names an address. OSC is off unless `--osc` names one. A Pi's service file names both.
 
-- **Token.** Generated on first start, kept in `server.token` beside the library with mode 0600, printed at startup. On Unix, a file others can read or write is refused. `GET /?token=` sets a cookie; every other route requires it.
+- **Token.** Generated on first start, kept in `server.token` beside the library with mode 0600, printed at startup to a terminal only. A service's log, which other users may read, gets the file's path instead. On Unix, a file others can read or write is refused. `GET /?token=` sets a cookie; every other route requires it.
 
 - **`--open`.** No token: anyone who can reach the address controls playr. Chosen for a home network over a login page, since a phone cannot easily take a 64-character address, and a proxy in front can add authentication where it is needed. The token stays the default, so `--listen 0.0.0.0` alone does not expose playr.
 
@@ -172,7 +172,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 ### Where step 2 differs from the sketch
 
-- **`httparse` over `tiny_http`.** `tiny_http`'s last release was 0.12.0, on 2022-10-06. `httparse` is hyper's request parser, maintained, with no dependencies. The server around it reads at most an 8 KiB head and a 4 KiB body, takes 10 s for either, and holds 32 connections.
+- **`httparse` over `tiny_http`.** `tiny_http`'s last release was 0.12.0, on 2022-10-06. `httparse` is hyper's request parser, maintained, with no dependencies. The server around it reads at most an 8 KiB head and a 4 KiB body, takes 10 s for both together, and holds 32 connections, at most 24 of them event streams.
 
 - **Clients parse and check.** `/command` parses in the HTTP thread, so a parse error or a refusal is the response to the request that caused it: 400 or 403 with the reason. `Request` holds only an `Action`.
 

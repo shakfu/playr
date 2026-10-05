@@ -48,9 +48,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **Name an edited plan in the Slice drop-down.** After a planned slice is moved or joined, the drop-down still shows the method that made the plan, such as "At onsets". Only the plan line says "edited". Moving the sensitivity slider then plans again and replaces the edits; undo brings them back. An "Edited" entry in the drop-down would say so before the slider moves.
 
-- [ ] **Keep an edited plan across a track change.** Changing tracks drops the planned slices and clears undo, so starts set by hand are lost for good. Options: confirm before leaving a track with an edited plan, or keep each track's plan until it is written or discarded.
-
-- [ ] **Planned edges to marks.** One action turns a plan's edges into marks, which are kept in the library and already drag, nudge and snap. It matters once a WAV is exported with cue points (as a looped range now carries its loop in a `smpl` chunk): the marks would then carry the slice points into the file for a hardware sampler. Open: whether the edges replace the marks in the range or join them, and whether the cue export should read the plan's edges directly and skip this step.
+- [ ] **Keep an edited plan across a track change.** Changing tracks drops the planned slices and clears undo, so starts set by hand are lost for good. Options: confirm before leaving a track with an edited plan, or keep each track's plan until it is written or discarded. `:mark-slices` keeps the starts as marks meanwhile, and `:slice marks` plans them again.
 
 - [ ] **Mark labels and export.** `marks` has `path`, `frame` and `rate`, and no text. A label column would allow notes such as "solo" or "break". Export as an Audacity label file or a cue sheet; `docs/guide-sampler.md` already designs a `marks.jsonl` line. Since slices serve any sampler (decision 3), SFZ output may reach the most samplers (inference, not researched).
 

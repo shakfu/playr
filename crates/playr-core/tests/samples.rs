@@ -3,8 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use playr_core::samples::{
-    beat_points, equal_spans, export, kit_path, nearest_onset, onsets, plan, plan_with, region,
-    sliced_dir, spans_at, Cut, Edges, Exported, Fades, Job, OnsetAudio, FIRST_KEY, MAX_SLICES,
+    beat_points, equal_spans, export, extent, kit_path, nearest_onset, onsets, plan, plan_with,
+    region, sliced_dir, spans_at, write, Cut, Edges, Exported, Fades, Job, OnsetAudio, Plan,
+    FIRST_KEY, MAX_SLICES,
 };
 use playr_core::wave::{snap_reach, Peaks};
 
@@ -901,24 +902,24 @@ fn smpl_loop(path: &Path) -> Option<(u32, u32, u32, u32)> {
 fn beats_fall_on_the_tempo_in_phase_with_the_first_mark() {
     // 120 BPM at 48 kHz: a beat is 24,000 frames, 4 beats 96,000.
     assert_eq!(
-        beat_points(&[], 0, 400_000, 48_000, 4, 120.0).unwrap(),
+        beat_points(&[], 0, 400_000, 48_000, 4.0, 120.0).unwrap(),
         [0, 96_000, 192_000, 288_000, 384_000, 400_000]
     );
     // A mark inside sets the phase; the slice before it is short. Marks
     // outside the region are ignored.
     let marks = [5, 1_050_000, 1_500_000];
     assert_eq!(
-        beat_points(&marks, 1_000_000, 300_000, 48_000, 4, 120.0).unwrap(),
+        beat_points(&marks, 1_000_000, 300_000, 48_000, 4.0, 120.0).unwrap(),
         [0, 50_000, 146_000, 242_000, 300_000]
     );
     // A tempo that is no whole number of frames: each edge is rounded from
     // its exact place, so the last is where 50 steps put it.
-    let points = beat_points(&[], 0, 1_100_000, 44_100, 1, 128.0).unwrap();
+    let points = beat_points(&[], 0, 1_100_000, 44_100, 1.0, 128.0).unwrap();
     assert_eq!(
         points[50],
         (50.0f64 * 44_100.0 * 60.0 / 128.0).round() as u64
     );
-    assert!(beat_points(&[], 0, 1000, 44_100, 1, 0.0).is_err());
+    assert!(beat_points(&[], 0, 1000, 44_100, 1.0, 0.0).is_err());
 }
 
 #[test]
@@ -926,23 +927,40 @@ fn no_beat_slice_is_shorter_than_half_a_beat_at_either_end() {
     // 2 bars at 120 BPM and 48 kHz are 192,000 frames; a range 600 frames
     // longer, as a range set by hand is, cuts as 2 bars, not 2 and a sliver.
     assert_eq!(
-        beat_points(&[], 0, 192_600, 48_000, 4, 120.0).unwrap(),
+        beat_points(&[], 0, 192_600, 48_000, 4.0, 120.0).unwrap(),
         [0, 96_000, 192_600]
     );
     assert_eq!(
-        beat_points(&[], 0, 192_600, 48_000, 8, 120.0).unwrap(),
+        beat_points(&[], 0, 192_600, 48_000, 8.0, 120.0).unwrap(),
         [0, 192_600]
     );
     // A mark just inside the start would leave a sliver before it.
     assert_eq!(
-        beat_points(&[1_000], 0, 192_000, 48_000, 4, 120.0).unwrap(),
+        beat_points(&[1_000], 0, 192_000, 48_000, 4.0, 120.0).unwrap(),
         [0, 97_000, 192_000]
     );
     // Half a beat is kept.
     assert_eq!(
-        beat_points(&[12_000], 0, 192_000, 48_000, 4, 120.0).unwrap(),
+        beat_points(&[12_000], 0, 192_000, 48_000, 4.0, 120.0).unwrap(),
         [0, 12_000, 108_000, 192_000]
     );
+}
+
+#[test]
+fn a_fraction_of_a_beat_cuts_shorter_slices_and_keeps_the_first_cut() {
+    // 120 BPM at 48 kHz: a beat is 24,000 frames, an eighth note 12,000.
+    assert_eq!(
+        beat_points(&[], 0, 48_000, 48_000, 0.5, 120.0).unwrap(),
+        [0, 12_000, 24_000, 36_000, 48_000]
+    );
+    // A sixteenth, 6,000 frames: its first cut is kept, though it is under
+    // half a beat from the start. Only a sliver under half a slice is dropped.
+    assert_eq!(
+        beat_points(&[], 0, 24_500, 48_000, 0.25, 120.0).unwrap(),
+        [0, 6_000, 12_000, 18_000, 24_500]
+    );
+    assert!(beat_points(&[], 0, 1000, 48_000, 0.0, 120.0).is_err());
+    assert!(beat_points(&[], 0, 1000, 48_000, -1.0, 120.0).is_err());
 }
 
 #[test]
@@ -959,7 +977,7 @@ fn a_range_cut_at_beats_writes_each_slice_exact() {
             &[26_000],
             0,
             Cut::Beats {
-                beats: 1,
+                beats: 1.0,
                 bpm: 240.0,
             },
             dir.path(),
@@ -1024,4 +1042,133 @@ fn onsets_found_again_at_another_sensitivity_read_the_track_once() {
     // Another region is read again, and so fails here.
     let other = job(&file, rate, &[3_000], 4_000, Cut::Onsets(0.5), dir.path());
     assert!(plan_with(&other, &audio).is_err());
+}
+
+#[test]
+fn starts_set_by_hand_on_marks_without_a_range_keep_the_whole_track() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("src.wav");
+    source(&file, 8000, 1, 16, 32_000);
+    // The playhead sits between two marks, which is the region for every
+    // other cut; marks without a range cut the whole track.
+    let marked = job(
+        &file,
+        8000,
+        &[8_000, 16_000, 24_000],
+        12_000,
+        Cut::Marks,
+        dir.path(),
+    );
+    assert_eq!(extent(&marked), (0, None));
+    let hand = Job {
+        cuts: Some(vec![400, 9_000, 16_000, 24_000]),
+        ..marked
+    };
+    assert_eq!(
+        plan(&hand).unwrap(),
+        [
+            (400, Some(9_000)),
+            (9_000, Some(16_000)),
+            (16_000, Some(24_000)),
+            (24_000, None)
+        ]
+    );
+    let out = export(&hand).unwrap();
+    assert_eq!(
+        out.slices,
+        [
+            (400, 9_000),
+            (9_000, 16_000),
+            (16_000, 24_000),
+            (24_000, 32_000)
+        ]
+    );
+}
+
+#[test]
+fn starts_out_of_order_or_past_the_end_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("src.wav");
+    source(&file, 8000, 1, 16, 32_000);
+    let samples = dir.path().join("samples");
+    let ranged = |cuts: Vec<u64>| Job {
+        range: Some((4_000, 20_000)),
+        cuts: Some(cuts),
+        ..job(&file, 8000, &[], 0, Cut::Equal(2), &samples)
+    };
+    for cuts in [
+        vec![4_000, 12_000, 9_000],
+        vec![4_000, 9_000, 9_000],
+        vec![4_000, 20_000],
+    ] {
+        assert!(plan(&ranged(cuts.clone())).is_err(), "planned {cuts:?}");
+    }
+    // Spans written as given are checked too, and nothing is left behind.
+    let job = ranged(vec![4_000]);
+    assert!(write(&job, &[(4_000, Some(9_000)), (9_000, Some(6_000))]).is_err());
+    assert!(write(&job, &[(9_000, Some(12_000)), (4_000, Some(8_000))]).is_err());
+    assert!(!samples.exists());
+}
+
+#[test]
+fn a_planned_start_moves_inside_its_neighbours_and_joins_the_one_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let job = Job {
+        range: Some((1_000, 9_000)),
+        ..job(
+            Path::new("/none.wav"),
+            8000,
+            &[],
+            0,
+            Cut::Equal(4),
+            dir.path(),
+        )
+    };
+    let mut plan = Plan {
+        job,
+        spans: vec![
+            (1_000, Some(3_000)),
+            (3_000, Some(5_000)),
+            (5_000, Some(7_000)),
+            (7_000, Some(9_000)),
+        ],
+    };
+    assert_eq!(plan.index_of(5_000), Some(2));
+    assert_eq!(plan.move_start(1, 3_500, None), 3_500);
+    assert_eq!(
+        plan.spans[..2],
+        [(1_000, Some(3_500)), (3_500, Some(5_000))]
+    );
+    assert_eq!(plan.job.cuts, Some(vec![1_000, 3_500, 5_000, 7_000]));
+    // A frame inside each neighbour, and the first slice inside the range.
+    assert_eq!(plan.move_start(1, 9_999, None), 4_999);
+    assert_eq!(plan.move_start(1, 0, None), 1_001);
+    assert_eq!(plan.move_start(0, 0, None), 1_000);
+    // The last keeps its end; the first has nothing before it to join.
+    assert!(plan.join(3));
+    assert_eq!(plan.spans.last(), Some(&(5_000, Some(9_000))));
+    assert!(!plan.join(0));
+    assert!(!plan.join(9));
+}
+
+#[test]
+fn with_zero_edges_a_moved_start_lands_where_planning_again_puts_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    let rate = 8_000;
+    let read = tone(&file, rate, 37.0, 40_000);
+    let peaks = Peaks::from_interleaved(&read, 2, rate);
+    let job = Job {
+        edges: Edges::Zero,
+        range: Some((2_000, 30_000)),
+        ..job(&file, rate, &[], 0, Cut::Equal(4), dir.path())
+    };
+    let mut plan = Plan {
+        spans: plan(&job).unwrap(),
+        job,
+    };
+    let to = plan.move_start(1, 12_345, Some(&peaks));
+    assert_ne!(to, 12_345, "not on a crossing");
+    assert_eq!(plan.spans[1].0, to);
+    assert_eq!(playr_core::samples::plan(&plan.job).unwrap(), plan.spans);
 }

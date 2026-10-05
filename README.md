@@ -266,7 +266,7 @@ playr-server --db other.db           # use a different library file
 
 `playr-server` plays on the machine it runs on, such as a Raspberry Pi with a DAC, and serves a web page that controls it. It takes the terminal's options and reads the same settings file, so the page's keys and `:` commands are the terminal's. The page has the library, selection, playlists and queue views, search, row menus, dialogs, marks, themes and the level meter, without the sampler. It adapts to a phone, a tablet or a desktop browser: click or tap a row to move the cursor, again to play, right-click or `...` for its menu, and shift-click the progress bar to add a mark.
 
-Every request needs a token, printed in the startup address and kept in `server.token` beside the library. Opening that address sets a cookie for a year, so each browser needs it once. `--open` serves the page without a token, for a network where every device is trusted; the `Host` and `Origin` checks still refuse a website whose domain resolves to the machine.
+Every request needs a token, printed in the startup address on a terminal and kept in `server.token` beside the library. Opening that address sets a cookie for a year, so each browser needs it once. `--open` serves the page without a token, for a network where every device is trusted; the `Host` and `Origin` checks still refuse a website whose domain resolves to the machine.
 
 The page cannot name a path, so it cannot open, scan or prune one, and it cannot quit the server. Its Rescan library re-scans the directories `playr scan` recorded, and nothing else.
 
@@ -454,7 +454,7 @@ Marks are stored in the library by file path and source frame, so they survive a
 | `:slice marks`      | the whole track, cut at every mark                                   |
 | `:slice N`          | the region in N equal parts, 2 to 256                                |
 | `:slice onsets [S]` | the region, cut where hits start; `S` from 0 to 1, higher finds more |
-| `:slice beats [N]`  | the region, every N beats at the analysed tempo, 1 to 64; 4 without N |
+| `:slice beats [N]`  | the region, every N beats at the analysed tempo, 0.125 to 64, so 0.5 cuts eighths; 4 without N |
 
 Each export writes a new directory, named after the track, under `samples` in [`settings.toml`](#configuration), by default `~/Music/playr/samples`. A second export of `amen.flac` goes to `amen-2`. The directory holds:
 
@@ -502,7 +502,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `S`     | `:snap`                 | snap to zero crossings, on or off                 |
 | `f`     | `:fit`                  | zoom to the range and centre on it, on or off     |
 | `\|`    | `:fit on`               | back to the whole range after `[` or `]`          |
-| `i` `o` | `:in`, `:out`           | start or end the range at the playhead            |
+| `i` `o` | `:in`, `:out`           | start or end the range at the playhead, or at TIME |
 | `l`     | `:loop`                 | play the range, or else the region, over and over, or stop |
 | F1-F8   | `:loop 1` ... `:loop 8` | loop a saved loop, or save the range to an empty slot |
 | shift-F1-F8 | `:loop N save`      | save the range as loop N, over what it holds      |
@@ -518,6 +518,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `,` `.` | `:audition prev`, `:audition next` | select the previous or next planned slice, and play it once |
 | `enter` | `:write`                | write the slices planned                          |
 | `esc`   | `:discard`              | discard them                                      |
+|         | `:mark-slices`          | mark each slice's start, to keep the cuts         |
 
 - **Displays.** The envelope draws each column as two bars in eighth blocks: its RMS level in the bright colour, inside its peak level in a darker one. The waveform is folded, with negative samples counted by their size, so the bars use the full height. RMS shows loudness, such as a verse against a chorus, where a mastered track's peaks are near full scale everywhere; peak shows where each hit starts. The Braille display, which the view starts with, draws the waveform around a centre line, two dots across and four down a cell, which shows its shape. Both scale to the loudest sample in the track.
 

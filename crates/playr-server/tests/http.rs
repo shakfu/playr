@@ -13,6 +13,9 @@ use playr_server::owner::Request;
 use playr_server::state::Latest;
 use serde_json::{json, Value};
 
+/// How long the server waits for the owner, here.
+const ANSWER_WITHIN: Duration = Duration::from_millis(500);
+
 const TOKEN: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
 struct Server {
@@ -39,6 +42,8 @@ fn start(rescan: bool, token: Option<&str>) -> Server {
         token: token.map(String::from),
         hosts: vec!["pi.lan".into()],
         rescan,
+        timeout: Duration::from_secs(1),
+        answer_within: ANSWER_WITHIN,
     };
     let serving = latest.clone();
     std::thread::spawn(move || http::serve(listener, config, send, serving));
@@ -47,6 +52,8 @@ fn start(rescan: bool, token: Option<&str>) -> Server {
 
 /// Describes each request to the test before answering it. A command or key
 /// named `refuse` is refused with 403; a read answers with its description.
+/// A command named `slow` is claimed only after the server stops waiting, and
+/// the owner then tells whether it ran.
 fn fake_owner(requests: Receiver<Request>, tell: mpsc::Sender<String>) {
     let refused = |what: &str| {
         if what == "refuse" {
@@ -78,18 +85,15 @@ fn fake_owner(requests: Receiver<Request>, tell: mpsc::Sender<String>) {
         };
         let _ = tell.send(line.clone());
         match request {
-            Request::Command { line, reply } => {
-                let _ = reply.send(refused(&line));
+            Request::Command { line, reply } if line == "slow" => {
+                std::thread::sleep(ANSWER_WITHIN * 2);
+                let ran = reply.claim();
+                let _ = tell.send(format!("slow ran: {ran}"));
             }
-            Request::Key { name, reply } => {
-                let _ = reply.send(refused(&name));
-            }
-            Request::Row { reply, .. } => {
-                let _ = reply.send(Ok(()));
-            }
-            Request::Read { reply, .. } => {
-                let _ = reply.send(json!({ "read": line }));
-            }
+            Request::Command { line, reply } if reply.claim() => reply.send(refused(&line)),
+            Request::Key { name, reply } if reply.claim() => reply.send(refused(&name)),
+            Request::Row { reply, .. } if reply.claim() => reply.send(Ok(())),
+            Request::Read { reply, .. } if reply.claim() => reply.send(json!({ "read": line })),
             _ => {}
         }
     }
@@ -489,6 +493,7 @@ fn events_stream_the_latest_state_and_its_changes() {
     reader.read_line(&mut line).unwrap();
     assert_eq!(line, "HTTP/1.1 200 OK\r\n");
     let mut data = Vec::new();
+    let mut unbuffered = false;
     while data.len() < 2 {
         line.clear();
         reader.read_line(&mut line).unwrap();
@@ -497,8 +502,12 @@ fn events_stream_the_latest_state_and_its_changes() {
             server.latest.set(r#"{"state":"playing"}"#.into());
         } else if line.starts_with("Content-Type") {
             assert_eq!(line.trim_end(), "Content-Type: text/event-stream");
+        } else if line.starts_with("X-Accel-Buffering") {
+            // nginx would otherwise hold events back until its buffer fills.
+            unbuffered = line.trim_end() == "X-Accel-Buffering: no";
         }
     }
+    assert!(unbuffered);
     assert_eq!(data, [r#"{"state":"stopped"}"#, r#"{"state":"playing"}"#]);
 }
 
@@ -526,4 +535,71 @@ fn hosts_that_name_this_machine() {
     ] {
         assert!(!host_allowed(host, &extra), "{host}");
     }
+}
+
+#[test]
+fn a_request_sent_a_byte_at_a_time_is_cut_off_at_the_deadline() {
+    let server = server();
+    let host = server.addr;
+    for (whole, trickled) in [
+        // The head trickles in.
+        (
+            String::new(),
+            format!("GET /config HTTP/1.1\r\nHost: {host}\r\n"),
+        ),
+        // The head arrives whole; the body trickles in.
+        (
+            format!("POST /command HTTP/1.1\r\nHost: {host}\r\nContent-Length: 64\r\n\r\n"),
+            "pause".repeat(13),
+        ),
+    ] {
+        let mut stream = TcpStream::connect(host).unwrap();
+        stream.write_all(whole.as_bytes()).unwrap();
+        let started = std::time::Instant::now();
+        // A byte every 100 ms: each read ends in time, the request does not.
+        // A write fails once the server has closed the connection.
+        let closed = trickled.bytes().any(|byte| {
+            std::thread::sleep(Duration::from_millis(100));
+            stream.write_all(&[byte]).is_err()
+        });
+        let held = started.elapsed();
+        assert!(closed, "still open after {held:?}");
+        assert!(held < Duration::from_secs(3), "held for {held:?}");
+    }
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_request_the_owner_answers_too_late_is_never_done() {
+    let server = server();
+    let r = server.send("POST", "/command", "slow");
+    assert_eq!(r.status, 503);
+    assert_eq!(server.requests(), ["command slow", "slow ran: false"]);
+}
+
+#[test]
+fn pages_left_open_leave_room_for_commands() {
+    let server = server();
+    let open = |server: &Server| {
+        let mut stream = TcpStream::connect(server.addr).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /events HTTP/1.1\r\nHost: {}\r\nCookie: playr_token={TOKEN}\r\n\r\n",
+            server.addr
+        )
+        .unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        (reader, line)
+    };
+    let streams: Vec<_> = (0..24).map(|_| open(&server)).collect();
+    assert!(streams.iter().all(|(_, l)| l == "HTTP/1.1 200 OK\r\n"));
+    let (_, refused) = open(&server);
+    assert!(refused.starts_with("HTTP/1.1 503"), "{refused}");
+    assert_eq!(server.send("POST", "/command", "pause").status, 204);
+    drop(streams);
 }

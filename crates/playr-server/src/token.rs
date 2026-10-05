@@ -2,6 +2,7 @@
 //! restart.
 
 use std::io::{self, Write};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 /// Bytes of randomness in a token, written as twice as many hex digits.
@@ -67,4 +68,18 @@ pub fn matches(token: &str, given: &str) -> bool {
             .zip(given.bytes())
             .fold(0, |differ, (a, b)| differ | (a ^ b))
             == 0
+}
+
+/// The address playr-server prints at startup. Only a terminal gets the
+/// token: a service's output goes to a log other users may read, so it names
+/// the file the token is kept in instead.
+pub fn address(listen: SocketAddr, token: Option<&str>, terminal: bool, file: &Path) -> String {
+    match token {
+        None => format!("http://{listen}/ (open: no token)"),
+        Some(token) if terminal => format!("http://{listen}/?token={token}"),
+        Some(_) => format!(
+            "http://{listen}/?token=... (the token is in {})",
+            file.display()
+        ),
+    }
 }

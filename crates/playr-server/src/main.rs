@@ -130,11 +130,17 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
         hosts: cli.hosts,
         // Read once: `playr scan` cannot run while the server holds the lock.
         rescan: !model.session().roots().is_empty(),
+        timeout: http::TIMEOUT,
+        answer_within: http::ANSWER_WITHIN,
     };
-    match &server.token {
-        Some(token) => println!("playr-server: http://{}/?token={token}", cli.listen),
-        None => println!("playr-server: http://{}/ (open: no token)", cli.listen),
-    }
+    let terminal = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let address = token::address(
+        cli.listen,
+        server.token.as_deref(),
+        terminal,
+        &token::default_path(),
+    );
+    println!("playr-server: {address}");
     if let Some(socket) = osc_socket {
         let requests = requests.clone();
         std::thread::spawn(move || osc::listen(socket, requests));

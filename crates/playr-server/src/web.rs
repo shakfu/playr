@@ -62,8 +62,8 @@ pub fn allowed(action: &Action) -> bool {
         | Snap(_)
         | Fit(_)
         | SetSliceEdges(_)
-        | RangeIn
-        | RangeOut
+        | RangeIn(_)
+        | RangeOut(_)
         | SetRange(_)
         | Loop(_)
         | LoopSlot(..)
@@ -71,6 +71,7 @@ pub fn allowed(action: &Action) -> bool {
         | PickEdge(_)
         | WriteSlices
         | DiscardSlices
+        | MarkSlices
         | Convert(..)
         // Not in the first version: they would play on the server's device.
         | Tape(_)
@@ -165,10 +166,12 @@ pub fn screen(model: &Model) -> Value {
 }
 
 /// A number that changes when a list's rows may have, so the page fetches
-/// them again. A list replaced is a new allocation, so its address and length
-/// stand for the library; the selection and playlists are short enough to hash.
+/// them again. The session counts changes to the library; search results are
+/// a new allocation each time, so their address and length stand for them.
+/// The selection and playlists are short enough to hash.
 fn lists_revision(model: &Model) -> u64 {
     let mut hasher = DefaultHasher::new();
+    model.session().revision().hash(&mut hasher);
     let listed = model.listed();
     (listed.as_ptr() as usize, listed.len()).hash(&mut hasher);
     // Sorting reorders a list in place, leaving its address and length alone,
@@ -402,13 +405,13 @@ pub fn completions(model: &Model, text: &str) -> Value {
     })
 }
 
-/// Whether a `:` line is one the page may run, in the view shown. The error
+/// The action of a `:` line the page may run, in the view shown. The error
 /// is the parser's words, or why the page may not.
-pub fn check(model: &Model, line: &str) -> Result<(), (u16, String)> {
+pub fn check(model: &Model, line: &str) -> Result<Action, (u16, String)> {
     // The page runs no extension, so its errors name none.
     let action = command::parse_typed(line.trim(), model.view(), false).map_err(|e| (400, e))?;
     if allowed(&action) {
-        Ok(())
+        Ok(action)
     } else {
         Err((
             403,

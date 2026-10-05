@@ -154,10 +154,12 @@ pub enum Action {
     /// Centre the sampler view on the range, zooming to fit it, or return to
     /// the playhead; switch when `None`.
     Fit(Option<bool>),
-    /// Start the sampler's range at the playhead.
-    RangeIn,
-    /// End the sampler's range at the playhead.
-    RangeOut,
+    /// Start the sampler's range at this time, or at the playhead for `None`.
+    /// An end not after it is dropped.
+    RangeIn(Option<Duration>),
+    /// End the sampler's range at this time, or at the playhead for `None`.
+    /// A start not before it is dropped.
+    RangeOut(Option<Duration>),
     /// Set the sampler's range, or clear it for `None`.
     SetRange(Option<(Duration, Duration)>),
     /// Play the range over and over, or stop; switch when `None`.
@@ -194,6 +196,9 @@ pub enum Action {
     /// Write the slices planned in the sampler view.
     WriteSlices,
     DiscardSlices,
+    /// Mark the start of each planned slice, keeping the marks there are, so
+    /// the cuts outlast the plan.
+    MarkSlices,
     /// Converts the slices last written to this ConvertWithMoss format.
     /// With a directory, converts that export instead of the last.
     Convert(String, Option<PathBuf>),
@@ -239,6 +244,8 @@ pub enum Zoom {
     Out,
     /// Back to the whole track.
     All,
+    /// This many steps in from the whole track, as the window's slider sets it.
+    To(u32),
 }
 
 /// A move of the playhead in the sampler view; negative is back.
@@ -259,8 +266,8 @@ pub enum Slicing {
     /// At onsets, with this sensitivity, or with `onset_sensitivity` from the
     /// settings when `None`.
     Onsets(Option<f32>),
-    /// Every this many beats at the track's analysed tempo.
-    Beats(u32),
+    /// Every this many beats at the track's analysed tempo; 0.5 is eighths.
+    Beats(f32),
 }
 
 /// A key, as bindings name it. Each frontend converts its own key events to

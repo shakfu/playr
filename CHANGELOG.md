@@ -6,6 +6,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
+- `:mark-slices`, or Sampler, Slice, Mark slice starts, marks each planned slice's start and keeps the marks there are. A plan is lost when the track changes; marks are kept in the library, and `:slice marks` plans them again. One undo takes them all back. Library API: `Action::MarkSlices`.
+
+- `:in TIME` and `:out TIME` set one end of the range at a time rather than the playhead; `:zoom N` zooms to step N. Library API: `Action::RangeIn` and `Action::RangeOut` take an `Option<Duration>`, `Zoom::To`.
+
 - Two DJ decks. Each plays a library track at its own varispeed rate (fader ranges +/-8, 16 and 50%, a held nudge of 4%), with a CDJ-style cue. Sync follows the other deck's tempo at half, the same or double, moves into phase with it, and holds it there with a rate trim of up to 5%; quantize starts play, cue, hot cues, jumps and seeks in phase. The mixer has a trim, a 3-band isolator EQ with kills, a one-knob filter, a mute and a channel fader per deck, a crossfader with a constant-power and a sharp curve, and a headphone cue, split across one stereo output or on channels 3 and 4 of a 4-channel device. Each track's beat grid comes from `playr analyze`, a track never analysed is analysed on load, and grid edits are kept with the track. The decks play on their own output stream, as the tape does, and pause the player. The terminal has the commands and the window a DJ tab; the server has neither. On click tracks the beats stay within 1 frame of each other 5 minutes after sync.
 
   ```
@@ -42,7 +46,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
   The design, and where the build departs from it, is in `docs/dev/looper-engine.md`.
 
-- `:slice beats N` cuts the region every N beats, 1 to 64, or every bar of 4/4 without N, at the track's tempo. The cuts fall in phase with the first mark inside the region, else its start, and a cut within half a beat of either end is left out, so a range a few frames longer than 2 bars cuts as 2 bars rather than 2 and a sliver. A track with no tempo yet is analysed first and cut when that finishes; one with no clear pulse is then refused. The window's Slice drop-down offers it as Beats. Library API: `Cut::Beats`, `samples::beat_points`, `Slicing::Beats`, `command::DEFAULT_BEATS` and `MAX_BEATS`, `Refusal::NoTempo`, `Outcome::FindingTempo`.
+- `:slice beats N` cuts the region every N beats, 0.125 to 64, or every bar of 4/4 without N, at the track's tempo. A fraction cuts within the beat: 0.5 gives eighth notes. The cuts fall in phase with the first mark inside the region, else its start, and a cut within half a beat of either end, or half a slice when slices are shorter than a beat, is left out, so a range a few frames longer than 2 bars cuts as 2 bars rather than 2 and a sliver. A track with no tempo yet is analysed first and cut when that finishes; one with no clear pulse is then refused. The window's Slice drop-down offers it as Beats. Library API: `Cut::Beats`, `samples::beat_points`, `Slicing::Beats`, `command::DEFAULT_BEATS`, `MIN_BEATS` and `MAX_BEATS`, `Refusal::NoTempo`, `Outcome::FindingTempo`.
 
 - `playr analyze` finds a beat grid: the tempo to 0.01 BPM and where the first beat falls. Where the estimate reads under 80 BPM and records the double, as a house track at 62 BPM with 124 recorded, the grid takes the faster level: at half the tempo it tests every other beat, and on that track it settled 0.6 of a beat off the kick. Above 80 the estimate stands; taking the double there put hip hop read at 95 at 190. The tempo the status bar and the tempo column show, sort by and `:slice beats` cuts at is the grid's where there is one; `bpm:` finds it as well as the estimate. On synthetic click tracks the grid holds within 2.6 ms of the beats, and within 2.3 ms after 5 minutes; `docs/dev/analyze.md` has what it does on a real library. Library API: `tempo::Grid`, `Tempo::grid`, `Tempo::estimate`, `analysis::HALVED_BELOW`, `Analysis::grid`, `db::analysis::grid_of`, `Session::grid`.
 
@@ -51,6 +55,12 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 - A range cut whole while it loops gets a `smpl` chunk in its WAV files, the slice file and `sliced/NAME.wav`, looping the whole file. Before, only `samples.json` and the `.sfz` file held the loop, and samplers that load a bare WAV read neither. The root note is middle C, as for a lone sample; the kit's key 36 is a drum-pad convention. Library API: `sliced::smpl_chunk`, `sliced::append_chunk`.
 
 ### Changed
+
+- The window's Range starts here and Range ends here set one end, as `i` and `o` do. They set both before, putting the other end at the track's start or end, so the menu and the keys left different ranges. The zoom slider performs `:zoom N`, so it goes through the same path as every other control. Library API: `DraftAnswer::of_key`.
+
+- Library API: planned slices are edited in core, by `Plan::move_start`, `Plan::join` and `Plan::index_of`, so an edited plan and one made again from it follow one rule. `samples::spans_from` is no longer public. `Session::revision` counts changes to the tracks, their order and their measurements. `playr_server::web::check` returns the action it checked, which `Model::run_checked` performs.
+
+- After a seek, and on a new output stream, the device starts once 100 ms of audio is buffered, rather than on the first frames. A device started on a few frames underran when the engine woke late for the next. A seek now starts up to 100 ms later.
 
 - The guides are `docs/guide-*.md`: the sampler and server guides under their new names, and new ones for the DJ tab, the tape and the library. Release archives and the Linux `playr` package ship them all, with the cheatsheet and the diagrams they link to; before, only the server guide shipped.
 
@@ -71,6 +81,26 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 - Digits typed into a number field in the window, such as the sampler's slice count, ran the keys bound to them instead, which show views and sections. Only the search, command and name fields held the keys; any field being typed into now does.
 
 - `:analyze PATH` found no tracks when the library held them by a path through a symbolic link, such as macOS's `/var`: it compared the stored paths only with the resolved one. It now matches either.
+
+- `#` pressed twice on a slice whose start is a mark moved the mark too. The older snap's result, which should have been dropped, was applied to the mark there.
+
+- Editing slices cut at marks without a range used the region around the playhead as their bounds. The first slice could not move below the region's start, and a plan made again, as on `:slice-edges`, ended the last slice at the region's end: inverted, so the export wrote fewer slices and reported no error. Slices out of order are now refused when planned or written.
+
+- With `zero` slice edges, a slice start moved by hand stayed where it was put, off a crossing, until the plan was made again. It now moves to the nearest crossing at once. An equal or onset plan edited by hand also ended its last slice unsnapped when made again; it now ends where the unedited plan did.
+
+- In the window, dragging a range end past the other swapped the ends, leaving the wrong one selected. It now stops a frame short, as `<` `>` do.
+
+- In the window, a drag released while another view showed, or after the track changed, carried on: with Scrub on, a pointer passing over the waveform played it.
+
+- `playr-server`: a client sending a request a byte at a time held a connection for as long as it kept sending, since only each read was timed. 32 such clients, without the token, locked out every page. The whole request now has 10 s, and pages left open take at most 24 of the 32 connections, so commands still get through.
+
+- `playr-server`: a command, key or row the server answered with 503 after 5 s still ran once the model got to it, so a retry ran it twice. It is now either run and answered, or never run.
+
+- Analysis results did not reach the columns until the library was read again, as by a scan: the loudness, peak and BPM columns stayed empty, and a sort by them was wrong. The web page also kept its rows after a sort or an analysis changed them in place.
+
+- Undo or redo that failed to write a mark, as on a locked library, left the marks half put back, and the step could not be redone. The marks now change in one transaction, all or none. Library API: `Session::set_marks`.
+
+- `playr-server` prints the token only to a terminal. Under systemd its output goes to the journal, which other users in the `adm` or `systemd-journal` groups can read; there it names the token's file instead. Event streams send `X-Accel-Buffering: no`, so nginx passes events on as they come. `docs/server-guide.md` says a proxy must pass `Host` through.
 
 ## [0.17.0]
 

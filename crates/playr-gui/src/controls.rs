@@ -196,8 +196,8 @@ pub const SAMPLER_BAR: &[Control] = &[
 /// Sampler, Range: its ends at the playhead, then selecting an end. A drag
 /// across the waveform does both by pointer.
 pub const RANGE_MENU: &[Control] = &[
-    control("Range in", Action::RangeIn),
-    control("Range out", Action::RangeOut),
+    control("Range in", Action::RangeIn(None)),
+    control("Range out", Action::RangeOut(None)),
     control("Select start", Action::PickEdge(Edge::Start)),
     control("Select end", Action::PickEdge(Edge::End)),
 ];
@@ -219,13 +219,15 @@ pub const MARK_ROW: &[Control] = &[
     control("Delete mark", Action::RemoveSelected),
 ];
 
-/// Hearing planned slices, then writing them: in the slice row while a plan
-/// waits, drawn as `<`, `>`, Write and Discard, and under Sampler, Slice.
+/// Hearing planned slices, then writing them: under Sampler, Slice, and the
+/// first four in the slice row while a plan waits, drawn as `<`, `>`, Write
+/// and Discard.
 pub const PLAN_BAR: &[Control] = &[
     control("Previous slice", Action::AuditionSlice(false)),
     control("Next slice", Action::AuditionSlice(true)),
     control("Write slices", Action::WriteSlices),
     control("Discard slices", Action::DiscardSlices),
+    control("Mark slice starts", Action::MarkSlices),
 ];
 
 /// Sampler, Loops, after the numbered loops.

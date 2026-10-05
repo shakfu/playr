@@ -462,9 +462,10 @@ impl Player {
     /// Audible position in the current track.
     pub fn position(&self) -> Duration {
         // Until the engine has reset them, the counters describe the audio
-        // before a seek.
-        let requested = self.shared.flush_requested.load(Ordering::Relaxed);
-        if requested != self.shared.flush_applied.load(Ordering::Relaxed) {
+        // before a seek. Acquire pairs with the engine's release of each, so
+        // a request seen has its target, and counters applied are the new ones.
+        let requested = self.shared.flush_requested.load(Ordering::Acquire);
+        if requested != self.shared.flush_applied.load(Ordering::Acquire) {
             return Duration::from_nanos(self.shared.seek_target.load(Ordering::Relaxed));
         }
         position_now(&self.shared, &self.pending)
@@ -1324,7 +1325,7 @@ impl Engine {
             Ordering::Relaxed,
         );
         self.shared.priming.store(true, Ordering::Relaxed);
-        let generation = self.shared.flush_requested.fetch_add(1, Ordering::Relaxed) + 1;
+        let generation = self.shared.flush_requested.fetch_add(1, Ordering::Release) + 1;
         self.flush = Some(Flush {
             generation,
             deadline: std::time::Instant::now() + FLUSH_TIMEOUT,
@@ -1387,9 +1388,10 @@ impl Engine {
     /// seek target. Called once they describe the audio now playing.
     fn settle_position(&self) {
         let requested = self.shared.flush_requested.load(Ordering::Relaxed);
+        // Release: the counters stored before this are seen with it.
         self.shared
             .flush_applied
-            .store(requested, Ordering::Relaxed);
+            .store(requested, Ordering::Release);
     }
 
     /// The factor queue index `index` plays at: its ReplayGain, from the

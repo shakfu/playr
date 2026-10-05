@@ -184,8 +184,14 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
     assert_eq!(s("snap off"), Ok(Action::Snap(Some(false))));
     assert_eq!(s("fit"), Ok(Action::Fit(None)));
     assert_eq!(s("fit on"), Ok(Action::Fit(Some(true))));
-    assert_eq!(s("in"), Ok(Action::RangeIn));
-    assert_eq!(s("out"), Ok(Action::RangeOut));
+    assert_eq!(s("in"), Ok(Action::RangeIn(None)));
+    assert_eq!(s("out"), Ok(Action::RangeOut(None)));
+    assert_eq!(s("in 2"), Ok(Action::RangeIn(Some(secs(2.0)))));
+    assert_eq!(s("out 1:01"), Ok(Action::RangeOut(Some(secs(61.0)))));
+    assert_eq!(
+        s("zoom 12"),
+        Ok(Action::Zoom(playr_app::action::Zoom::To(12)))
+    );
     assert_eq!(s("range"), Ok(Action::SetRange(None)));
     assert_eq!(s("loop"), Ok(Action::Loop(None)));
     assert_eq!(s("loop off"), Ok(Action::Loop(Some(false))));
@@ -201,7 +207,8 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         "snap maybe",
         "fit range",
         "range 1",
-        "in 2",
+        "in x",
+        "zoom 1.5",
         "loop 9",
     ] {
         assert!(s(bad).is_err(), "{bad:?} parsed");
@@ -216,6 +223,9 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         "range 1.5 2.25",
         "in",
         "out",
+        "in 1.5",
+        "out 2.25",
+        "zoom 12",
         "range",
         "loop on",
         "edge end",
@@ -816,8 +826,11 @@ fn default_keys_map_to_actions_by_view() {
         Some(Action::Nudge(Nudge::Columns(1)))
     );
     assert_eq!(default_key("right", Library), Some(Action::SeekBy(5)));
-    assert_eq!(default_key("i", View::Sampler), Some(Action::RangeIn));
-    assert_eq!(default_key("o", View::Sampler), Some(Action::RangeOut));
+    assert_eq!(default_key("i", View::Sampler), Some(Action::RangeIn(None)));
+    assert_eq!(
+        default_key("o", View::Sampler),
+        Some(Action::RangeOut(None))
+    );
     assert_eq!(default_key("{", View::Sampler), Some(Action::PrevMark));
     assert_eq!(default_key("}", Library), Some(Action::NextMark));
     assert_eq!(default_key(",", Library), Some(Action::PrevMark));
@@ -986,8 +999,10 @@ fn export_and_slice_choose_how_the_track_is_cut() {
         ("slice 16", Slicing::Equal(16)),
         ("slice onsets", Slicing::Onsets(None)),
         ("slice onsets 0.8", Slicing::Onsets(Some(0.8))),
-        ("slice beats 4", Slicing::Beats(4)),
-        ("slice beats 8", Slicing::Beats(8)),
+        ("slice beats 4", Slicing::Beats(4.0)),
+        ("slice beats 8", Slicing::Beats(8.0)),
+        ("slice beats 0.5", Slicing::Beats(0.5)),
+        ("slice beats 0.125", Slicing::Beats(0.125)),
     ] {
         assert_eq!(lib(text), Ok(Action::Slice(cut)), "{text}");
         for view in [Selection, Playlists] {
@@ -1008,13 +1023,28 @@ fn export_and_slice_choose_how_the_track_is_cut() {
         "slice onsets"
     );
     assert_eq!(
-        line(&Action::Slice(Slicing::Beats(8)), None),
+        line(&Action::Slice(Slicing::Beats(8.0)), None),
         "slice beats 8"
     );
+    assert_eq!(
+        line(&Action::Slice(Slicing::Beats(0.5)), None),
+        "slice beats 0.5"
+    );
     // With no count, a bar of 4/4.
-    assert_eq!(lib("slice beats"), Ok(Action::Slice(Slicing::Beats(4))));
-    for text in ["slice beats 0", "slice beats 65", "slice beats x"] {
-        assert_eq!(lib(text), Err("beats a slice are 1 to 64".into()), "{text}");
+    assert_eq!(lib("slice beats"), Ok(Action::Slice(Slicing::Beats(4.0))));
+    // Down to a 32nd note in 4/4, and not past 16 bars.
+    for text in [
+        "slice beats 0",
+        "slice beats 0.1",
+        "slice beats -1",
+        "slice beats 65",
+        "slice beats x",
+    ] {
+        assert_eq!(
+            lib(text),
+            Err("beats a slice are 0.125 to 64".into()),
+            "{text}"
+        );
     }
     assert_eq!(lib("slice 1"), Err("slices are 2 to 256".into()));
     assert_eq!(lib("slice 257"), Err("slices are 2 to 256".into()));

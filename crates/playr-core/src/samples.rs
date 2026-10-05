@@ -38,7 +38,7 @@ pub enum Cut {
     Onsets(f32),
     /// The region, every `beats` beats at `bpm`, in phase with the first mark
     /// inside it, else from its start.
-    Beats { beats: u32, bpm: f32 },
+    Beats { beats: f32, bpm: f32 },
 }
 
 /// What an export does at each slice's edges, against clicks.
@@ -205,19 +205,23 @@ pub fn equal_spans(len: u64, n: usize) -> Vec<(u64, u64)> {
 }
 
 /// Slice edges every `beats` beats at `bpm` across `len` frames from `start`,
-/// as offsets from `start`, from 0 to `len`. The edges fall on the first of
-/// `marks` inside, else on 0; a slice before that mark may be short. An edge
-/// within half a beat of either end is dropped, so no sliver is written: a
-/// range a few frames longer than 2 bars cuts as 2 bars. Each edge is
-/// rounded from its exact position, so none drifts.
+/// as offsets from `start`, from 0 to `len`. `beats` may be a fraction, as
+/// 0.5 for eighth notes. The edges fall on the first of `marks` inside, else
+/// on 0; a slice before that mark may be short. An edge within half a beat of
+/// either end, or half a slice when a slice is shorter, is dropped, so no
+/// sliver is written: a range a few frames longer than 2 bars cuts as 2 bars.
+/// Each edge is rounded from its exact position, so none drifts.
 pub fn beat_points(
     marks: &[u64],
     start: u64,
     len: u64,
     rate: u32,
-    beats: u32,
+    beats: f32,
     bpm: f32,
 ) -> Result<Vec<u64>, String> {
+    if !(beats > 0.0 && beats.is_finite()) {
+        return Err(format!("{beats} beats is not a slice length"));
+    }
     let beat = f64::from(rate) * 60.0 / f64::from(bpm);
     let step = beat * f64::from(beats);
     if !(step >= 1.0 && step.is_finite()) {
@@ -229,7 +233,7 @@ pub fn beat_points(
         .min()
         .map_or(0.0, |&m| (m - start) as f64);
     let first = anchor - (anchor / step).floor() * step;
-    let half = beat / 2.0;
+    let half = step.min(beat) / 2.0;
     let inner = (0u64..)
         .map(|k| first + k as f64 * step)
         .take_while(|&p| p < len as f64)
@@ -328,6 +332,65 @@ pub struct Plan {
     pub spans: Vec<Span>,
 }
 
+impl Plan {
+    /// The index of the slice starting at `start`.
+    pub fn index_of(&self, start: u64) -> Option<usize> {
+        self.spans.iter().position(|s| s.0 == start)
+    }
+
+    /// Moves the start of slice `i` to `to`, which moves the end of the slice
+    /// before it too, and returns where it landed. It stays a frame inside its
+    /// neighbours, and the first slice's start inside [`extent`]. With
+    /// [`Edges::Zero`] it lands on the crossing in `peaks` that planning again
+    /// would move it to.
+    pub fn move_start(&mut self, i: usize, to: u64, peaks: Option<&crate::wave::Peaks>) -> u64 {
+        let lowest = match i {
+            0 => extent(&self.job).0,
+            _ => self.spans[i - 1].0 + 1,
+        };
+        let highest = (self.spans[i].1).map_or(u64::MAX, |end| end.saturating_sub(1));
+        let mut to = to.clamp(lowest, highest.max(lowest));
+        if let Some(peaks) = peaks.filter(|_| self.job.edges == Edges::Zero && !self.job.loops) {
+            // As `snap_edges`: the nearest crossing, if it keeps the order.
+            let reach = crate::wave::snap_reach(peaks.rate);
+            let crossing = peaks
+                .crossing(to.saturating_sub(reach), to + reach, to)
+                .unwrap_or(to);
+            if (lowest.max(1)..=highest).contains(&crossing) {
+                to = crossing;
+            }
+        }
+        let mut starts = self.starts();
+        starts[i] = to;
+        self.set_starts(starts);
+        to
+    }
+
+    /// Joins slice `i` to the one before it. The first has none before it,
+    /// so it is refused with `false`.
+    pub fn join(&mut self, i: usize) -> bool {
+        if i == 0 || i >= self.spans.len() {
+            return false;
+        }
+        let mut starts = self.starts();
+        starts.remove(i);
+        self.set_starts(starts);
+        true
+    }
+
+    fn starts(&self) -> Vec<u64> {
+        self.spans.iter().map(|s| s.0).collect()
+    }
+
+    /// Slices at `starts`, the last ending where it did, kept on the job so a
+    /// plan made again keeps them.
+    fn set_starts(&mut self, starts: Vec<u64>) {
+        let end = self.spans.last().and_then(|s| s.1);
+        self.spans = spans_from(&starts, end);
+        self.job.cuts = Some(starts);
+    }
+}
+
 /// Frames `start..end` of the track at `path`, which counts frames at `rate`,
 /// interleaved, with the channel count. Fewer where the track ends first.
 pub fn read_frames(
@@ -392,17 +455,19 @@ pub fn plan(job: &Job) -> Result<Vec<Span>, String> {
     plan_with(job, &OnsetAudio::default())
 }
 
-/// The frames `job` cuts: its range, or the region around its playhead.
+/// The frames `job` cuts: its range, or else the whole track for
+/// [`Cut::Marks`] and the region around its playhead for every other cut.
 pub fn extent(job: &Job) -> (u64, Option<u64>) {
-    match job.range {
-        Some((a, b)) => (a, Some(b)),
-        None => region(&job.marks, job.at),
+    match (job.range, job.cut) {
+        (Some((a, b)), _) => (a, Some(b)),
+        (None, Cut::Marks) => (0, None),
+        (None, _) => region(&job.marks, job.at),
     }
 }
 
 /// Slices starting at each of `starts`, each ending where the next starts,
 /// the last at `end`.
-pub fn spans_from(starts: &[u64], end: Option<u64>) -> Vec<Span> {
+fn spans_from(starts: &[u64], end: Option<u64>) -> Vec<Span> {
     let ends = starts.iter().skip(1).map(|&e| Some(e)).chain([end]);
     starts.iter().copied().zip(ends).collect()
 }
@@ -411,7 +476,17 @@ pub fn spans_from(starts: &[u64], end: Option<u64>) -> Vec<Span> {
 pub fn plan_with(job: &Job, audio: &OnsetAudio) -> Result<Vec<Span>, String> {
     let (start, end) = extent(job);
     let spans: Vec<Span> = match (&job.cuts, job.cut) {
-        (Some(starts), _) => spans_from(starts, end),
+        (Some(starts), _) => {
+            // Equal, onset and beat cuts end at the counted last frame, which
+            // edges then snap, so starts set by hand in one end there too.
+            let end = match (end, job.cut) {
+                (None, Cut::Equal(_) | Cut::Onsets(_) | Cut::Beats { .. }) => {
+                    Some(start + Reader::open(&job.path, job.rate, start)?.count_to(None)?)
+                }
+                _ => end,
+            };
+            spans_from(starts, end)
+        }
         (None, cut) => match cut {
             Cut::Region => vec![(start, end)],
             Cut::Marks if job.range.is_some() => {
@@ -478,6 +553,7 @@ pub fn plan_with(job: &Job, audio: &OnsetAudio) -> Result<Vec<Span>, String> {
             }
         },
     };
+    check(&spans)?;
     if spans.len() > MAX_SLICES {
         return Err(format!(
             "{} slices is more than the {MAX_SLICES} a sample bank holds",
@@ -488,6 +564,19 @@ pub fn plan_with(job: &Job, audio: &OnsetAudio) -> Result<Vec<Span>, String> {
         return snap_edges(job, spans);
     }
     Ok(spans)
+}
+
+/// Refuses `spans` unless each is non-empty and starts at or after the
+/// previous one's end. A span out of order would be written short, or not at all.
+fn check(spans: &[Span]) -> Result<(), String> {
+    let mut before = 0;
+    for &(start, end) in spans {
+        if start < before || end.is_some_and(|e| e <= start) {
+            return Err("the slices are out of order".into());
+        }
+        before = end.unwrap_or(u64::MAX);
+    }
+    Ok(())
 }
 
 /// `spans` with each edge on the nearest zero crossing within
@@ -544,6 +633,7 @@ pub fn write(job: &Job, spans: &[Span]) -> Result<Exported, String> {
     let Some(&(first, _)) = spans.first() else {
         return Err(EMPTY.into());
     };
+    check(spans)?;
     // Opened before the directory is made, so a track that will not open
     // leaves nothing behind.
     let reader = Reader::open(&job.path, job.rate, first)?;

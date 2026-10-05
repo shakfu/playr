@@ -280,6 +280,9 @@ fn snap_on_snaps_the_range_and_fit_zooms_to_it() {
     assert_eq!(model.message(), Some(&Message::Fit(false)));
     assert_eq!(model.sampler().centre(current.as_ref()), None);
     assert_eq!(model.sampler().zoom, 2, "turning it off keeps the zoom");
+    // The window's slider sets a step directly.
+    model.perform(Action::Zoom(playr_app::action::Zoom::To(7)));
+    assert_eq!(model.sampler().zoom, 7);
 }
 
 #[test]
@@ -445,7 +448,7 @@ fn the_range_loops_follows_its_changes_and_escape_clears_it() {
     settle(&model, &|s| s.looping.is_none());
 
     // A range with one end does not loop.
-    model.perform(Action::RangeIn);
+    model.perform(Action::RangeIn(None));
     model.perform(Action::Loop(None));
     assert_eq!(model.message(), Some(&Message::NoRangeToLoop));
     model.perform(Action::SetRange(None));
@@ -1092,10 +1095,22 @@ fn audition_takes_the_range_then_the_slice_then_the_region_under_the_playhead() 
 
 /// A model on a track with a waveform read, in the sampler view.
 fn sampler_model(dir: &Path, file: &Path) -> Model {
+    sampler_model_on(dir, file, common::fake_player().0)
+}
+
+/// As [`sampler_model`], on a device whose clock is held: the playhead moves
+/// only by a seek or [`common::Control::advance`].
+fn held_sampler_model(dir: &Path, file: &Path) -> (Model, std::sync::Arc<common::Control>) {
+    let (player, control) = common::fake_player();
+    control.hold();
+    (sampler_model_on(dir, file, player), control)
+}
+
+fn sampler_model_on(dir: &Path, file: &Path, player: playr_core::audio::Player) -> Model {
     use playr_app::sampler::Wave;
     let mut model = Model::new(
         db::open(&dir.join("library.db")).unwrap(),
-        common::fake_player().0,
+        player,
         vec![track(&file.to_string_lossy())],
         Config::default(),
     );
@@ -1164,17 +1179,32 @@ fn slicing_at_beats_takes_the_track_s_tempo() {
     common::silence(&file, 8000, 10.0);
     // Tagged at 120 BPM: 4 beats is 2 s, 16,000 frames at 8 kHz.
     let mut model = analysable(dir.path(), &file, Some(120.0));
-    model.perform(Action::Slice(Slicing::Beats(4)));
+    model.perform(Action::Slice(Slicing::Beats(4.0)));
     until(&mut model, |m| m.sampler().pending.is_some());
     let plan = model.sampler().pending.as_ref().unwrap();
     let tagged = Cut::Beats {
-        beats: 4,
+        beats: 4.0,
         bpm: 120.0,
     };
     assert_eq!(plan.job.cut, tagged, "a tag alone gives no grid");
     assert_eq!(
         plan.spans.iter().map(|s| s.0).collect::<Vec<_>>(),
         [0, 16_000, 32_000, 48_000, 64_000]
+    );
+
+    // Half a beat, an eighth note: 2,000 frames.
+    model.perform(Action::Slice(Slicing::Beats(0.5)));
+    until(&mut model, |m| {
+        m.sampler().pending.as_ref().map(|p| p.job.cut)
+            == Some(Cut::Beats {
+                beats: 0.5,
+                bpm: 120.0,
+            })
+    });
+    let plan = model.sampler().pending.as_ref().unwrap();
+    assert_eq!(
+        plan.spans[..4].iter().map(|s| s.0).collect::<Vec<_>>(),
+        [0, 2_000, 4_000, 6_000]
     );
 }
 
@@ -1186,14 +1216,14 @@ fn slicing_at_beats_analyses_a_track_with_no_tempo_first() {
     let file = dir.path().join("clicks.wav");
     common::clicks(&file, 22_050, 120.0, 0.25, 12.0);
     let mut model = analysable(dir.path(), &file, None);
-    model.perform(Action::Slice(Slicing::Beats(4)));
+    model.perform(Action::Slice(Slicing::Beats(4.0)));
     assert_eq!(
         model.message(),
         Some(&Message::Core(Notice::Done(Outcome::FindingTempo)))
     );
     until(&mut model, |m| m.sampler().pending.is_some());
     let plan = model.sampler().pending.as_ref().unwrap();
-    let Cut::Beats { beats: 4, bpm } = plan.job.cut else {
+    let Cut::Beats { beats: 4.0, bpm } = plan.job.cut else {
         panic!("not cut at beats: {:?}", plan.job.cut);
     };
     assert!((bpm - 120.0).abs() < 0.05, "{bpm}");
@@ -1238,13 +1268,13 @@ fn a_tempo_is_corrected_by_octaves_and_slicing_follows() {
     assert_eq!(fix(&mut model, TempoFix::Reset), fixed(120.0, 1.0));
     assert_eq!(fix(&mut model, TempoFix::Halve), fixed(60.0, 0.5));
     // A beat is now 1 s, so 2 beats are 16,000 frames at 8 kHz.
-    model.perform(Action::Slice(Slicing::Beats(2)));
+    model.perform(Action::Slice(Slicing::Beats(2.0)));
     until(&mut model, |m| m.sampler().pending.is_some());
     let plan = model.sampler().pending.as_ref().unwrap();
     assert_eq!(
         plan.job.cut,
         Cut::Beats {
-            beats: 2,
+            beats: 2.0,
             bpm: 60.0
         }
     );
@@ -1258,20 +1288,21 @@ fn slicing_at_beats_refuses_a_track_analysed_with_no_pulse() {
     let file = dir.path().join("t.wav");
     common::silence(&file, 8000, 10.0);
     let mut model = analysable(dir.path(), &file, None);
-    model.perform(Action::Slice(Slicing::Beats(4)));
+    model.perform(Action::Slice(Slicing::Beats(4.0)));
     let refused = Message::Core(Notice::Refused(Refusal::NoTempo));
     until(&mut model, |m| m.message() == Some(&refused));
     assert!(model.sampler().pending.is_none() && model.sampler().tempo_for.is_none());
 }
 
-/// Seeks to `at`, and waits for the player to get there. Playing, the
-/// playhead moves on at once, so a poll can miss `at` itself.
+/// Seeks to `at` on a model from [`held_sampler_model`], and waits for the
+/// player to get there. The clock is held, so the playhead then stays.
 fn seek(model: &mut Model, at: Duration) {
+    use playr_app::sampler::frame_of;
     model.perform(Action::SeekTo(at));
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !(at..at + Duration::from_millis(500)).contains(&model.session().player().position()) {
+    while frame_of(model.session().player().position(), 8000) != frame_of(at, 8000) {
         assert!(Instant::now() < deadline, "never sought to {at:?}");
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -1286,7 +1317,7 @@ fn the_mark_keys_select_a_mark_and_step_from_the_selection() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("long.wav");
     common::silence(&file, 8000, 10.0);
-    let mut model = sampler_model(dir.path(), &file);
+    let (mut model, _clock) = held_sampler_model(dir.path(), &file);
     let secs = |n| Duration::from_secs(n);
 
     // A new mark is selected.
@@ -1346,7 +1377,7 @@ fn a_selected_mark_moves_and_is_removed() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("long.wav");
     common::silence(&file, 8000, 10.0);
-    let mut model = sampler_model(dir.path(), &file);
+    let (mut model, _clock) = held_sampler_model(dir.path(), &file);
     let secs = |n| Duration::from_secs(n);
     model.set_scale(Scale {
         start: 0,
@@ -1429,7 +1460,7 @@ fn a_range_end_is_selected_moved_and_removed() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("long.wav");
     common::silence(&file, 8000, 10.0);
-    let mut model = sampler_model(dir.path(), &file);
+    let (mut model, _clock) = held_sampler_model(dir.path(), &file);
     let secs = |n| Duration::from_secs(n);
     model.set_scale(Scale {
         start: 0,
@@ -1442,8 +1473,10 @@ fn a_range_end_is_selected_moved_and_removed() {
     // An end not yet set cannot be selected.
     model.perform(Action::PickEdge(Edge::End));
     assert_eq!(model.message(), Some(&Message::NoEdge(Edge::End)));
-    // Set directly: RangeIn/RangeOut take the moving playhead, not an exact frame.
-    model.perform(Action::SetRange(Some((secs(2), secs(4)))));
+    seek(&mut model, secs(2));
+    model.perform(Action::RangeIn(None));
+    seek(&mut model, secs(4));
+    model.perform(Action::RangeOut(None));
     model.perform(Action::PickEdge(Edge::End));
     assert_eq!(
         model.sampler().selected_edge(current.as_ref()),
@@ -3254,4 +3287,177 @@ fn a_selected_slice_snaps_to_the_nearest_rise() {
     assert!(back.abs_diff(8_000) <= 100, "slice 2 starts at {back}");
     let current = model.snapshot().status.current().cloned();
     assert_eq!(model.sampler().selected_slice(current.as_ref()), Some(back));
+}
+
+/// Waits for a plan, after one was asked for.
+fn wait_for_pending(model: &mut Model) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.sampler().pending.is_none() {
+        assert!(Instant::now() < deadline, "no plan");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_snap_pressed_again_moves_only_the_slice_not_the_mark_under_it() {
+    use playr_app::sampler::Scale;
+    let dir = tempfile::tempdir().unwrap();
+    let file = hit(dir.path());
+    let mut model = sampler_model(dir.path(), &file);
+    let current = model.snapshot().status.current().cloned();
+    let marks = |model: &mut Model| -> Vec<u64> {
+        (model.session_mut().marks_for(current.as_ref()).iter())
+            .map(|m| m.frame)
+            .collect()
+    };
+    model.perform(Action::MarkAt(Duration::from_millis(1100)));
+    model.perform(Action::MarkAt(Duration::from_secs(3)));
+    model.perform(Action::Slice(playr_app::action::Slicing::Marks));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.sampler().pending.is_none() {
+        assert!(Instant::now() < deadline, "no plan");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+    model.perform(Action::SelectSliceAt(Duration::from_millis(1100)));
+    assert_eq!(
+        model.sampler().selected_slice(current.as_ref()),
+        Some(8_800)
+    );
+
+    // Two snaps of one slice: whichever lands first, the older one is stale
+    // and moves nothing, so the mark at the slice's start stays.
+    model.perform(Action::SnapSelected);
+    model.perform(Action::SnapSelected);
+    snapped(&mut model);
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(marks(&mut model), [8_800, 24_000]);
+    let moved = starts(&model)[1];
+    assert!(moved.abs_diff(8_000) <= 100, "slice at {moved}");
+}
+
+#[test]
+fn slices_cut_at_marks_without_a_range_cover_the_whole_track_when_edited() {
+    use playr_app::sampler::{time_of, Scale};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let (mut model, _clock) = held_sampler_model(dir.path(), &file);
+    model.perform(Action::MarkAt(Duration::from_secs(1)));
+    model.perform(Action::MarkAt(Duration::from_secs(6)));
+    // The playhead between the marks makes a region, which marks without a
+    // range do not cut to.
+    seek(&mut model, Duration::from_secs(2));
+    model.perform(Action::Slice(playr_app::action::Slicing::Marks));
+    wait_for_pending(&mut model);
+    assert_eq!(starts(&model), [0, 8_000, 48_000]);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+
+    // The first slice moves inside the track, not the region.
+    model.perform(Action::SelectSliceAt(Duration::ZERO));
+    model.perform(Action::MoveSelectedTo(time_of(400, 8000)));
+    assert_eq!(starts(&model), [400, 8_000, 48_000]);
+
+    // Planned again, the last slice still runs to the end of the track.
+    model.perform(Action::SetSliceEdges(playr_core::samples::Edges::Zero));
+    wait_for_pending(&mut model);
+    let plan = model.sampler().pending.clone().unwrap();
+    assert_eq!(
+        plan.spans,
+        [(400, Some(8_000)), (8_000, Some(48_000)), (48_000, None)]
+    );
+}
+
+#[test]
+fn a_slice_moved_by_hand_lands_on_a_zero_crossing_with_zero_edges() {
+    use playr_app::sampler::{time_of, Scale};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    common::tone(&file, 8000, 10.0, -6.0);
+    let mut model = sampler_model(dir.path(), &file);
+    model.perform(Action::SetSliceEdges(playr_core::samples::Edges::Zero));
+    model.perform(Action::Slice(playr_app::action::Slicing::Equal(4)));
+    wait_for_pending(&mut model);
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+    let second = starts(&model)[1];
+    model.perform(Action::SelectSliceAt(time_of(second, 8000)));
+
+    // 2 frames past a crossing of the 1 kHz tone, which has one every 4 frames.
+    model.perform(Action::MoveSelectedTo(time_of(30_002, 8000)));
+    let plan = model.sampler().pending.clone().unwrap();
+    let moved = plan.spans[1].0;
+    assert_ne!(moved, 30_002, "not snapped");
+    assert!(moved.abs_diff(30_002) <= 4, "moved to {moved}");
+    // What the plan shows is what planning it again would write.
+    assert_eq!(playr_core::samples::plan(&plan.job).unwrap(), plan.spans);
+    assert_eq!(
+        model
+            .sampler()
+            .selected_slice(model.snapshot().status.current()),
+        Some(moved)
+    );
+}
+
+#[test]
+fn a_draft_question_is_answered_by_the_first_letter_of_each_answer() {
+    use playr_app::action::Key;
+    use playr_app::model::DraftAnswer;
+    let key = |k: &str| DraftAnswer::of_key(Key::parse(k).unwrap());
+    assert_eq!(key("o"), Some(DraftAnswer::Overwrite));
+    assert_eq!(key("a"), Some(DraftAnswer::Append));
+    assert_eq!(key("s"), Some(DraftAnswer::Save));
+    for other in ["y", "ctrl-a", "esc", "S"] {
+        assert_eq!(key(other), None, "{other}");
+    }
+}
+
+#[test]
+fn planned_slice_starts_become_marks_in_one_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = planned(dir.path(), &file, 4);
+    let current = model.snapshot().status.current().cloned();
+    let marks = |model: &mut Model| -> Vec<u64> {
+        (model.session_mut().marks_for(current.as_ref()).iter())
+            .map(|m| m.frame)
+            .collect()
+    };
+    model.perform(Action::MarkAt(Duration::from_secs(2)));
+    assert_eq!(starts(&model), [0, 20_000, 40_000, 60_000]);
+
+    // The track's own start needs no mark; the mark there was is kept.
+    model.perform(Action::MarkSlices);
+    assert_eq!(model.message(), Some(&Message::SlicesMarked { added: 3 }));
+    assert_eq!(marks(&mut model), [16_000, 20_000, 40_000, 60_000]);
+    model.perform(Action::MarkSlices);
+    assert_eq!(model.message(), Some(&Message::SlicesMarked { added: 0 }));
+
+    // One undo takes them all back.
+    model.perform(Action::Undo);
+    assert_eq!(marks(&mut model), [16_000]);
+    model.perform(Action::DiscardSlices);
+    model.perform(Action::MarkSlices);
+    assert_eq!(model.message(), Some(&Message::NoSlicesPlanned));
 }

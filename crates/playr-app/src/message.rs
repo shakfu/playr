@@ -101,6 +101,10 @@ pub enum Message {
     },
     NoSlicesPlanned,
     SlicesDiscarded,
+    /// Marks were added at this many planned slice starts.
+    SlicesMarked {
+        added: usize,
+    },
     /// A `:` command could not be parsed or run; the parser's own words.
     Command(String),
     /// A `:sql` statement is running on its own thread.
@@ -271,6 +275,9 @@ pub fn text(message: &Message) -> String {
         }
         Message::NoSlicesPlanned => "no slices planned; :slice plans them".into(),
         Message::SlicesDiscarded => "slices discarded".into(),
+        Message::SlicesMarked { added: 0 } => "every slice start is marked already".into(),
+        Message::SlicesMarked { added: 1 } => "marked 1 slice start".into(),
+        Message::SlicesMarked { added } => format!("marked {added} slice starts"),
         Message::Command(error) => error.clone(),
     }
 }

@@ -296,6 +296,43 @@ fn marks_need_something_playing() {
 }
 
 #[test]
+fn marks_set_at_once_change_all_or_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, file) = playing(dir.path());
+    let ms = Duration::from_millis;
+    session.add_mark(Some(ms(1_000)));
+    session.add_mark(Some(ms(2_000)));
+    let frames = |session: &mut Session| -> Vec<u64> {
+        let marks = session.marks_for(Some(&file)).to_vec();
+        marks.iter().map(|m| m.frame).collect()
+    };
+    assert_eq!(frames(&mut session), [8_000, 16_000]);
+
+    // A write that fails partway, as a locked or full disk would make one,
+    // leaves every mark as it was: the removal before it is undone too.
+    let other = db::open(&dir.path().join("library.db")).unwrap();
+    other
+        .execute_batch(
+            "CREATE TRIGGER refuse BEFORE INSERT ON marks WHEN NEW.frame = 777 \
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        session.set_marks(&[8_000, 777]),
+        Err(Notice::Failed { .. })
+    ));
+    assert_eq!(frames(&mut session), [8_000, 16_000]);
+    let stored = query::marks(&other, &file.to_string_lossy()).unwrap();
+    assert_eq!(
+        stored.iter().map(|m| m.frame).collect::<Vec<_>>(),
+        [8_000, 16_000]
+    );
+
+    assert_eq!(session.set_marks(&[8_000, 24_000]), Ok(()));
+    assert_eq!(frames(&mut session), [8_000, 24_000]);
+}
+
+#[test]
 fn marks_can_be_allowed_closer_but_never_on_the_same_frame() {
     let dir = tempfile::tempdir().unwrap();
     let (mut session, _file) = playing(dir.path());

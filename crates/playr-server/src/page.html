@@ -939,7 +939,10 @@ window.addEventListener("resize", () => requestAnimationFrame(drawRows));
 
 const events = new EventSource("/events");
 events.onmessage = e => draw(JSON.parse(e.data));
-events.onerror = () => fail("reconnecting to playr-server");
+// A refusal, such as too many pages open, closes the stream for good.
+events.onerror = () => fail(events.readyState === EventSource.CLOSED
+  ? "playr-server refused this page; reload it"
+  : "reconnecting to playr-server");
 </script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 //! The token file.
 
-use playr_server::token::{load_or_create, matches};
+use playr_server::token::{address, load_or_create, matches};
 
 #[test]
 fn a_token_is_made_once_and_read_back() {
@@ -57,4 +57,20 @@ fn tokens_match_only_when_equal() {
     assert!(!matches("abcd", "abce"));
     assert!(!matches("abcd", "abc"));
     assert!(!matches("abcd", ""));
+}
+
+#[test]
+fn the_token_is_printed_to_a_terminal_and_kept_out_of_a_log() {
+    let listen = "0.0.0.0:8080".parse().unwrap();
+    let file = std::path::Path::new("/home/me/.local/share/playr/server.token");
+    let token = "ab".repeat(32);
+    let to_terminal = address(listen, Some(&token), true, file);
+    assert_eq!(to_terminal, format!("http://0.0.0.0:8080/?token={token}"));
+    let to_log = address(listen, Some(&token), false, file);
+    assert!(!to_log.contains(&token), "{to_log}");
+    assert!(to_log.contains("/home/me/.local/share/playr/server.token"));
+    assert_eq!(
+        address(listen, None, false, file),
+        "http://0.0.0.0:8080/ (open: no token)"
+    );
 }

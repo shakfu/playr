@@ -129,8 +129,10 @@ pub struct Session {
     /// search, so the list a frontend shows is the list it plays.
     sort: Vec<SortKey>,
     /// What `playr analyze` measured, for the columns that show it and the
-    /// keys that sort by it. Read with the library.
+    /// keys that sort by it. Read with the library and after an analysis.
     measures: HashMap<String, Measures>,
+    /// Counts the times `tracks` or `measures` changed; see [`Session::revision`].
+    revision: u64,
 }
 
 impl Session {
@@ -175,6 +177,7 @@ impl Session {
             replaygain: ReplayGain::Off,
             sort: Vec::new(),
             measures: HashMap::new(),
+            revision: 0,
         };
         session.reload();
         session
@@ -271,11 +274,24 @@ impl Session {
         self.tracks = query::all(&self.conn).unwrap_or_default();
         self.playlists = query::playlists(&self.conn).unwrap_or_default();
         self.searches = query::searches(&self.conn).unwrap_or_default();
+        self.measure();
+        self.send_gains();
+    }
+
+    /// Reads what analysis measured of the tracks, and sorts them again, since
+    /// a sort can be by a measurement.
+    fn measure(&mut self) {
         self.measures = db::analysis::measures(&self.conn, &self.tracks).unwrap_or_default();
         let mut tracks = std::mem::take(&mut self.tracks);
         self.order(&mut tracks);
         self.tracks = tracks;
-        self.send_gains();
+        self.revision += 1;
+    }
+
+    /// A number that changes whenever the tracks, their order or their
+    /// measurements may have, for a frontend that keeps rows between frames.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Sorts `tracks` by the current keys. Every list a frontend shows goes
@@ -314,6 +330,7 @@ impl Session {
         let mut tracks = std::mem::take(&mut self.tracks);
         self.order(&mut tracks);
         self.tracks = tracks;
+        self.revision += 1;
     }
 
     pub fn sort(&self) -> &[SortKey] {
@@ -1450,6 +1467,35 @@ impl Session {
         }
     }
 
+    /// Makes the playing track's marks those at `frames`, in one transaction,
+    /// so undo and redo put back every mark or, on an error, none.
+    pub fn set_marks(&mut self, frames: &[u64]) -> Result<(), Notice> {
+        let (path, rate) = self.playing_track()?;
+        let now: Vec<u64> = self
+            .marks_for(Some(&path))
+            .iter()
+            .map(|m| m.frame)
+            .collect();
+        let remove: Vec<u64> = now
+            .iter()
+            .copied()
+            .filter(|f| !frames.contains(f))
+            .collect();
+        let add: Vec<Mark> = (frames.iter().copied())
+            .filter(|f| !now.contains(f))
+            .map(|frame| Mark { frame, rate })
+            .collect();
+        let key = path.to_string_lossy();
+        query::change_marks(&mut self.conn, &key, &remove, &add).map_err(|e| Notice::Failed {
+            task: Task::Mark,
+            error: e.to_string(),
+        })?;
+        self.marks.retain(|m| !remove.contains(&m.frame));
+        self.marks.extend(add);
+        self.marks.sort_by_key(|m| m.frame);
+        Ok(())
+    }
+
     /// Looks for the onset nearest the mark at `from`, on a job, since it
     /// decodes. Finishes with [`Event::Snapped`].
     pub fn snap_mark(&mut self, from: u64, sensitivity: f32) -> Result<JobId, Refusal> {
@@ -1779,9 +1825,11 @@ impl Session {
         }))
     }
 
-    /// Takes in a finished analysis: reads the library's gains again, so
-    /// tracks analysed just now play at their measured level.
+    /// Takes in a finished analysis: reads the measurements again, for the
+    /// columns, and the gains, so tracks analysed just now play at their
+    /// measured level.
     pub fn analysed(&mut self) {
+        self.measure();
         self.send_gains();
     }
 
@@ -1836,7 +1884,7 @@ impl Session {
         });
         db::analysis::set_grid_edit(&self.conn, key, stored).map_err(|e| e.to_string())?;
         self.tempo_rev += 1;
-        self.measures = db::analysis::measures(&self.conn, &self.tracks).unwrap_or_default();
+        self.measure();
         Ok(())
     }
 
@@ -1886,7 +1934,7 @@ impl Session {
             };
         }
         self.tempo_rev += 1;
-        self.measures = db::analysis::measures(&self.conn, &self.tracks).unwrap_or_default();
+        self.measure();
         Outcome::TempoFixed {
             bpm: shown / was * factor,
             factor,

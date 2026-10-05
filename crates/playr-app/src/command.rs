@@ -232,8 +232,8 @@ pub const COMMANDS: &[Command] = &[
     only(
         Sampler,
         "zoom",
-        "+ | - | all",
-        "zoom in, out, or to the whole track",
+        "+ | - | all | N",
+        "zoom in, out, whole track, or to step N",
     ),
     only(
         Sampler,
@@ -259,8 +259,18 @@ pub const COMMANDS: &[Command] = &[
         "[on|off]",
         "zoom to the range and keep it centred",
     ),
-    only(Sampler, "in", "", "start the range at the playhead"),
-    only(Sampler, "out", "", "end the range at the playhead"),
+    only(
+        Sampler,
+        "in",
+        "[TIME]",
+        "start the range at the playhead or TIME",
+    ),
+    only(
+        Sampler,
+        "out",
+        "[TIME]",
+        "end the range at the playhead or TIME",
+    ),
     only(
         Sampler,
         "range",
@@ -316,6 +326,12 @@ pub const COMMANDS: &[Command] = &[
     only(Sampler, "edge", "start|end", "select a range end"),
     only(Sampler, "write", "", "write the slices :slice planned"),
     only(Sampler, "discard", "", "discard the planned slices"),
+    only(
+        Sampler,
+        "mark-slices",
+        "",
+        "mark each planned slice's start",
+    ),
 ];
 
 const MODES: &[(&str, Mode)] = &Mode::NAMES;
@@ -569,6 +585,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Zoom(crate::action::Zoom::In) => "zoom +".into(),
         Zoom(crate::action::Zoom::Out) => "zoom -".into(),
         Zoom(crate::action::Zoom::All) => "zoom all".into(),
+        Zoom(crate::action::Zoom::To(n)) => format!("zoom {n}"),
         Display(None) => "display".into(),
         Display(Some(d)) => format!("display {}", d.name()),
         Nudge(crate::action::Nudge::Columns(n)) => format!("nudge {n:+}"),
@@ -579,8 +596,10 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Fit(None) => "fit".into(),
         Fit(Some(true)) => "fit on".into(),
         Fit(Some(false)) => "fit off".into(),
-        RangeIn => "in".into(),
-        RangeOut => "out".into(),
+        RangeIn(None) => "in".into(),
+        RangeIn(Some(t)) => format!("in {}", time(t)),
+        RangeOut(None) => "out".into(),
+        RangeOut(Some(t)) => format!("out {}", time(t)),
         SetRange(None) => "range".into(),
         PickEdge(edge) => format!("edge {}", edge.name()),
         Audition => "audition".into(),
@@ -605,6 +624,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         SetRange(Some((a, b))) => format!("range {} {}", time(a), time(b)),
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
+        MarkSlices => "mark-slices".into(),
         Tape(t) => format!("tape {}", tape_line(t)),
         Dj(d) => format!("dj {}", dj_line(d)),
         Convert(format, None) => format!("convert {format}"),
@@ -624,7 +644,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Slice(Slicing::Equal(n)) => format!("slice {n}"),
         Slice(Slicing::Onsets(None)) => "slice onsets".into(),
         Slice(Slicing::Onsets(Some(s))) => format!("slice onsets {}", number(f64::from(*s))),
-        Slice(Slicing::Beats(n)) => format!("slice beats {n}"),
+        Slice(Slicing::Beats(n)) => format!("slice beats {}", number(f64::from(*n))),
         Map { view, key, action } => {
             let target = match action {
                 Some(a) => line(a, *view),
@@ -646,10 +666,13 @@ pub fn line(action: &Action, view: Option<View>) -> String {
 const SLICE_USAGE: &str = "usage: :slice region|marks|N|onsets [S]|beats [N]";
 
 /// Beats a slice of `:slice beats` with no count: a bar of 4/4.
-pub const DEFAULT_BEATS: u32 = 4;
+pub const DEFAULT_BEATS: f32 = 4.0;
+
+/// Fewest beats in one slice of `:slice beats`: a 32nd note in 4/4.
+pub const MIN_BEATS: f32 = 0.125;
 
 /// Most beats in one slice of `:slice beats`: 16 bars of 4/4.
-pub const MAX_BEATS: u32 = 64;
+pub const MAX_BEATS: f32 = 64.0;
 
 const TAPE_USAGE: &str = "usage: :tape load [N] | play | stop | reset | save | rec | \
      write on|off | feedback F | wear W | thin T | window A B | \
@@ -1347,7 +1370,10 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             "+" => Ok(Action::Zoom(Zoom::In)),
             "-" => Ok(Action::Zoom(Zoom::Out)),
             "all" => Ok(Action::Zoom(Zoom::All)),
-            _ => Err(usage()),
+            n => n
+                .parse()
+                .map(|n| Action::Zoom(Zoom::To(n)))
+                .map_err(|_| usage()),
         },
         "display" => match rest {
             "" => Ok(Action::Display(None)),
@@ -1426,8 +1452,10 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         "select-slice" => Ok(Action::SelectSliceAt(parse_time(rest)?)),
         "onset" => nothing(Action::SnapSelected),
         "remove" if command.view == Some(Sampler) => nothing(Action::RemoveSelected),
-        "in" => nothing(Action::RangeIn),
-        "out" => nothing(Action::RangeOut),
+        "in" if rest.is_empty() => Ok(Action::RangeIn(None)),
+        "in" => Ok(Action::RangeIn(Some(parse_time(rest)?))),
+        "out" if rest.is_empty() => Ok(Action::RangeOut(None)),
+        "out" => Ok(Action::RangeOut(Some(parse_time(rest)?))),
         "range" if rest.is_empty() => Ok(Action::SetRange(None)),
         "range" => match rest.split_whitespace().collect::<Vec<_>>()[..] {
             [a, b] => {
@@ -1452,6 +1480,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         "redo" => nothing(Action::Redo),
         "write" => nothing(Action::WriteSlices),
         "discard" => nothing(Action::DiscardSlices),
+        "mark-slices" => nothing(Action::MarkSlices),
         "slice" => match first_word(rest) {
             ("region", "") => Ok(Action::Slice(Slicing::Region)),
             ("marks", "") => Ok(Action::Slice(Slicing::Marks)),
@@ -1461,9 +1490,11 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
                 _ => Err("onset sensitivity is 0 to 1".into()),
             },
             ("beats", "") => Ok(Action::Slice(Slicing::Beats(DEFAULT_BEATS))),
-            ("beats", n) => match n.parse::<u32>() {
-                Ok(n) if (1..=MAX_BEATS).contains(&n) => Ok(Action::Slice(Slicing::Beats(n))),
-                _ => Err(format!("beats a slice are 1 to {MAX_BEATS}")),
+            ("beats", n) => match n.parse::<f32>() {
+                Ok(n) if (MIN_BEATS..=MAX_BEATS).contains(&n) => {
+                    Ok(Action::Slice(Slicing::Beats(n)))
+                }
+                _ => Err(format!("beats a slice are {MIN_BEATS} to {MAX_BEATS}")),
             },
             (n, "") if n.parse::<usize>().is_ok() => match n.parse::<usize>() {
                 Ok(n) if (2..=MAX_SLICES).contains(&n) => Ok(Action::Slice(Slicing::Equal(n))),

@@ -604,6 +604,19 @@ pub fn add_mark(conn: &Connection, path: &str, mark: Mark) -> Result<()> {
     Ok(())
 }
 
+/// Removes the marks at `remove` and adds `add` in the track at `path`, in one
+/// transaction: all of them or, on an error, none.
+pub fn change_marks(conn: &mut Connection, path: &str, remove: &[u64], add: &[Mark]) -> Result<()> {
+    let tx = conn.transaction()?;
+    for &frame in remove {
+        remove_mark(&tx, path, frame)?;
+    }
+    for &mark in add {
+        add_mark(&tx, path, mark)?;
+    }
+    tx.commit()
+}
+
 /// Removes the mark at `frame` in the track at `path`. Returns whether one
 /// was there.
 pub fn remove_mark(conn: &Connection, path: &str, frame: u64) -> Result<bool> {

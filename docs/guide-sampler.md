@@ -22,13 +22,13 @@ A **range**, set in the sampler view with `i` and `o`, `:range START END`, or a 
 | `:slice marks` | the whole track, cut at every mark; the playhead does not matter |
 | `:slice N` | the region in N equal parts, 2 to 256; the last part takes the remainder |
 | `:slice onsets [S]` | the region, cut where hits start; `S` from 0 to 1, higher finds more |
-| `:slice beats [N]` | the region, every N beats at the track's tempo, 1 to 64; 4 without N |
+| `:slice beats [N]` | the region, every N beats at the track's tempo, 0.125 to 64, so 0.5 cuts eighths; 4 without N |
 
 An export holds at most 256 slices, the size of an rtrack sample bank. A cut that would make more is refused.
 
 ### Beats
 
-`:slice beats N` cuts at the tempo `:analyze` measured, or the track's BPM tag, which wins. A track not analysed yet is analysed first, in the background, and cut when that finishes. One whose pulse is too faint to trust is then refused. The cuts fall in phase with the first mark inside the region, so a mark on a downbeat puts every cut on one; the slice before that mark is shorter. Without a mark they start at the region's start, or the range's, so a range set on a loop's first beat cuts in step with the loop. A cut within half a beat of either end is left out, so a range a few frames longer than 2 bars cuts as 2 bars rather than 2 and a sliver. The tempo is the beat grid's when the analysis found one: measured to 0.01 BPM, and at the faster level where the estimate read half the tempo, as house often does. It is the tempo the status bar and the tempo column show. A tempo read an octave off is corrected with `:bpm x2` or `:bpm /2`, and the cuts follow. Each cut is placed from the first, not from the one before, so rounding does not add up.
+`:slice beats N` cuts at the tempo `:analyze` measured, or the track's BPM tag, which wins. A track not analysed yet is analysed first, in the background, and cut when that finishes. One whose pulse is too faint to trust is then refused. The cuts fall in phase with the first mark inside the region, so a mark on a downbeat puts every cut on one; the slice before that mark is shorter. Without a mark they start at the region's start, or the range's, so a range set on a loop's first beat cuts in step with the loop. A cut within half a beat of either end, or half a slice when slices are shorter than a beat, is left out, so a range a few frames longer than 2 bars cuts as 2 bars rather than 2 and a sliver. The tempo is the beat grid's when the analysis found one: measured to 0.01 BPM, and at the faster level where the estimate read half the tempo, as house often does. It is the tempo the status bar and the tempo column show. A tempo read an octave off is corrected with `:bpm x2` or `:bpm /2`, and the cuts follow. Each cut is placed from the first, not from the one before, so rounding does not add up.
 
 The tempo is one number for the track. On music not played to a click, cuts drift from the beat over a long region (inference); onsets follow the playing instead. A tempo above about 170 BPM is read at half, so `:slice beats 2` then cuts every beat.
 

@@ -95,6 +95,20 @@ pub enum DraftAnswer {
     Save,
 }
 
+impl DraftAnswer {
+    /// The answer `key` gives: `o`, `a` or `s`, the first letter of each.
+    pub fn of_key(key: crate::action::Key) -> Option<DraftAnswer> {
+        [
+            ("o", DraftAnswer::Overwrite),
+            ("a", DraftAnswer::Append),
+            ("s", DraftAnswer::Save),
+        ]
+        .into_iter()
+        .find(|(name, _)| crate::action::Key::parse(name) == Ok(key))
+        .map(|(_, answer)| answer)
+    }
+}
+
 /// The row under each list's cursor, if the list has rows and one is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Cursors {
@@ -408,6 +422,14 @@ impl Model {
             Ok(action) => self.perform(action),
             Err(e) => self.notify(Message::Command(e)),
         }
+    }
+
+    /// As [`Model::run_command`], performing `action`, which the caller parsed
+    /// from `line` and checked, rather than parsing the line again.
+    pub fn run_checked(&mut self, line: &str, action: Action) {
+        self.input = Input::None;
+        self.history.push(line);
+        self.perform(action);
     }
 
     /// Shows the tracks matching `query`, as typed so far, with the search
@@ -972,7 +994,11 @@ impl Model {
                     from,
                     result,
                 } => {
-                    let snapping = self.sampler.snapping.take_if(|(j, _)| *j == job);
+                    // A snap pressed again supersedes this one, which moves nothing.
+                    let Some((_, snapping)) = self.sampler.snapping.take_if(|(j, _)| *j == job)
+                    else {
+                        continue;
+                    };
                     // The track may have changed while the window decoded; a
                     // mark moved in one that is no longer playing would be a
                     // surprise, so it is dropped.
@@ -983,17 +1009,17 @@ impl Model {
                         Ok(Some(to)) => {
                             let before = dispatch::before(self);
                             match snapping {
-                                Some((_, Selected::Edge(edge))) => {
+                                Selected::Edge(edge) => {
                                     dispatch::set_edge(self, &track, edge, to);
                                     let (start, end) = self.sampler.range_ends(Some(&track));
                                     if let Ok((_, rate)) = self.session.playing_track() {
                                         self.notify(Message::Range { start, end, rate });
                                     }
                                 }
-                                Some((_, Selected::Slice(start))) => {
+                                Selected::Slice(start) => {
                                     dispatch::move_slice(self, start, to);
                                 }
-                                _ => {
+                                Selected::Mark(_) => {
                                     let notice = self.session.move_mark(from, to);
                                     if matches!(notice, Notice::Done(Outcome::MarkMoved { .. })) {
                                         self.sampler.selected =
@@ -1360,6 +1386,7 @@ impl Frontend for Model {
                     Zoom::In => self.sampler.zoom + 1,
                     Zoom::Out => self.sampler.zoom.saturating_sub(1),
                     Zoom::All => 0,
+                    Zoom::To(n) => n,
                 }
             }
             Presentation::Display(display) => {

@@ -195,18 +195,7 @@ impl Gui {
                     .model
                     .answer(key == playr_app::action::Key::parse("y").expect("a key")),
                 // As in the terminal: anything but an answer leaves the draft alone.
-                Input::Draft(_) => {
-                    let is = |k: &str| key == playr_app::action::Key::parse(k).expect("a key");
-                    let answer = [
-                        ("o", DraftAnswer::Overwrite),
-                        ("a", DraftAnswer::Append),
-                        ("s", DraftAnswer::Save),
-                    ]
-                    .into_iter()
-                    .find(|(k, _)| is(k))
-                    .map(|(_, a)| a);
-                    self.model.answer_draft(answer);
-                }
+                Input::Draft(_) => self.model.answer_draft(DraftAnswer::of_key(key)),
                 // Any key closes a list.
                 Input::Help | Input::CommandHelp => self.model.set_input(Input::None),
                 _ => match self.model.keymap().lookup(key, self.model.view()).cloned() {

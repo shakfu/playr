@@ -1032,14 +1032,14 @@ fn the_waveform_s_menu_acts_on_the_point_right_clicked() {
         "{marks:?}"
     );
 
+    // As `i` there: a start, and no end until one is set.
     menu(&mut harness, "Range starts here");
     let current = model(&harness).snapshot().status.current().cloned();
-    let (a, b) = model(&harness)
-        .sampler()
-        .range(current.as_ref())
-        .expect("no range");
-    // From there to the track's end.
-    assert!(a.abs_diff(middle) <= 96 && b == 96_000, "{a}..{b}");
+    let ends = model(&harness).sampler().range_ends(current.as_ref());
+    assert!(
+        matches!(ends, (Some(a), None) if a.abs_diff(middle) <= 96),
+        "{ends:?}"
+    );
 
     menu(&mut harness, "Delete mark");
     wait(&mut harness, |m| m.snapshot().marks.is_empty());
@@ -1779,4 +1779,133 @@ fn the_dj_tab_loads_from_its_library_fits_the_smallest_window_and_a_view_key_lea
     harness.key_press(egui::Key::Tab);
     harness.run_steps(2);
     assert!(harness.query_by_label("Deck A waveform").is_none());
+}
+
+/// Runs `line` in the command bar.
+fn command(harness: &mut Harness<'_, Gui>, line: &str) {
+    typing(harness, ":");
+    harness.run_steps(2);
+    let bar = harness.get(
+        egui_kittest::kittest::by()
+            .role(egui::accesskit::Role::TextInput)
+            .label(":"),
+    );
+    bar.type_text(line);
+    harness.run_steps(1);
+    harness.key_press(egui::Key::Enter);
+    harness.run_steps(2);
+}
+
+/// Drags from `from` to `to` with the primary button, in four moves.
+fn drag_between(harness: &mut Harness<'_, Gui>, from: egui::Pos2, to: egui::Pos2) {
+    harness.hover_at(from);
+    harness.run_steps(1);
+    harness.drag_at(from);
+    harness.run_steps(1);
+    for k in 1..=4 {
+        harness.hover_at(from + (to - from) * (k as f32 / 4.0));
+        harness.run_steps(1);
+    }
+    harness.drop_at(to);
+    harness.run_steps(2);
+}
+
+/// Where frame `f` is drawn now, on the waveform's middle line.
+fn x_of(harness: &Harness<'_, Gui>, f: u64) -> egui::Pos2 {
+    let rect = harness.get_by_label("Track waveform").rect();
+    let scale = model(harness).sampler().scale.unwrap();
+    let column = f.saturating_sub(scale.start) as f32 / scale.per_column as f32;
+    egui::pos2(rect.left() + column + 0.5, rect.center().y)
+}
+
+/// The playing track's range.
+fn range_of(harness: &Harness<'_, Gui>) -> (u64, u64) {
+    let m = model(harness);
+    let current = m.snapshot().status.current().cloned();
+    m.sampler().range(current.as_ref()).expect("no range")
+}
+
+#[test]
+fn a_range_end_dragged_past_the_other_stops_short_of_it() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    command(&mut harness, "range 1 2");
+    assert_eq!(range_of(&harness), (8_000, 16_000));
+    let current = model(&harness).snapshot().status.current().cloned();
+
+    // As the keys move it: the start alone, a frame short of the end, and
+    // still the start that is selected.
+    let (from, to) = (x_of(&harness, 8_000), x_of(&harness, 16_000));
+    drag_between(&mut harness, from, to + egui::vec2(40.0, 0.0));
+    let (a, b) = range_of(&harness);
+    assert_eq!(b, 16_000, "the ends swapped");
+    assert!(a < b);
+    assert_eq!(
+        model(&harness).sampler().selected_edge(current.as_ref()),
+        Some(Edge::Start)
+    );
+}
+
+#[test]
+fn a_drag_released_in_another_view_does_not_go_on_scrubbing() {
+    use playr_core::audio::State;
+
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    harness.get_by_label("Scrub").click();
+    harness.run_steps(2);
+    let rect = harness.get_by_label("Track waveform").rect();
+    let along = |x: f32| egui::pos2(rect.left() + rect.width() * x, rect.center().y);
+    harness.hover_at(along(0.25));
+    harness.run_steps(1);
+    harness.drag_at(along(0.25));
+    harness.run_steps(1);
+    harness.hover_at(along(0.3));
+    harness.run_steps(1);
+    // Another view while the button is held, and the release there.
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(2);
+    assert_ne!(model(&harness).view(), View::Sampler);
+    harness.drop_at(along(0.3));
+    harness.run_steps(2);
+    wait(&mut harness, |m| {
+        m.session().player().status().state == State::Paused
+    });
+    let paused_at = model(&harness).session().player().position();
+
+    // Back in the sampler, a pointer passing over the waveform plays nothing.
+    harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    harness.run_steps(2);
+    assert_eq!(model(&harness).view(), View::Sampler);
+    for x in [0.6, 0.7, 0.8] {
+        harness.hover_at(along(x));
+        harness.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+    }
+    harness.run_steps(2);
+    assert_eq!(
+        model(&harness).session().player().status().state,
+        State::Paused
+    );
+    assert_eq!(model(&harness).session().player().position(), paused_at);
+}
+
+#[test]
+fn a_zoom_while_paused_reads_the_frames_without_another_input() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    harness.get_by_label("Pause").click();
+    harness.run_steps(2);
+    // Deep enough that each column is fewer frames than a peak covers.
+    // By key, which animates nothing that would ask for frames of its own.
+    for _ in 0..3 {
+        harness.event(egui::Event::Text("z".into()));
+        harness.run();
+    }
+    let m = model(&harness);
+    assert!(m.sampler().scale.unwrap().needs_detail());
+    assert!(
+        !matches!(m.sampler().detail, playr_app::sampler::DetailRead::None),
+        "no read was started"
+    );
 }

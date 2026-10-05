@@ -131,13 +131,13 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 
 | command                            | key                     | does                                   |
 |------------------------------------|-------------------------|----------------------------------------|
-| `:zoom + \| - \| all`              | `z` `Z` `0`             | zoom in, out, or to the whole track    |
+| `:zoom + \| - \| all \| N`          | `z` `Z` `0`             | zoom in, out, whole track, or to step N |
 | `:display [DISPLAY]`               | `w`                     | envelope, db, braille or spectrogram   |
 | `:nudge +N \| -N \| +N% \| -N%`     | left, right, with shift | move N columns, or N% of the view      |
 | `:snap [on\|off]`                  | `S`                     | snap moves and marks to zero crossings |
 | `:fit [on\|off]`                   | `f`; `\|` is `:fit on`  | zoom to the range and keep it centred  |
-| `:in`                              | `i`                     | start the range at the playhead        |
-| `:out`                             | `o`                     | end the range at the playhead          |
+| `:in [TIME]`                       | `i`                     | start the range at the playhead or TIME |
+| `:out [TIME]`                      | `o`                     | end the range at the playhead or TIME |
 | `:range [START END]`               |                         | set the range to slice, or clear it    |
 | `:loop [on\|off] \| N [save\|clear]` | `l`; F1-F8, with shift  | loop the range or region, or recall or save |
 | `:loops clear`                    |                         | clear this track's loops; asks y/n     |
@@ -153,6 +153,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:remove`                         | `backspace`             | remove the selected mark, or the range |
 | `:write`                           | `enter`                 | write the slices :slice planned        |
 | `:discard`                         | `esc`                   | discard the planned slices             |
+| `:mark-slices`                     |                         | mark each planned slice's start        |
 
 In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; a selected end moves the loop with it.
 

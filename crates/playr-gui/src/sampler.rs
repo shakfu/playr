@@ -16,6 +16,7 @@
 //! Two rows of controls sit under the waveform. The Sampler menu holds every
 //! action; `docs/dev/ui-refactor.md` says which get a button.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use eframe::egui;
@@ -130,7 +131,7 @@ pub struct State {
     method: Option<Method>,
     slices: usize,
     /// Beats a slice, for slicing at the track's tempo.
-    beats: u32,
+    beats: f32,
     sensitivity: Option<f32>,
     /// The height the view took besides the waveform in the last frame: its
     /// header, the loops, the detail line and the rows of controls.
@@ -145,6 +146,8 @@ pub struct State {
     /// Where a click or drag on the overview last sought, in points, so a
     /// pointer held still does not seek again each frame.
     sought: Option<f32>,
+    /// The track a drag on the waveform began on.
+    dragging: Option<PathBuf>,
 }
 
 impl Default for State {
@@ -165,6 +168,7 @@ impl Default for State {
             scrub: false,
             grain: None,
             sought: None,
+            dragging: None,
         }
     }
 }
@@ -175,6 +179,16 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     let mut actions = Vec::new();
     let snapshot = model.snapshot().clone();
     let current = snapshot.status.current().cloned();
+    // A drag this view did not see released, as when the view or the track
+    // changed under it, is dropped rather than resumed by a pointer passing.
+    let held = ui.input(|i| i.pointer.any_down() || i.pointer.any_released());
+    if !held || state.dragging != current {
+        state.drag = None;
+        state.edge_drag = None;
+        state.mark_drag = None;
+        state.grain = None;
+        state.dragging = None;
+    }
     let peaks = match sampler::peaks_of(model.sampler(), current.as_ref()) {
         Ok(peaks) => peaks,
         Err(hint) => {
@@ -280,7 +294,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     );
     // Takes effect next frame, as the zoom buttons' does.
     if zoom != layout.zoom {
-        model.set_zoom(zoom);
+        actions.push(Action::Zoom(Zoom::To(zoom)));
     }
     overview(ui, &layout, &mut state.sought, &mut actions);
     let (rect, response) =
@@ -342,6 +356,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         (slice_at(p).map(|t| (Grab::Slice, t))).or_else(|| mark_at(p).map(|t| (Grab::Mark, t)))
     };
     if response.drag_started() {
+        state.dragging = current.clone();
         state.held_start = Some(layout.start);
         // A drag starts once the pointer has moved a little; it runs from the press.
         let origin = ui.input(|i| i.pointer.press_origin()).or(pointer);
@@ -400,10 +415,15 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     let dragged = state.drag;
     let dragging_mark = (state.mark_drag.map(|(_, t)| t)).zip(pointer.map(at));
     if response.drag_stopped() {
-        state.edge_drag = None;
+        let edge = state.edge_drag.take();
         state.grain = None;
         if let Some((from, to)) = state.drag.take().filter(|(from, to)| from != to) {
-            actions.push(Action::SetRange(Some((from.min(to), from.max(to)))));
+            // An end moves as the keys move it, picked at the start: alone,
+            // and a frame short of the other.
+            actions.push(match edge {
+                Some(_) => Action::MoveSelectedTo(to),
+                None => Action::SetRange(Some((from.min(to), from.max(to)))),
+            });
             // A scrub leaves no loop running, so the release starts one.
             if state.scrub {
                 actions.push(Action::Loop(Some(true)));
@@ -502,29 +522,17 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         let Some((time, mark)) = state.menu else {
             return;
         };
-        let ends = |frame: Option<u64>| frame.map(|f| sampler::time_of(f, layout.rate));
-        let (start, end) = (ends(layout.range.0), ends(layout.range.1));
-        // The other end holds while it is on the right side of this one.
-        let end = end
-            .filter(|e| *e > time)
-            .or(snapshot.status.duration)
-            .unwrap_or_default();
-        let start = start.filter(|s| *s < time).unwrap_or_default();
         let mut chosen = Vec::new();
         if ui.button("Mark here").clicked() {
             chosen.push(Action::MarkAt(time));
         }
-        if ui
-            .add_enabled(time < end, egui::Button::new("Range starts here"))
-            .clicked()
-        {
-            chosen.push(Action::SetRange(Some((time, end))));
+        // As `i` and `o` at this time: the other end stays if it is on the
+        // right side of this one.
+        if ui.button("Range starts here").clicked() {
+            chosen.push(Action::RangeIn(Some(time)));
         }
-        if ui
-            .add_enabled(start < time, egui::Button::new("Range ends here"))
-            .clicked()
-        {
-            chosen.push(Action::SetRange(Some((start, time))));
+        if ui.button("Range ends here").clicked() {
+            chosen.push(Action::RangeOut(Some(time)));
         }
         let clear = egui::Button::new("Clear range");
         if ui
@@ -678,7 +686,8 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                 .changed(),
             Some(Method::Beats) => {
                 let beats = egui::DragValue::new(&mut state.beats)
-                    .range(1..=playr_app::command::MAX_BEATS)
+                    .range(playr_app::command::MIN_BEATS..=playr_app::command::MAX_BEATS)
+                    .speed(0.125)
                     .custom_formatter(|n, _| match n {
                         1.0 => "1 beat".into(),
                         n => format!("{n} beats"),

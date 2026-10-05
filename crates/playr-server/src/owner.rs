@@ -5,7 +5,9 @@
 //! across a refresh, and a request of several steps runs with nothing between
 //! them.
 
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::time::Duration;
 
 use playr_app::action::{Action, Key};
@@ -30,6 +32,56 @@ pub const END_MARGIN: Duration = Duration::from_millis(100);
 /// Why the owner refused a request: an HTTP status and the reason.
 pub type Refused = (u16, String);
 
+/// Where the owner answers a request. The owner claims it before acting on it,
+/// and a client that gives up waiting claims it first, so a request is either
+/// done and answered or skipped, never done after its client was told it failed.
+#[derive(Debug)]
+pub struct Reply<T> {
+    send: Sender<T>,
+    claimed: Arc<AtomicBool>,
+}
+
+/// The client's end of a [`Reply`].
+#[derive(Debug)]
+pub struct Answer<T> {
+    receive: Receiver<T>,
+    claimed: Arc<AtomicBool>,
+}
+
+impl<T> Reply<T> {
+    pub fn new() -> (Reply<T>, Answer<T>) {
+        let (send, receive) = mpsc::channel();
+        let claimed = Arc::new(AtomicBool::new(false));
+        let answer = Answer {
+            receive,
+            claimed: claimed.clone(),
+        };
+        (Reply { send, claimed }, answer)
+    }
+
+    /// Whether the owner may act: true unless the client gave up first.
+    pub fn claim(&self) -> bool {
+        !self.claimed.swap(true, Ordering::AcqRel)
+    }
+
+    pub fn send(self, value: T) {
+        let _ = self.send.send(value);
+    }
+}
+
+impl<T> Answer<T> {
+    /// The owner's answer, or `None` when none came `within` and the request
+    /// was given up before the owner claimed it, so it will never run. A
+    /// request the owner has claimed is waited for.
+    pub fn wait(self, within: Duration) -> Option<T> {
+        match self.receive.recv_timeout(within) {
+            Ok(value) => Some(value),
+            Err(_) if !self.claimed.swap(true, Ordering::AcqRel) => None,
+            Err(_) => self.receive.recv().ok(),
+        }
+    }
+}
+
 /// What a client asks of the model. A request that can be refused carries a
 /// reply, so the refusal reaches the client that sent it.
 #[derive(Debug)]
@@ -39,13 +91,13 @@ pub enum Request {
     /// A `:` command line from the page, parsed in the view shown.
     Command {
         line: String,
-        reply: Sender<Result<(), Refused>>,
+        reply: Reply<Result<(), Refused>>,
     },
     /// A key pressed on the page, named as a binding names it, looked up in
     /// the view shown as the other frontends look keys up.
     Key {
         name: String,
-        reply: Sender<Result<(), Refused>>,
+        reply: Reply<Result<(), Refused>>,
     },
     /// Puts the cursor on `row` of `view`, then runs `command` there, if the
     /// row is still the one named `key`: a list can change between the page
@@ -55,7 +107,7 @@ pub enum Request {
         row: usize,
         key: String,
         command: Option<String>,
-        reply: Sender<Result<(), Refused>>,
+        reply: Reply<Result<(), Refused>>,
     },
     /// Shows the tracks matching `query` as it is typed; with `done`, closes
     /// the search, keeping the results unless the query is empty.
@@ -69,7 +121,7 @@ pub enum Request {
     /// Closes the prompt or list open.
     Close,
     /// JSON the page reads: rows, keys, help or completions.
-    Read { query: Query, reply: Sender<Value> },
+    Read { query: Query, reply: Reply<Value> },
     /// Seeks to this fraction of the playing track. Of several queued, only
     /// the last runs: a fader's drag sends dozens.
     Seek(f64),
@@ -116,14 +168,14 @@ pub fn run(
         match request {
             Ok(Request::Perform(action)) => model.perform(action),
             Ok(Request::Command { line, reply }) => {
-                let checked = web::check(&model, &line);
-                if checked.is_ok() {
-                    model.run_command(&line);
+                if reply.claim() {
+                    reply.send(run_line(&mut model, &line));
                 }
-                let _ = reply.send(checked);
             }
             Ok(Request::Key { name, reply }) => {
-                let _ = reply.send(key(&mut model, &name));
+                if reply.claim() {
+                    reply.send(key(&mut model, &name));
+                }
             }
             Ok(Request::Row {
                 view,
@@ -132,7 +184,9 @@ pub fn run(
                 command,
                 reply,
             }) => {
-                let _ = reply.send(on_row(&mut model, view, row, &key, command.as_deref()));
+                if reply.claim() {
+                    reply.send(on_row(&mut model, view, row, &key, command.as_deref()));
+                }
             }
             Ok(Request::Search { query, done }) => search(&mut model, query, done),
             Ok(Request::Answer(yes)) => model.answer(yes),
@@ -147,12 +201,14 @@ pub fn run(
                 _ => model.set_input(Input::None),
             },
             Ok(Request::Read { query, reply }) => {
-                let _ = reply.send(match query {
-                    Query::Rows { view, start, count } => web::rows(&model, view, start, count),
-                    Query::Keys => web::keys(&model),
-                    Query::Help { commands } => web::help(&model, commands),
-                    Query::Completions(text) => web::completions(&model, &text),
-                });
+                if reply.claim() {
+                    reply.send(match query {
+                        Query::Rows { view, start, count } => web::rows(&model, view, start, count),
+                        Query::Keys => web::keys(&model),
+                        Query::Help { commands } => web::help(&model, commands),
+                        Query::Completions(text) => web::completions(&model, &text),
+                    });
+                }
             }
             Ok(Request::Seek(mut fraction)) => {
                 for queued in requests.try_iter() {
@@ -212,6 +268,14 @@ pub fn seek_target(duration: Duration, fraction: f64) -> Duration {
     at.min(duration.saturating_sub(END_MARGIN))
 }
 
+/// Runs a `:` line in the view shown, if the page may: the action checked is
+/// the one performed.
+fn run_line(model: &mut Model, line: &str) -> Result<(), Refused> {
+    let action = web::check(model, line)?;
+    model.run_checked(line, action);
+    Ok(())
+}
+
 /// Performs what `name` is bound to in the view shown, if the page may.
 fn key(model: &mut Model, name: &str) -> Result<(), Refused> {
     let key = Key::parse(name).map_err(|e| (400, e))?;
@@ -240,11 +304,7 @@ fn on_row(
     model.set_view(view);
     model.set_cursor(view, Some(row));
     match command {
-        Some(line) => {
-            web::check(model, line)?;
-            model.run_command(line);
-            Ok(())
-        }
+        Some(line) => run_line(model, line),
         None => Ok(()),
     }
 }

@@ -72,6 +72,7 @@ impl Session {
     pub fn new(conn: Connection, player: Player, events: EventSink) -> Session;
     pub fn set_samples_dir(&mut self, dir: PathBuf);
     pub fn reload(&mut self);
+    pub fn revision(&self) -> u64;                    // changes with the tracks, their order or measurements
 
     // Library
     pub fn tracks(&self) -> &[Track];

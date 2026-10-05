@@ -90,8 +90,8 @@ fn every_action() -> Vec<Action> {
         Action::Nudge(playr_app::action::Nudge::Columns(1)),
         Action::Snap(None),
         Action::Fit(None),
-        Action::RangeIn,
-        Action::RangeOut,
+        Action::RangeIn(None),
+        Action::RangeOut(None),
         Action::SetRange(None),
         Action::Loop(None),
         Action::LoopSlot(1, playr_app::action::SlotOp::Use),
@@ -109,6 +109,7 @@ fn every_action() -> Vec<Action> {
         Action::PickEdge(playr_app::sampler::Edge::Start),
         Action::WriteSlices,
         Action::DiscardSlices,
+        Action::MarkSlices,
         Action::Convert("sf2".into(), None),
         Action::Tape(playr_app::tape::TapeAction::Play),
         Action::Dj(playr_app::dj::DjAction::Play(playr_app::dj::Side::A)),
@@ -200,8 +201,8 @@ fn every_action() -> Vec<Action> {
             | Action::Nudge(_)
             | Action::Snap(_)
             | Action::Fit(_)
-            | Action::RangeIn
-            | Action::RangeOut
+            | Action::RangeIn(_)
+            | Action::RangeOut(_)
             | Action::SetRange(_)
             | Action::Loop(_)
             | Action::LoopSlot(..)
@@ -219,6 +220,7 @@ fn every_action() -> Vec<Action> {
             | Action::PickEdge(_)
             | Action::WriteSlices
             | Action::DiscardSlices
+            | Action::MarkSlices
             | Action::Convert(..)
             | Action::Tape(_)
             | Action::Dj(_)

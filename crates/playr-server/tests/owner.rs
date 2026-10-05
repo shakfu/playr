@@ -15,7 +15,7 @@ use playr_app::model::Input;
 use playr_app::model::Model;
 use playr_app::View;
 use playr_core::db::{self, query, Track};
-use playr_server::owner::{self, seek_target, Query, Request, END_MARGIN};
+use playr_server::owner::{self, seek_target, Query, Reply, Request, END_MARGIN};
 
 fn model() -> Model {
     let conn = db::open_memory().unwrap();
@@ -132,9 +132,32 @@ fn run(model: Model, requests: Vec<Request>) -> Model {
 }
 
 /// A request with a reply, and where the reply arrives.
-fn replied<T>(make: impl FnOnce(mpsc::Sender<T>) -> Request) -> (Request, mpsc::Receiver<T>) {
-    let (reply, answer) = mpsc::channel();
-    (make(reply), answer)
+fn replied<T>(make: impl FnOnce(Reply<T>) -> Request) -> (Request, Answered<T>) {
+    let (reply, answer) = Reply::new();
+    (make(reply), Answered(answer))
+}
+
+/// An [`owner::Answer`] read as a channel is.
+struct Answered<T>(owner::Answer<T>);
+
+impl<T> Answered<T> {
+    fn recv(self) -> Option<T> {
+        self.0.wait(Duration::from_secs(5))
+    }
+}
+
+#[test]
+fn a_request_its_client_gave_up_on_is_skipped() {
+    let (model, _dir) = library();
+    let (reply, answer) = Reply::new();
+    // The client stops waiting before the owner reaches the request.
+    assert_eq!(answer.wait(Duration::ZERO), None);
+    let given_up = Request::Command {
+        line: "view playlists".into(),
+        reply,
+    };
+    let model = run(model, vec![given_up]);
+    assert_eq!(model.view(), View::Library);
 }
 
 #[test]

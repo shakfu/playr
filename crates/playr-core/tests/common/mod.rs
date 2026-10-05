@@ -6,7 +6,7 @@
 use std::any::Any;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -140,6 +140,15 @@ pub struct Control {
     pub stall: AtomicBool,
     /// Passes the device's thread has made while stalled.
     stalled_passes: AtomicUsize,
+    /// When set, the device plays only what [`Control::advance`] allows, so
+    /// the playhead stays where a seek put it. Set it with [`Control::hold`].
+    held: AtomicBool,
+    /// Passes the device's thread has made while held.
+    held_passes: AtomicUsize,
+    /// Frames a held device may still play.
+    budget: AtomicU64,
+    /// The rate of the stream opened last.
+    rate: AtomicU32,
     /// Streams opened so far.
     pub opened: AtomicUsize,
     /// Every sample played, interleaved.
@@ -158,6 +167,41 @@ impl Control {
         self.stall.store(true, Ordering::Relaxed);
         let deadline = Instant::now() + Duration::from_secs(2);
         while self.stalled_passes.load(Ordering::Relaxed) <= seen && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Holds the device's clock: it goes on taking seeks, pauses and flushes,
+    /// but plays nothing until [`Control::advance`]. Returns once its thread
+    /// has passed through a turn held, so no chunk under way plays after.
+    pub fn hold(&self) {
+        let seen = self.held_passes.load(Ordering::Relaxed);
+        self.held.store(true, Ordering::Relaxed);
+        // A stream opened later starts held.
+        if self.opened.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.held_passes.load(Ordering::Relaxed) <= seen && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Plays exactly `by` of audio on a held device, and returns once it has.
+    /// Panics if it cannot within five seconds, as when paused.
+    pub fn advance(&self, by: Duration) {
+        assert!(self.held.load(Ordering::Relaxed), "the device is not held");
+        let rate = self.rate.load(Ordering::Relaxed);
+        assert!(rate > 0, "no stream open");
+        let frames = (by.as_secs_f64() * f64::from(rate)).round() as u64;
+        self.budget.fetch_add(frames, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.budget.load(Ordering::Relaxed) > 0 {
+            assert!(
+                Instant::now() < deadline,
+                "could not play {by:?}: {}",
+                self.report()
+            );
             std::thread::sleep(Duration::from_millis(1));
         }
     }
@@ -221,6 +265,7 @@ impl Backend for Fake {
         }
         *self.0.events.lock().unwrap() = Some(events);
         self.0.opened.fetch_add(1, Ordering::Relaxed);
+        self.0.rate.store(plan.rate, Ordering::Relaxed);
         let running = Arc::new(AtomicBool::new(true));
         let alive = running.clone();
         let control = self.0.clone();
@@ -241,6 +286,33 @@ impl Backend for Fake {
                 if control.stall.load(Ordering::Relaxed) {
                     due = now;
                     control.stalled_passes.fetch_add(1, Ordering::Relaxed);
+                } else if control.held.load(Ordering::Relaxed) {
+                    // A call every chunk, so a seek's flush still lands, of
+                    // only as many frames as the test has let it play.
+                    let channels = plan.channels as usize;
+                    let budget = control.budget.load(Ordering::Relaxed) as usize;
+                    let frames = budget.min(buf.len() / channels);
+                    let before = shared.frames_out.load(Ordering::Relaxed);
+                    let out = &mut buf[..frames * channels];
+                    render(
+                        out,
+                        &mut consumer,
+                        &shared,
+                        &mut eq,
+                        &mut meter,
+                        plan.channels as u64,
+                        |v| v,
+                    );
+                    // Saturating: the engine zeroes the count when it opens a stream.
+                    let played = (shared.frames_out.load(Ordering::Relaxed)).saturating_sub(before);
+                    control
+                        .played
+                        .lock()
+                        .unwrap()
+                        .extend_from_slice(&out[..played as usize * channels]);
+                    control.budget.fetch_sub(played, Ordering::Relaxed);
+                    control.held_passes.fetch_add(1, Ordering::Relaxed);
+                    due = now + CHUNK;
                 } else {
                     let mut chunks = 0;
                     // The stall is checked before each chunk: a device told to

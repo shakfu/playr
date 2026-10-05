@@ -10,14 +10,14 @@
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use playr_app::action::Action;
 use serde_json::{json, Value};
 
-use crate::owner::{Query, Refused, Request};
+use crate::owner::{Query, Refused, Reply, Request};
 use crate::state::Latest;
 use crate::{token, web};
 
@@ -33,14 +33,18 @@ const BODY_LIMIT: usize = 4 * 1024;
 /// Connections open at once, most of them event streams.
 const CONNECTIONS: usize = 32;
 
-/// How long a client may take to send a request, or to take a write.
-const TIMEOUT: Duration = Duration::from_secs(10);
+/// Event streams open at once. The rest of [`CONNECTIONS`] is kept for
+/// requests, so pages left open cannot lock out the commands.
+const EVENT_STREAMS: usize = 24;
+
+/// How long a client may take to send a whole request, or to take a write.
+pub const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Least time between two states sent to one page.
 const EVENT_INTERVAL: Duration = Duration::from_millis(66);
 
 /// How long a request waits for the owner to answer.
-const ANSWER_WITHIN: Duration = Duration::from_secs(5);
+pub const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 
 /// Longest silence on an event stream; a comment is sent after it, so a
 /// client that has gone is found and its connection closed.
@@ -59,6 +63,10 @@ pub struct Config {
     /// can add one while the server holds the instance lock, so this is read
     /// once.
     pub rescan: bool,
+    /// [`TIMEOUT`], shorter in tests.
+    pub timeout: Duration,
+    /// [`ANSWER_WITHIN`], shorter in tests.
+    pub answer_within: Duration,
 }
 
 /// What every connection's thread shares.
@@ -67,6 +75,7 @@ struct Context {
     requests: Sender<Request>,
     latest: Arc<Latest>,
     open: AtomicUsize,
+    streams: AtomicUsize,
 }
 
 /// Serves `listener` until accepting fails, a thread per connection.
@@ -81,9 +90,14 @@ pub fn serve(
         requests,
         latest,
         open: AtomicUsize::new(0),
+        streams: AtomicUsize::new(0),
     });
     for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
+        let Ok(mut stream) = stream else {
+            // As when out of file descriptors: retrying at once would spin.
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
         if context.open.fetch_add(1, Ordering::SeqCst) >= CONNECTIONS {
             context.open.fetch_sub(1, Ordering::SeqCst);
             let _ = respond(&mut stream, 503, "text/plain", &[], b"too many connections");
@@ -147,9 +161,8 @@ impl From<io::Error> for Unreadable {
 }
 
 fn handle(stream: &mut TcpStream, context: &Context) -> io::Result<()> {
-    stream.set_read_timeout(Some(TIMEOUT))?;
-    stream.set_write_timeout(Some(TIMEOUT))?;
-    let request = match read(stream) {
+    stream.set_write_timeout(Some(context.config.timeout))?;
+    let request = match read(stream, Instant::now() + context.config.timeout) {
         Ok(request) => request,
         Err(Unreadable::Status(status, why)) => {
             respond(stream, status, "text/plain", &[], why.as_bytes())?;
@@ -220,7 +233,15 @@ fn handle(stream: &mut TcpStream, context: &Context) -> io::Result<()> {
             &[("Content-Security-Policy", PAGE_POLICY)],
             PAGE.as_bytes(),
         ),
-        ("GET", "/events") => events(stream, &context.latest),
+        ("GET", "/events") => {
+            if context.streams.fetch_add(1, Ordering::SeqCst) >= EVENT_STREAMS {
+                context.streams.fetch_sub(1, Ordering::SeqCst);
+                return text(stream, 503, "too many pages open");
+            }
+            let streamed = events(stream, &context.latest);
+            context.streams.fetch_sub(1, Ordering::SeqCst);
+            streamed
+        }
         ("GET", "/config") => json(stream, &json!({ "rescan": config.rescan })),
         ("POST", "/command") => {
             let line = body.trim().to_string();
@@ -329,19 +350,19 @@ fn perform(stream: &mut TcpStream, context: &Context, request: Request) -> io::R
     }
 }
 
-/// Sends the request `make` builds around a reply channel, and waits for the
-/// owner's answer.
-fn ask<T>(context: &Context, make: impl FnOnce(Sender<T>) -> Request) -> Option<T> {
-    let (reply, answer) = mpsc::channel();
+/// Sends the request `make` builds around a reply, and waits for the owner's
+/// answer. `None` means the request was not done, and never will be.
+fn ask<T>(context: &Context, make: impl FnOnce(Reply<T>) -> Request) -> Option<T> {
+    let (reply, answer) = Reply::new();
     context.requests.send(make(reply)).ok()?;
-    answer.recv_timeout(ANSWER_WITHIN).ok()
+    answer.wait(context.config.answer_within)
 }
 
 /// Answers 204 once the owner has done the request, or its refusal.
 fn refusable(
     stream: &mut TcpStream,
     context: &Context,
-    make: impl FnOnce(Sender<Result<(), Refused>>) -> Request,
+    make: impl FnOnce(Reply<Result<(), Refused>>) -> Request,
 ) -> io::Result<()> {
     match ask(context, make) {
         Some(Ok(())) => respond(stream, 204, "text/plain", &[], b""),
@@ -391,19 +412,26 @@ pub fn host_allowed(host: &str, extra: &[String]) -> bool {
         || extra.iter().any(|h| h.eq_ignore_ascii_case(&name))
 }
 
-fn read(stream: &mut TcpStream) -> Result<Incoming, Unreadable> {
+/// Reads into `buf` what arrives before `deadline`, at least a byte.
+fn read_by(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<usize, Unreadable> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(Unreadable::Io);
+    }
+    stream.set_read_timeout(Some(left))?;
+    match stream.read(buf)? {
+        0 => Err(Unreadable::Io),
+        n => Ok(n),
+    }
+}
+
+/// Reads one request, head and body, by `deadline`: a client sending a byte
+/// at a time holds a connection no longer than one sending all at once.
+fn read(stream: &mut TcpStream, deadline: Instant) -> Result<Incoming, Unreadable> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
-    let started = Instant::now();
     let (head_len, mut request) = loop {
-        // Each read has its own timeout; this bounds a head sent a byte at a time.
-        if started.elapsed() > TIMEOUT {
-            return Err(Unreadable::Io);
-        }
-        let n = stream.read(&mut chunk)?;
-        if n == 0 {
-            return Err(Unreadable::Io);
-        }
+        let n = read_by(stream, &mut chunk, deadline)?;
         buf.extend_from_slice(&chunk[..n]);
         let mut headers = [httparse::EMPTY_HEADER; 32];
         let mut parsed = httparse::Request::new(&mut headers);
@@ -433,10 +461,10 @@ fn read(stream: &mut TcpStream) -> Result<Incoming, Unreadable> {
     }
     let mut body = buf.split_off(head_len.min(buf.len()));
     body.truncate(length);
-    if body.len() < length {
-        let start = body.len();
-        body.resize(length, 0);
-        stream.read_exact(&mut body[start..])?;
+    let mut filled = body.len();
+    body.resize(length, 0);
+    while filled < length {
+        filled += read_by(stream, &mut body[filled..], deadline)?;
     }
     request.body = body;
     Ok(request)
@@ -467,8 +495,15 @@ fn incoming(parsed: &httparse::Request) -> Incoming {
 /// resets the connection, and the client can lose the response sent before it.
 fn linger(stream: &mut TcpStream) -> io::Result<()> {
     stream.shutdown(std::net::Shutdown::Write)?;
-    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
-    let _ = io::copy(&mut stream.take(64 * 1024), &mut io::sink());
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut sink = [0u8; 4096];
+    let mut left: usize = 64 * 1024;
+    while left > 0 {
+        match read_by(stream, &mut sink, deadline) {
+            Ok(n) => left = left.saturating_sub(n),
+            Err(_) => break,
+        }
+    }
     Ok(())
 }
 
@@ -478,6 +513,7 @@ fn events(stream: &mut TcpStream, latest: &Latest) -> io::Result<()> {
         b"HTTP/1.1 200 OK\r\n\
           Content-Type: text/event-stream\r\n\
           Cache-Control: no-store\r\n\
+          X-Accel-Buffering: no\r\n\
           Connection: close\r\n\r\n",
     )?;
     let mut seen = 0;
