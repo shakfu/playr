@@ -97,6 +97,13 @@ jobs:
               dst: /usr/share/doc/playr/README.md
             - src: CHANGELOG.md
               dst: /usr/share/doc/playr/CHANGELOG.md
+            # Where README.md links to them, with what the guides link to.
+            - src: docs/guide-*.md
+              dst: /usr/share/doc/playr/docs/
+            - src: docs/cheatsheet.md
+              dst: /usr/share/doc/playr/docs/cheatsheet.md
+            - src: docs/media/sampling-*.svg
+              dst: /usr/share/doc/playr/docs/media/
             - src: LICENSE
               dst: /usr/share/licenses/playr/LICENSE
           overrides:

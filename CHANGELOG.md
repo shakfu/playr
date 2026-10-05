@@ -52,6 +52,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Changed
 
+- The guides are `docs/guide-*.md`: the sampler and server guides under their new names, and new ones for the DJ tab, the tape and the library. Release archives and the Linux `playr` package ship them all, with the cheatsheet and the diagrams they link to; before, only the server guide shipped.
+
 - Opus is on by default, in `cargo build` and `cargo install` as in the release archives, so building needs cmake. `--no-default-features` leaves it out. `make test` and `make clippy` run once, with Opus, not once with and once without.
 
 - The tests that ask the machine for its audio devices, and the smoke test that plays the default one, run only with `PLAYR_DEVICE_TESTS` set, as `make test-devices` and CI set it. Listing devices takes about 14 s a test on macOS. Tests build `playr-core`, the DSP crates and the FFT and decoding crates under them at `opt-level` 1, which takes the analysis tests from 25 s to 3.3 s. Optimising every dependency took them to 1.3 s, but a cold test build from about 5 to 27 minutes.
