@@ -22,6 +22,10 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **macOS signing and notarization.** `playr.app` is unsigned, so a downloaded copy is refused until allowed in System Settings. Needs an Apple Developer account and the workflow's secrets.
 
+### Mixer
+
+- [ ] **A mixer section, with the volume as master.** The player, the tape and the DJ decks each play on their own stream, and only the player follows the volume slider. While the tape or a deck plays, the player is paused, so the slider does nothing. The DJ engine has a master volume, `Setting::Volume`, that the app never sends; the looper has none. The section holds the master volume, applied to the main mix of all three with the player's percent-to-gain law, and a level per source. The headphone cue keeps its own level, as on a DJ mixer, so turning the room down leaves the headphones alone. The level meter reads only the player; the decks already measure their peak, in `Status::take_peak`. Open: whether the section is a panel of its own, part of the transport, or the DJ tab's mixer grown; and whether the three streams become one, which both engines' designs rejected for the player's 2 s ring (open question 6 in `docs/dev/dj-engine.md`).
+
 ## Medium
 
 ### Playlists
