@@ -263,10 +263,15 @@ The cpal layer needs an audio device, which CI runners lack. It is tested by han
 - **A strip per voice, not a row.** The voices and the write head each have a column of controls, side by side. A row per voice used 800 points with 5 sliders at 54 points; a strip adds a parameter as a row, and its sliders take the column's width. At 800 by 504 the strips leave less than one row spare, so a further parameter needs a taller minimum window, or a scroll and a fit test that allows one. The minimum rose to 592 for the rows below.
 
 - **More per voice, and Thin.** Added after softcut and a similar iOS looper:
+
   - **Ping.** At either end of its window the head reflects and reverses, so no frame plays twice and nothing crossfades. A window set meanwhile applies at the turn. A three-way direction control was rejected: the sign of the rate already gives forward and reverse.
+
   - **Slew.** A rate change ramps over the voice's slew, 20 ms until set, up to 10 s; the other settings keep 20 ms.
+
   - **Drive, then filter.** Drive is `clip(k x) / sqrt(k)` with `k` up to 16. A gain-compensated `tanh` was rejected because its level at 0 is not the input's; `clip` passes `|x| <= 0.5` unchanged. The filter is a state-variable filter, Butterworth damped, in its topology-preserving form, which stays stable while the cutoff moves. It runs while bypassed, so leaving low-pass 1 or high-pass 0 does not start from silence. Its band-pass is scaled to unity at the centre. Both come before Level and Send, so they shape what is printed; Wear stays the send's own darkening.
+
   - **Solo.** A gain on what is heard alone, ramped. Turning other voices off was rejected: an off voice stops its head and its sends.
+
   - **Thin.** A one-pole high-pass in the write path after Wear, 20 Hz to 2 kHz, as a filter in a delay's feedback path. Its low-pass runs at every setting, so leaving 0 does not step. One write-head control was preferred to a high-pass on every voice: it changes the loop itself.
 
 - **Crossfades are drawn** in the Tape tab's lanes where `crossfade` puts them, with the pre-roll and post-roll dimmed, so what a wrap reads beyond the window shows.

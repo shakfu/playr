@@ -36,15 +36,21 @@ Sampler view unless marked global.
 Marks are captured during playback and edited while paused. Three ways to edit marks, slices and range ends were considered.
 
 1. **The playhead is the target.** No selection. An edit acts on the mark at the playhead.
+
    - For: no state and no new drawing. It matches how marks are placed.
+
    - Against: it covers marks only. The playhead identifies the slice it is in, but not which edge, and never a range end.
 
 2. **Each kind is selected with its own keys; one set of action keys acts on the selection.** One item is selected at a time: the one selected last.
+
    - For: selecting sets the kind, so there is no mode key and no extra keystroke.
+
    - Against: still modal, with the mode set as a side effect of selecting. Slices need editable plans.
 
 3. **A mode key picks the kind; shared keys then select and act.**
+
    - For: fewest keys; a new kind costs no new keys.
+
    - Against: the mode is hidden state. The select keys are shared too, so a wrong mode moves the wrong item with no audio cue. Every kind switch costs a keystroke. `f1`-`f8` and `shift-f1`-`shift-f8` hold loop slots, and F9-F12 are often taken by the OS or terminal (F10 menu and F11 fullscreen in GNOME Terminal).
 
 ### Decision
