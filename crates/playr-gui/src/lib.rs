@@ -25,7 +25,7 @@ use playr_app::command::{self, view_name};
 use playr_app::dispatch::Frontend;
 use playr_app::mix::Strip;
 use playr_app::model::{DraftAnswer, Input, Model};
-use playr_app::{Theme, View};
+use playr_app::{Tab, Theme, View};
 use playr_core::audio::State;
 
 /// Ids of the text fields, so keys go to a field that has focus and to the
@@ -54,21 +54,15 @@ pub struct Gui {
     /// The theme last handed to egui.
     theme: Option<Theme>,
 
-    /// The view the Tape tab was opened over, while it shows. It is not a
-    /// `View`: the terminal has no Tape view, so keys keep acting in this one.
-    tape: Option<View>,
     tape_tab: tape::State,
-    /// The view the DJ tab was opened over, while it shows, as for `tape`.
-    dj: Option<View>,
-    /// The view the Mix tab was opened over, while it shows, as for `tape`.
-    mix: Option<View>,
     /// The master went over full scale while the Mix tab was hidden.
     clipped: bool,
     dj_tab: dj::State,
 }
 
 impl Gui {
-    pub fn new(model: Model) -> Gui {
+    pub fn new(mut model: Model) -> Gui {
+        model.offer_tabs();
         Gui {
             model,
             search: String::new(),
@@ -78,11 +72,8 @@ impl Gui {
             cursor: (View::Library, None),
             sampler: sampler::State::default(),
             theme: None,
-            mix: None,
             clipped: false,
-            tape: None,
             tape_tab: tape::State::default(),
-            dj: None,
             dj_tab: dj::State::default(),
         }
     }
@@ -102,18 +93,8 @@ impl Gui {
         self.follow_theme(ui.ctx());
         self.follow_input(ui.ctx());
         self.keys(ui.ctx());
-        // A key that changed the view leaves the Tape or DJ tab for it.
-        if self.tape.is_some_and(|v| v != self.model.view()) {
-            self.tape = None;
-        }
-        if self.dj.is_some_and(|v| v != self.model.view()) {
-            self.dj = None;
-        }
-        if self.mix.is_some_and(|v| v != self.model.view()) {
-            self.mix = None;
-        }
         let over = self.model.snapshot().meters[3].is_some_and(|db| db > 0.0);
-        self.clipped = self.mix.is_none() && (self.clipped || over);
+        self.clipped = self.model.tab() != Some(Tab::Mix) && (self.clipped || over);
 
         self.dropped(ui.ctx());
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
@@ -378,46 +359,26 @@ impl Gui {
                     View::Queue => format!("{} {}", view.title(), self.model.queue().len()),
                     View::Sampler => view.title().to_string(),
                 };
-                if ui
-                    .selectable_label(
-                        self.tape.is_none()
-                            && self.dj.is_none()
-                            && self.mix.is_none()
-                            && self.model.view() == view,
-                        title,
-                    )
-                    .clicked()
-                {
-                    self.tape = None;
-                    self.dj = None;
-                    self.mix = None;
+                let shown = self.model.tab().is_none() && self.model.view() == view;
+                if ui.selectable_label(shown, title).clicked() {
                     self.perform(Action::ShowView(view));
                 }
             }
-            if ui.selectable_label(self.tape.is_some(), "Tape").clicked() {
-                self.tape = Some(self.model.view());
-                self.dj = None;
-                self.mix = None;
-            }
-            // Over the library, which the tab lists for loading.
-            if ui.selectable_label(self.dj.is_some(), "DJ").clicked() {
-                self.perform(Action::ShowView(View::Library));
-                self.dj = Some(View::Library);
-                self.tape = None;
-                self.mix = None;
-            }
-            // Marked while a strip is muted, or the master clipped unseen.
-            let mix = self.model.mixer();
-            let muted = Strip::ALL.into_iter().any(|s| mix.muted(s));
-            let title = match muted || self.clipped {
-                true => "Mix *",
-                false => "Mix",
-            };
-            if ui.selectable_label(self.mix.is_some(), title).clicked() {
-                self.mix = Some(self.model.view());
-                self.tape = None;
-                self.dj = None;
-                self.clipped = false;
+            for tab in Tab::ALL {
+                // Marked while a strip is muted, or the master clipped unseen.
+                let mix = self.model.mixer();
+                let marked = tab == Tab::Mix
+                    && (self.clipped || Strip::ALL.into_iter().any(|s| mix.muted(s)));
+                let title = match marked {
+                    true => format!("{} *", tab.title()),
+                    false => tab.title().to_string(),
+                };
+                if ui
+                    .selectable_label(self.model.tab() == Some(tab), title)
+                    .clicked()
+                {
+                    self.perform(Action::ShowTab(tab));
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.search_field(ui)
@@ -543,27 +504,30 @@ impl Gui {
     }
 
     fn view(&mut self, ui: &mut egui::Ui) {
-        if self.mix.is_some() {
-            for action in mixer::show(&self.model, ui) {
-                self.perform(action);
+        match self.model.tab() {
+            Some(Tab::Mix) => {
+                for action in mixer::show(&self.model, ui) {
+                    self.perform(action);
+                }
+                return;
             }
-            return;
-        }
-        if self.dj.is_some() {
-            let (actions, row) = dj::show(&self.model, ui, &mut self.dj_tab);
-            if row.is_some() {
-                self.model.set_cursor(View::Library, row);
+            Some(Tab::Dj) => {
+                let (actions, row) = dj::show(&self.model, ui, &mut self.dj_tab);
+                if row.is_some() {
+                    self.model.set_cursor(View::Library, row);
+                }
+                for action in actions {
+                    self.perform(action);
+                }
+                return;
             }
-            for action in actions {
-                self.perform(action);
+            Some(Tab::Tape) => {
+                for action in tape::show(&self.model, ui, &mut self.tape_tab) {
+                    self.perform(action);
+                }
+                return;
             }
-            return;
-        }
-        if self.tape.is_some() {
-            for action in tape::show(&self.model, ui, &mut self.tape_tab) {
-                self.perform(action);
-            }
-            return;
+            None => {}
         }
         let view = self.model.view();
         let cursor = self.model.cursor(view);

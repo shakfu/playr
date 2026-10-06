@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::action::{Action, Key, Keymap, Nudge, Slicing, Zoom};
-use crate::{Display, Theme, View};
+use crate::{Display, Tab, Theme, View};
 use playr_core::audio::eq::{Band, RANGE_DB};
 use playr_core::audio::Mode;
 use playr_core::columns::{Column, SortKey};
@@ -67,7 +67,7 @@ pub const COMMANDS: &[Command] = &[
     any(
         "view",
         "VIEW | next | prev",
-        "a view by its tab's name, or next or prev",
+        "a view or window tab, or next or prev",
     ),
     any("down", "[N]", "move the cursor down N rows, default 1"),
     any("up", "[N]", "move the cursor up N rows, default 1"),
@@ -354,6 +354,9 @@ const VIEWS: &[(&str, View)] = &[
     ("sampler", Sampler),
 ];
 
+/// The window's tabs; `:view` reaches them as it does the views.
+const TABS: &[(&str, Tab)] = &[("tape", Tab::Tape), ("dj", Tab::Dj), ("mix", Tab::Mix)];
+
 /// The name of `view` as commands spell it.
 pub fn view_name(view: View) -> &'static str {
     VIEWS.iter().find(|v| v.1 == view).expect("every view").0
@@ -491,6 +494,10 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Help => "keys".into(),
         CommandHelp => "help".into(),
         ShowView(v) => format!("view {}", view_name(*v)),
+        ShowTab(t) => format!(
+            "view {}",
+            TABS.iter().find(|n| n.1 == *t).expect("every tab").0
+        ),
         NextView => "view next".into(),
         PrevView => "view prev".into(),
         Cursor(1) => "down".into(),
@@ -1283,7 +1290,15 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         "view" => match rest {
             "next" => Ok(Action::NextView),
             "prev" => Ok(Action::PrevView),
-            _ => choose(rest, VIEWS, "view").map(Action::ShowView),
+            _ => match (choose(rest, TABS, "view"), choose(rest, VIEWS, "view")) {
+                (Ok(tab), _) => Ok(Action::ShowTab(tab)),
+                (_, Ok(view)) => Ok(Action::ShowView(view)),
+                (_, Err(e)) if e.starts_with("views: ") => {
+                    let tabs: Vec<&str> = TABS.iter().map(|t| t.0).collect();
+                    Err(format!("{e}, {}", tabs.join(", ")))
+                }
+                (_, Err(e)) => Err(e),
+            },
         },
         "down" => rows(1),
         "up" => rows(-1),
@@ -1670,6 +1685,7 @@ pub fn completions(
         "view" => VIEWS
             .iter()
             .map(|v| v.0)
+            .chain(TABS.iter().map(|t| t.0))
             .chain(["next", "prev"])
             .map(String::from)
             .collect(),

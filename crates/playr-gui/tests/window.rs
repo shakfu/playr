@@ -12,7 +12,7 @@ use playr_app::dispatch::Frontend;
 use playr_app::message::Message;
 use playr_app::model::{Input, Model};
 use playr_app::sampler::Edge;
-use playr_app::View;
+use playr_app::{Tab, View};
 use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_gui::Gui;
@@ -1286,15 +1286,15 @@ fn shift_tab_moves_to_the_previous_view() {
     harness.run_steps(2);
     harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
     harness.run_steps(2);
-    assert_eq!(model(&harness).view(), View::Sampler);
+    assert_eq!(model(&harness).tab(), Some(Tab::Mix), "the last tab");
     // The binding took the key, so egui did not move focus with it.
     assert_eq!(harness.ctx.memory(|m| m.focused()), None);
     harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
     harness.run_steps(2);
-    assert_eq!(model(&harness).view(), View::Playlists);
+    assert_eq!(model(&harness).tab(), Some(Tab::Dj));
     harness.key_press(egui::Key::Tab);
     harness.run_steps(2);
-    assert_eq!(model(&harness).view(), View::Sampler);
+    assert_eq!(model(&harness).tab(), Some(Tab::Mix));
 }
 
 #[test]
@@ -1318,6 +1318,7 @@ fn the_eq_button_opens_a_dialog_whose_sliders_set_bands() {
     };
     button(&harness);
     harness.run_steps(2);
+    harness.get_by_label("player EQ");
     let (bass, treble) = (
         slider(&harness, "bass").unwrap(),
         slider(&harness, "treble").unwrap(),
@@ -1418,19 +1419,67 @@ fn the_mix_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
         "tape",
         "decks",
         "headphones",
-        "bass",
-        "treble",
         "mute headphones",
         "Record",
         "cubic",
     ] {
         harness.get_by_label(label);
     }
+    // The player's EQ is the transport's popup, as the decks' are in the DJ tab.
+    assert!(
+        harness.query_by_label("bass").is_none(),
+        "an EQ in the Mix tab"
+    );
     assert_fits(&harness, window, "the Mix tab");
-    harness.key_press(egui::Key::Tab);
-    harness.run_steps(2);
+    typing(&mut harness, "2");
     assert_eq!(harness.state().model().view(), View::Queue);
     assert!(harness.query_by_label("mute headphones").is_none());
+}
+
+#[test]
+fn the_window_tabs_are_reached_by_number_and_by_tab() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    let at = |harness: &Harness<'_, Gui>| (model(harness).view(), model(harness).tab());
+    typing(&mut harness, "6");
+    assert_eq!(at(&harness), (View::Library, Some(Tab::Tape)));
+    harness.get_by_label("Tape waveform");
+    // A view key leaves a tab, even for the view under it.
+    typing(&mut harness, "1");
+    assert_eq!(at(&harness), (View::Library, None));
+    typing(&mut harness, "5");
+    typing(&mut harness, "7");
+    assert_eq!(
+        at(&harness),
+        (View::Library, Some(Tab::Dj)),
+        "over the library"
+    );
+    typing(&mut harness, "8");
+    assert_eq!(at(&harness), (View::Library, Some(Tab::Mix)));
+    harness.get_by_label("mute headphones");
+
+    // Tab steps through the views, then the tabs, and round.
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(2);
+    assert_eq!(at(&harness), (View::Library, None));
+    let back = |harness: &mut Harness<'_, Gui>| {
+        harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        harness.run_steps(2);
+    };
+    back(&mut harness);
+    assert_eq!(at(&harness), (View::Library, Some(Tab::Mix)));
+    back(&mut harness);
+    back(&mut harness);
+    assert_eq!(at(&harness), (View::Library, Some(Tab::Tape)));
+    back(&mut harness);
+    assert_eq!(at(&harness), (View::Sampler, None));
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(2);
+    assert_eq!(
+        at(&harness),
+        (View::Sampler, Some(Tab::Tape)),
+        "over the sampler"
+    );
 }
 
 #[test]
@@ -1549,8 +1598,7 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
         Some(&Message::Tape(playr_app::tape::TapeMessage::NoRange))
     );
 
-    harness.key_press(egui::Key::Tab);
-    harness.run_steps(2);
+    typing(&mut harness, "2");
     assert_eq!(harness.state().model().view(), View::Queue);
     assert!(harness.query_by_label("Tape waveform").is_none());
 }
@@ -1947,8 +1995,7 @@ fn a_drag_released_in_another_view_does_not_go_on_scrubbing() {
     harness.hover_at(along(0.3));
     harness.run_steps(1);
     // Another view while the button is held, and the release there.
-    harness.key_press(egui::Key::Tab);
-    harness.run_steps(2);
+    typing(&mut harness, "1");
     assert_ne!(model(&harness).view(), View::Sampler);
     harness.drop_at(along(0.3));
     harness.run_steps(2);
@@ -1958,8 +2005,7 @@ fn a_drag_released_in_another_view_does_not_go_on_scrubbing() {
     let paused_at = model(&harness).session().player().position();
 
     // Back in the sampler, a pointer passing over the waveform plays nothing.
-    harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
-    harness.run_steps(2);
+    typing(&mut harness, "5");
     assert_eq!(model(&harness).view(), View::Sampler);
     for x in [0.6, 0.7, 0.8] {
         harness.hover_at(along(x));

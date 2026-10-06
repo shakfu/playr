@@ -50,7 +50,7 @@ Every row is a feature the terminal has today.
 
 | feature | terminal | GUI | actions |
 |-|-|-|-|
-| views | tabs; `1` to `4`, `tab`, shift-tab | tab bar | `ShowView`, `NextView`, `PrevView` |
+| views | tabs; `1` to `5`, `tab`, shift-tab | tab bar; `6` to `8` for the Tape, DJ and Mix tabs | `ShowView`, `ShowTab`, `NextView`, `PrevView` |
 | cursor | highlighted row; `j` `k` `g` `G` | highlighted row; click; the same keys | `Cursor`, `CursorFirst`, `CursorLast` |
 | library | columns fitted to the width | a table with resizable columns, only visible rows laid out | |
 | play from a row | `enter` | double-click; `enter` | `Activate` |
@@ -84,7 +84,7 @@ Every row is a feature the terminal has today.
 | range ends | `[` `]` select an end, drawn reversed; `<` `>` move it a column | Select start and Select end, drawn chosen; Sampler, Edit; the selected end's line is thicker; the same keys | `PickEdge`, `MoveSelected` |
 | slicing | `:slice`; planned edges as `+`; `enter` `esc` | a Slice menu for three cuts; under the waveform, Slice region or range, Slice at marks, a count with Equal slices, and a sensitivity slider with Slice at onsets; planned edges as lines; Write and Discard buttons | `Slice`, `WriteSlices`, `DiscardSlices` |
 | region detail | line under the waveform | the same line; the region shaded | |
-| tape looper | `:tape` commands only | a Tape tab: the loop, each voice's window and head, the write window and head, a strip of controls per voice and one for writing; the waveform shows and drags the selected voice's window, by an edge or whole, a lane drags its own voice's, the write window drags in a strip above the waveform, and an edge near the range's edge lands on it; it is not a `View`, so keys act in the view under it | `Tape` |
+| tape looper | `:tape` commands only | a Tape tab: the loop, each voice's window and head, the write window and head, a strip of controls per voice and one for writing; the waveform shows and drags the selected voice's window, by an edge or whole, a lane drags its own voice's, the write window drags in a strip above the waveform, and an edge near the range's edge lands on it; it is not a `View`, so keys act in the view under it; `6`, `7` and `8`, or `:view tape`, `dj` and `mix`, open the Tape, DJ and Mix tabs, and Tab steps through them after the views | `Tape`, `ShowTab` |
 
 The display named `braille` keeps its name in commands and settings, so `:display braille` works in both frontends. In the GUI it draws the same min/max shape as lines.
 

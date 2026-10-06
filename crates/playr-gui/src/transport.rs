@@ -167,6 +167,7 @@ fn eq_popup(model: &Model, button: &egui::Response, actions: &mut Vec<Action>) {
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             ui.spacing_mut().slider_width = 160.0;
+            ui.label("player EQ");
             for (band, mut db) in Band::ALL.into_iter().zip(gains) {
                 let slider = egui::Slider::new(&mut db, -RANGE_DB..=RANGE_DB)
                     .step_by(0.5)

@@ -372,7 +372,7 @@ These keys are the same in the terminal, the window and the web page, and any of
 
 | keys                     | action                                      |
 |--------------------------|---------------------------------------------|
-| `tab` shift-tab `1`-`5`  | next, previous view; `2` queue, `5` sampler |
+| `tab` shift-tab `1`-`8`  | next, previous view; `2` queue, `5` sampler; in the window, `6` tape, `7` DJ, `8` mix |
 | `j` `k`, up/down         | move                                        |
 | `g` `G`, home/end        | jump to first or last                       |
 | page up/down             | move by ten                                 |
@@ -637,7 +637,7 @@ The master volume, `:volume` or the Volume slider, scales everything playr plays
 - A mute silences a source without stopping it: the decks stay in sync and the tape keeps writing. The tape's recording reads before its fader.
 - `:mix rec` records the master, everything playr plays, to a 32-bit float stereo WAV under the samples directory, `master/master.wav` and then `master-2/master-2.wav`, and adds it to the library once stopped. The cue is never in it. Overs above full scale are kept in the file, though the device clips them. While it records, a track at another rate is resampled rather than changing the output's rate.
 - `master` in `settings.toml` sets the master at start. `volume`, its name before the mixer, held a level, not a position. It is still read, and plays at the level it always did; a file setting both is an error.
-- In the window, the **Mix** tab has a strip for each: a fader, its level in dB, a meter after the fader, and a mute; the player's strip has the EQ, and the master's has Record and the law. The master's meter measures what the device is sent. The tab is marked `Mix *` while a strip is muted, or once the master has gone over full scale while the tab was hidden. The server plays only the player, so its page and OSC have the master and a mute, `/playr/mute`; `:mix` works from the page's command line.
+- In the window, the **Mix** tab has a strip for each: a fader, its level in dB, a meter after the fader, and a mute; the master's has Record and the law. The master's meter measures what the device is sent. The tab is marked `Mix *` while a strip is muted, or once the master has gone over full scale while the tab was hidden. The server plays only the player, so its page and OSC have the master and a mute, `/playr/mute`; `:mix` works from the page's command line.
 
 ### Varispeed
 
@@ -647,7 +647,7 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 
 ### EQ
 
-`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass 3` sets a band, `:eq bass =-3` sets it below 0, and `:eq treble -2` moves one; `:eq flat` returns all three to 0. In the window, the EQ button beside Mode opens a popup with a slider for each and Flat, which a click elsewhere closes, and the Mix tab has them too; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
+`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass 3` sets a band, `:eq bass =-3` sets it below 0, and `:eq treble -2` moves one; `:eq flat` returns all three to 0. In the window, the EQ button beside Mode opens a popup with a slider for each and Flat, which a click elsewhere closes; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
 
 A boost raises its band and leaves the rest, so at full volume a large one can clip a loud track. The volume applies after the EQ, so turning it down makes room: at 50, a 6 dB boost cannot clip. The level meter reads after the EQ and before the volume. `:slice` and the sampler's measurements read the file, so the EQ does not reach them. The EQ starts flat each time playr does, and changes last until it exits.
 

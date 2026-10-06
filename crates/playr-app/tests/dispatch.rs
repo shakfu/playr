@@ -65,6 +65,13 @@ impl Frontend for Headless {
     fn set_view(&mut self, view: View) {
         self.view = view;
     }
+    fn tabs(&self) -> &'static [playr_app::Tab] {
+        &[]
+    }
+    fn tab(&self) -> Option<playr_app::Tab> {
+        None
+    }
+    fn set_tab(&mut self, _: Option<playr_app::Tab>) {}
     fn cursor(&self, view: View) -> Option<usize> {
         slot(view).and_then(|i| self.cursors[i])
     }

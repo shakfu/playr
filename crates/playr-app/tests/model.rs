@@ -13,7 +13,7 @@ use playr_app::config::Config;
 use playr_app::dispatch::{Confirm, Frontend};
 use playr_app::message::Message;
 use playr_app::model::{hold_peak, Input, Model, PEAK_HOLD};
-use playr_app::View;
+use playr_app::{Tab, View};
 use playr_core::audio::Mode;
 use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
@@ -3617,4 +3617,18 @@ fn the_master_is_recorded_into_the_library_and_metered() {
             .any(|t| Path::new(&t.path) == canonical),
         "the recording is not in the library"
     );
+}
+
+#[test]
+fn the_terminal_refuses_the_window_tabs_and_steps_over_them() {
+    let (mut model, _dir) = model();
+    model.perform(Action::ShowTab(Tab::Mix));
+    assert_eq!(model.tab(), None);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Command("no Mix tab here; use :mix".into()))
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    model.perform(Action::NextView);
+    assert_eq!((model.view(), model.tab()), (View::Library, None));
 }

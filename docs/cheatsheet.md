@@ -44,7 +44,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:help`                               |                         | list these commands                         |
 | `:keys`                               | `?`                     | list the keys for this view                 |
 | `:quit`                               | `q`                     | quit                                        |
-| `:view VIEW \| next \| prev`          | `1` to `5`, `tab`, shift-tab | a view by its tab's name, or next or prev |
+| `:view VIEW \| next \| prev`          | `1` to `8`, `tab`, shift-tab | a view or window tab, or next or prev |
 | `:down [N]`                           | `j`, down, page down    | move the cursor down N rows, default 1      |
 | `:up [N]`                             | `k`, up, page up        | move the cursor up N rows, default 1        |
 | `:first`                              | `g`, home               | move the cursor to the first row            |

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use playr_app::action::{Action, Key, Keymap};
 use playr_app::command::{completions, line, parse, CommandLine, History, COMMANDS, HISTORY_LEN};
+use playr_app::Tab;
 use playr_app::View::{self, Library, Playlists, Sampler, Selection};
 use playr_core::audio::Mode;
 use playr_core::gain::ReplayGain;
@@ -598,9 +599,12 @@ fn mode_and_view_take_a_name_or_its_prefix() {
     assert_eq!(lib("view sel"), Ok(Action::ShowView(Selection)));
     assert_eq!(lib("view p"), Ok(Action::ShowView(Playlists)));
     assert_eq!(lib("view q"), Ok(Action::ShowView(View::Queue)));
+    assert_eq!(lib("view t"), Ok(Action::ShowTab(Tab::Tape)));
+    assert_eq!(lib("view mix"), Ok(Action::ShowTab(Tab::Mix)));
+    assert_eq!(line(&Action::ShowTab(Tab::Dj), None), "view dj");
     assert_eq!(
         lib("view nope"),
-        Err("views: library, queue, selection, playlists, sampler".into())
+        Err("views: library, queue, selection, playlists, sampler, tape, dj, mix".into())
     );
     assert_eq!(
         lib("mode"),
@@ -672,6 +676,9 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
             "view selection",
             "view playlists",
             "view sampler",
+            "view tape",
+            "view dj",
+            "view mix",
             "view next",
             "view prev"
         ]

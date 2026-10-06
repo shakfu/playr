@@ -312,7 +312,8 @@ Step 3, 2026-10-06. `make test` passes: 953 tests. Differences from the design:
 
 Step 4, 2026-10-06. `make test` passes: 954 tests. Differences from the design:
 
-- **The strips sit side by side in a horizontal scroll area**, the player's EQ beside its strip and Record and the law beside the master's; at 800 by 592 nothing scrolls or overlaps.
+- **The strips sit side by side in a horizontal scroll area**, Record and the law beside the master's; at 800 by 592 nothing scrolls or overlaps.
+- **The player's EQ left the Mix tab** (2026-10-06). The decks' EQs and the tape's filters stay in their own tabs, so the tab holds only what every source has: a fader, a meter and a mute. Beside the player's strip, the EQ read as a strip of its own. The popup is titled "player EQ" because its button sits beside the master's volume.
 - **The headphones have no meter**: nothing measures the cue alone yet.
 - **The tab's mark is `Mix *`**, for a mute, or for a master over full scale while the tab was hidden. The clip half is not under test: the fake device cannot be driven over full scale without a test-only path.
 - **The EQ popup closes on a click outside it**; the Mix tab's EQ is the same state.

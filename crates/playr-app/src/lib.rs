@@ -80,6 +80,29 @@ impl View {
     }
 }
 
+/// A tab the window shows over a view. Keys keep acting in the view under it.
+/// The terminal has none; it reaches these with `:tape`, `:dj` and `:mix`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Tape,
+    Dj,
+    Mix,
+}
+
+impl Tab {
+    /// The tabs in tab order, after the views.
+    pub const ALL: [Tab; 3] = [Tab::Tape, Tab::Dj, Tab::Mix];
+
+    /// The tab's name on its tab.
+    pub fn title(self) -> &'static str {
+        match self {
+            Tab::Tape => "Tape",
+            Tab::Dj => "DJ",
+            Tab::Mix => "Mix",
+        }
+    }
+}
+
 /// The colours an interface draws in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {

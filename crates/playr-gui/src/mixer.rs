@@ -1,16 +1,15 @@
 //! The Mix tab: a strip for the player, the tape, the decks, the headphones
 //! and the master, each a fader, its level in dB, a meter and a mute. The
-//! player's strip has the EQ; the master's has the recording and the fader
-//! law. `docs/dev/mixer.md`, under "Phase 3", has the design.
+//! master's strip has the recording and the fader law. Each source's own
+//! controls stay in its view. `docs/dev/mixer.md`, under "Phase 3", has the
+//! design.
 
 use eframe::egui;
 use playr_app::action::Action;
 use playr_app::dispatch::Frontend;
 use playr_app::mix::{Law, Mix, MixAction, Strip};
 use playr_app::model::Model;
-use playr_core::audio::eq::{Band, RANGE_DB};
 
-use crate::controls;
 use crate::palette::Palette;
 
 /// The faders' length, in points.
@@ -47,14 +46,8 @@ pub fn show(model: &Model, ui: &mut egui::Ui) -> Vec<Action> {
                         fader(ui, &mix, strip, held, &mut actions);
                     });
                 });
-                match strip {
-                    Strip::Player => {
-                        ui.group(|ui| eq(ui, snapshot.eq, &mut actions));
-                    }
-                    Strip::Master => {
-                        ui.group(|ui| master(ui, &mix, recording.as_deref(), &mut actions));
-                    }
-                    _ => {}
+                if strip == Strip::Master {
+                    ui.group(|ui| master(ui, &mix, recording.as_deref(), &mut actions));
                 }
             }
         });
@@ -115,34 +108,6 @@ fn meter(ui: &mut egui::Ui, held: Option<f32>) {
     };
     let bar = egui::Rect::from_min_max(egui::pos2(rect.left(), top), rect.max);
     painter.rect_filled(bar, 1.0, colour);
-}
-
-/// The player's EQ: a vertical slider a band, and Flat.
-fn eq(ui: &mut egui::Ui, gains: [f32; 3], actions: &mut Vec<Action>) {
-    ui.vertical(|ui| {
-        ui.label("EQ");
-        ui.horizontal(|ui| {
-            for (band, mut db) in Band::ALL.into_iter().zip(gains) {
-                let slider = egui::Slider::new(&mut db, -RANGE_DB..=RANGE_DB)
-                    .vertical()
-                    .step_by(0.5)
-                    .show_value(false)
-                    .text(band.name());
-                if ui.add(slider).changed() {
-                    actions.push(Action::SetEq(band, db));
-                }
-            }
-        });
-        for control in controls::EQ {
-            let flat = gains == [0.0; 3];
-            if ui
-                .add_enabled(!flat, egui::Button::new(control.label))
-                .clicked()
-            {
-                actions.push(control.action.clone());
-            }
-        }
-    });
 }
 
 /// The master's recording, the file it goes to, and the fader law.

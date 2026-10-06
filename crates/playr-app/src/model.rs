@@ -35,7 +35,7 @@ use crate::message::{self, Message};
 use crate::mix::{Mix, Strip};
 use crate::persist;
 use crate::sampler::{DetailRead, Sampler, Selected, Wave, DETAIL_MARGIN};
-use crate::View;
+use crate::{Tab, View};
 
 /// How long a message stays showing.
 pub const MESSAGE_FOR: Duration = Duration::from_secs(4);
@@ -160,6 +160,10 @@ pub struct Model {
     /// The library and player, and everything done with them.
     session: Session,
     view: View,
+    /// The window tab over `view`; left when the view changes.
+    tab: Option<Tab>,
+    /// The tabs the frontend shows; none until a window calls [`Model::offer_tabs`].
+    tabs: &'static [Tab],
     /// Search results; when set, the library view shows these instead.
     results: Option<Vec<Track>>,
     cursors: Cursors,
@@ -288,6 +292,8 @@ impl Model {
         let mut model = Model {
             session,
             view: View::Library,
+            tab: None,
+            tabs: &[],
             results: None,
             cursors: Cursors::default(),
             playing: Vec::new(),
@@ -814,6 +820,11 @@ impl Model {
         self.theme
     }
 
+    /// Lets `:view` and the view keys reach the window's tabs.
+    pub fn offer_tabs(&mut self) {
+        self.tabs = &Tab::ALL;
+    }
+
     /// Whether the window's transport buttons show words rather than symbols.
     pub fn transport_text_buttons(&self) -> bool {
         self.transport_text_buttons
@@ -1331,7 +1342,22 @@ impl Frontend for Model {
         self.view
     }
 
+    fn tabs(&self) -> &'static [Tab] {
+        self.tabs
+    }
+
+    fn tab(&self) -> Option<Tab> {
+        self.tab
+    }
+
+    fn set_tab(&mut self, tab: Option<Tab>) {
+        self.tab = tab;
+    }
+
     fn set_view(&mut self, view: View) {
+        if view != self.view {
+            self.tab = None;
+        }
         self.view = view;
         // The queue opens on its first row: the track playing, if queued.
         if view == View::Queue && self.cursors.queue.is_none() && !self.queue.is_empty() {

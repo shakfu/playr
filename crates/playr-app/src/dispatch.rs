@@ -23,7 +23,7 @@ use crate::action::{Action, Keymap, Slicing, Zoom};
 use crate::message::Message;
 use crate::mix::{MixAction, Strip};
 use crate::sampler::{self, Before, Sampler, Selected};
-use crate::{Display, Theme, View};
+use crate::{Display, Tab, Theme, View};
 
 /// A destructive action held until the listener confirms it.
 #[derive(Debug, Clone, PartialEq)]
@@ -189,6 +189,11 @@ pub trait Frontend {
 
     fn view(&self) -> View;
     fn set_view(&mut self, view: View);
+    /// The tabs this frontend shows over its views: none in the terminal.
+    fn tabs(&self) -> &'static [Tab];
+    /// The tab showing over the view, if any.
+    fn tab(&self) -> Option<Tab>;
+    fn set_tab(&mut self, tab: Option<Tab>);
 
     /// The row under `view`'s cursor, if it has rows and one is chosen.
     fn cursor(&self, view: View) -> Option<usize>;
@@ -295,20 +300,54 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
     settle(f, before);
 }
 
+/// Shows `tab`, over the library for the DJ tab, which lists it for loading.
+fn show_tab(f: &mut impl Frontend, tab: Tab) {
+    if !f.tabs().contains(&tab) {
+        let name = tab.title().to_lowercase();
+        f.notify(Message::Command(format!(
+            "no {} tab here; use :{name}",
+            tab.title()
+        )));
+        return;
+    }
+    if tab == Tab::Dj {
+        f.set_view(View::Library);
+    }
+    f.set_tab(Some(tab));
+}
+
+/// Moves `by` places along the views, then the frontend's tabs.
+fn step_view(f: &mut impl Frontend, by: isize) {
+    let tabs = f.tabs();
+    let at = match f.tab() {
+        Some(tab) => View::ALL.len() + tabs.iter().position(|t| *t == tab).expect("shown"),
+        None => View::ALL
+            .iter()
+            .position(|v| *v == f.view())
+            .expect("every view"),
+    };
+    let to = (at as isize + by).rem_euclid((View::ALL.len() + tabs.len()) as isize) as usize;
+    match View::ALL.get(to) {
+        Some(view) => {
+            f.set_tab(None);
+            f.set_view(*view);
+        }
+        None => show_tab(f, tabs[to - View::ALL.len()]),
+    }
+}
+
 fn act(action: Action, f: &mut impl Frontend) {
     match action {
         Action::Quit => f.present(Presentation::Quit),
         Action::Help => f.present(Presentation::KeyList),
         Action::CommandHelp => f.present(Presentation::CommandList),
-        Action::ShowView(view) => f.set_view(view),
-        Action::NextView => {
-            let next = f.view().next();
-            f.set_view(next);
+        Action::ShowView(view) => {
+            f.set_tab(None);
+            f.set_view(view);
         }
-        Action::PrevView => {
-            let prev = f.view().prev();
-            f.set_view(prev);
-        }
+        Action::ShowTab(tab) => show_tab(f, tab),
+        Action::NextView => step_view(f, 1),
+        Action::PrevView => step_view(f, -1),
         Action::Cursor(rows) => move_cursor(f, rows),
         Action::CursorFirst => select(f, 0),
         Action::CursorLast => {

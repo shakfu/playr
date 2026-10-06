@@ -665,7 +665,9 @@ fn an_analysis_reports_each_file_then_what_it_measured() {
     // session can read a tempo and the gains back. The columns show the
     // measurements without a reload.
     session.analysed();
-    let a = songs.join("a.wav").to_string_lossy().into_owned();
+    // Canonical, as the scan stores it: on macOS the temp dir is a symlink.
+    let a = songs.join("a.wav").canonicalize().unwrap();
+    let a = a.to_string_lossy().into_owned();
     assert!(session.measures_of(&a).loudness.is_some(), "not measured");
     session.analyze(None).unwrap();
     let seen = until(&events, |e| matches!(e, Event::Analysed { .. }));
@@ -674,7 +676,8 @@ fn an_analysis_reports_each_file_then_what_it_measured() {
         other => panic!("{other:?}"),
     }
     // A 1 kHz tone has no pulse, so no tempo; the row is there all the same.
-    assert_eq!(session.bpm(&songs.join("a.wav")), None);
+    assert!(session.analysis_of(Path::new(&a)).is_some(), "no row");
+    assert_eq!(session.bpm(Path::new(&a)), None);
     assert_eq!(session.bpm(Path::new("/nowhere.wav")), None);
 }
 
