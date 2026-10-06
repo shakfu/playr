@@ -10,6 +10,7 @@ use playr_core::gain::ReplayGain;
 use playr_core::settings::Persist;
 
 use crate::config::Program;
+use crate::mix::{Mix, Strip};
 use crate::Theme;
 
 /// Every value `persist` can name, as a session holds it.
@@ -17,8 +18,8 @@ use crate::Theme;
 pub struct Values {
     /// dB, by band, in `Band::ALL` order.
     pub eq: [f32; 3],
-    /// From 0 to 1.
-    pub volume: f32,
+    /// The faders. `Volume` keeps the master's position, `Mix` the rest.
+    pub mix: Mix,
     pub mode: Mode,
     pub replaygain: ReplayGain,
     pub theme: Theme,
@@ -33,6 +34,8 @@ pub struct Values {
 pub fn key(p: Persist, program: Program) -> String {
     match p {
         Persist::Columns | Persist::Sort => format!("{}.{}", p.name(), program.table()),
+        // A position; `volume` held a gain, which `legacy_volume` reads.
+        Persist::Volume => "master".into(),
         _ => p.name().to_string(),
     }
 }
@@ -42,7 +45,12 @@ pub fn encode(p: Persist, values: &Values) -> String {
     let names = |names: Vec<String>| names.join(",");
     match p {
         Persist::Eq => values.eq.map(|db| db.to_string()).join(" "),
-        Persist::Volume => values.volume.to_string(),
+        Persist::Volume => values.mix.level(Strip::Master).to_string(),
+        Persist::Mix => {
+            let levels = MIXED.map(|s| values.mix.level(s).to_string());
+            let mutes = Strip::ALL.map(|s| u8::from(values.mix.muted(s)).to_string());
+            format!("{} {}", levels.join(" "), mutes.join(" "))
+        }
         Persist::Mode => name_of(&Mode::NAMES, values.mode).into(),
         Persist::ReplayGain => values.replaygain.name().into(),
         Persist::Theme => values.theme.name().into(),
@@ -69,7 +77,33 @@ pub fn decode(p: Persist, text: &str, values: &mut Values) {
         }
         Persist::Volume => {
             if let Some(v) = text.parse::<f32>().ok().filter(|v| (0.0..=1.0).contains(v)) {
-                values.volume = v;
+                values.mix.set_level(Strip::Master, v);
+            }
+        }
+        Persist::Mix => {
+            let words: Vec<&str> = text.split(' ').collect();
+            let levels: Option<Vec<f32>> = words
+                .iter()
+                .take(MIXED.len())
+                .map(|w| w.parse().ok().filter(|v| (0.0..=1.0).contains(v)))
+                .collect();
+            let mutes: Option<Vec<bool>> = words
+                .iter()
+                .skip(MIXED.len())
+                .map(|w| match *w {
+                    "0" => Some(false),
+                    "1" => Some(true),
+                    _ => None,
+                })
+                .collect();
+            let fits = words.len() == MIXED.len() + Strip::ALL.len();
+            if let (true, Some(levels), Some(mutes)) = (fits, levels, mutes) {
+                for (s, p) in MIXED.into_iter().zip(levels) {
+                    values.mix.set_level(s, p);
+                }
+                for (s, on) in Strip::ALL.into_iter().zip(mutes) {
+                    values.mix.set_muted(s, on);
+                }
             }
         }
         Persist::Mode => values.mode = named(&Mode::NAMES, text).unwrap_or(values.mode),
@@ -100,6 +134,19 @@ pub fn decode(p: Persist, text: &str, values: &mut Values) {
                 .collect()
         }
     }
+}
+
+/// The strips `Mix` keeps the level of: all but the master.
+const MIXED: [Strip; 4] = [Strip::Player, Strip::Tape, Strip::Decks, Strip::Headphones];
+
+/// The master's position from the gain a version before the mixer stored
+/// under `volume`, by the law in use, so it plays at the same level.
+pub fn legacy_volume(text: &str, law: crate::mix::Law) -> Option<f32> {
+    let g = text
+        .parse::<f32>()
+        .ok()
+        .filter(|v| (0.0..=1.0).contains(v))?;
+    Some(law.position(g))
 }
 
 /// The name `names` gives `value`.

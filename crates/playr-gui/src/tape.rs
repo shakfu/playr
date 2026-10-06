@@ -93,7 +93,7 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
         if frames.is_none() {
             ui.weak(match deck.loading() {
                 true => "Reading the range.",
-                false => "Set a range in the sampler while a track plays, then Load range.",
+                false => "Set a sampler range, then Load range or Take.",
             });
         }
     });

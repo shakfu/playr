@@ -91,6 +91,7 @@ Received:
 | `/playr/stop` | none, or non-zero | `Stop` |
 | `/playr/progress` | float 0 to 1 | `SeekTo`, as a fraction of the track |
 | `/playr/volume` | float 0 to 1 | `SetVolume` |
+| `/playr/mute` | 1 or 0 | `Mix(Mute(Master, ..))` |
 | `/playr/speed` | int -12 to 12 | `SetSpeed` |
 | `/playr/mode` | int 0 to 3, index into `Mode::NAMES` | `SetMode` |
 | `/playr/playlist` | int index from 0, oldest playlist first | `PlayPlaylist` |
@@ -103,7 +104,7 @@ Sent to `--osc-reply HOST:PORT`:
 | `/playr/state` | int: 0 stopped, 1 playing, 2 paused | state change |
 | `/playr/progress` | float 0 to 1 | each refresh while playing, about 30 times a second |
 | `/playr/time` | string, `1:23 / 4:56` | with progress |
-| `/playr/volume`, `/playr/speed`, `/playr/mode` | as received | on change |
+| `/playr/volume`, `/playr/mute`, `/playr/speed`, `/playr/mode` | as received | on change |
 | `/playr/level` | float 0 to 1, over -40 to 0 dB as the meter bar | with progress |
 
 - **Triggers ignore a zero argument.** A TouchOSC button sends on press and on release; acting on both would pause and resume at once.

@@ -561,6 +561,7 @@ The waveform glyphs are the view's only characters outside ASCII. Marks are plac
 | command | does |
 |-|-|
 | `:tape play`, `:tape stop` | play the tape, pausing the player, or stop it |
+| `:tape take` | load the range and take over from the player: from where it is inside the range, or at the range's start once it gets there; the player pauses |
 | `:tape V on`, `:tape V off` | turn voice 1, 2 or 3 on or off; voice 1 starts on |
 | `:tape V rate R` | frames a frame, -4 to 4; negative plays in reverse |
 | `:tape V window A B` | the part of the loop the voice repeats |
@@ -618,6 +619,26 @@ Two decks play library tracks at once, each at its own rate. Each track gets a b
 
 Rate is varispeed: pitch moves with tempo, as on a turntable. A synced deck stays in phase: the other deck's rate changes follow, and a small rate trim pulls it back if it drifts. A nudge on it moves the phase it holds. Grid edits and hot cues are kept with the track, across analyses. With quantize on, hot cues and loops fall on beats. A playing deck refuses a new track. The decks play on their own output stream on the player's device, as the tape does.
 
+### Mixer
+
+The master volume, `:volume` or the Volume slider, scales everything playr plays: the player, the tape and the decks. Each of them also has a fader and a mute, and the DJ headphone cue has a fader the master leaves alone.
+
+```
+:mix                        every fader, in percent and dB
+:mix tape 80                set one: master, player, tape, decks or headphones
+:mix decks -10              move one
+:mix player mute [on|off]   mute or unmute; alone, toggle
+:mix law [db|cubic]         the fader law for this session; alone, toggle
+:mix rec                    record the master, or stop recording it
+```
+
+- A fader's position maps to a level by its law, which `fader` in `settings.toml` sets. `db`, the default, is even in decibels: each 1% of travel is 0.6 dB, 50% is -30 dB, and 0 is silent. `cubic` is the position cubed, as PulseAudio's volume: 50% is -18 dB. `:mix law` switches it with the faders where they are, to compare the two.
+- A fader at the top plays its source at full level. No fader boosts.
+- A mute silences a source without stopping it: the decks stay in sync and the tape keeps writing. The tape's recording reads before its fader.
+- `:mix rec` records the master, everything playr plays, to a 32-bit float stereo WAV under the samples directory, `master/master.wav` and then `master-2/master-2.wav`, and adds it to the library once stopped. The cue is never in it. Overs above full scale are kept in the file, though the device clips them. While it records, a track at another rate is resampled rather than changing the output's rate.
+- `master` in `settings.toml` sets the master at start. `volume`, its name before the mixer, held a level, not a position. It is still read, and plays at the level it always did; a file setting both is an error.
+- In the window, the **Mix** tab has a strip for each: a fader, its level in dB, a meter after the fader, and a mute; the player's strip has the EQ, and the master's has Record and the law. The master's meter measures what the device is sent. The tab is marked `Mix *` while a strip is muted, or once the master has gone over full scale while the tab was hidden. The server plays only the player, so its page and OSC have the master and a mute, `/playr/mute`; `:mix` works from the page's command line.
+
 ### Varispeed
 
 `(` and `)` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
@@ -626,7 +647,7 @@ This is not the pitch-preserving speed change of a podcast app. That is time-str
 
 ### EQ
 
-`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass 3` sets a band, `:eq bass =-3` sets it below 0, and `:eq treble -2` moves one; `:eq flat` returns all three to 0. In the window, the EQ button beside Mode opens a dialog with a slider for each and Flat; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
+`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass 3` sets a band, `:eq bass =-3` sets it below 0, and `:eq treble -2` moves one; `:eq flat` returns all three to 0. In the window, the EQ button beside Mode opens a popup with a slider for each and Flat, which a click elsewhere closes, and the Mix tab has them too; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
 
 A boost raises its band and leaves the rest, so at full volume a large one can clip a loud track. The volume applies after the EQ, so turning it down makes room: at 50, a 6 dB boost cannot clip. The level meter reads after the EQ and before the volume. `:slice` and the sampler's measurements read the file, so the EQ does not reach them. The EQ starts flat each time playr does, and changes last until it exits.
 
@@ -659,7 +680,8 @@ playr reads `$XDG_CONFIG_HOME/playr/settings.toml`, or `~/.config/playr/settings
 An error in the file stops playr before it plays. Subcommands such as `scan` and `search --json` use no settings; they print the errors as warnings and run.
 
 ```toml
-volume = 60                        # percent, 0 to 100
+master = 60                        # the master fader, percent, 0 to 100; see Mixer
+fader = "cubic"                    # how faders map to levels: db or cubic
 mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in full
 after_queue = "stop"               # after the queue: resume the library, or stop
 speed = -3                         # semitones, -12 to 12
@@ -702,7 +724,7 @@ x = "remove"
 
 - One file serves all three programs. A table another program owns, such as `[gui]` or `[server]`, is passed over by the ones that do not read it, so the terminal starts on a file written for the window. Only the program that owns a table checks what is inside it. A name no program owns, such as `[colours]`, is still an error.
 
-- Top-level settings come before any table. TOML reads a bare key after a `[table]` header as belonging to that table, so `volume = 60` below `[keys]` sets a key binding named `volume`, not the volume.
+- Top-level settings come before any table. TOML reads a bare key after a `[table]` header as belonging to that table, so `master = 60` below `[keys]` sets a key binding named `master`, not the master volume.
 
 - Each key's value is a `:` command, as listed in [docs/cheatsheet.md](docs/cheatsheet.md). `"nop"` makes a key do nothing, and `"command"` opens the `:` prompt.
 
@@ -718,7 +740,7 @@ Any error stops playr before it starts, and every bad setting is listed with its
 
 `keep_queue`, on by default, keeps the queue between runs, and offers it with the track that was playing. Turning it off also forgets the queue stored. `draft` chooses what happens to the selection's draft playlist; see Keys, under the selection.
 
-`persist` names session values playr remembers between runs: `eq`, `volume`, `mode`, `replaygain`, `theme`, `columns`, `sort`, and `history`, the last 100 `:` command lines. None are remembered unless named. playr stores them in the library, not in this file: `settings.toml` holds only what you write, and playr never changes it. While a name is listed, its remembered value wins over the setting of the same name, which then applies only until something is remembered. Remove the name to go back to the setting. `columns` and `sort` are remembered for each program, as a program's table sets them; the rest are shared. A change is stored once it has held still for half a second, so dragging a slider is one write. Without a library, nothing is remembered.
+`persist` names session values playr remembers between runs: `eq`, `volume` (the master fader), `mode`, `replaygain`, `theme`, `columns`, `sort`, `history`, the last 100 `:` command lines, and `mix`, the other faders and the mutes. None are remembered unless named. playr stores them in the library, not in this file: `settings.toml` holds only what you write, and playr never changes it. While a name is listed, its remembered value wins over the setting of the same name, which then applies only until something is remembered. Remove the name to go back to the setting. `columns` and `sort` are remembered for each program, as a program's table sets them; the rest are shared. A change is stored once it has held still for half a second, so dragging a slider is one write. Without a library, nothing is remembered.
 
 `theme` sets the colours, `dark` unless set, and `:theme` changes them until playr exits. In the window, `system` follows the system's light or dark appearance. A terminal cannot report its background reliably, so there `system` and `dark` use the terminal's own ANSI colours, which its theme shades, and `light` uses fixed colours for a light background. With `NO_COLOR` set to any value, the terminal draws without colour and reverses the cursor row.
 

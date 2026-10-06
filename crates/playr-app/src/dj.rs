@@ -8,9 +8,10 @@ use std::sync::Arc;
 
 use playr_core::analysis::tempo;
 use playr_core::analysis::TempoFix;
+use playr_core::audio::bus::Cue;
 use playr_core::audio::output::DeviceEvent;
 use playr_core::audio::resample::Resample;
-use playr_core::audio::State;
+use playr_core::audio::{Attachment, Sources, State};
 use playr_core::db::Track;
 use playr_core::event::JobId;
 use playr_core::notice::Notice;
@@ -21,6 +22,7 @@ use playr_dj::{Engine, Handle, Returned, Setting};
 
 use crate::dispatch::Frontend;
 use crate::message::Message;
+use crate::mix::Strip;
 
 /// A change to a deck's beat grid. Each is stored with the track, so it
 /// holds across loads and analyses.
@@ -158,20 +160,33 @@ impl From<DjMessage> for Message {
 
 /// Where the decks play.
 enum Output {
-    /// The device with this ID, or the default.
-    Device(Option<String>),
+    /// The player's stream, summed with what else plays there.
+    Bus(Sources),
     /// Nowhere: [`Decks::process`] runs the engine, for tests.
     Manual,
+}
+
+/// The engine as a source on the player's stream: its main mix, and its cue
+/// routed as the decks' cue-out says.
+struct Played(Engine);
+
+impl playr_core::audio::bus::Source for Played {
+    fn process(&mut self, main: &mut [f32], cue: &mut [f32]) -> Cue {
+        match self.0.process_buses(main, cue) {
+            None => Cue::None,
+            Some((CueOut::Split, swap)) => Cue::Split { swap },
+            Some((CueOut::Channels, swap)) => Cue::Channels { swap },
+        }
+    }
 }
 
 /// The engine playing, or ready to.
 struct Live {
     handle: Handle,
-    _stream: Option<cpal::Stream>,
+    /// Where the engine plays on the player's stream; `None` for manual decks.
+    attached: Option<Attachment>,
     engine: Option<Engine>,
     rate: u32,
-    /// The stream's channels; manual decks count 2.
-    channels: u16,
 }
 
 /// A track read and ready to load.
@@ -270,8 +285,8 @@ pub struct Decks {
     autoplay: [bool; 2],
     /// Takes over from the player once the track loads.
     handover: [bool; 2],
-    /// The master volume last sent: the player's.
-    volume: f32,
+    /// The main mix's and the cue's volumes last sent.
+    volume: (f32, f32),
     state: DjState,
     errors: (Sender<DeviceEvent>, Receiver<DeviceEvent>),
 }
@@ -284,10 +299,10 @@ fn i(side: Side) -> usize {
 }
 
 impl Decks {
-    /// Decks playing to the output device `device`, or the default, with the
+    /// Decks playing on the player's stream through `sources`, with the
     /// master's soft clip at `knee`.
-    pub fn new(device: Option<String>, knee: f32) -> Self {
-        Decks::with(Output::Device(device), knee)
+    pub fn new(sources: Sources, knee: f32) -> Self {
+        Decks::with(Output::Bus(sources), knee)
     }
 
     /// Decks with no device, which play only as [`Decks::process`] is called.
@@ -310,7 +325,7 @@ impl Decks {
             sent: [None, None],
             autoplay: [false; 2],
             handover: [false; 2],
-            volume: f32::NAN,
+            volume: (f32::NAN, f32::NAN),
             state: DjState::default(),
             errors: channel(),
         }
@@ -366,36 +381,25 @@ impl Decks {
     /// plays it, else at the device's.
     fn live(&mut self, rate: u32) -> Result<&mut Live, String> {
         if self.live.is_none() {
-            let (rate, device) = match &self.output {
-                Output::Device(want) => {
-                    let device = playr_core::audio::output::device(want.as_deref())
-                        .map_err(|e| e.to_string())?;
-                    let to = playr_dj::device::rate(&device, rate).map_err(|e| e.to_string())?;
-                    (to, Some(device))
-                }
-                Output::Manual => (rate, None),
+            let rate = match &self.output {
+                Output::Bus(sources) => sources.rate_for(rate),
+                Output::Manual => rate,
             };
             let (engine, mut handle) = playr_dj::new(rate);
             handle
                 .set(Setting::Knee(self.knee))
                 .map_err(|e| e.to_string())?;
-            let stream = match device {
-                Some(device) => {
-                    let errors = self.errors.0.clone();
-                    let on_error = move |e: cpal::Error| _ = errors.send(e.into());
-                    let (stream, channels) = playr_dj::device::open(&device, engine, on_error)
-                        .map_err(|e| e.to_string())?;
-                    (Some(stream), None, channels)
+            let (attached, engine) = match &self.output {
+                Output::Bus(sources) => {
+                    (Some(sources.attach(rate, Box::new(Played(engine)))), None)
                 }
-                None => (None, Some(engine), 2),
+                Output::Manual => (None, Some(engine)),
             };
-            let (stream, engine, channels) = stream;
             self.live = Some(Live {
                 handle,
-                _stream: stream,
+                attached,
                 engine,
                 rate,
-                channels,
             });
         }
         Ok(self.live.as_mut().expect("opened above"))
@@ -420,21 +424,20 @@ impl Decks {
         Ok(())
     }
 
-    /// Sends the player's volume as the master, when it changed. Once the
-    /// engine is open; a new engine starts at NaN, so it gets it too.
-    fn follow_volume(&mut self, volume: f32) {
-        if volume == self.volume {
-            return;
+    /// Sends the main mix's and the cue's volumes, when they changed. Once
+    /// the engine is open; a new engine starts at NaN, so it gets them too.
+    fn follow_volume(&mut self, main: f32, cue: f32) {
+        let Some(live) = &mut self.live else { return };
+        if main != self.volume.0 && live.handle.set(Setting::Volume(f64::from(main))).is_ok() {
+            self.volume.0 = main;
         }
-        if let Some(live) = &mut self.live {
-            if live.handle.set(Setting::Volume(f64::from(volume))).is_ok() {
-                self.volume = volume;
-            }
+        if cue != self.volume.1 && live.handle.set(Setting::Headphones(f64::from(cue))).is_ok() {
+            self.volume.1 = cue;
         }
     }
 
-    /// Where the stream reports device events. Manual decks have no stream;
-    /// whatever drives them reports here.
+    /// Where manual decks' device events are reported, by whatever drives
+    /// them. Decks on the player's stream learn of a loss from the player.
     pub fn device_events(&self) -> Sender<DeviceEvent> {
         self.errors.0.clone()
     }
@@ -534,6 +537,17 @@ pub fn poll(f: &mut impl Frontend) {
             f.notify(m.into());
         }
     }
+    // The player's stream lost its device, and the engine with it.
+    if f.dj()
+        .live
+        .as_ref()
+        .and_then(|l| l.attached.as_ref())
+        .is_some_and(Attachment::lost)
+    {
+        f.dj().lose_device();
+        let e = "the output device went away".to_string();
+        f.notify(DjMessage::DeviceLost(e).into());
+    }
     while let Ok(e) = f.dj().errors.1.try_recv() {
         match e {
             DeviceEvent::Rerouted => {}
@@ -545,8 +559,9 @@ pub fn poll(f: &mut impl Frontend) {
             }
         }
     }
-    let volume = f.session().player().volume();
-    f.dj().follow_volume(volume);
+    let mix = f.mix();
+    let (main, cue) = (mix.gain(Strip::Decks), mix.gain(Strip::Headphones));
+    f.dj().follow_volume(main, cue);
     for side in [Side::A, Side::B] {
         if let Err(e) = keep_hot_cues(f, side) {
             f.notify(DjMessage::Failed(e).into());
@@ -896,10 +911,15 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         {
             return Err(DjMessage::NoGrid(side));
         }
-        D::CueOut(CueOut::Channels) => match f.dj().live.as_ref().map_or(2, |l| l.channels) {
-            n if n < 4 => return Err(DjMessage::NoCueChannels(n)),
-            _ => {}
-        },
+        D::CueOut(CueOut::Channels) => {
+            let n = match &f.dj().output {
+                Output::Bus(sources) => sources.widen(4),
+                Output::Manual => 2,
+            };
+            if n < 4 {
+                return Err(DjMessage::NoCueChannels(n));
+            }
+        }
         _ => {}
     }
     let slot = |n: u8| usize::from(n) - 1;
@@ -1001,14 +1021,6 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         D::Curve(c) => st.curve = c,
         D::Mute(s, on) => st.mute[i(s)] = on,
         _ => {}
-    }
-    // The decks play alone; the player stays paused until asked.
-    let starts = matches!(
-        action,
-        D::Play(_) | D::Cue(_) | D::CueHold(_, true) | D::HotCue(..)
-    );
-    if starts && f.session().player().status().state == State::Playing {
-        f.session().send(playr_core::audio::Cmd::TogglePause);
     }
     Ok(())
 }

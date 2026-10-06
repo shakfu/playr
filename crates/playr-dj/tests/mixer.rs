@@ -561,3 +561,42 @@ fn a_leader_started_after_its_follower_is_locked_in_phase() {
     // Within the lock's dead band, 0.01 beat: 225 frames at 128 BPM.
     assert!(e.abs() < 230.0, "from {start} to {e}");
 }
+
+/// The master volume scales the main mix only, and the headphones the cue
+/// only. The peak is the main mix's, before the master.
+#[test]
+fn the_master_and_the_headphones_scale_their_own_side() {
+    let mut m = Mixer::new(SR);
+    // Deck A: 0.2 in both channels. Deck B, cued: 0.3.
+    let a: Vec<f32> = vec![0.2; SR as usize * 2];
+    let b: Vec<f32> = vec![0.3; SR as usize * 2];
+    m.load(Side::A, Box::new(Track::new(a, 2, None).unwrap()))
+        .unwrap();
+    m.load(Side::B, Box::new(Track::new(b, 2, None).unwrap()))
+        .unwrap();
+    m.set(Setting::Xfade(0.0));
+    m.set(Setting::Play(Side::A));
+    m.set(Setting::Play(Side::B));
+    m.set(Setting::CueBus(Some(Side::B)));
+    m.set(Setting::Volume(0.0));
+    run(&mut m, SETTLE);
+    m.take_peak();
+    let out = block(&mut m);
+    for f in out.chunks(2) {
+        assert_eq!(f[0], 0.0, "main");
+        assert!((f[1] - 0.3).abs() < 1e-6, "cue: {}", f[1]);
+    }
+    assert!(
+        (m.take_peak() - 0.2).abs() < 1e-6,
+        "the peak followed the master"
+    );
+
+    m.set(Setting::Volume(1.0));
+    m.set(Setting::Headphones(0.5));
+    run(&mut m, SETTLE);
+    let out = block(&mut m);
+    for f in out.chunks(2) {
+        assert!((f[0] - 0.2).abs() < 1e-6, "main: {}", f[0]);
+        assert!((f[1] - 0.15).abs() < 1e-6, "cue: {}", f[1]);
+    }
+}

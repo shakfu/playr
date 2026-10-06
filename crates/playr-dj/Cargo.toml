@@ -12,5 +12,4 @@ categories = ["multimedia::audio"]
 
 [dependencies]
 playr-dsp.workspace = true
-cpal.workspace = true
 rtrb.workspace = true

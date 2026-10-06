@@ -91,8 +91,10 @@ pub enum Setting {
     CueBus(Option<Side>),
     /// Puts the cue on the left and the main mix on the right.
     CueSwap(bool),
-    /// The master volume, 0 to 1.
+    /// The master volume of the main mix, 0 to 1.
     Volume(f64),
+    /// The cue's volume, 0 to 1, which the master volume leaves alone.
+    Headphones(f64),
     /// The level, 0 to 0.99, below which the master's soft clip passes the
     /// mix unchanged.
     Knee(f32),
@@ -130,6 +132,7 @@ impl Setting {
             | Setting::Xfade(v)
             | Setting::XfadeGlide(v)
             | Setting::Volume(v)
+            | Setting::Headphones(v)
             | Setting::Eq(_, _, v)
             | Setting::Filter(_, v)
             | Setting::BeatJump(_, v)
@@ -153,6 +156,9 @@ pub struct Mixer {
     cue_bus: Option<Side>,
     cue_swap: bool,
     volume: Ramp,
+    headphones: Ramp,
+    /// The largest magnitude of the main mix before the volume, since taken.
+    peak: f32,
     knee: f32,
     /// Each deck's EQ bands, in dB, and whether each is killed.
     bands: [[(f64, bool); 3]; 2],
@@ -171,6 +177,8 @@ impl Mixer {
             cue_bus: None,
             cue_swap: false,
             volume: Ramp::new(1.0),
+            headphones: Ramp::new(1.0),
+            peak: 0.0,
             knee: DEFAULT_KNEE,
             bands: [[(0.0, false); 3]; 2],
             cue_out: CueOut::default(),
@@ -198,6 +206,12 @@ impl Mixer {
     /// The crossfader where it is now, moving or not.
     pub fn xfade(&self) -> f64 {
         self.xfade.value()
+    }
+
+    /// The largest magnitude of the main mix before the volume since the
+    /// last call, which resets it.
+    pub fn take_peak(&mut self) -> f32 {
+        std::mem::take(&mut self.peak)
     }
 
     fn smooth(&self) -> u32 {
@@ -275,6 +289,10 @@ impl Mixer {
             Setting::Volume(v) => {
                 let n = self.smooth();
                 self.volume.set(v.clamp(0.0, 1.0), n);
+            }
+            Setting::Headphones(v) => {
+                let n = self.smooth();
+                self.headphones.set(v.clamp(0.0, 1.0), n);
             }
             Setting::Knee(v) => self.knee = v.clamp(0.0, 0.99),
             Setting::Eq(d, b, db) => {
@@ -573,23 +591,58 @@ impl Mixer {
     /// Fills `out`, interleaved with `channels`, 2 or more: the main mix on
     /// the first two, or the split cue; with [`CueOut::Channels`] and 4 or
     /// more, the cue in stereo on the third and fourth. Channels past those
-    /// are silent.
+    /// are silent. In a split, each side is the mean of the clipped stereo.
     pub fn process_channels(&mut self, out: &mut [f32], channels: usize) {
+        const FRAMES: usize = 512;
+        let ch = channels.max(2);
+        let (mut main, mut cue) = ([0.0f32; FRAMES * 2], [0.0f32; FRAMES * 2]);
+        for block in out.chunks_mut(FRAMES * ch) {
+            let n = block.len() / ch * 2;
+            let routed = self.process_buses(&mut main[..n], &mut cue[..n]);
+            let frames = block.chunks_exact_mut(ch);
+            let pairs = main[..n]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .zip(cue[..n].as_chunks::<2>().0);
+            for (o, (m, c)) in frames.zip(pairs) {
+                o.fill(0.0);
+                match routed {
+                    Some((out, swap)) if out == CueOut::Split || ch < 4 => {
+                        let (l, r) = ((m[0] + m[1]) / 2.0, (c[0] + c[1]) / 2.0);
+                        (o[0], o[1]) = if swap { (r, l) } else { (l, r) };
+                    }
+                    routed => {
+                        o[..2].copy_from_slice(m);
+                        if routed.is_some() {
+                            o[2..4].copy_from_slice(c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fills `main_out` with the main mix and `cue_out` with the cued deck,
+    /// interleaved stereo, each after the soft clip and its volume. Returns
+    /// where the cue goes and whether its sides swap; `None` with no deck cued,
+    /// when `cue_out` stays silent.
+    pub fn process_buses(
+        &mut self,
+        main_out: &mut [f32],
+        cue_out: &mut [f32],
+    ) -> Option<(CueOut, bool)> {
         for side in [Side::A, Side::B] {
             self.follow(side);
             self.lock(side);
         }
-        let (left, right) = match self.cue_swap {
-            false => (0, 1),
-            true => (1, 0),
-        };
-        let split = self.cue_out == CueOut::Split || channels < 4;
         let knee = self.knee;
-        for o in out.chunks_exact_mut(channels.max(2)) {
-            o.fill(0.0);
+        let frames = main_out.as_chunks_mut::<2>().0.iter_mut();
+        for (mo, co) in frames.zip(cue_out.as_chunks_mut::<2>().0) {
             let x = self.xfade.next();
             let gains = self.xfade_gains(x);
             let vol = self.volume.next() as f32;
+            let phones = self.headphones.next() as f32;
             let mut main = [0.0f32; 2];
             let mut cue = [0.0f32; 2];
             for (i, d) in self.decks.iter_mut().enumerate() {
@@ -601,21 +654,18 @@ impl Mixer {
                 main[0] += s[0] * g;
                 main[1] += s[1] * g;
             }
-            match (self.cue_bus, split) {
-                (Some(_), true) => {
-                    o[left] = soft_clip((main[0] + main[1]) / 2.0, knee) * vol;
-                    o[right] = soft_clip((cue[0] + cue[1]) / 2.0, knee) * vol;
-                }
-                (bus, _) => {
-                    o[0] = soft_clip(main[0], knee) * vol;
-                    o[1] = soft_clip(main[1], knee) * vol;
-                    if bus.is_some() {
-                        o[2] = soft_clip(cue[0], knee) * vol;
-                        o[3] = soft_clip(cue[1], knee) * vol;
-                    }
-                }
-            }
+            let m = [soft_clip(main[0], knee), soft_clip(main[1], knee)];
+            self.peak = self.peak.max(m[0].abs()).max(m[1].abs());
+            *mo = [m[0] * vol, m[1] * vol];
+            *co = match self.cue_bus {
+                Some(_) => [
+                    soft_clip(cue[0], knee) * phones,
+                    soft_clip(cue[1], knee) * phones,
+                ],
+                None => [0.0; 2],
+            };
         }
+        self.cue_bus.map(|_| (self.cue_out, self.cue_swap))
     }
 }
 

@@ -7,6 +7,11 @@
 # system, light or dark.
 theme = "dark"
 
+# How the mixer's faders map to levels: db, even in decibels over 60 dB, or
+# cubic, the position cubed, as PulseAudio's volume. :mix law switches it for
+# the session.
+fader = "db"
+
 # Keys for every view. Each value is a : command; "nop" makes a key do nothing.
 [keys]
 q = "quit"

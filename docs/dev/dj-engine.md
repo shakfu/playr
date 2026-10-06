@@ -90,6 +90,8 @@ Built as step 1; see "Build order". `playr-looper` already had the pieces a deck
 
 ## Output device
 
+Superseded 2026-10-06: the engine plays on the player's stream as a source of its bus; see "Phase 3: one output stream" in `docs/dev/mixer.md`. The text below is the design as built before.
+
 As for the looper: `playr-dj` opens its own cpal stream on the player's device, and `playr-app` pauses the player while a deck plays. Two shared-mode streams on one device already work for the looper. An exclusively held device, such as an ALSA `hw:` device, fails, as it does for the looper.
 
 The cue bus needs the main mix and the cued deck on separate channels:

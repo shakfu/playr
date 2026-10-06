@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cpal::SampleFormat;
+use playr_core::audio::bus::Bus;
 use playr_core::audio::eq::Eq;
 use playr_core::audio::meter::Meter;
 use playr_core::audio::output::{render, Backend, DeviceEvent, OutputError, Plan, Shared};
@@ -160,6 +161,11 @@ pub struct Control {
 }
 
 impl Control {
+    /// The rate of the stream opened last.
+    pub fn rate(&self) -> u32 {
+        self.rate.load(Ordering::Relaxed)
+    }
+
     /// Stalls the device, returning once its thread has passed through a turn
     /// stalled, so no callback already under way can act on what comes next.
     pub fn stall(&self) {
@@ -257,6 +263,7 @@ impl Backend for Fake {
         &self,
         plan: Plan,
         mut consumer: rtrb::Consumer<f32>,
+        mut bus: Bus,
         shared: Arc<Shared>,
         events: Sender<DeviceEvent>,
     ) -> Result<Box<dyn Any>, OutputError> {
@@ -297,6 +304,7 @@ impl Backend for Fake {
                     render(
                         out,
                         &mut consumer,
+                        &mut bus,
                         &shared,
                         &mut eq,
                         &mut meter,
@@ -322,6 +330,7 @@ impl Backend for Fake {
                         render(
                             &mut buf,
                             &mut consumer,
+                            &mut bus,
                             &shared,
                             &mut eq,
                             &mut meter,

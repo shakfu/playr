@@ -1033,7 +1033,7 @@ fn the_config_sets_keys_and_startup_before_anything_plays() {
     use playr_app::config::Config;
     use playr_core::audio::Mode;
     let config =
-        Config::parse("volume = 30\nmode = 'repeat'\n[keys.selection]\nctrl-x = 'remove'").unwrap();
+        Config::parse("master = 30\nmode = 'repeat'\n[keys.selection]\nctrl-x = 'remove'").unwrap();
     let tracks: Vec<Track> = ["/m/a.flac", "/m/b.flac"]
         .iter()
         .map(|p| Track {

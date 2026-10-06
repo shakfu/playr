@@ -46,6 +46,8 @@ pub struct Config {
     pub settings: Settings,
     pub keys: Keymap,
     pub theme: Theme,
+    /// How the mixer's faders map to gains.
+    pub fader: crate::mix::Law,
     /// `[gui] transport_text_buttons`: the window's transport buttons as
     /// words rather than media symbols.
     pub transport_text_buttons: bool,
@@ -60,6 +62,7 @@ impl Default for Config {
             settings: Settings::default(),
             keys: Keymap::empty(),
             theme: Theme::Dark,
+            fader: crate::mix::Law::Db,
             transport_text_buttons: false,
             program: Program::Terminal,
         };
@@ -148,10 +151,16 @@ impl Config {
 
     fn apply_for(&mut self, program: Option<Program>, text: &str) -> Result<(), Vec<String>> {
         let mine = program.map(Program::table).unwrap_or("keys");
-        let (tables, mut errors) = self.settings.apply(text, &["keys", "theme", mine]);
+        let (tables, mut errors) = self.settings.apply(text, &["keys", "theme", "fader", mine]);
         for (name, value) in tables {
             if let Some(program) = program.filter(|p| name.get_ref() == p.table()) {
                 self.apply_program(program, value.get_ref(), value.span().start, &mut errors);
+                continue;
+            }
+            if name.get_ref() == "fader" {
+                if let Err(e) = self.set_fader(value.get_ref()) {
+                    errors.add(value.span().start, e);
+                }
                 continue;
             }
             if name.get_ref() == "theme" {
@@ -221,6 +230,18 @@ impl Config {
                 other => errors.add(key.span().start, format!("unknown setting: {other}")),
             }
         }
+    }
+
+    fn set_fader(&mut self, value: &DeValue) -> Result<(), String> {
+        use crate::mix::Law;
+        let DeValue::String(s) = value else {
+            return Err(format!("fader cannot be {}", kind(value)));
+        };
+        self.fader = Law::named(s).ok_or_else(|| {
+            let names = Law::NAMES.map(|l| l.0).join(", ");
+            format!("unknown fader {s}; faders: {names}")
+        })?;
+        Ok(())
     }
 
     fn set_theme(&mut self, value: &DeValue) -> Result<(), String> {

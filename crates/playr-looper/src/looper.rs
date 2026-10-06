@@ -24,6 +24,8 @@ const SNAPSHOT_SPEED: usize = 8;
 /// How long the output fades out before a load while playing, and back in
 /// after: the heads jump.
 const LOAD_FADE_MS: f32 = 5.0;
+/// How long a volume change takes.
+const VOLUME_MS: f32 = 20.0;
 /// How long a stopped recorder waits for the callback to acknowledge it.
 const RECORD_STOP_WAIT: Duration = Duration::from_secs(1);
 
@@ -35,6 +37,8 @@ pub enum Cmd {
     /// A buffer the length of the loop's samples, to copy the loop into.
     Snapshot(Box<[f32]>),
     Load(Box<Loop>),
+    /// The output's gain, 0 to 1, after the recording and the meter.
+    Volume(f32),
 }
 
 impl Cmd {
@@ -103,6 +107,7 @@ impl Status {
     }
 
     /// The largest output magnitude since the last call, which resets it.
+    /// Measured before [`Cmd::Volume`].
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
     }
@@ -147,6 +152,10 @@ pub struct Looper {
     /// The output's gain, faded out round a load.
     gain: playr_dsp::Ramp<f32>,
     fade: u32,
+    /// The gain [`Cmd::Volume`] sets, which neither the recording nor the
+    /// meter hears.
+    volume: playr_dsp::Ramp<f32>,
+    volume_ramp: u32,
 }
 
 /// A looper at `sample_rate` and the handle that controls it.
@@ -165,6 +174,8 @@ pub fn new(sample_rate: u32) -> (Looper, Handle) {
         snapshot: None,
         gain: playr_dsp::Ramp::new(1.0),
         fade: (LOAD_FADE_MS * sample_rate as f32 / 1000.0) as u32,
+        volume: playr_dsp::Ramp::new(1.0),
+        volume_ramp: (VOLUME_MS * sample_rate as f32 / 1000.0) as u32,
     };
     let handle = Handle {
         commands: cmd_tx,
@@ -199,6 +210,12 @@ impl Looper {
             }
         }
         self.publish(out);
+        if !(self.volume.settled() && self.volume.value() == 1.0) {
+            for frame in out.as_chunks_mut::<2>().0 {
+                let g = self.volume.next();
+                frame.iter_mut().for_each(|s| *s *= g);
+            }
+        }
     }
 
     pub fn tape(&self) -> &Tape {
@@ -257,6 +274,10 @@ impl Looper {
                     _ = self.returns.push(Returned::Loop(old));
                     self.gain.set(1.0, self.fade);
                 }
+                Cmd::Volume(v) if v.is_finite() => {
+                    self.volume.set(v.clamp(0.0, 1.0), self.volume_ramp)
+                }
+                Cmd::Volume(_) => {}
             }
         }
     }
@@ -375,6 +396,11 @@ impl Handle {
 
     pub fn set(&mut self, s: Setting) -> Result<(), Error> {
         self.send(Cmd::Set(s)).map_err(|_| Error::Full)
+    }
+
+    /// Sets the output's gain, 0 to 1. Recording and the meter do not follow it.
+    pub fn set_volume(&mut self, v: f32) -> Result<(), Error> {
+        self.send(Cmd::Volume(v)).map_err(|_| Error::Full)
     }
 
     /// Loads `lp`, keeping a copy for [`Handle::reset`].

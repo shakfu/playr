@@ -89,6 +89,8 @@ pub struct Session {
     draft_settled: bool,
     /// A change waits on the listener's answer about the old draft.
     draft_question: bool,
+    /// The master being recorded.
+    master: Option<crate::audio::record::MasterRecording>,
     /// The playlist whose tracks the selection holds to edit, by id.
     editing: Option<i64>,
     /// Marks in the track `marks_for`, earliest first.
@@ -155,6 +157,7 @@ impl Session {
             draft: Draft::Ask,
             draft_settled: false,
             draft_question: false,
+            master: None,
             editing: None,
             marks: Vec::new(),
             marks_for: None,
@@ -1968,6 +1971,44 @@ impl Session {
             }
         }
         self.reload();
+    }
+
+    /// Starts recording the master: everything the output plays, the player,
+    /// the tape and the decks, to a new file under the samples directory.
+    /// Returns the file.
+    pub fn start_master(&mut self) -> Result<PathBuf, String> {
+        if self.master.is_some() {
+            return Err("already recording the master".into());
+        }
+        std::fs::create_dir_all(&self.samples)
+            .map_err(|e| format!("cannot create {}: {e}", self.samples.display()))?;
+        let dir = samples::unused_dir(&self.samples, "master")?;
+        let stem = dir.file_name().unwrap_or_default().to_string_lossy();
+        let path = dir.join(format!("{stem}.wav"));
+        let rec = self.player.sources().record(&path).inspect_err(|_| {
+            _ = std::fs::remove_dir(&dir);
+        })?;
+        self.master = Some(rec);
+        Ok(path)
+    }
+
+    /// Asks the master's recording to stop; [`Session::master_done`] has the
+    /// result once its file is written. False with none under way.
+    pub fn stop_master(&mut self) -> bool {
+        self.master.as_ref().inspect(|m| m.stop()).is_some()
+    }
+
+    /// The file the master is being recorded to.
+    pub fn master_recording(&self) -> Option<&Path> {
+        self.master.as_ref().map(|m| m.path())
+    }
+
+    /// The master's recording, once its file is written: after a stop, or
+    /// when the output closed under it. A file written is added to the library.
+    pub fn master_done(&mut self) -> Option<Result<crate::audio::record::Recorded, String>> {
+        let done = self.master.as_ref()?.finished()?;
+        self.master = None;
+        Some(done.and_then(|r| self.add_to_library(&r.path).map(|()| r)))
     }
 
     /// Adds the audio file at `path` to the library, as a scan would, without

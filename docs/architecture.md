@@ -45,7 +45,7 @@ The Rust frontends also depend on `playr-core` directly, for `Session` and the t
 
 - **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `analysis`, `gain`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
 
-- **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state), `sampler` (the sampler view's state and column geometry), `tape` (the tape looper's actions and its stream) and `dj` (the DJ decks' actions, loads and grid edits). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
+- **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state), `sampler` (the sampler view's state and column geometry), `tape` (the tape looper's actions and its stream), `dj` (the DJ decks' actions, loads and grid edits) and `mix` (the mixer's faders and fader laws; `docs/dev/mixer.md`). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
 
 - **playr-looper** (`crates/playr-looper`): the tape looper's engine, on interleaved `f32` at the device's rate. It depends on neither `playr-core` nor `playr-app`, decodes nothing and resamples nothing; `playr_app::tape` reads the range through `playr-core` and hands it a ready loop. `docs/dev/looper-engine.md` has the design.
 
@@ -242,7 +242,7 @@ Position, loudness and peak level change continuously, so they are not events. A
 
 `settings.toml` holds settings, which the user writes; `library.db` holds state, which playr writes. playr never writes `settings.toml`. A session value worth keeping, such as the EQ, is state: the `persist` setting names which are kept, and `playr_app::persist` stores them in the library's `state` table.
 
-`settings.toml` is one file. `playr_core::settings::Settings` owns the top-level keys: `volume`, `mode`, `speed`, `samples` and `onset_sensitivity`. Each frontend owns the tables it names: `playr-app` owns `[keys]`, and the top-level `theme` that both of its frontends read; a GUI might own `[gui]`.
+`settings.toml` is one file. `playr_core::settings::Settings` owns the top-level keys: `master`, `volume`, `mode`, `speed`, `samples` and `onset_sensitivity`. Each frontend owns the tables it names: `playr-app` owns `[keys]`, and the top-level `theme` and `fader` that its frontends read; a GUI might own `[gui]`.
 
 ```rust
 impl Settings {

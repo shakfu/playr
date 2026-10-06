@@ -121,6 +121,16 @@ pub enum Message {
     Slept,
     Tape(crate::tape::TapeMessage),
     Dj(crate::dj::DjMessage),
+    /// Every fader, as `:mix` reports them.
+    Mix(crate::mix::Mix),
+    /// The fader law now in use.
+    FaderLaw(crate::mix::Law),
+    /// The master is being recorded to this file.
+    MasterRecording(std::path::PathBuf),
+    /// The master's recording stops once its file is written.
+    MasterStopping,
+    MasterRecorded(playr_core::audio::record::Recorded),
+    MasterFailed(String),
 }
 
 impl From<Notice> for Message {
@@ -199,6 +209,24 @@ pub fn text(message: &Message) -> String {
         Message::Slept => "sleep timer ran out; stopped".into(),
         Message::Tape(m) => tape_text(m),
         Message::Dj(m) => dj_text(m),
+        Message::Mix(mix) => mix_text(mix),
+        Message::FaderLaw(law) => format!("fader law: {}", law.name()),
+        Message::MasterRecording(path) => {
+            format!("recording the master to {}", home_as_tilde(path))
+        }
+        Message::MasterStopping => "finishing the master's recording".into(),
+        Message::MasterRecorded(r) => {
+            let secs = r.frames as f64 / f64::from(r.rate.max(1));
+            let done = format!(
+                "recorded the master: {secs:.2} s to {}",
+                home_as_tilde(&r.path)
+            );
+            match r.dropped {
+                0 => done,
+                n => format!("{done}; {n} blocks lost, the disk was too slow"),
+            }
+        }
+        Message::MasterFailed(e) => format!("master recording: {e}"),
         Message::NoPlaylistUnderCursor => {
             "no playlist under the cursor in the playlists view".into()
         }
@@ -572,6 +600,10 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
         TapeMessage::AlreadySaving => "the tape is already being saved".into(),
         TapeMessage::SaveAborted => "the save was cut short; save again".into(),
         TapeMessage::DeviceLost(e) => format!("audio device lost: {e}; load the tape again"),
+        TapeMessage::Took => "the tape took over from the player".into(),
+        TapeMessage::TakeWaiting => "the tape takes over at the range's start".into(),
+        TapeMessage::PastRange => "the player is past the range; the tape is loaded".into(),
+        TapeMessage::TakeDropped => "the player left the track; the tape is loaded".into(),
         TapeMessage::Saving => "saving the tape".into(),
         TapeMessage::Saved(path) => format!("saved the tape to {}", home_as_tilde(path)),
         TapeMessage::Recording(path) => format!("recording the tape to {}", home_as_tilde(path)),
@@ -593,6 +625,23 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
         }
         TapeMessage::Failed(e) => format!("tape: {e}"),
     }
+}
+
+fn mix_text(mix: &crate::mix::Mix) -> String {
+    use crate::mix::Strip;
+    let strips: Vec<String> = Strip::ALL
+        .into_iter()
+        .map(|s| {
+            let p = (mix.level(s) * 100.0).round();
+            let db = match mix.law().gain(mix.level(s)) {
+                0.0 => "off".to_string(),
+                g => format!("{:.1} dB", 20.0 * g.log10()),
+            };
+            let muted = if mix.muted(s) { ", muted" } else { "" };
+            format!("{} {p}% ({db}{muted})", s.name())
+        })
+        .collect();
+    format!("{}; law {}", strips.join(", "), mix.law().name())
 }
 
 fn dj_text(m: &crate::dj::DjMessage) -> String {

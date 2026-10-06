@@ -812,3 +812,30 @@ fn the_knee_sets_where_the_write_head_starts_to_clip() {
     assert!((default - 0.768).abs() < 0.01, "{default}");
     assert!((high - 0.8).abs() < 0.01, "{high}");
 }
+
+/// A head is placed inside its voice's window: moved while stopped, kept
+/// inside the window when asked past it, and jumped to while playing.
+#[test]
+fn a_head_is_placed_inside_its_window() {
+    let window = Setting::Window(0, Window::new(1000, 9000));
+    let mut t = tape(noise(SR as usize * 2, 0.5), 1, &[window]);
+    t.set(Setting::Stop);
+    t.set(Setting::Head(0, 4321.0));
+    assert_eq!(t.voice(0), 4321.0);
+    t.set(Setting::Head(0, 20_000.0));
+    assert_eq!(t.voice(0), 8999.0);
+    t.set(Setting::Head(0, f64::NAN));
+    assert_eq!(
+        t.voice(0),
+        8999.0,
+        "a value that is not a number is ignored"
+    );
+
+    t.set(Setting::Head(0, 2000.0));
+    t.set(Setting::Play);
+    run(&mut t, 100);
+    assert!((t.voice(0) - 2100.0).abs() < 1.0, "{}", t.voice(0));
+    t.set(Setting::Head(0, 6000.0));
+    run(&mut t, 100);
+    assert!((t.voice(0) - 6100.0).abs() < 1.0, "{}", t.voice(0));
+}

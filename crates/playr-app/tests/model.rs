@@ -3461,3 +3461,160 @@ fn planned_slice_starts_become_marks_in_one_step() {
     model.perform(Action::MarkSlices);
     assert_eq!(model.message(), Some(&Message::NoSlicesPlanned));
 }
+
+/// Refreshes `m` until `done` holds of it, or fails with `what`.
+fn model_until(m: &mut Model, what: &str, done: impl Fn(&Model) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done(m) {
+        assert!(Instant::now() < deadline, "{what}: {:?}", m.message());
+        m.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The tape plays on the player's stream: it opens none of its own, and its
+/// loop is heard there, with the player paused by its Play.
+#[test]
+fn the_tape_plays_on_the_player_s_stream() {
+    use playr_app::tape::{TapeAction, TapeMessage};
+    use playr_core::audio::State;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    common::tone(&file, 8000, 4.0, -6.0);
+    let (player, control) = common::fake_player();
+    let conn = db::open_memory().unwrap();
+    let mut m = Model::new(conn, player, Vec::new(), Config::default());
+    m.session_mut().play(&[track(&file.to_string_lossy())], 0);
+    model_until(&mut m, "playing", |m| {
+        m.session().player().status().state == State::Playing
+    });
+    m.sampler_mut().range = Some(playr_app::sampler::Range {
+        path: file.clone(),
+        start: Some(8000),
+        end: Some(16000),
+    });
+    m.perform(Action::Tape(TapeAction::Load(None)));
+    model_until(&mut m, "the loop loaded", |m| {
+        matches!(m.message(), Some(Message::Tape(TapeMessage::Loaded { .. })))
+    });
+    m.perform(Action::Tape(TapeAction::Play));
+    model_until(&mut m, "the player paused", |m| {
+        m.session().player().status().state == State::Paused
+    });
+    control.played.lock().unwrap().clear();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let peak = control
+            .played
+            .lock()
+            .unwrap()
+            .iter()
+            .fold(0.0f32, |a, s| a.max(s.abs()));
+        if peak > 0.1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the tape was not heard: {}",
+            control.report()
+        );
+        m.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(control.opened.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+/// The decks play on the player's stream: Take hands the player's track to a
+/// deck there, and cue-out 3-4 asks the stream for 4 channels, which a
+/// stereo device refuses.
+#[test]
+fn the_decks_play_on_the_player_s_stream() {
+    use playr_app::dj::{CueOut, DjAction, DjMessage, Side};
+    use playr_core::audio::State;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    common::tone(&file, 8000, 20.0, -6.0);
+    let (player, control) = common::fake_player();
+    let conn = db::open_memory().unwrap();
+    let mut m = Model::new(conn, player, Vec::new(), Config::default());
+    m.session_mut().play(&[track(&file.to_string_lossy())], 0);
+    model_until(&mut m, "playing", |m| {
+        m.session().player().status().state == State::Playing
+    });
+    m.perform(Action::Dj(DjAction::Take(Side::A)));
+    model_until(&mut m, "the take", |m| {
+        m.message() == Some(&Message::Dj(DjMessage::Took(Side::A)))
+    });
+    model_until(&mut m, "the player paused", |m| {
+        m.session().player().status().state == State::Paused
+    });
+    control.played.lock().unwrap().clear();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let peak = control
+            .played
+            .lock()
+            .unwrap()
+            .iter()
+            .fold(0.0f32, |a, s| a.max(s.abs()));
+        if peak > 0.1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the deck was not heard: {}",
+            control.report()
+        );
+        m.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(control.opened.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+    m.perform(Action::Dj(DjAction::CueOut(CueOut::Channels)));
+    assert_eq!(m.message(), Some(&Message::Dj(DjMessage::NoCueChannels(2))));
+}
+
+/// `:mix rec` records the master to the samples directory and, once
+/// stopped and written, adds the file to the library; the master's meter
+/// reads what plays.
+#[test]
+fn the_master_is_recorded_into_the_library_and_metered() {
+    use playr_core::audio::State;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tone.wav");
+    common::tone(&file, 8000, 20.0, -6.0);
+    let (player, _control) = common::fake_player();
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let mut m = Model::new(conn, player, Vec::new(), Config::default());
+    m.session_mut().set_samples_dir(dir.path().join("samples"));
+    m.session_mut().play(&[track(&file.to_string_lossy())], 0);
+    model_until(&mut m, "playing", |m| {
+        m.session().player().status().state == State::Playing
+    });
+    model_until(&mut m, "the master metered", |m| {
+        m.snapshot().meters[3].is_some_and(|db| (db + 6.0).abs() < 0.5)
+    });
+    assert_eq!(m.snapshot().meters[1], None, "no tape, no tape meter");
+
+    m.run_command("mix rec");
+    let path = dir.path().join("samples/master/master.wav");
+    assert_eq!(m.message(), Some(&Message::MasterRecording(path.clone())));
+    std::thread::sleep(Duration::from_millis(300));
+    m.run_command("mix rec");
+    assert_eq!(m.message(), Some(&Message::MasterStopping));
+    model_until(&mut m, "the file written", |m| {
+        matches!(m.message(), Some(Message::MasterRecorded(_)))
+    });
+    let Some(Message::MasterRecorded(done)) = m.message() else {
+        unreachable!("waited for it")
+    };
+    assert!(done.frames > 0 && done.path == path);
+    let canonical = path.canonicalize().unwrap();
+    assert!(
+        m.session()
+            .tracks()
+            .iter()
+            .any(|t| Path::new(&t.path) == canonical),
+        "the recording is not in the library"
+    );
+}

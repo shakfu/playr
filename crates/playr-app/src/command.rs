@@ -134,7 +134,12 @@ pub const COMMANDS: &[Command] = &[
     any(
         "volume",
         "PERCENT | +N | -N",
-        "set the volume, or change it: 60, +10",
+        "set the master, or change it: 60, +10",
+    ),
+    any(
+        "mix",
+        "[STRIP N|mute] | law | rec",
+        "faders and mutes; :mix alone shows them",
     ),
     any(
         "speed",
@@ -627,6 +632,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         MarkSlices => "mark-slices".into(),
         Tape(t) => format!("tape {}", tape_line(t)),
         Dj(d) => format!("dj {}", dj_line(d)),
+        Mix(m) => mix_line(m),
         Convert(format, None) => format!("convert {format}"),
         Convert(format, Some(dir)) => format!("convert {format} {}", dir.display()),
         Theme(t) => format!("theme {}", t.name()),
@@ -674,7 +680,7 @@ pub const MIN_BEATS: f32 = 0.125;
 /// Most beats in one slice of `:slice beats`: 16 bars of 4/4.
 pub const MAX_BEATS: f32 = 64.0;
 
-const TAPE_USAGE: &str = "usage: :tape load [N] | play | stop | reset | save | rec | \
+const TAPE_USAGE: &str = "usage: :tape load [N] | take | play | stop | reset | save | rec | \
      write on|off | feedback F | wear W | thin T | window A B | \
      V on|off | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
      ping on|off|slew MS|drive D|filter F|lp|hp|bp|solo on|off";
@@ -698,6 +704,7 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
     let words: Vec<&str> = rest.split_whitespace().collect();
     match words.as_slice() {
         ["load"] => Ok(T::Load(None)),
+        ["take"] => Ok(T::Take),
         ["load", n] => match n.parse::<u8>() {
             Ok(n) if (1..=playr_core::session::LOOP_SLOTS).contains(&n) => Ok(T::Load(Some(n))),
             _ => Err(format!("not a loop slot: {n}")),
@@ -958,6 +965,65 @@ fn tape_pos(word: &str) -> Result<crate::tape::Pos, String> {
     }
 }
 
+const MIX_USAGE: &str = "usage: :mix [master|player|tape|decks|headphones \
+     PERCENT|+N|-N|mute [on|off]] | law [db|cubic] | rec";
+
+/// Parses what follows `:mix`.
+fn mix(rest: &str) -> Result<crate::mix::MixAction, String> {
+    use crate::mix::{Law, MixAction as M, Strip};
+    let usage = || MIX_USAGE.to_string();
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    match words.as_slice() {
+        [] => Ok(M::Show),
+        ["law"] => Ok(M::Law(None)),
+        ["rec"] => Ok(M::Record),
+        ["law", w] => Law::named(w).map(|l| M::Law(Some(l))).ok_or_else(usage),
+        [s, rest @ ..] => {
+            let strip = Strip::named(s).ok_or_else(usage)?;
+            match rest {
+                ["mute"] => Ok(M::Mute(strip, None)),
+                ["mute", "on"] => Ok(M::Mute(strip, Some(true))),
+                ["mute", "off"] => Ok(M::Mute(strip, Some(false))),
+                [n] => {
+                    let (by, sign, n) = amount(n);
+                    let n = n
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|n| n.is_finite())
+                        .ok_or_else(|| format!("not a percentage: {n}"))?;
+                    match (by, sign as f32 * n) {
+                        (true, d) => Ok(M::By(strip, d / 100.0)),
+                        (false, p) if (0.0..=100.0).contains(&p) => Ok(M::Set(strip, p / 100.0)),
+                        _ => Err(format!("{s} is 0 to 100")),
+                    }
+                }
+                _ => Err(usage()),
+            }
+        }
+    }
+}
+
+/// The command line for `m`.
+fn mix_line(m: &crate::mix::MixAction) -> String {
+    use crate::mix::MixAction as M;
+    let on = |b: &bool| if *b { "on" } else { "off" };
+    match m {
+        M::Show => "mix".into(),
+        M::Set(s, p) => format!("mix {} {}", s.name(), number(f64::from(*p) * 100.0)),
+        M::By(s, d) => format!(
+            "mix {} {}{}",
+            s.name(),
+            if *d < 0.0 { "-" } else { "+" },
+            number(f64::from(d.abs()) * 100.0)
+        ),
+        M::Mute(s, None) => format!("mix {} mute", s.name()),
+        M::Mute(s, Some(b)) => format!("mix {} mute {}", s.name(), on(b)),
+        M::Law(None) => "mix law".into(),
+        M::Record => "mix rec".into(),
+        M::Law(Some(l)) => format!("mix law {}", l.name()),
+    }
+}
+
 /// What follows `tape ` in the command line for `t`.
 fn tape_line(t: &crate::tape::TapeAction) -> String {
     use crate::tape::{Filter, Pos, TapeAction as T, VoiceSetting as V};
@@ -969,6 +1035,7 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
     let on = |b: &bool| if *b { "on" } else { "off" };
     match t {
         T::Load(None) => "load".into(),
+        T::Take => "take".into(),
         T::Load(Some(slot)) => format!("load {slot}"),
         T::Play => "play".into(),
         T::Stop => "stop".into(),
@@ -1430,6 +1497,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         },
         "tape" => tape(rest).map(Action::Tape),
         "dj" => dj(rest).map(Action::Dj),
+        "mix" => mix(rest).map(Action::Mix),
         "loops" => match rest {
             "clear" => Ok(Action::ClearLoops),
             _ => Err(usage()),

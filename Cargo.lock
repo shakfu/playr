@@ -3796,7 +3796,6 @@ dependencies = [
 name = "playr-dj"
 version = "0.17.0"
 dependencies = [
- "cpal",
  "playr-dsp",
  "rtrb",
 ]
@@ -3829,7 +3828,6 @@ dependencies = [
 name = "playr-looper"
 version = "0.17.0"
 dependencies = [
- "cpal",
  "hound",
  "playr-dsp",
  "rtrb",

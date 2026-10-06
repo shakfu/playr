@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use playr_app::action::Action;
 use playr_app::message::fmt_time;
 use playr_app::meter;
+use playr_app::mix::{MixAction, Strip};
 use playr_app::model::Model;
 use playr_core::audio::{Mode, State};
 use rosc::{OscMessage, OscPacket, OscType};
@@ -52,6 +53,10 @@ const SPEED: Kind = Kind::Int {
     min: -12,
     max: Some(12),
 };
+const SWITCH: Kind = Kind::Int {
+    min: 0,
+    max: Some(1),
+};
 const MODE: Kind = Kind::Int {
     min: 0,
     max: Some(3),
@@ -69,6 +74,7 @@ pub const RECEIVED: &[Address] = &[
         "seek to this fraction of the track",
     ),
     address("/playr/volume", UNIT, "set the volume"),
+    address("/playr/mute", SWITCH, "mute the volume: 1, or unmute: 0"),
     address("/playr/speed", SPEED, "set varispeed in semitones"),
     address("/playr/mode", MODE, "normal, shuffle, repeat or repeat-one"),
     address(
@@ -101,6 +107,7 @@ pub const SENT: &[Address] = &[
         "position and length, as 1:23 / 4:56",
     ),
     address("/playr/volume", UNIT, "volume"),
+    address("/playr/mute", SWITCH, "whether the volume is muted"),
     address("/playr/speed", SPEED, "varispeed in semitones"),
     address("/playr/mode", MODE, "normal, shuffle, repeat or repeat-one"),
     address(
@@ -161,6 +168,11 @@ pub fn request(message: &OscMessage) -> Option<Request> {
         "/playr/volume" => number()
             .filter(|n| (0.0..=1.0).contains(n))
             .and_then(|n| perform(Action::SetVolume(n as f32))),
+        "/playr/mute" => match number() {
+            Some(0.0) => perform(mute(false)),
+            Some(1.0) => perform(mute(true)),
+            _ => None,
+        },
         // Rounded, so a fader can send it.
         "/playr/speed" => number()
             .map(f64::round)
@@ -172,6 +184,10 @@ pub fn request(message: &OscMessage) -> Option<Request> {
         "/playr/playlist" => index().map(Request::PlayPlaylistAt),
         _ => None,
     }
+}
+
+fn mute(on: bool) -> Action {
+    Action::Mix(MixAction::Mute(Strip::Master, Some(on)))
 }
 
 fn number(arg: &OscType) -> Option<f64> {
@@ -307,6 +323,10 @@ pub fn values(model: &Model) -> Vec<(&'static str, OscType)> {
         ("/playr/progress", OscType::Float(progress as f32)),
         ("/playr/time", OscType::String(time)),
         ("/playr/volume", OscType::Float(snapshot.volume)),
+        (
+            "/playr/mute",
+            OscType::Int(model.mixer().muted(Strip::Master).into()),
+        ),
         ("/playr/speed", OscType::Int(status.semitones)),
         (
             "/playr/mode",

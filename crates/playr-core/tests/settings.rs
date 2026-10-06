@@ -17,13 +17,34 @@ fn the_defaults_file_sets_the_defaults() {
     let settings = parse(DEFAULT_SETTINGS).unwrap();
     assert_eq!(settings, Settings::default());
     assert_eq!(
-        (settings.volume, settings.mode, settings.speed),
-        (1.0, Mode::Normal, 0)
+        (
+            settings.master,
+            settings.volume,
+            settings.mode,
+            settings.speed
+        ),
+        (None, None, Mode::Normal, 0)
     );
-    let settings = parse("volume = 40\nmode = \"Repeat-One\"\nspeed = -3").unwrap();
+    let settings = parse("master = 40\nmode = \"Repeat-One\"\nspeed = -3").unwrap();
     assert_eq!(
-        (settings.volume, settings.mode, settings.speed),
-        (0.4, Mode::RepeatOne, -3)
+        (settings.master, settings.mode, settings.speed),
+        (Some(0.4), Mode::RepeatOne, -3)
+    );
+}
+
+/// `volume` was a gain before `master` took its place as a fader position;
+/// a file that still sets it keeps its level, and one setting both is refused.
+#[test]
+fn volume_is_read_as_a_gain_and_refused_beside_master() {
+    let settings = parse("volume = 50").unwrap();
+    assert_eq!((settings.volume, settings.master), (Some(0.5), None));
+    assert_eq!(
+        parse("master = 80\nvolume = 50").unwrap_err(),
+        ["line 2: volume and master are both set; master replaces volume"]
+    );
+    assert_eq!(
+        parse("master = 101").unwrap_err(),
+        ["line 1: master is a number from 0 to 100"]
     );
 }
 
@@ -77,7 +98,7 @@ fn another_frontends_table_is_passed_over_not_refused() {
     let (tables, errors) = settings.apply(text, &["keys"]);
     assert!(tables.is_empty(), "a table this frontend never asked for");
     assert_eq!(errors.finish(), Ok(()));
-    assert_eq!(settings.volume, 0.4, "core keys still apply");
+    assert_eq!(settings.volume, Some(0.4), "core keys still apply");
 
     // A typo is still caught: only the names frontends own are passed over.
     let mut settings = Settings::default();
@@ -449,7 +470,7 @@ fn persist_names_the_values_to_remember() {
     assert_eq!(
         parse("persist = ['eq', 'speed', 3]").unwrap_err(),
         [
-            "line 1: unknown persist speed; choices: eq, volume, mode, replaygain, theme, columns, sort, history",
+            "line 1: unknown persist speed; choices: eq, volume, mode, replaygain, theme, columns, sort, history, mix",
             "line 1: a name, not an integer",
         ]
     );

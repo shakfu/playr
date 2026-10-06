@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use playr_core::audio::output::DeviceEvent;
 use playr_core::audio::resample::Resample;
-use playr_core::audio::State;
+use playr_core::audio::{Attachment, Sources, State};
 use playr_core::samples;
 pub use playr_looper::Filter;
 use playr_looper::{Handle, Loop, Looper, Returned, Setting, Window};
@@ -55,6 +55,10 @@ pub enum VoiceSetting {
 pub enum TapeAction {
     /// Load the sampler's range of the playing track, or its loop slot `n`.
     Load(Option<u8>),
+    /// Load the sampler's range of the playing track and take over from the
+    /// player: at its position inside the range, or at the range's start
+    /// once the player reaches it.
+    Take,
     /// Play, pausing the player.
     Play,
     Stop,
@@ -97,6 +101,14 @@ pub enum TapeMessage {
     SaveAborted,
     /// The output device went away, and the tape with it.
     DeviceLost(String),
+    /// The tape took over from the player.
+    Took,
+    /// The tape takes over when the player reaches the range's start.
+    TakeWaiting,
+    /// A take found the player past the range.
+    PastRange,
+    /// A take's player left the track, or stopped, before the tape took over.
+    TakeDropped,
     Saving,
     Saved(PathBuf),
     Recording(PathBuf),
@@ -117,10 +129,20 @@ impl From<TapeMessage> for Message {
 
 /// Where the tape plays.
 enum Output {
-    /// The device with this ID, or the default.
-    Device(Option<String>),
+    /// The player's stream, summed with what else plays there.
+    Bus(Sources),
     /// Nowhere: [`Deck::process`] runs the looper, for tests.
     Manual,
+}
+
+/// The looper as a source on the player's stream.
+struct Played(Looper);
+
+impl playr_core::audio::bus::Source for Played {
+    fn process(&mut self, main: &mut [f32], _cue: &mut [f32]) -> playr_core::audio::bus::Cue {
+        self.0.process(main);
+        playr_core::audio::bus::Cue::None
+    }
 }
 
 /// A loop read and ready to play.
@@ -132,14 +154,14 @@ struct Loaded {
 /// A load in progress: the decoding thread's result, and where it will play.
 struct Loading {
     result: Receiver<Result<Loaded, String>>,
-    device: Option<cpal::Device>,
     name: String,
 }
 
 /// The tape playing, or ready to.
 struct Live {
     handle: Handle,
-    _stream: Option<cpal::Stream>,
+    /// Where the looper plays on the player's stream; `None` for a manual deck.
+    attached: Option<Attachment>,
     looper: Option<Looper>,
     /// The source track's name, for the directories saves go in.
     name: String,
@@ -147,6 +169,8 @@ struct Live {
     /// Where the snapshot asked for is to be saved.
     save_to: Option<PathBuf>,
     state: TapeState,
+    /// The volume last sent to the looper.
+    volume: f32,
 }
 
 /// How far each side of the range a load reads, for crossfades to fade into:
@@ -249,8 +273,8 @@ impl TapeState {
             Setting::Filter(i, f) => self.voices[i].filter = f,
             Setting::Solo(i, on) => self.voices[i].solo = on,
             Setting::Thin(x) => self.thin = x,
-            // From the settings file, not a control.
-            Setting::Knee(_) => {}
+            // From the settings file, and a take: not controls.
+            Setting::Knee(_) | Setting::Head(..) => {}
         }
     }
 }
@@ -275,13 +299,30 @@ pub struct Deck {
     /// Saves finishing on their threads, and the stream's events.
     saved: (Sender<Saved>, Receiver<Saved>),
     errors: (Sender<DeviceEvent>, Receiver<DeviceEvent>),
+    /// The volume the mixer gives the tape, which a new looper starts at.
+    volume: f32,
+    /// A take under way, until the tape takes over or it is dropped.
+    taking: Option<Taking>,
+}
+
+/// A take: the track and range loaded, and how far it has gone.
+#[derive(Debug, Clone)]
+struct Taking {
+    path: PathBuf,
+    /// The track's rate, which `span` counts frames at.
+    rate: u32,
+    span: (u64, u64),
+    /// The loop is in.
+    loaded: bool,
+    /// The player is before the range, and was told so.
+    waiting: bool,
 }
 
 impl Deck {
-    /// A deck playing to the output device `device`, or the default, with
-    /// the write head's clip at `knee`.
-    pub fn new(device: Option<String>, knee: f32) -> Self {
-        Deck::with(Output::Device(device), knee)
+    /// A deck playing on the player's stream through `sources`, with the
+    /// write head's clip at `knee`.
+    pub fn new(sources: Sources, knee: f32) -> Self {
+        Deck::with(Output::Bus(sources), knee)
     }
 
     /// A deck with no device, which plays only as [`Deck::process`] is called.
@@ -297,6 +338,18 @@ impl Deck {
             loading: None,
             saved: channel(),
             errors: channel(),
+            volume: 1.0,
+            taking: None,
+        }
+    }
+
+    /// Sends the looper `volume` when it changed.
+    fn follow_volume(&mut self, volume: f32) {
+        self.volume = volume;
+        if let Some(live) = self.live.as_mut().filter(|l| l.volume != volume) {
+            if live.handle.set_volume(volume).is_ok() {
+                live.volume = volume;
+            }
         }
     }
 
@@ -337,23 +390,14 @@ impl Deck {
 
     /// Starts reading `start..end` of `path`, which counts frames at `rate`.
     fn load(&mut self, path: PathBuf, rate: u32, (start, end): (u64, u64)) -> Result<(), String> {
-        let (device, to) = match &self.output {
-            Output::Device(want) => {
-                let device = playr_core::audio::output::device(want.as_deref())
-                    .map_err(|e| e.to_string())?;
-                let to = playr_looper::device::rate(&device, rate).map_err(|e| e.to_string())?;
-                (Some(device), to)
-            }
-            Output::Manual => (None, rate),
+        let to = match &self.output {
+            Output::Bus(sources) => sources.rate_for(rate),
+            Output::Manual => rate,
         };
         let (tx, rx) = channel();
         let name = samples::name_for(&path);
         std::thread::spawn(move || _ = tx.send(read(&path, rate, (start, end), to)));
-        self.loading = Some(Loading {
-            result: rx,
-            device,
-            name,
-        });
+        self.loading = Some(Loading { result: rx, name });
         Ok(())
     }
 
@@ -371,12 +415,13 @@ impl Deck {
             if let Some(f) = self.live.as_mut().and_then(stop_recording) {
                 found.push(f);
             }
-            found.push(Found::Note(
-                match result.and_then(|l| self.start(loading, l)) {
-                    Ok(m) => m,
-                    Err(e) => TapeMessage::Failed(e),
-                },
-            ));
+            let started = result.and_then(|l| self.start(loading, l));
+            match (&started, &mut self.taking) {
+                (Ok(_), Some(t)) => t.loaded = true,
+                (Err(_), _) => self.taking = None,
+                _ => {}
+            }
+            found.push(Found::Note(started.unwrap_or_else(TapeMessage::Failed)));
         }
         if let Some(live) = &mut self.live {
             while let Some(r) = live.handle.poll() {
@@ -415,11 +460,22 @@ impl Deck {
                 }
             }
         }
+        // The player's stream lost its device, and the looper with it.
+        let lost = |l: &Live| l.attached.as_ref().is_some_and(Attachment::lost);
+        if self.live.as_ref().is_some_and(lost) {
+            if let Some(f) = self.live.as_mut().and_then(stop_recording) {
+                found.push(f);
+            }
+            self.live = None;
+            found.push(Found::Note(TapeMessage::DeviceLost(
+                "the output device went away".into(),
+            )));
+        }
         found
     }
 
-    /// Where the stream reports device events. A manual deck has no stream;
-    /// whatever drives it reports here.
+    /// Where a manual deck's device events are reported, by whatever drives
+    /// it. A deck on the player's stream learns of a loss from the player.
     pub fn device_events(&self) -> Sender<DeviceEvent> {
         self.errors.0.clone()
     }
@@ -436,26 +492,24 @@ impl Deck {
         handle
             .set(Setting::Knee(self.knee))
             .map_err(|e| e.to_string())?;
-        let (stream, looper) = match loading.device {
-            Some(device) => {
-                let errors = self.errors.0.clone();
-                let on_error = move |e: cpal::Error| _ = errors.send(e.into());
-                // An exclusive device takes one stream at a time.
-                self.live = None;
-                let stream = playr_looper::device::open(&device, looper, on_error)
-                    .map_err(|e| e.to_string())?;
-                (Some(stream), None)
-            }
-            None => (None, Some(looper)),
+        handle.set_volume(self.volume).map_err(|e| e.to_string())?;
+        // The old looper is detached as its `Live` goes.
+        let (attached, looper) = match &self.output {
+            Output::Bus(sources) => (
+                Some(sources.attach(extent.rate, Box::new(Played(looper)))),
+                None,
+            ),
+            Output::Manual => (None, Some(looper)),
         };
         self.live = Some(Live {
             handle,
-            _stream: stream,
+            attached,
             looper,
             name: loading.name,
             extent,
             save_to: None,
             state: TapeState::new(extent.range),
+            volume: self.volume,
         });
         Ok(TapeMessage::Loaded {
             frames: extent.range.len(),
@@ -546,6 +600,9 @@ pub fn poll(f: &mut impl Frontend) {
     for found in f.tape().poll() {
         report(f, found);
     }
+    take_over(f);
+    let volume = f.mix().gain(crate::mix::Strip::Tape);
+    f.tape().follow_volume(volume);
 }
 
 fn report(f: &mut impl Frontend, found: Found) {
@@ -562,6 +619,7 @@ fn report(f: &mut impl Frontend, found: Found) {
 pub fn act(f: &mut impl Frontend, action: TapeAction) {
     match action {
         TapeAction::Load(slot) => return load(f, slot),
+        TapeAction::Take => return take(f),
         TapeAction::Record => return record(f),
         _ => {}
     }
@@ -606,24 +664,105 @@ fn send(live: &mut Live, action: TapeAction, samples: PathBuf) -> Result<(), Tap
 }
 
 fn load(f: &mut impl Frontend, slot: Option<u8>) {
+    if let Some((path, rate, span)) = range(f, slot) {
+        f.tape().taking = None;
+        start_load(f, path, rate, span);
+    }
+}
+
+/// Loads the range as `load` does, to take over from the player once in.
+fn take(f: &mut impl Frontend) {
+    if let Some((path, rate, span)) = range(f, None) {
+        f.tape().taking = Some(Taking {
+            path: path.clone(),
+            rate,
+            span,
+            loaded: false,
+            waiting: false,
+        });
+        start_load(f, path, rate, span);
+    }
+}
+
+/// The playing track, its rate, and the span `slot` or the sampler's range
+/// marks in it; or says why there is none.
+fn range(f: &mut impl Frontend, slot: Option<u8>) -> Option<(PathBuf, u32, (u64, u64))> {
     let (path, rate) = match f.session().playing_track() {
         Ok(track) => track,
-        Err(refusal) => return f.notify(refusal.into()),
+        Err(refusal) => {
+            f.notify(refusal.into());
+            return None;
+        }
     };
     let span = match slot {
-        Some(n) => match f.session_mut().loops_for(Some(&path))[usize::from(n) - 1] {
-            Some(span) => span,
-            None => return f.notify(TapeMessage::EmptySlot(n).into()),
-        },
-        None => match f.sampler().range(Some(&path)) {
-            Some(span) => span,
-            None => return f.notify(TapeMessage::NoRange.into()),
-        },
+        Some(n) => f.session_mut().loops_for(Some(&path))[usize::from(n) - 1],
+        None => f.sampler().range(Some(&path)),
     };
+    match (span, slot) {
+        (Some(span), _) => Some((path, rate, span)),
+        (None, Some(n)) => {
+            f.notify(TapeMessage::EmptySlot(n).into());
+            None
+        }
+        (None, None) => {
+            f.notify(TapeMessage::NoRange.into());
+            None
+        }
+    }
+}
+
+fn start_load(f: &mut impl Frontend, path: PathBuf, rate: u32, span: (u64, u64)) {
     match f.tape().load(path, rate, span) {
         Ok(()) => f.notify(TapeMessage::Loading.into()),
-        Err(e) => f.notify(TapeMessage::Failed(e).into()),
+        Err(e) => {
+            f.tape().taking = None;
+            f.notify(TapeMessage::Failed(e).into());
+        }
     }
+}
+
+/// Hands the player over to the tape once a take's loop is in: voice 1 at
+/// the player's position inside the range, or at its start once the player
+/// reaches it. The player pauses as the tape starts; a paused player leaves
+/// the tape cued there.
+fn take_over(f: &mut impl Frontend) {
+    let Some(t) = f.tape().taking.clone().filter(|t| t.loaded) else {
+        return;
+    };
+    let player = f.session().player();
+    let state = player.status().state;
+    let on_track = f.session().playing_track().is_ok_and(|(p, _)| p == t.path);
+    if !on_track || state == State::Stopped {
+        f.tape().taking = None;
+        return f.notify(TapeMessage::TakeDropped.into());
+    }
+    let at = player.position().as_secs_f64() * f64::from(t.rate);
+    let (start, end) = (t.span.0 as f64, t.span.1 as f64);
+    if at >= end {
+        f.tape().taking = None;
+        return f.notify(TapeMessage::PastRange.into());
+    }
+    if at < start {
+        if !t.waiting {
+            f.tape().taking.as_mut().expect("taken above").waiting = true;
+            f.notify(TapeMessage::TakeWaiting.into());
+        }
+        return;
+    }
+    f.tape().taking = None;
+    let Some(live) = f.tape().live.as_mut() else {
+        return;
+    };
+    let e = live.extent;
+    let head = e.range.start as f64 + (at - start) * f64::from(e.rate) / f64::from(t.rate);
+    if let Err(err) = live.handle.set(Setting::Head(0, head)) {
+        return f.notify(TapeMessage::Failed(err.to_string()).into());
+    }
+    if state == State::Playing {
+        // Play pauses the player, as the tape's Play does.
+        act(f, TapeAction::Play);
+    }
+    f.notify(TapeMessage::Took.into());
 }
 
 fn record(f: &mut impl Frontend) {
@@ -772,8 +911,10 @@ pub fn settings(action: TapeAction, e: Extent) -> Result<Vec<Setting>, TapeMessa
                 VoiceSetting::Solo(on) => Setting::Solo(i, on),
             }
         }
-        TapeAction::Load(_) | TapeAction::Reset | TapeAction::Save | TapeAction::Record => {
-            return Ok(Vec::new())
-        }
+        TapeAction::Load(_)
+        | TapeAction::Take
+        | TapeAction::Reset
+        | TapeAction::Save
+        | TapeAction::Record => return Ok(Vec::new()),
     }])
 }

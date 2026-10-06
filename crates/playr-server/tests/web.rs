@@ -189,6 +189,9 @@ fn the_screen_has_views_counts_input_and_playback() {
     );
     assert_eq!(s["marks"], json!([]));
     assert_eq!(s["volume"], 100.0);
+    assert_eq!(s["muted"], false);
+    model.run_command("mix master mute on");
+    assert_eq!(web::screen(&model)["muted"], true);
 }
 
 #[test]

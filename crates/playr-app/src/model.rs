@@ -32,6 +32,7 @@ use crate::config::{Config, Program};
 use crate::dispatch::{self, Confirm, Frontend, Presentation, Prompt};
 use crate::media::Media;
 use crate::message::{self, Message};
+use crate::mix::{Mix, Strip};
 use crate::persist;
 use crate::sampler::{DetailRead, Sampler, Selected, Wave, DETAIL_MARGIN};
 use crate::View;
@@ -134,11 +135,16 @@ pub struct TrackInfo {
 pub struct Snapshot {
     pub status: Status,
     pub position: Duration,
+    /// The master fader's position, 0 to 1.
     pub volume: f32,
     /// Momentary loudness in LUFS; `None` for silence.
     pub loudness: Option<f32>,
     /// The highest recent sample peak in dBFS, held for [`PEAK_HOLD`].
     pub peak: Option<f32>,
+    /// The mixer's meters: the player's, the tape's and the decks' peaks
+    /// after their own faders, then the master's as measured, in dBFS, each
+    /// held for [`PEAK_HOLD`].
+    pub meters: [Option<f32>; 4],
     /// Marks in the playing track, as times into it, earliest first.
     pub marks: Vec<Duration>,
     /// Loops saved in the playing track, by slot from 1, in source frames.
@@ -206,6 +212,8 @@ pub struct Model {
 
     /// The peak shown, as a sample magnitude, and when it was reached.
     peak_hold: Option<(f32, Instant)>,
+    /// The mixer's meters, as `Snapshot::meters`, as magnitudes.
+    meter_holds: [Option<(f32, Instant)>; 4],
     snapshot: Snapshot,
     /// The playing track's tempo, and which track it was read for. Read on
     /// each track change rather than every frame.
@@ -217,6 +225,8 @@ pub struct Model {
     tape: crate::tape::Deck,
     /// The DJ decks, which play on their own stream.
     dj: crate::dj::Decks,
+    /// The faders over the player, the tape and the decks.
+    mix: Mix,
 }
 
 impl Model {
@@ -248,7 +258,7 @@ impl Model {
         // The settings, then what `persist` says to remember over them.
         let mut values = persist::Values {
             eq: [0.0; 3],
-            volume: config.settings.volume,
+            mix: Mix::new(config.fader, master(&config)),
             mode: config.settings.mode,
             replaygain: config.settings.replaygain,
             theme: config.theme,
@@ -259,6 +269,11 @@ impl Model {
         for &p in &config.settings.persist {
             if let Some(text) = session.state(&persist::key(p, config.program)) {
                 persist::decode(p, &text, &mut values);
+            } else if p == Persist::Volume {
+                let old = session.state("volume");
+                if let Some(v) = old.and_then(|t| persist::legacy_volume(&t, config.fader)) {
+                    values.mix.set_level(Strip::Master, v);
+                }
             }
         }
         session.set_samples_dir(config.settings.samples);
@@ -269,6 +284,7 @@ impl Model {
         session.set_ot_file(config.settings.slice_ot_file);
         session.keep_queue(config.settings.keep_queue);
         session.set_draft(config.settings.draft);
+        let sources = session.player().sources();
         let mut model = Model {
             session,
             view: View::Library,
@@ -300,19 +316,18 @@ impl Model {
             message: None,
             quit: false,
             peak_hold: None,
+            meter_holds: [None; 4],
             bpm: None,
             bpm_for: (None, 0),
             tape: crate::tape::Deck::new(
-                config.settings.device.clone(),
+                sources.clone(),
                 10f32.powf(config.settings.tape_knee / 20.0),
             ),
-            dj: crate::dj::Decks::new(
-                config.settings.device.clone(),
-                10f32.powf(config.settings.dj_knee / 20.0),
-            ),
+            dj: crate::dj::Decks::new(sources, 10f32.powf(config.settings.dj_knee / 20.0)),
             snapshot: Snapshot::default(),
+            mix: values.mix.clone(),
         };
-        model.session.send(Cmd::SetVolume(values.volume));
+        crate::mix::send_player(&mut model);
         model.session.send(Cmd::SetMode(values.mode));
         model
             .session
@@ -355,13 +370,25 @@ impl Model {
         self.cursors.playlists = (n > 0).then(|| self.cursors.playlists.unwrap_or(0).min(n - 1));
         self.save_values(false);
         let player = self.session.player();
-        self.peak_hold = hold_peak(self.peak_hold, player.take_peak(), Instant::now());
+        let now = Instant::now();
+        let player_peak = player.take_peak();
+        self.peak_hold = hold_peak(self.peak_hold, player_peak, now);
+        let readings = [
+            player_peak * self.mix.fader_gain(Strip::Player),
+            self.tape.status().map_or(0.0, |s| s.take_peak()) * self.mix.fader_gain(Strip::Tape),
+            self.dj.status().map_or(0.0, |s| s.take_peak()) * self.mix.fader_gain(Strip::Decks),
+            player.take_master_peak(),
+        ];
+        for (held, reading) in self.meter_holds.iter_mut().zip(readings) {
+            *held = hold_peak(*held, reading, now);
+        }
         self.snapshot = Snapshot {
             status: player.status(),
             position: player.position(),
-            volume: player.volume(),
+            volume: self.mix.level(Strip::Master),
             loudness: player.loudness(),
             peak: self.peak_hold.map(|(p, _)| 20.0 * p.log10()),
+            meters: self.meter_holds.map(|h| h.map(|(p, _)| 20.0 * p.log10())),
             marks: Vec::new(),
             loops: Default::default(),
             eq: player.eq(),
@@ -382,6 +409,7 @@ impl Model {
         }
         self.drain_events(current.as_ref());
         crate::tape::poll(self);
+        crate::mix::poll(self);
         crate::dj::poll(self);
         // After the events, so what the panel asks for acts on this frame.
         for action in self
@@ -530,7 +558,7 @@ impl Model {
         let player = self.session.player();
         persist::Values {
             eq: player.eq(),
-            volume: player.volume(),
+            mix: self.mix.clone(),
             mode: player.mode(),
             replaygain: self.session.replaygain(),
             theme: self.theme,
@@ -718,6 +746,11 @@ impl Model {
     /// The DJ decks, to draw.
     pub fn decks(&self) -> &crate::dj::Decks {
         &self.dj
+    }
+
+    /// The mixer's faders, to draw.
+    pub fn mixer(&self) -> &Mix {
+        &self.mix
     }
 
     /// Plays the DJ decks through `decks` from now on, as a test does
@@ -1278,6 +1311,10 @@ impl Frontend for Model {
         &mut self.dj
     }
 
+    fn mix(&mut self) -> &mut Mix {
+        &mut self.mix
+    }
+
     fn session(&self) -> &Session {
         &self.session
     }
@@ -1430,6 +1467,14 @@ impl Frontend for Model {
     fn sql_started(&mut self, job: JobId, then: dispatch::SqlThen) {
         self.sql = Some((job, then));
     }
+}
+
+/// The master's position the settings give: `master`, or else the gain
+/// `volume` held before it, by the law in use.
+fn master(config: &Config) -> f32 {
+    let s = &config.settings;
+    s.master
+        .unwrap_or_else(|| config.fader.position(s.volume.unwrap_or(1.0)))
 }
 
 /// After a scan found missing files: prune them, or ask first.

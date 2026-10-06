@@ -337,6 +337,9 @@ pub enum Setting {
     /// Frames advanced per output frame, -4 to 4.
     Rate(usize, f32),
     Window(usize, Window),
+    /// Puts the voice's head at this frame of the loop, inside its window;
+    /// while playing it jumps there, crossfading.
+    Head(usize, f64),
     Level(usize, f32),
     Pan(usize, f32),
     Send(usize, f32),
@@ -493,6 +496,20 @@ impl Voice {
             self.window = w;
             self.next = None;
             self.jump(self.home(w), self.rate.value(), sample_rate);
+        }
+    }
+
+    /// Puts the head at `at`, kept inside the window: a jump while playing,
+    /// else a move.
+    fn place(&mut self, at: f64, playing: bool, sample_rate: u32) {
+        let w = self.window;
+        let at = at.clamp(w.start as f64, (w.end - 1) as f64);
+        if playing {
+            self.jump(at, self.rate.value(), sample_rate);
+        } else {
+            self.pos = at;
+            self.homed = false;
+            self.old = None;
         }
     }
 
@@ -1029,6 +1046,9 @@ impl Tape {
             }
             Setting::Window(i, w) if i < VOICES && !w.is_empty() && w.end <= frames => {
                 self.voices[i].set_window(w, self.playing, sr)
+            }
+            Setting::Head(i, at) if i < VOICES && at.is_finite() => {
+                self.voices[i].place(at, self.playing, sr)
             }
             _ => {}
         }

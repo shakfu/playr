@@ -8,6 +8,7 @@
 pub mod controls;
 mod dj;
 pub mod keys;
+mod mixer;
 pub mod palette;
 mod sampler;
 mod tape;
@@ -22,6 +23,7 @@ use eframe::egui;
 use playr_app::action::Action;
 use playr_app::command::{self, view_name};
 use playr_app::dispatch::Frontend;
+use playr_app::mix::Strip;
 use playr_app::model::{DraftAnswer, Input, Model};
 use playr_app::{Theme, View};
 use playr_core::audio::State;
@@ -51,14 +53,17 @@ pub struct Gui {
     sampler: sampler::State,
     /// The theme last handed to egui.
     theme: Option<Theme>,
-    /// Whether the EQ dialog shows.
-    eq_open: bool,
+
     /// The view the Tape tab was opened over, while it shows. It is not a
     /// `View`: the terminal has no Tape view, so keys keep acting in this one.
     tape: Option<View>,
     tape_tab: tape::State,
     /// The view the DJ tab was opened over, while it shows, as for `tape`.
     dj: Option<View>,
+    /// The view the Mix tab was opened over, while it shows, as for `tape`.
+    mix: Option<View>,
+    /// The master went over full scale while the Mix tab was hidden.
+    clipped: bool,
     dj_tab: dj::State,
 }
 
@@ -73,7 +78,8 @@ impl Gui {
             cursor: (View::Library, None),
             sampler: sampler::State::default(),
             theme: None,
-            eq_open: false,
+            mix: None,
+            clipped: false,
             tape: None,
             tape_tab: tape::State::default(),
             dj: None,
@@ -103,6 +109,11 @@ impl Gui {
         if self.dj.is_some_and(|v| v != self.model.view()) {
             self.dj = None;
         }
+        if self.mix.is_some_and(|v| v != self.model.view()) {
+            self.mix = None;
+        }
+        let over = self.model.snapshot().meters[3].is_some_and(|db| db > 0.0);
+        self.clipped = self.mix.is_none() && (self.clipped || over);
 
         self.dropped(ui.ctx());
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
@@ -110,7 +121,6 @@ impl Gui {
         egui::Panel::bottom("transport").show(ui, |ui| self.bottom(ui));
         egui::CentralPanel::default().show(ui, |ui| self.view(ui));
         self.dialogs(ui.ctx());
-        transport::eq_dialog(&mut self.model, ui.ctx(), &mut self.eq_open);
 
         if self.model.quitting() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -370,25 +380,44 @@ impl Gui {
                 };
                 if ui
                     .selectable_label(
-                        self.tape.is_none() && self.dj.is_none() && self.model.view() == view,
+                        self.tape.is_none()
+                            && self.dj.is_none()
+                            && self.mix.is_none()
+                            && self.model.view() == view,
                         title,
                     )
                     .clicked()
                 {
                     self.tape = None;
                     self.dj = None;
+                    self.mix = None;
                     self.perform(Action::ShowView(view));
                 }
             }
             if ui.selectable_label(self.tape.is_some(), "Tape").clicked() {
                 self.tape = Some(self.model.view());
                 self.dj = None;
+                self.mix = None;
             }
             // Over the library, which the tab lists for loading.
             if ui.selectable_label(self.dj.is_some(), "DJ").clicked() {
                 self.perform(Action::ShowView(View::Library));
                 self.dj = Some(View::Library);
                 self.tape = None;
+                self.mix = None;
+            }
+            // Marked while a strip is muted, or the master clipped unseen.
+            let mix = self.model.mixer();
+            let muted = Strip::ALL.into_iter().any(|s| mix.muted(s));
+            let title = match muted || self.clipped {
+                true => "Mix *",
+                false => "Mix",
+            };
+            if ui.selectable_label(self.mix.is_some(), title).clicked() {
+                self.mix = Some(self.model.view());
+                self.tape = None;
+                self.dj = None;
+                self.clipped = false;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.search_field(ui)
@@ -419,7 +448,7 @@ impl Gui {
     /// The command bar when it is open, the message, and the transport.
     fn bottom(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
-        transport::show(&mut self.model, ui, &mut self.eq_open);
+        transport::show(&mut self.model, ui);
         if matches!(self.model.input(), Input::Command(_)) {
             self.command_bar(ui);
         } else {
@@ -514,6 +543,12 @@ impl Gui {
     }
 
     fn view(&mut self, ui: &mut egui::Ui) {
+        if self.mix.is_some() {
+            for action in mixer::show(&self.model, ui) {
+                self.perform(action);
+            }
+            return;
+        }
         if self.dj.is_some() {
             let (actions, row) = dj::show(&self.model, ui, &mut self.dj_tab);
             if row.is_some() {

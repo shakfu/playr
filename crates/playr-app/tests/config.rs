@@ -119,7 +119,7 @@ fn the_file_changes_keys_and_sets_how_playback_starts() {
             config.settings.mode,
             config.settings.speed
         ),
-        (0.4, Mode::Shuffle, -3)
+        (Some(0.4), Mode::Shuffle, -3)
     );
     let keys = &config.keys;
     assert_eq!(
@@ -345,5 +345,20 @@ fn transport_text_buttons_is_the_window_s_own() {
     assert_eq!(
         Config::parse_for(Program::Gui, "[gui]\ntransport_text_buttons = 1\n").unwrap_err(),
         ["line 2: transport_text_buttons cannot be an integer"]
+    );
+}
+
+#[test]
+fn the_fader_law_is_a_top_level_setting() {
+    use playr_app::mix::Law;
+    assert_eq!(Config::default().fader, Law::Db);
+    assert_eq!(Config::parse("fader = 'cubic'").unwrap().fader, Law::Cubic);
+    assert_eq!(
+        Config::parse("fader = 'linear'").unwrap_err(),
+        ["line 1: unknown fader linear; faders: db, cubic"]
+    );
+    assert_eq!(
+        Config::parse("fader = 3").unwrap_err(),
+        ["line 1: fader cannot be an integer"]
     );
 }

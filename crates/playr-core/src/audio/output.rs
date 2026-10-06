@@ -15,6 +15,7 @@ use cpal::{
     SupportedStreamConfigRange,
 };
 
+use super::bus::{Bus, BusControl, Cue};
 use super::decode::Spec;
 use super::eq::{Eq, Gains};
 use super::meter::Meter;
@@ -102,12 +103,14 @@ pub trait Backend: Send + 'static {
     /// Chooses an output format for `src`.
     fn negotiate(&self, src: Spec) -> Result<Plan, OutputError>;
 
-    /// Starts a stream per `plan` that plays `consumer` through [`render`],
-    /// sending device events to `events`. Dropping the result stops it.
+    /// Starts a stream per `plan` that plays `consumer` and `bus` through
+    /// [`render`], sending device events to `events`. Dropping the result
+    /// stops it.
     fn start(
         &self,
         plan: Plan,
         consumer: rtrb::Consumer<f32>,
+        bus: Bus,
         shared: Arc<Shared>,
         events: Sender<DeviceEvent>,
     ) -> Result<Box<dyn Any>, OutputError>;
@@ -125,6 +128,7 @@ impl Backend for Cpal {
         &self,
         plan: Plan,
         consumer: rtrb::Consumer<f32>,
+        bus: Bus,
         shared: Arc<Shared>,
         events: Sender<DeviceEvent>,
     ) -> Result<Box<dyn Any>, OutputError> {
@@ -135,25 +139,33 @@ impl Backend for Cpal {
         };
         let device = &self.0;
         let stream = match plan.format {
-            SampleFormat::F32 => build::<f32>(device, &config, consumer, shared, events, |v| v),
+            SampleFormat::F32 => {
+                build::<f32>(device, &config, consumer, bus, shared, events, |v| v)
+            }
             SampleFormat::F64 => {
-                build::<f64>(device, &config, consumer, shared, events, |v| v as f64)
+                build::<f64>(device, &config, consumer, bus, shared, events, |v| v as f64)
             }
             // Scaled in f64 by the positive maximum, so full scale cannot wrap.
-            SampleFormat::I32 => build::<i32>(device, &config, consumer, shared, events, |v| {
-                (v.clamp(-1.0, 1.0) as f64 * i32::MAX as f64) as i32
-            }),
+            SampleFormat::I32 => {
+                build::<i32>(device, &config, consumer, bus, shared, events, |v| {
+                    (v.clamp(-1.0, 1.0) as f64 * i32::MAX as f64) as i32
+                })
+            }
             SampleFormat::I24 => {
-                build::<cpal::I24>(device, &config, consumer, shared, events, |v| {
+                build::<cpal::I24>(device, &config, consumer, bus, shared, events, |v| {
                     cpal::I24::new_unchecked((v.clamp(-1.0, 1.0) as f64 * 8_388_607.0) as i32)
                 })
             }
-            SampleFormat::I16 => build::<i16>(device, &config, consumer, shared, events, |v| {
-                (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
-            }),
-            SampleFormat::U16 => build::<u16>(device, &config, consumer, shared, events, |v| {
-                ((v.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16
-            }),
+            SampleFormat::I16 => {
+                build::<i16>(device, &config, consumer, bus, shared, events, |v| {
+                    (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+                })
+            }
+            SampleFormat::U16 => {
+                build::<u16>(device, &config, consumer, bus, shared, events, |v| {
+                    ((v.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16
+                })
+            }
             other => {
                 return Err(OutputError::Build(format!(
                     "unsupported sample format {other:?}"
@@ -355,6 +367,9 @@ pub struct Shared {
     pub frames_out: AtomicU64,
     /// Playback gain, as f32 bits.
     volume: AtomicU32,
+    /// The gain the callback reached at the end of its last call, as f32
+    /// bits. Only the callback writes it; it ramps from here to `volume`.
+    applied: AtomicU32,
     /// When set, the callback emits silence and consumes nothing.
     ///
     /// Pausing is done here rather than with `Stream::pause` because ALSA
@@ -397,8 +412,16 @@ pub struct Shared {
     momentary_bits: AtomicU32,
     /// Largest sample magnitude played since it was last taken, as f32 bits.
     peak_bits: AtomicU32,
+    /// The same of the master: the player after its volume, with the sources.
+    master_peak_bits: AtomicU32,
+    /// Callbacks whose master the recording ring had no room for.
+    pub rec_dropped: Arc<AtomicU64>,
     /// The tone control's gains, which the callback applies.
     pub eq: Gains,
+    /// The open stream's channels; 0 with none open.
+    pub out_channels: AtomicU32,
+    /// How many times the device has been lost.
+    pub lost: AtomicU64,
     /// Commands sent to the engine, and those it has acted on and published.
     pub sent: AtomicU64,
     pub taken: AtomicU64,
@@ -409,6 +432,7 @@ impl Shared {
         Shared {
             frames_out: AtomicU64::new(0),
             volume: AtomicU32::new(1.0f32.to_bits()),
+            applied: AtomicU32::new(1.0f32.to_bits()),
             paused: AtomicBool::new(false),
             priming: AtomicBool::new(false),
             position_rate: AtomicU32::new(0),
@@ -421,7 +445,11 @@ impl Shared {
             seek_target: AtomicU64::new(0),
             momentary_bits: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             peak_bits: AtomicU32::new(0),
+            master_peak_bits: AtomicU32::new(0),
+            rec_dropped: Arc::default(),
             eq: Gains::default(),
+            out_channels: AtomicU32::new(0),
+            lost: AtomicU64::new(0),
             sent: AtomicU64::new(0),
             taken: AtomicU64::new(0),
         }
@@ -436,6 +464,12 @@ impl Shared {
     /// The largest sample magnitude played since the last call, which resets it.
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed))
+    }
+
+    /// The largest magnitude of the master since the last call, which resets
+    /// it: what the device was sent, before the cue's routing.
+    pub fn take_master_peak(&self) -> f32 {
+        f32::from_bits(self.master_peak_bits.swap(0, Ordering::Relaxed))
     }
 
     pub fn volume(&self) -> f32 {
@@ -463,31 +497,37 @@ impl Default for Shared {
     }
 }
 
-/// An open output stream and the producer end of its ring buffer.
+/// An open output stream, the producer end of its ring buffer, and the end
+/// that attaches sources to its bus.
 pub struct Output {
     _stream: Box<dyn Any>,
     pub producer: rtrb::Producer<f32>,
+    pub(crate) bus: BusControl,
     pub plan: Plan,
     pub capacity: usize,
     pub shared: Arc<Shared>,
 }
 
 impl Output {
-    /// Opens a stream on `backend` per `plan`, with a two second ring.
+    /// Opens a stream on `backend` per `plan`, with a two second ring. Its
+    /// bus starts empty, and sends its sources to `home` when it closes.
     ///
     /// It plays or stays silent as `shared.paused` already says.
-    pub fn open(
+    pub(crate) fn open(
         backend: &dyn Backend,
         plan: Plan,
         shared: Arc<Shared>,
         events: Sender<DeviceEvent>,
+        home: Sender<Vec<super::bus::Attached>>,
     ) -> Result<Self, OutputError> {
         let capacity = (plan.rate * BUFFER_SECONDS) as usize * plan.channels as usize;
         let (producer, consumer) = rtrb::RingBuffer::<f32>::new(capacity);
-        let stream = backend.start(plan, consumer, shared.clone(), events)?;
+        let (bus, control) = Bus::new(Some(home));
+        let stream = backend.start(plan, consumer, bus, shared.clone(), events)?;
         Ok(Output {
             _stream: stream,
             producer,
+            bus: control,
             plan,
             capacity,
             shared,
@@ -513,10 +553,12 @@ impl Output {
 }
 
 /// Builds a cpal stream. `conv` maps a gain-applied f32 sample to the device type.
+#[allow(clippy::too_many_arguments)]
 fn build<T>(
     device: &Device,
     config: &StreamConfig,
     mut consumer: rtrb::Consumer<f32>,
+    mut bus: Bus,
     shared: Arc<Shared>,
     events: Sender<DeviceEvent>,
     conv: fn(f32) -> T,
@@ -534,6 +576,7 @@ where
                 render(
                     out,
                     &mut consumer,
+                    &mut bus,
                     &shared,
                     &mut eq,
                     &mut meter,
@@ -550,17 +593,20 @@ where
         .map_err(OutputError::build)
 }
 
-/// Fills `out` from the ring, applies the tone control, meters it, and counts
-/// the frames played.
+/// Fills `out` from the ring, applies the tone control, meters it, adds the
+/// bus's sources, and counts the frames played.
 ///
-/// The body of every output callback, so it must not lock or allocate. It
-/// emits silence while paused or priming, and on underrun rather than repeating stale
-/// samples, which would click. Metering is after the tone control and before
-/// the volume, so it describes what plays, ReplayGain and EQ included, rather
-/// than the volume setting.
+/// The body of every output callback, so it must not lock or allocate. The
+/// player is silent while paused or priming, and on underrun rather than
+/// repeating stale samples, which would click; the sources play on. Metering
+/// is the player's, after the tone control and before the volume, so it
+/// describes what plays, ReplayGain and EQ included, rather than the volume
+/// setting. With no sources the output is the player's, sample for sample.
+#[allow(clippy::too_many_arguments)]
 pub fn render<T>(
     out: &mut [T],
     consumer: &mut rtrb::Consumer<f32>,
+    bus: &mut Bus,
     shared: &Shared,
     eq: &mut Eq,
     meter: &mut Meter,
@@ -575,18 +621,27 @@ pub fn render<T>(
         }
         shared.flush_done.store(requested, Ordering::Relaxed);
     }
-    if shared.paused.load(Ordering::Relaxed) || shared.priming.load(Ordering::Relaxed) {
-        for slot in out.iter_mut() {
-            *slot = conv(0.0);
-        }
+    bus.commands();
+    let ch = channels as usize;
+    let frames = out.len() / ch;
+    let silent = shared.paused.load(Ordering::Relaxed) || shared.priming.load(Ordering::Relaxed);
+    if !bus.is_empty() || bus.recording() {
+        return mixed(out, consumer, bus, shared, eq, meter, ch, conv, !silent);
+    }
+    if silent {
+        out.iter_mut().for_each(|slot| *slot = conv(0.0));
         return;
     }
-    let gain = shared.volume();
+    // Ramped across the call, so a volume change does not step.
+    let from = f32::from_bits(shared.applied.load(Ordering::Relaxed));
+    let to = shared.volume();
+    let step = (to - from) / frames.max(1) as f32;
     eq.follow(shared.eq.get());
     // Whole frames, counted once: the engine pushes whole frames, but a pop
     // that found the ring empty and then saw a push land mid-callback would
     // start a frame on the wrong channel, and swap channels from there on.
     let filled = consumer.slots().min(out.len()) / channels as usize * channels as usize;
+    let mut master = 0.0f32;
     for (i, slot) in out.iter_mut().enumerate() {
         let s = match i < filled {
             true => consumer.pop().unwrap_or(0.0),
@@ -598,8 +653,15 @@ pub fn render<T>(
                 .momentary_bits
                 .store(lufs.to_bits(), Ordering::Relaxed);
         }
-        *slot = conv(s * gain);
+        let left = frames.saturating_sub(i / ch + 1);
+        let s = s * (to - step * left as f32);
+        master = master.max(s.abs());
+        *slot = conv(s);
     }
+    shared
+        .master_peak_bits
+        .fetch_max(master.to_bits(), Ordering::Relaxed);
+    shared.applied.store(to.to_bits(), Ordering::Relaxed);
     let peak = meter.take_peak();
     // The reader resets it to zero, so a plain store could undo a higher peak.
     // A peak is never negative or NaN, and such floats order as their bits.
@@ -609,6 +671,108 @@ pub fn render<T>(
     shared
         .frames_out
         .fetch_add(filled as u64 / channels, Ordering::Relaxed);
+}
+
+/// [`render`] with sources attached: the master is the player, silent unless
+/// `playing`, plus the sources' main, frame by frame, routed with the cue.
+/// The player's channels past the second pass through.
+#[allow(clippy::too_many_arguments)]
+fn mixed<T>(
+    out: &mut [T],
+    consumer: &mut rtrb::Consumer<f32>,
+    bus: &mut Bus,
+    shared: &Shared,
+    eq: &mut Eq,
+    meter: &mut Meter,
+    ch: usize,
+    conv: fn(f32) -> T,
+    playing: bool,
+) {
+    let frames = out.len() / ch;
+    let (from, to) = (
+        f32::from_bits(shared.applied.load(Ordering::Relaxed)),
+        shared.volume(),
+    );
+    let step = (to - from) / frames.max(1) as f32;
+    let filled = match playing {
+        true => consumer.slots().min(out.len()) / ch * ch,
+        false => 0,
+    };
+    if playing {
+        eq.follow(shared.eq.get());
+    }
+    let recording = bus.record_room(frames);
+    if bus.recording() && !recording {
+        shared.rec_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+    let mut peak = 0.0f32;
+    for (frame, o) in out.chunks_exact_mut(ch).enumerate() {
+        let mut player = [0.0f32; 2];
+        for (c, slot) in o.iter_mut().enumerate() {
+            let i = frame * ch + c;
+            let mut s = 0.0;
+            if playing {
+                s = match i < filled {
+                    true => consumer.pop().unwrap_or(0.0),
+                    false => 0.0,
+                };
+                s = eq.process(s);
+                if let Some(lufs) = meter.sample(s) {
+                    shared
+                        .momentary_bits
+                        .store(lufs.to_bits(), Ordering::Relaxed);
+                }
+                s *= to - step * frames.saturating_sub(frame + 1) as f32;
+            }
+            match c {
+                0 | 1 => player[c] = s,
+                _ => *slot = conv(s),
+            }
+        }
+        let (main, cue, route) = bus.frame(frame, frames);
+        let m = match ch {
+            1 => [player[0] + main[0], player[0] + main[1]],
+            _ => [player[0] + main[0], player[1] + main[1]],
+        };
+        peak = peak.max(m[0].abs()).max(m[1].abs());
+        if recording {
+            bus.record(m);
+        }
+        if ch == 1 {
+            o[0] = conv((m[0] + m[1]) / 2.0);
+            continue;
+        }
+        match route {
+            Cue::None => {
+                o[0] = conv(m[0]);
+                o[1] = conv(m[1]);
+            }
+            Cue::Channels { .. } if ch >= 4 => {
+                for (slot, v) in o.iter_mut().zip([m[0], m[1], cue[0], cue[1]]) {
+                    *slot = conv(v);
+                }
+            }
+            Cue::Split { swap } | Cue::Channels { swap } => {
+                let (l, r) = ((m[0] + m[1]) / 2.0, (cue[0] + cue[1]) / 2.0);
+                let (a, b) = if swap { (r, l) } else { (l, r) };
+                o[0] = conv(a);
+                o[1] = conv(b);
+            }
+        }
+    }
+    shared
+        .master_peak_bits
+        .fetch_max(peak.to_bits(), Ordering::Relaxed);
+    if playing {
+        shared.applied.store(to.to_bits(), Ordering::Relaxed);
+        let peak = meter.take_peak();
+        shared
+            .peak_bits
+            .fetch_max(peak.to_bits(), Ordering::Relaxed);
+        shared
+            .frames_out
+            .fetch_add(filled as u64 / ch as u64, Ordering::Relaxed);
+    }
 }
 
 /// Maps interleaved audio from `src_ch` channels to `dst_ch`, appending to `out`.

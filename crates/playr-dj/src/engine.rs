@@ -7,7 +7,7 @@ use std::sync::Arc;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::deck::{Deck, Range, HOT_CUES};
-use crate::mixer::{Mixer, Setting};
+use crate::mixer::{CueOut, Mixer, Setting};
 use crate::track::Track;
 use crate::{Error, Side};
 
@@ -176,7 +176,8 @@ impl Status {
         load(&self.xfade)
     }
 
-    /// The largest output magnitude since the last call, which resets it.
+    /// The largest magnitude of the main mix since the last call, which
+    /// resets it. Measured before the master volume.
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
     }
@@ -227,13 +228,26 @@ impl Engine {
     pub fn process_channels(&mut self, out: &mut [f32], channels: usize) {
         self.commands();
         self.mixer.process_channels(out, channels);
+        self.publish();
+    }
+
+    /// As [`Engine::process`], filling the main mix and the cue apart, as
+    /// [`Mixer::process_buses`] does, for a caller that routes them.
+    pub fn process_buses(&mut self, main: &mut [f32], cue: &mut [f32]) -> Option<(CueOut, bool)> {
+        self.commands();
+        let routed = self.mixer.process_buses(main, cue);
+        self.publish();
+        routed
+    }
+
+    fn publish(&mut self) {
         for side in [Side::A, Side::B] {
             self.status.deck(side).publish(self.mixer.deck(side));
         }
         store(&self.status.xfade, self.mixer.xfade());
         // The reader resets it, so a plain store could undo a higher peak.
         // A magnitude is never negative, and such floats order as their bits.
-        let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let peak = self.mixer.take_peak();
         self.status
             .peak
             .fetch_max(peak.to_bits(), Ordering::Relaxed);

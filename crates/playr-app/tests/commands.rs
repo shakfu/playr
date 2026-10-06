@@ -1402,6 +1402,7 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
     for (text, action) in [
         ("tape load", T::Load(None)),
         ("tape load 3", T::Load(Some(3))),
+        ("tape take", T::Take),
         ("tape play", T::Play),
         ("tape stop", T::Stop),
         ("tape reset", T::Reset),
@@ -1562,5 +1563,48 @@ fn dj_commands_parse_in_any_view_and_round_trip() {
     ] {
         let got = parse(text, Library).unwrap_err();
         assert!(got.contains(error), "{text}: {got}");
+    }
+}
+
+#[test]
+fn mix_commands_parse_in_any_view_and_round_trip() {
+    use playr_app::mix::{Law, MixAction as M, Strip};
+    for (text, action) in [
+        ("mix", M::Show),
+        ("mix tape 80", M::Set(Strip::Tape, 0.8)),
+        ("mix decks -10", M::By(Strip::Decks, -0.1)),
+        ("mix headphones +5", M::By(Strip::Headphones, 0.05)),
+        ("mix master 0", M::Set(Strip::Master, 0.0)),
+        ("mix player mute", M::Mute(Strip::Player, None)),
+        ("mix player mute on", M::Mute(Strip::Player, Some(true))),
+        ("mix master mute off", M::Mute(Strip::Master, Some(false))),
+        ("mix law", M::Law(None)),
+        ("mix law cubic", M::Law(Some(Law::Cubic))),
+        ("mix law db", M::Law(Some(Law::Db))),
+        ("mix rec", M::Record),
+    ] {
+        let action = Action::Mix(action);
+        for view in [Library, Sampler] {
+            assert_eq!(parse(text, view), Ok(action.clone()), "{text}");
+        }
+        assert_eq!(line(&action, None), text);
+    }
+    assert_eq!(
+        lib("mix tape =60"),
+        Ok(Action::Mix(M::Set(Strip::Tape, 0.6)))
+    );
+    for (text, error) in [
+        ("mix tape 101", "tape is 0 to 100"),
+        ("mix tape =-5", "tape is 0 to 100"),
+        ("mix tape loud", "not a percentage: loud"),
+        ("mix tape +inf", "not a percentage: inf"),
+        ("mix tape nan", "not a percentage: nan"),
+        ("mix sampler 50", "usage: :mix"),
+        ("mix tape", "usage: :mix"),
+        ("mix tape mute maybe", "usage: :mix"),
+        ("mix law linear", "usage: :mix"),
+    ] {
+        let got = lib(text).unwrap_err();
+        assert!(got.starts_with(error), "{text}: {got}");
     }
 }

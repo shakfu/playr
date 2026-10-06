@@ -85,7 +85,7 @@ pub fn allowed(action: &Action) -> bool {
         | TogglePause | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | StopAfter
         | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | SetEq(..)
         | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
-        | UndoMark | Undo | Redo | ClearMarks | NextMark | PrevMark | Theme(_) => true,
+        | UndoMark | Undo | Redo | ClearMarks | NextMark | PrevMark | Theme(_) | Mix(_) => true,
     }
 }
 
@@ -152,6 +152,7 @@ pub fn screen(model: &Model) -> Value {
         "duration": status.duration.map(seconds),
         "marks": snapshot.marks.iter().copied().map(seconds).collect::<Vec<_>>(),
         "volume": tenths(snapshot.volume * 100.0),
+        "muted": model.mixer().muted(playr_app::mix::Strip::Master),
         "speed": status.semitones,
         "speed_label": format!("{:.2}x", speed_for(status.semitones)),
         "mode": mode_name(status.mode),

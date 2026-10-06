@@ -4,13 +4,11 @@
 //! - [`Mixer`]: the decks, sync and the mix; any thread, no device.
 //! - [`Engine`]: the mixer in the audio callback, fed by a command ring.
 //! - [`Handle`]: the commands and status, from any other thread.
-//! - [`device`]: the engine's own cpal output stream.
 //!
-//! Audio is interleaved `f32` at the device's rate; the caller decodes and
-//! resamples. The design is in `docs/dev/dj-engine.md`.
+//! Audio is interleaved `f32` at the stream's rate; the caller decodes,
+//! resamples, and plays [`Engine`] on its stream. The design is in `docs/dev/dj-engine.md`.
 
 mod deck;
-pub mod device;
 mod engine;
 mod fx;
 mod mixer;
@@ -52,11 +50,6 @@ pub enum Error {
     Grid,
     /// The command ring is full.
     Full,
-    /// The device cannot play at this rate; resample to [`device::rate`].
-    Rate(u32),
-    NoConfig,
-    Busy,
-    Device(String),
 }
 
 impl std::fmt::Display for Error {
@@ -66,10 +59,6 @@ impl std::fmt::Display for Error {
             Error::Length => write!(f, "a track needs a whole number of frames"),
             Error::Grid => write!(f, "a grid needs a positive tempo and a finite first beat"),
             Error::Full => write!(f, "the DJ engine's command ring is full"),
-            Error::Rate(r) => write!(f, "the output device cannot play {r} Hz"),
-            Error::NoConfig => write!(f, "the output device offers no usable format"),
-            Error::Busy => write!(f, "the output device is busy"),
-            Error::Device(s) => write!(f, "could not open audio stream: {s}"),
         }
     }
 }

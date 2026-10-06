@@ -237,6 +237,7 @@ pub const LOOP_MENU: &[Control] = &[control("Clear loops", Action::ClearLoops)];
 /// `Action::Tape` with their values.
 pub const TAPE_BAR: &[Control] = &[
     control("Load range", Action::Tape(TapeAction::Load(None))),
+    control("Take", Action::Tape(TapeAction::Take)),
     control("Play tape", Action::Tape(TapeAction::Play)),
     control("Stop tape", Action::Tape(TapeAction::Stop)),
     control("Reset", Action::Tape(TapeAction::Reset)),
@@ -305,7 +306,11 @@ pub const TABLES: &[&[Control]] = &[
 pub const WITH_VALUES: &[(&str, &str)] = &[
     ("SetVolume", "the volume slider"),
     ("SetSpeed", "the speed slider"),
-    ("SetEq", "the sliders in the EQ dialog"),
+    (
+        "SetEq",
+        "the sliders under the EQ button, and in the Mix tab",
+    ),
+    ("Mix", "the Mix tab's faders, mutes, Record and law"),
     ("SetMode", "the mode menu"),
     ("SetReplayGain", "Playback, ReplayGain"),
     (

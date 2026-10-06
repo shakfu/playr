@@ -6,6 +6,17 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
+- `:mix rec` records the master, everything playr plays, before the headphone cue is routed, to a 32-bit float stereo WAV under the samples directory, and adds it to the library once stopped. Overs are kept. The model holds a meter for each strip after its fader, and one for the measured master. Library API: `Sources::record`, `record::{MasterRecording, Recorded}`, `Session::start_master`, `stop_master`, `master_recording` and `master_done`, `Player::take_master_peak`, `MixAction::Record`, `Snapshot::meters`, `Mix::fader_gain`.
+
+- `:tape take`, or Take in the Tape tab, loads the sampler's range and hands the player over to the tape, as a deck's Take does: from the player's position inside the range, or at the range's start once the player reaches it. Past the range it is refused. Library API: `TapeAction::Take`, `Setting::Head` in `playr-looper`.
+
+- A mixer. The master volume now scales the tape as well as the player and the decks, and each of the three has a fader and a mute. The DJ headphone cue has its own fader, which the master leaves alone; before, the master scaled it. The player's volume ramps across each audio callback rather than stepping at its start. The decks' level meter now reads the main mix before the master, as the player's and the tape's do. The tape's recording ignores the faders. The window's Mix tab has a strip each for the player, the tape, the decks, the headphones and the master: a fader, its level in dB, a meter after the fader and a mute, with the EQ on the player's strip and Record and the law on the master's. The transport's EQ button opens a popup in place of its dialog. The server plays only the player, so its page gains a mute beside the volume, and OSC `/playr/mute`. Library API: `playr_app::mix`, `Action::Mix`, `Frontend::mix`, `Model::mixer`, `Message::Mix` and `FaderLaw`, `Persist::Mix`; `Handle::set_volume` and `Cmd::Volume` in `playr-looper`; `Setting::Headphones` and `Mixer::take_peak` in `playr-dj`. The design is in `docs/dev/mixer.md`.
+
+  ```
+  :mix                        :mix tape 80          :mix decks -10
+  :mix player mute [on|off]   :mix headphones 70    :mix law [db|cubic]
+  ```
+
 - `:mark-slices`, or Sampler, Slice, Mark slice starts, marks each planned slice's start and keeps the marks there are. A plan is lost when the track changes; marks are kept in the library, and `:slice marks` plans them again. One undo takes them all back. Library API: `Action::MarkSlices`.
 
 - `:in TIME` and `:out TIME` set one end of the range at a time rather than the playhead; `:zoom N` zooms to step N. Library API: `Action::RangeIn` and `Action::RangeOut` take an `Option<Duration>`, `Zoom::To`.
@@ -59,6 +70,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Changed
 
+- The tape and the DJ decks play on the player's output stream, summed with it, instead of opening streams of their own. They no longer need a second stream, which a device held exclusively, such as an ALSA `hw:` device, refused; this is not yet tried on such a device. While the tape or a deck is loaded, a track at another rate is resampled to the stream's rather than reopening it, which would cut the others off; the player alone still plays each track at its own rate. Starting a deck no longer pauses the player; the tape's Play and both Takes still do. The headphone cue's routing takes in everything playing, so in Split the player is in the left ear with the main mix. `:dj cue-out 3-4` reopens the stream with 4 channels where the device has them. Library API: `playr_core::audio::bus` (`Source`, `Cue`, `Bus`, `BusControl`), `Player::sources`, `Sources`, `Attachment`; `Backend::start` and `output::render` take the bus; `Engine::process_buses` and `Mixer::process_buses` in `playr-dj`; `playr_looper::device` and `playr_dj::device` are gone. The design is phase 3 in `docs/dev/mixer.md`.
+
+- Volume faders follow a decibel law: each 1% of travel is 0.6 dB, so 50% is -30 dB, not -6 dB. Linear amplitude spent the top half of the slider on the first 6 dB. `fader = "cubic"` in `settings.toml` uses the position cubed instead, as PulseAudio does, and `:mix law` switches between the two for the session. The setting `master` sets the master's position. `volume`, which set a gain, is still read and plays at the same level; a file setting both is an error. A remembered volume converts once to a position at the same level. Under `db`, one press of `-` from the top is now 3 dB, not 0.4 dB.
+
 - The window's Range starts here and Range ends here set one end, as `i` and `o` do. They set both before, putting the other end at the track's start or end, so the menu and the keys left different ranges. The zoom slider performs `:zoom N`, so it goes through the same path as every other control. Library API: `DraftAnswer::of_key`.
 
 - Library API: planned slices are edited in core, by `Plan::move_start`, `Plan::join` and `Plan::index_of`, so an edited plan and one made again from it follow one rule. `samples::spans_from` is no longer public. `Session::revision` counts changes to the tracks, their order and their measurements. `playr_server::web::check` returns the action it checked, which `Model::run_checked` performs.
@@ -80,6 +95,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 - Undo brings back an edited plan that was discarded or replaced by a new cut, such as one from the window's Sensitivity slider. Before, the starts set by hand were lost with no way back. Making or replacing an unedited plan is still not a step: undo would put back a cut a later one replaced.
 
 ### Fixed
+
+- On a phone, the server's page scrolled sideways. With the Queue tab, the four tabs needed 387px of a 374px row; they now shrink, and a long count is cut off. The selection's toolbar did not wrap, so its three buttons widened the page to 546px, and a confirm dialog opened centred on that width with Yes off screen. `make page-test` had failed since the server's token: the fixture took the address printed into a pipe, whose token is `...`. It now reads the token file, and checks each view's width.
 
 - Digits typed into a number field in the window, such as the sampler's slice count, ran the keys bound to them instead, which show views and sections. Only the search, command and name fields held the keys; any field being typed into now does.
 

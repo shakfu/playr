@@ -54,6 +54,8 @@ Three layers, so the DSP is testable without a device:
 
 ## Output device
 
+Superseded 2026-10-06: the engine plays on the player's stream as a source of its bus; see "Phase 3: one output stream" in `docs/dev/mixer.md`. The text below is the design as built before.
+
 Proposed: the looper opens its own cpal output stream on the device the player uses, and `playr-app` pauses the player while the looper plays.
 
 Alternative: mix the looper into the player's `render` callback (`crates/playr-core/src/audio/output.rs:561`). One stream, so no device conflict, and the looper would pass through the EQ, the meter and the volume. Against: it puts a second source in the most timing-sensitive code in playr, and `playr-core` would depend on the looper or grow a generic source hook.

@@ -19,6 +19,7 @@ pub mod instance;
 pub mod media;
 pub mod message;
 pub mod meter;
+pub mod mix;
 pub mod model;
 pub mod persist;
 pub mod sampler;

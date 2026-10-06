@@ -71,7 +71,8 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:stop [after \| in TIME \| in off]`   | `x`                     | now, after this track, or in TIME           |
 | `:restart`                            | `R`                     | play from the range's start, or the track's |
 | `:seek TIME \| +TIME \| -TIME`        | left, right, with shift | seek to a time, or by one: 1:23, +10        |
-| `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the volume, or change it: 60, +10       |
+| `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the master, or change it: 60, +10       |
+| `:mix [STRIP N\|mute] \| law \| rec` |                         | faders and mutes; `:mix` alone shows them   |
 | `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | set varispeed in semitones, or change it    |
 | `:eq BAND =N \| +N \| -N \| flat`     |                         | bass, mid or treble, -12 to 12 dB           |
 | `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |

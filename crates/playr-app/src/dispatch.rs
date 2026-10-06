@@ -21,6 +21,7 @@ use playr_core::wave::Peaks;
 
 use crate::action::{Action, Keymap, Slicing, Zoom};
 use crate::message::Message;
+use crate::mix::{MixAction, Strip};
 use crate::sampler::{self, Before, Sampler, Selected};
 use crate::{Display, Theme, View};
 
@@ -227,6 +228,8 @@ pub trait Frontend {
     fn tape(&mut self) -> &mut crate::tape::Deck;
     /// The DJ decks' state.
     fn dj(&mut self) -> &mut crate::dj::Decks;
+    /// The mixer's faders.
+    fn mix(&mut self) -> &mut crate::mix::Mix;
 }
 
 /// What to do with the tracks a `:sql` statement names, once it finishes.
@@ -520,8 +523,8 @@ fn act(action: Action, f: &mut impl Frontend) {
             let at = snapped(f, at);
             f.session().send(Cmd::Seek(at));
         }
-        Action::VolumeBy(delta) => f.session().volume_by(delta),
-        Action::SetVolume(v) => f.session().send(Cmd::SetVolume(v)),
+        Action::VolumeBy(delta) => crate::mix::act(f, MixAction::By(Strip::Master, delta)),
+        Action::SetVolume(v) => crate::mix::act(f, MixAction::Set(Strip::Master, v)),
         Action::SpeedBy(semitones) => f.session().send(Cmd::SpeedBy(semitones)),
         Action::SetSpeed(semitones) => f.session().send(Cmd::SetSpeed(semitones)),
         Action::SetEq(band, db) => set_eq(f, &[(band, db)]),
@@ -826,6 +829,7 @@ fn act(action: Action, f: &mut impl Frontend) {
         },
         Action::Tape(t) => crate::tape::act(f, t),
         Action::Dj(d) => crate::dj::act(f, d),
+        Action::Mix(m) => crate::mix::act(f, m),
         Action::MarkSlices => mark_slices(f),
         Action::DiscardSlices => {
             // Edits set by hand would otherwise be lost for good.

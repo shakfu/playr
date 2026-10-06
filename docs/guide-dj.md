@@ -8,7 +8,7 @@ playr has two decks and a mixer. Each deck plays a library track at its own rate
 
 - **Headphones.** Without a second output, the headphone cue shares your one stereo output: the main mix in the left ear, the cued deck in the right. See [Headphone cue](#headphone-cue).
 
-- **The player pauses.** The decks play on their own audio stream, on the player's device. Starting a deck pauses the player, as the tape does. A device held exclusively, such as an ALSA `hw:` device, cannot take a second stream, and the decks fail to open on it. If the device goes away, the decks close; load them again.
+- **The player plays on.** The decks play on the player's own output stream, mixed with it, so starting a deck leaves the player playing; pause it, or mute it in the Mixer. Take pauses the player, since it moves the player's track onto a deck. If the device goes away, the decks close; load them again.
 
 ## The tab
 
@@ -51,7 +51,7 @@ A library or selection row's right-click menu has **Load to deck A** and **Load 
 
 **Take** on a deck moves the track the player is playing onto it, and carries on from where the player is. The player plays on while the deck reads the track, which takes a few seconds. Then the deck starts at the player's position and the player pauses. In the terminal, `:dj a take`.
 
-- **Carried over:** the speed, as the rate fader in the narrowest range that holds it, and the ReplayGain the player applied, as the trim. The volume slider is the decks' master already.
+- **Carried over:** the speed, as the rate fader in the narrowest range that holds it, and the ReplayGain the player applied, as the trim. The master volume scales the decks, as it scales the player.
 
 - **The crossfader** moves to the taking deck if the other deck is silent; at its centre it would take 3 dB.
 
@@ -187,7 +187,7 @@ The **mixer**:
 
 - **Curve Smooth, Sharp.** Smooth keeps the level constant across the crossfader's travel, for blends. Sharp holds both decks at full level and fades one out only over the last 5% of the travel, for cuts.
 
-The main mix passes a soft clip, which leaves levels under `dj_knee` in `settings.toml`, -0.9 dBFS by default, untouched. playr's volume slider is the decks' master volume, after the clip; it scales the headphone cue too.
+The main mix passes a soft clip, which leaves levels under `dj_knee` in `settings.toml`, -0.9 dBFS by default, untouched. playr's master volume and the decks' fader in the mixer apply after the clip, to the main mix only. The headphone cue has its own fader, `:mix headphones`, which the master leaves alone; see Mixer in the README.
 
 ### Headphone cue
 
@@ -196,7 +196,7 @@ The main mix passes a soft clip, which leaves levels under `dj_knee` in `setting
 | **Split** | left: the main mix in mono; right: the cued deck in mono | the same, on channels 1 and 2 |
 | **3-4** | refused | channels 1 and 2: the main mix in stereo; channels 3 and 4: the cued deck in stereo |
 
-Split puts the main mix and the cue on one stereo output, so it suits practising on headphones: speakers on that output would play the split too. 3-4 suits an audio interface with two outputs: the room on outputs 1 and 2, headphones on 3 and 4. The decks open a 4-channel stream whenever the device offers one. 3-4 has not been tried on real interfaces yet.
+Split puts the main mix and the cue on one stereo output, so it suits practising on headphones: speakers on that output would play the split too. 3-4 suits an audio interface with two outputs: the room on outputs 1 and 2, headphones on 3 and 4. Choosing 3-4 reopens the output with 4 channels where the device has them, which interrupts whatever plays once; set it before a set. The cue's routing takes in everything playing: in Split, the player and the tape are in the left ear with the main mix. 3-4 has not been tried on real interfaces yet.
 
 ## A first mix
 

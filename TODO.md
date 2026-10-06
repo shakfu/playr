@@ -24,7 +24,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Mixer
 
-- [ ] **A mixer section, with the volume as master.** The player, the tape and the DJ decks each play on their own stream, and only the player follows the volume slider. While the tape or a deck plays, the player is paused, so the slider does nothing. The DJ engine's master volume follows the slider; the looper has none. The section holds the master volume, applied to the main mix of all three with the player's percent-to-gain law, and a level per source. The headphone cue keeps its own level, as on a DJ mixer, so turning the room down leaves the headphones alone. The level meter reads only the player; the decks already measure their peak, in `Status::take_peak`. Open: whether the section is a panel of its own, part of the transport, or the DJ tab's mixer grown; and whether the three streams become one, which both engines' designs rejected for the player's 2 s ring (open question 6 in `docs/dev/dj-engine.md`).
+- [ ] **A headphone meter, and a frame-exact tape Take.** The mixer is built (`docs/dev/mixer.md`, phases 1 to 3). Left: the cue has no meter of its own, and the tape's Take is checked each refresh, about 16 ms, rather than on the frame, which needs a hook in the bus's callback.
 
 ## Medium
 

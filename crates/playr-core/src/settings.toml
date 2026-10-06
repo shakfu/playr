@@ -4,8 +4,11 @@
 # lines it changes. The format is described in README.md, under Configuration.
 # The theme and key bindings are in crates/playr-app/src/keys.toml.
 
-# Percent, 0 to 100.
-volume = 100
+# The master volume's fader position, in percent, 0 to 100; unset is 100.
+# How a position maps to a level is the fader setting's law. It replaces
+# volume, a level in percent of amplitude, which is still read when master is
+# unset. Setting both is an error.
+# master = 100
 # normal, shuffle, repeat or repeat-one.
 mode = "normal"
 # Semitones, -12 to 12.
@@ -62,11 +65,11 @@ keep_queue = true
 # selection first changes: ask, overwrite, append (put its tracks back first),
 # or off, which keeps no draft.
 draft = "ask"
-# Session values to remember in the library between runs: eq, volume, mode,
-# replaygain, theme, columns, sort and history, the : command lines. While a
-# name is listed, its remembered value wins over the setting above; columns
-# and sort are remembered for each program. Nothing is remembered without a
-# library.
+# Session values to remember in the library between runs: eq, volume (the
+# master), mode, replaygain, theme, columns, sort, history (the : command
+# lines) and mix (the other faders and every mute). While a name is listed,
+# its remembered value wins over the setting above; columns and sort are
+# remembered for each program. Nothing is remembered without a library.
 persist = []
 
 # An extension runs a program that is not part of playr, so each is off until

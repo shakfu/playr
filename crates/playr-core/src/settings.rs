@@ -28,7 +28,7 @@ pub const DEFAULT_SETTINGS: &str = include_str!("settings.toml");
 /// Nothing here is checked by the core: a frontend validates its own table
 /// when it runs, so a mistake inside `[gui]` is reported by the window and
 /// not by the terminal.
-pub const FRONTEND_TABLES: &[&str] = &["keys", "theme", "terminal", "gui", "server"];
+pub const FRONTEND_TABLES: &[&str] = &["keys", "theme", "fader", "terminal", "gui", "server"];
 
 /// `convert-with-moss` under `[extensions]`: `:convert`, which runs
 /// ConvertWithMoss.
@@ -42,8 +42,11 @@ pub struct ConvertWithMoss {
 /// What the settings file sets for the core.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
-    /// From 0 to 1.
-    pub volume: f32,
+    /// The master's fader position, from 0 to 1.
+    pub master: Option<f32>,
+    /// The key `master` replaced: a linear gain, from 0 to 1. A frontend
+    /// converts it with its gain law when `master` is unset.
+    pub volume: Option<f32>,
     pub mode: Mode,
     /// What plays once the queued tracks have.
     pub after_queue: AfterQueue,
@@ -119,10 +122,12 @@ pub enum Persist {
     Sort,
     /// `:` command lines, shared by every program.
     History,
+    /// The mixer's faders and mutes, but the master's level, which is `Volume`.
+    Mix,
 }
 
 impl Persist {
-    pub const NAMES: [(&'static str, Persist); 8] = [
+    pub const NAMES: [(&'static str, Persist); 9] = [
         ("eq", Persist::Eq),
         ("volume", Persist::Volume),
         ("mode", Persist::Mode),
@@ -131,6 +136,7 @@ impl Persist {
         ("columns", Persist::Columns),
         ("sort", Persist::Sort),
         ("history", Persist::History),
+        ("mix", Persist::Mix),
     ];
 
     pub fn name(self) -> &'static str {
@@ -145,7 +151,8 @@ impl Persist {
 impl Default for Settings {
     fn default() -> Self {
         let mut settings = Settings {
-            volume: 1.0,
+            master: None,
+            volume: None,
             mode: Mode::Normal,
             after_queue: AfterQueue::Resume,
             speed: 0,
@@ -308,6 +315,8 @@ impl Settings {
             }
         };
         let mut named = Vec::new();
+        // Where `volume` and `master` are, to refuse a file with both.
+        let (mut volume_at, mut master_at) = (None, None);
         for (name, value) in table {
             let at = value.span().start;
             match (name.get_ref().as_ref(), value.get_ref()) {
@@ -323,8 +332,18 @@ impl Settings {
                     ),
                 ),
                 ("volume", v) => match number(v) {
-                    Some(n) if (0.0..=100.0).contains(&n) => self.volume = (n / 100.0) as f32,
+                    Some(n) if (0.0..=100.0).contains(&n) => {
+                        self.volume = Some((n / 100.0) as f32);
+                        volume_at = Some(at);
+                    }
                     _ => errors.add(at, "volume is a number from 0 to 100"),
+                },
+                ("master", v) => match number(v) {
+                    Some(n) if (0.0..=100.0).contains(&n) => {
+                        self.master = Some((n / 100.0) as f32);
+                        master_at = Some(at);
+                    }
+                    _ => errors.add(at, "master is a number from 0 to 100"),
                 },
                 ("mode", DeValue::String(s)) => {
                     match Mode::NAMES.iter().find(|m| m.0.eq_ignore_ascii_case(s)) {
@@ -470,6 +489,12 @@ impl Settings {
                 ) => errors.add(at, format!("{} cannot be {}", name.get_ref(), kind(v))),
                 (other, _) => errors.add(name.span().start, format!("unknown setting: {other}")),
             }
+        }
+        if let (Some(v), Some(m)) = (volume_at, master_at) {
+            errors.add(
+                v.max(m),
+                "volume and master are both set; master replaces volume",
+            );
         }
         (named, errors)
     }

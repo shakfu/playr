@@ -19,7 +19,7 @@ import json
 import sys
 
 import py2tosc
-from py2tosc import Conversion, Orientation, TriggerCondition, ui
+from py2tosc import ButtonType, Conversion, Orientation, TriggerCondition, ui
 
 #: A tablet in landscape.
 FRAME = (0, 0, 1024, 768)
@@ -134,7 +134,22 @@ def build(playlists: int) -> py2tosc.Document:
         name="transport",
     )
     settings = ui.column(
-        captioned(fader("volume", mirrors("/playr/volume")), "Volume", 20),
+        ui.row(
+            captioned(fader("volume", mirrors("/playr/volume")), "Volume", 20),
+            captioned(
+                py2tosc.button(
+                    name="mute",
+                    color=ACCENT,
+                    button_type=ButtonType.TOGGLE_PRESS,
+                    messages=[mirrors("/playr/mute")],
+                ),
+                "Mute",
+                20,
+            ),
+            sizes=(5, 1),
+            gap=GAP,
+            name="volume row",
+        ),
         captioned(
             fader(
                 "speed",

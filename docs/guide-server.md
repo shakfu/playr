@@ -84,7 +84,7 @@ location / {
 
 - **Tablet:** the same, without the album column.
 
-- **Phone:** tap a row to move the cursor, tap it again to play. `...` opens a row's menu, `-` or `+` selects a track, and More shows volume, speed and mode.
+- **Phone:** tap a row to move the cursor, tap it again to play. `...` opens a row's menu, `-` or `+` selects a track, and More shows volume and its mute, speed and mode.
 
 ## OSC and TouchOSC
 

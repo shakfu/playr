@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use playr_core::audio::bus::Bus;
 use playr_core::audio::eq::Eq;
 use playr_core::audio::meter::Meter;
 use playr_core::audio::output::{render, Shared};
@@ -17,6 +18,7 @@ fn callback(
     render(
         out,
         consumer,
+        &mut Bus::idle(),
         shared,
         &mut Eq::new(8000, 2),
         meter,
@@ -128,6 +130,7 @@ fn the_callback_applies_the_tone_control_the_player_sets() {
     render(
         &mut out,
         &mut consumer,
+        &mut Bus::idle(),
         &shared,
         &mut eq,
         &mut meter,
@@ -136,4 +139,26 @@ fn the_callback_applies_the_tone_control_the_player_sets() {
     );
     let last = out[62].abs();
     assert!(last < 0.3, "{last}");
+}
+
+/// A volume change ramps across one callback, so it does not step, and
+/// holds from the next.
+#[test]
+fn a_volume_change_ramps_across_a_callback() {
+    let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
+    let shared = Shared::new();
+    let mut meter = Meter::new(8000, 2);
+    for _ in 0..16 {
+        producer.push(1.0).unwrap();
+    }
+    shared.set_volume(0.2);
+    let mut out = [0.0f32; 8];
+    callback(&mut out, &mut consumer, &shared, &mut meter);
+    // Four frames from 1 to 0.2: both channels of a frame alike.
+    let want = [0.8, 0.6, 0.4, 0.2];
+    for (frame, w) in out.chunks(2).zip(want) {
+        assert!(frame.iter().all(|s| (s - w).abs() < 1e-6), "{out:?}");
+    }
+    callback(&mut out, &mut consumer, &shared, &mut meter);
+    assert!(out.iter().all(|s| (s - 0.2).abs() < 1e-6), "{out:?}");
 }

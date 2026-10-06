@@ -105,9 +105,9 @@ pub enum Action {
     /// Seek this many seconds; negative is back.
     SeekBy(i64),
     SeekTo(Duration),
-    /// Change the volume by this fraction of full.
+    /// Move the master fader by this fraction of its travel.
     VolumeBy(f32),
-    /// Set the volume, from 0 to 1.
+    /// Set the master fader's position, from 0 to 1.
     SetVolume(f32),
     SpeedBy(i32),
     SetSpeed(i32),
@@ -206,6 +206,8 @@ pub enum Action {
     Tape(crate::tape::TapeAction),
     /// Drive the DJ decks.
     Dj(crate::dj::DjAction),
+    /// A `:mix` command.
+    Mix(crate::mix::MixAction),
     /// Draw in these colours.
     Theme(crate::Theme),
     /// Show these columns, in this order, until playr exits.

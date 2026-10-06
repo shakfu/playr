@@ -312,7 +312,8 @@ fn the_command_bar_completes_with_tab_and_recalls_with_up() {
     harness.run_steps(2);
     harness.key_press(egui::Key::Enter);
     harness.run_steps(2);
-    assert!((model(&harness).session().player().volume() - 0.4).abs() < 1e-3);
+    let want = playr_app::mix::Law::Db.gain(0.4);
+    assert!((model(&harness).session().player().volume() - want).abs() < 1e-6);
 
     typing(&mut harness, ":");
     harness.run_steps(2);
@@ -1347,6 +1348,89 @@ fn the_eq_button_opens_a_dialog_whose_sliders_set_bands() {
     button(&harness);
     harness.run_steps(2);
     assert_eq!(slider(&harness, "bass"), None);
+}
+
+#[test]
+fn the_mix_tab_sets_faders_mutes_records_and_the_law() {
+    use playr_app::mix::{Law, Strip};
+    let (mut harness, dir) = window();
+    harness
+        .state_mut()
+        .model_mut()
+        .session_mut()
+        .set_samples_dir(dir.path().join("samples"));
+    harness.run_steps(2);
+    harness.get_by_label("Mix").click();
+    harness.run_steps(2);
+
+    // A press at a fader's bottom takes it to the bottom.
+    let tape = harness
+        .query_all_by_label("tape")
+        .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Slider)
+        .map(|n| n.rect())
+        .unwrap();
+    let at = tape.center_bottom() - egui::vec2(0.0, 1.0);
+    harness.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+    harness.run_steps(2);
+    let mix = model(&harness).mixer().clone();
+    assert_eq!(mix.level(Strip::Tape), 0.0);
+    assert_eq!(mix.level(Strip::Decks), 1.0);
+
+    // A mute marks the tab, so it shows from any other.
+    harness.get_by_label("mute decks").click();
+    harness.run_steps(2);
+    assert!(model(&harness).mixer().muted(Strip::Decks));
+    harness.get_by_label("Mix *");
+    harness.get_by_label("cubic").click();
+    harness.run_steps(2);
+    assert_eq!(model(&harness).mixer().law(), Law::Cubic);
+
+    harness.get_by_label("Record").click();
+    harness.run_steps(2);
+    let path = dir.path().join("samples/master/master.wav");
+    assert_eq!(
+        model(&harness).message(),
+        Some(&Message::MasterRecording(path))
+    );
+    harness.get_by_label("Stop recording").click();
+    harness.run_steps(2);
+    assert_eq!(model(&harness).message(), Some(&Message::MasterStopping));
+}
+
+#[test]
+fn the_mix_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 592.0));
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = smallest(dir.path(), "1", false);
+    harness.get_by_label("Mix").click();
+    harness.run_steps(2);
+    for label in [
+        "master",
+        "player",
+        "tape",
+        "decks",
+        "headphones",
+        "bass",
+        "treble",
+        "mute headphones",
+        "Record",
+        "cubic",
+    ] {
+        harness.get_by_label(label);
+    }
+    assert_fits(&harness, window, "the Mix tab");
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(2);
+    assert_eq!(harness.state().model().view(), View::Queue);
+    assert!(harness.query_by_label("mute headphones").is_none());
 }
 
 #[test]

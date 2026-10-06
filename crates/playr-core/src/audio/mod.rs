@@ -5,6 +5,7 @@
 //! The cpal callback drains that ring on the realtime thread and touches
 //! nothing but atomics.
 
+pub mod bus;
 pub mod convert;
 pub mod decode;
 pub mod eq;
@@ -13,10 +14,11 @@ pub mod meter;
 pub mod opus;
 pub mod order;
 pub mod output;
+pub mod record;
 pub mod resample;
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -273,7 +275,22 @@ enum Msg {
     /// Which tracks are queued changed; the list did not.
     Relabel(List),
     Cmd(Cmd),
+    /// A source to play beside the player, the id it is detached by, and
+    /// the rate to open the stream at when none is open.
+    Attach(u64, u32, Box<dyn bus::Source>),
+    Detach(u64),
+    /// The rate a source wanting this one must play at, answered on the sender.
+    Rate(u32, Sender<u32>),
+    /// At least this many output channels, where the device has them; the
+    /// stream's channels after, answered on the sender.
+    Channels(u16, Sender<u16>),
+    /// Record the master to this file; answered with where the result comes.
+    Record(PathBuf, Sender<Recording>),
+    StopRecord,
 }
+
+/// The engine's answer to a recording asked for: where its result comes.
+type Recording = Result<record::Done, String>;
 
 /// A queue and which of its tracks the listener queued, as [`Status`] holds them.
 type List = (Arc<[PathBuf]>, Arc<[bool]>);
@@ -289,6 +306,123 @@ pub struct Player {
     pending: Arc<Pending>,
     events: Events,
     handle: Option<std::thread::JoinHandle<()>>,
+    sources: Sources,
+}
+
+/// Attaches sources to a player's output stream, from any thread. Cloned
+/// freely; every clone reaches the same player.
+#[derive(Clone)]
+pub struct Sources {
+    tx: Sender<Msg>,
+    status: Arc<Mutex<Status>>,
+    shared: Arc<Shared>,
+    /// The id the last attached source took.
+    ids: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Sources {
+    /// Plays `source` beside the player, summed into the same stream, until
+    /// the attachment is dropped or [`Sources::detach`]. It must run at
+    /// [`Sources::rate_for`]'s rate. A stream opens at `rate` if none is open.
+    pub fn attach(&self, rate: u32, source: Box<dyn bus::Source>) -> Attachment {
+        let id = self.ids.fetch_add(1, Ordering::Relaxed) + 1;
+        let lost = self.lost();
+        self.post(Msg::Attach(id, rate, source));
+        Attachment {
+            sources: self.clone(),
+            id,
+            lost,
+        }
+    }
+
+    /// Stops playing the source attached as `id`, and drops it off the audio thread.
+    pub fn detach(&self, id: u64) {
+        self.post(Msg::Detach(id));
+    }
+
+    /// The rate a source that would play at `want` must be resampled to: the
+    /// open stream's, which stays while sources play, or else the nearest
+    /// the device takes. `want` if the engine does not answer.
+    pub fn rate_for(&self, want: u32) -> u32 {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.post(Msg::Rate(want, tx));
+        rx.recv_timeout(Duration::from_secs(2)).unwrap_or(want)
+    }
+
+    /// Reopens the stream with at least `n` channels, where the device has
+    /// them, and returns its channels after; 0 with no stream open.
+    pub fn widen(&self, n: u16) -> u16 {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.post(Msg::Channels(n, tx));
+        rx.recv_timeout(Duration::from_secs(2))
+            .unwrap_or_else(|_| self.channels())
+    }
+
+    /// Records the master to `path`, a 32-bit float stereo WAV at the
+    /// stream's rate, opening a stream if none is open. One at a time.
+    pub fn record(&self, path: &Path) -> Result<record::MasterRecording, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.post(Msg::Record(path.to_path_buf(), tx));
+        let done = rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|_| "the player did not answer".to_string())??;
+        let sources = self.clone();
+        Ok(record::MasterRecording {
+            path: path.to_path_buf(),
+            done,
+            stop: Box::new(move || sources.post(Msg::StopRecord)),
+        })
+    }
+
+    /// The largest magnitude of the master since the last call, which resets it.
+    pub fn take_master_peak(&self) -> f32 {
+        self.shared.take_master_peak()
+    }
+
+    /// The open stream's channels; 0 with none open.
+    pub fn channels(&self) -> u16 {
+        self.shared.out_channels.load(Ordering::Relaxed) as u16
+    }
+
+    /// How many times the device has been lost. Every source goes with it.
+    pub fn lost(&self) -> u64 {
+        self.shared.lost.load(Ordering::Relaxed)
+    }
+
+    /// Sends `msg`, counted as [`Player::send`] counts commands.
+    fn post(&self, msg: Msg) {
+        let Ok(_order) = self.status.lock() else {
+            return;
+        };
+        self.shared.sent.fetch_add(1, Ordering::Relaxed);
+        let _ = self.tx.send(msg);
+    }
+}
+
+/// A source attached through [`Sources::attach`], detached when dropped.
+pub struct Attachment {
+    sources: Sources,
+    id: u64,
+    /// The device losses counted when it was attached.
+    lost: u64,
+}
+
+impl Attachment {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Whether the device has been lost since it was attached, which took
+    /// the source with it.
+    pub fn lost(&self) -> bool {
+        self.sources.lost() > self.lost
+    }
+}
+
+impl Drop for Attachment {
+    fn drop(&mut self) {
+        self.sources.detach(self.id);
+    }
 }
 
 impl Player {
@@ -321,6 +455,12 @@ impl Player {
                 .map_err(|e| output::OutputError::Build(e.to_string()))?
         };
 
+        let sources = Sources {
+            tx: tx.clone(),
+            status: status.clone(),
+            shared: shared.clone(),
+            ids: Arc::default(),
+        };
         Ok(Player {
             tx,
             status,
@@ -328,7 +468,18 @@ impl Player {
             pending,
             events,
             handle: Some(handle),
+            sources,
         })
+    }
+
+    /// The largest magnitude of the master since the last call, which resets it.
+    pub fn take_master_peak(&self) -> f32 {
+        self.shared.take_master_peak()
+    }
+
+    /// The handle that attaches sources to this player's stream.
+    pub fn sources(&self) -> Sources {
+        self.sources.clone()
     }
 
     /// Whether the engine has acted on every command sent and published the
@@ -573,6 +724,18 @@ struct Engine {
     deferred: VecDeque<Msg>,
 
     out: Option<Output>,
+    /// Sources attached and waiting for a stream, or between two.
+    waiting: Vec<bus::Attached>,
+    /// The ids attached and not since detached.
+    live: std::collections::HashSet<u64>,
+    /// Commands for the stream's bus that found its ring full.
+    bus_queue: VecDeque<bus::BusCmd>,
+    /// Where a closed stream's bus sends its sources.
+    home: (Sender<Vec<bus::Attached>>, Receiver<Vec<bus::Attached>>),
+    /// Raised while the master's recording writer runs.
+    recording: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the stream was held for more than the player at the last turn.
+    held: bool,
     stream: Option<AudioStream>,
     conv: Option<Converter>,
 
@@ -637,6 +800,12 @@ impl Engine {
             device_events: std::sync::mpsc::channel(),
             deferred: VecDeque::new(),
             out: None,
+            waiting: Vec::new(),
+            live: Default::default(),
+            bus_queue: VecDeque::new(),
+            home: std::sync::mpsc::channel(),
+            recording: Arc::default(),
+            held: false,
             stream: None,
             conv: None,
             queue: Arc::default(),
@@ -701,6 +870,13 @@ impl Engine {
             while let Ok(event) = self.device_events.1.try_recv() {
                 self.device_event(event);
             }
+            self.feed_bus();
+            // A recording that ended, as a detach does, can leave nothing on it.
+            let held = self.holds_bus();
+            if self.held && !held {
+                self.close_idle_bus();
+            }
+            self.held = held;
             self.poll_flush();
             if self.state == State::Playing {
                 self.pump();
@@ -745,6 +921,48 @@ impl Engine {
                 return self.discard_chosen();
             }
             Msg::Cmd(cmd) => cmd,
+            Msg::Attach(id, rate, source) => {
+                self.live.insert(id);
+                self.waiting.push((id, source));
+                if self.out.is_none() {
+                    self.open_bus(rate);
+                }
+                return self.feed_bus();
+            }
+            Msg::Detach(id) => {
+                self.live.remove(&id);
+                self.waiting.retain(|(s, _)| *s != id);
+                self.bus_queue.push_back(bus::BusCmd::Detach(id));
+                self.feed_bus();
+                return self.close_idle_bus();
+            }
+            Msg::Rate(want, answer) => {
+                let rate = match &self.out {
+                    Some(out) => out.plan.rate,
+                    None => self
+                        .backend
+                        .negotiate(Spec {
+                            rate: want,
+                            channels: 2,
+                        })
+                        .map_or(want, |p| p.rate),
+                };
+                let _ = answer.send(rate);
+                return;
+            }
+            Msg::Record(path, answer) => {
+                let _ = answer.send(self.record(&path));
+                return;
+            }
+            Msg::StopRecord => {
+                self.bus_queue.push_back(bus::BusCmd::StopRecord);
+                return self.feed_bus();
+            }
+            Msg::Channels(n, answer) => {
+                self.widen(n);
+                let _ = answer.send(self.out.as_ref().map_or(0, |o| o.plan.channels));
+                return;
+            }
         };
         match cmd {
             // `Player::send` delivers these as their own `Msg`.
@@ -860,6 +1078,13 @@ impl Engine {
             // The ring would never drain, freezing the position while `Playing`.
             DeviceEvent::Lost(e) => {
                 self.fail(format!("audio device lost: {e}"));
+                // The sources played on the lost device, and go with it.
+                self.live.clear();
+                self.waiting.clear();
+                self.bus_queue.clear();
+                self.shared.lost.fetch_add(1, Ordering::Relaxed);
+                // Whatever held it, the stream is gone; a recording ends with it.
+                self.out = None;
                 self.teardown();
                 self.state = State::Stopped;
             }
@@ -1004,10 +1229,23 @@ impl Engine {
         self.marks.clear();
         self.publish_marks();
         self.written = 0;
-        // Dropping the output drops the ring, discarding anything buffered.
-        self.out = None;
-        // A flush still pending would discard the next stream's first audio.
-        self.settle_flush();
+        if self.holds_bus() && self.out.is_some() {
+            // The sources play on: the device discards the player's audio, as
+            // for a seek, and nothing is pushed until it has.
+            self.shared.priming.store(true, Ordering::Relaxed);
+            let generation = self.shared.flush_requested.fetch_add(1, Ordering::Release) + 1;
+            self.flush = Some(Flush {
+                generation,
+                deadline: std::time::Instant::now() + FLUSH_TIMEOUT,
+                at: Duration::ZERO,
+                offset: 0,
+            });
+        } else {
+            // Dropping the output drops the ring, discarding anything buffered.
+            self.out = None;
+            // A flush still pending would discard the next stream's first audio.
+            self.settle_flush();
+        }
         self.shared.frames_out.store(0, Ordering::Relaxed);
         self.shared.track_start.store(0, Ordering::Relaxed);
         // A new track starts from its own beginning, not a previous seek.
@@ -1030,7 +1268,12 @@ impl Engine {
             return false;
         };
 
-        let plan = match self.backend.negotiate(spec) {
+        let pinned = self
+            .out
+            .as_ref()
+            .filter(|_| self.holds_bus())
+            .map(|o| o.plan);
+        let plan = match pinned.map_or_else(|| self.backend.negotiate(spec), Ok) {
             Ok(p) => p,
             Err(e) => {
                 self.fail(e.to_string());
@@ -1157,12 +1400,135 @@ impl Engine {
 
     fn open_output(&self, plan: Plan) -> Result<Output, output::OutputError> {
         self.shared.priming.store(true, Ordering::Relaxed);
+        self.shared
+            .out_channels
+            .store(u32::from(plan.channels), Ordering::Relaxed);
         Output::open(
             self.backend.as_ref(),
             plan,
             self.shared.clone(),
             self.device_events.0.clone(),
+            self.home.0.clone(),
         )
+    }
+
+    /// Hands waiting sources to the open stream's bus, sources a closed
+    /// stream sent home back to the waiting, and drops what the bus let go.
+    /// A source detached while between streams is dropped as it arrives.
+    fn feed_bus(&mut self) {
+        while let Ok(sources) = self.home.1.try_recv() {
+            let live = &self.live;
+            self.waiting
+                .extend(sources.into_iter().filter(|(id, _)| live.contains(id)));
+        }
+        let Some(out) = &mut self.out else {
+            return;
+        };
+        while out.bus.take_gone().is_some() {}
+        self.bus_queue
+            .extend(self.waiting.drain(..).map(bus::BusCmd::Attach));
+        while let Some(cmd) = self.bus_queue.pop_front() {
+            if let Err(cmd) = out.bus.send(cmd) {
+                self.bus_queue.push_front(cmd);
+                break;
+            }
+        }
+    }
+
+    /// Opens a stream for the sources, at `rate` where the device takes it.
+    fn open_bus(&mut self, rate: u32) {
+        let spec = Spec { rate, channels: 2 };
+        match self
+            .backend
+            .negotiate(spec)
+            .and_then(|p| self.rebuild_output(p))
+        {
+            Ok(()) => {}
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Whether the stream is held for something besides the player: a
+    /// source, or the master's recording. Its rate stays while it is.
+    fn holds_bus(&self) -> bool {
+        !self.live.is_empty() || self.recording.load(Ordering::Relaxed)
+    }
+
+    /// Starts recording the master to `path`, opening a stream if none is open.
+    fn record(&mut self, path: &Path) -> Recording {
+        if self.recording.load(Ordering::Relaxed) {
+            return Err("already recording the master".into());
+        }
+        if self.out.is_none() {
+            self.open_bus(48_000);
+        }
+        let rate = self
+            .out
+            .as_ref()
+            .map(|o| o.plan.rate)
+            .ok_or("no output to record")?;
+        let (ring, done) = record::start(
+            path,
+            rate,
+            self.recording.clone(),
+            self.shared.rec_dropped.clone(),
+        )?;
+        self.bus_queue.push_back(bus::BusCmd::Record(ring));
+        self.feed_bus();
+        Ok(done)
+    }
+
+    /// Closes the stream once nothing plays on it: no source, no track.
+    fn close_idle_bus(&mut self) {
+        if !self.holds_bus() && self.stream.is_none() && self.state == State::Stopped {
+            self.out = None;
+            self.flush = None;
+            self.settle_flush();
+            self.shared.out_channels.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Reopens the stream with at least `n` channels, where the device has
+    /// them, and plays the track on from where it was.
+    fn widen(&mut self, n: u16) {
+        let Some(plan) = self.out.as_ref().map(|o| o.plan) else {
+            return;
+        };
+        if plan.channels >= n {
+            return;
+        }
+        let wider = match self.backend.negotiate(Spec {
+            rate: plan.rate,
+            channels: n,
+        }) {
+            Ok(p) if p.rate == plan.rate && p.channels >= n => p,
+            _ => return,
+        };
+        let at = self.elapsed();
+        let playing = self.stream.is_some();
+        self.out = None;
+        self.flush = None;
+        self.settle_flush();
+        match self.open_output(wider) {
+            Ok(o) => {
+                if self.state == State::Playing {
+                    o.play();
+                }
+                self.out = Some(o);
+                self.shared
+                    .position_rate
+                    .store(wider.rate, Ordering::Relaxed);
+            }
+            Err(e) => {
+                self.fail(e.to_string());
+                self.teardown();
+                self.state = State::Stopped;
+                return;
+            }
+        }
+        if playing {
+            self.seek(at);
+        }
     }
 
     fn fail(&mut self, msg: String) {

@@ -14,7 +14,9 @@ A loop comes from the playing track, so play a track first. Then either:
 
 The load reads the range, plus up to 1 s of the track before it, the **pre-roll**, and 1 s after it, the **post-roll**. The rolls give the crossfades audio to fade into, so the loop repeats exactly the range's length. A saved loop holds only the range.
 
-A new load replaces the tape and starts from the default settings. **Play tape** starts it and pauses the player; **Stop tape** stops it. The player does not resume on its own.
+A new load replaces the tape and starts from the default settings. **Play tape** starts it and pauses the player; **Stop tape** stops it. The player does not resume on its own; Play on the player afterwards plays both.
+
+**Take**, or `:tape take`, loads the range and hands the player over to the tape, as a deck's Take does. With the player inside the range, voice 1 starts where the player is and the player pauses. With the player before the range, the tape waits and takes over at the range's start. Past the range, it is refused and the loop stays loaded. The take is checked each time the interface refreshes, so it lands within about 16 ms in the window and 33 ms in the server.
 
 ## The tab
 
@@ -122,8 +124,6 @@ Both are 32-bit float WAV, in a new directory each time, and both are added to t
 - **Recording an input.** The tape records only its own voices.
 
 - **Remembering a tape.** The settings last until the next load; only saved files are kept.
-
-- **A device held exclusively**, such as an ALSA `hw:` device: the tape opens its own audio stream beside the player's, and that fails there.
 
 - **Surviving a lost device.** If the device goes away, the tape closes, a recording under way is finished, and the loop as written is lost. Load it again.
 

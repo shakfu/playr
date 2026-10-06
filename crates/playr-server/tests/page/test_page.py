@@ -60,8 +60,11 @@ def server(tmp_path_factory):
         [target / "playr-server", "--listen", f"127.0.0.1:{port}"],
         env=env, stdout=subprocess.PIPE, text=True,
     )
-    url = re.search(r"http://\S+", proc.stdout.readline()).group(0)
-    yield url
+    # Into a pipe the server prints the token as `...`; it is written beside
+    # the library before that line.
+    base = re.search(r"http://[^/\s]+/", proc.stdout.readline()).group(0)
+    token = (home / "data" / "playr" / "server.token").read_text().strip()
+    yield f"{base}?token={token}"
     proc.terminate()
     proc.wait(timeout=5)
 
@@ -122,7 +125,8 @@ def test_keys_move_the_cursor_and_refused_keys_do_nothing(open_page):
     page.keyboard.press("j")
     page.keyboard.press("j")
     until(page, lambda s: s["cursors"]["library"] == 2, "two rows down")
-    page.keyboard.press("4")
+    # The sampler's view and quit, which the page refuses.
+    page.keyboard.press("5")
     page.keyboard.press("q")
     page.wait_for_timeout(300)
     assert state(page)["view"] == "library"
@@ -161,19 +165,21 @@ def test_a_selection_is_saved_and_the_playlist_deleted(open_page):
     until(page, lambda s: s["input"]["kind"] == "save", "the save prompt")
     page.fill("#name", "web test")
     page.click("#name-ok")
-    until(page, lambda s: s["counts"]["playlists"] == 1, "saved")
+    # The playlist "draft" holds the selection as it changes, beside the save.
+    until(page, lambda s: s["counts"]["playlists"] == 2, "saved")
     page.click(".tab[data-view=playlists]")
     page.locator(".row.playlist", has_text="web test").click(button="right")
     page.locator("#sheet-items button", has_text="Delete").click()
     s = until(page, lambda s: s["input"]["kind"] == "confirm", "the question")
     assert s["input"]["question"] == 'delete playlist "web test"?'
     page.click("#yes")
-    until(page, lambda s: s["counts"]["playlists"] == 0, "deleted")
+    until(page, lambda s: s["counts"]["playlists"] == 1, "deleted")
     page.click(".tab[data-view=selection]")
     page.click("#selection-bar [data-command=clear]")
     until(page, lambda s: s["input"]["kind"] == "confirm", "clear question")
     page.click("#yes")
-    until(page, lambda s: s["counts"]["selection"] == 0, "cleared")
+    # An empty selection takes the draft with it.
+    until(page, lambda s: s["counts"]["selection"] == 0 and s["counts"]["playlists"] == 0, "cleared")
     assert errors == []
 
 
@@ -221,7 +227,13 @@ def test_the_page_fits_its_width(open_page, width, height):
         has_touch=touch, is_mobile=touch,
     )
     page.evaluate("fail('a message long enough that it must be cut off rather than widen the page')")
-    assert page.evaluate("document.documentElement.scrollWidth") == width
+    # Each view has its own toolbar.
+    for view in ["library", "queue", "selection", "playlists"]:
+        page.evaluate(f"call('/command', 'view {view}')")
+        until(page, lambda s: s["view"] == view, view)
+        page.wait_for_timeout(100)
+        assert page.evaluate("document.documentElement.scrollWidth") == width, view
+    page.evaluate("call('/command', 'view library')")
     assert errors == []
 
 

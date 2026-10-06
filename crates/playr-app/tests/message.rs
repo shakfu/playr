@@ -560,6 +560,16 @@ fn tape_messages_are_worded() {
     let file = home.join("samples/song-tape/song-tape-mix.wav");
     for (message, words) in [
         (T::Loading, "reading the tape".to_string()),
+        (T::Took, "the tape took over from the player".into()),
+        (T::TakeWaiting, "the tape takes over at the range's start".into()),
+        (
+            T::PastRange,
+            "the player is past the range; the tape is loaded".into(),
+        ),
+        (
+            T::TakeDropped,
+            "the player left the track; the tape is loaded".into(),
+        ),
         (
             T::Loaded {
                 frames: 66_150,
@@ -724,4 +734,47 @@ fn dj_messages_are_worded() {
     ] {
         assert_eq!(text(&Message::Dj(message)), words);
     }
+}
+
+#[test]
+fn mix_messages_are_worded() {
+    use playr_app::mix::{Law, Mix, Strip};
+    let mut mix = Mix::new(Law::Db, 0.5);
+    mix.set_level(Strip::Tape, 0.0);
+    mix.set_muted(Strip::Decks, true);
+    assert_eq!(
+        text(&Message::Mix(mix)),
+        "master 50% (-30.0 dB), player 100% (0.0 dB), tape 0% (off), \
+         decks 100% (0.0 dB, muted), headphones 100% (0.0 dB); law db"
+    );
+    assert_eq!(text(&Message::FaderLaw(Law::Cubic)), "fader law: cubic");
+    let home = std::env::home_dir().unwrap();
+    let path = home.join("samples/master/master.wav");
+    assert_eq!(
+        text(&Message::MasterRecording(path.clone())),
+        "recording the master to ~/samples/master/master.wav"
+    );
+    assert_eq!(
+        text(&Message::MasterStopping),
+        "finishing the master's recording"
+    );
+    let mut done = playr_core::audio::record::Recorded {
+        path,
+        frames: 66_150,
+        rate: 44_100,
+        dropped: 0,
+    };
+    assert_eq!(
+        text(&Message::MasterRecorded(done.clone())),
+        "recorded the master: 1.50 s to ~/samples/master/master.wav"
+    );
+    done.dropped = 3;
+    assert_eq!(
+        text(&Message::MasterRecorded(done)),
+        "recorded the master: 1.50 s to ~/samples/master/master.wav; 3 blocks lost, the disk was too slow"
+    );
+    assert_eq!(
+        text(&Message::MasterFailed("no room".into())),
+        "master recording: no room"
+    );
 }

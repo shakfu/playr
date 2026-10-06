@@ -35,6 +35,7 @@ struct Headless {
     sampler: playr_app::sampler::Sampler,
     tape: playr_app::tape::Deck,
     dj: playr_app::dj::Decks,
+    mix: playr_app::mix::Mix,
 }
 
 fn slot(view: View) -> Option<usize> {
@@ -115,6 +116,9 @@ impl Frontend for Headless {
     fn dj(&mut self) -> &mut playr_app::dj::Decks {
         &mut self.dj
     }
+    fn mix(&mut self) -> &mut playr_app::mix::Mix {
+        &mut self.mix
+    }
 }
 
 /// A headless frontend over a library file of tracks a, b and c, and
@@ -152,6 +156,7 @@ fn headless() -> (Headless, tempfile::TempDir) {
         sampler: Default::default(),
         tape: playr_app::tape::Deck::manual(),
         dj: playr_app::dj::Decks::manual(),
+        mix: playr_app::mix::Mix::new(playr_app::mix::Law::Db, 1.0),
     };
     (frontend, dir)
 }
@@ -1024,7 +1029,7 @@ fn the_decks_load_from_the_cursor_sync_and_keep_grid_edits() {
     assert_eq!(f.dj.loaded(B).unwrap().frames, 160_000);
     assert_eq!(f.dj.rate(), Some(8000));
 
-    // Playing a deck pauses the player.
+    // Playing a deck leaves the player playing: both are heard on one stream.
     f.session.play(std::slice::from_ref(&a), 0);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while f.session.player().status().state != State::Playing {
@@ -1033,10 +1038,14 @@ fn the_decks_load_from_the_cursor_sync_and_keep_grid_edits() {
     }
     dj(&mut f, D::Play(A));
     said(&f, M::Done(D::Play(A)));
-    while f.session.player().status().state != State::Paused {
-        assert!(std::time::Instant::now() < deadline, "never paused");
+    while !f.session.player().caught_up() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the engine never caught up"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    assert_eq!(f.session.player().status().state, State::Playing);
     // A deck started since the engine last ran refuses a track; one known
     // to play keeps it for when it stops.
     dj(&mut f, D::Load(A));
@@ -1240,13 +1249,26 @@ fn a_deck_takes_over_the_player_s_track_where_it_is() {
         assert!(std::time::Instant::now() < deadline, "the player played on");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    // The player's volume is the decks' master: a -6 dBFS tone at half. The
-    // crossfader moved to deck A, so its centre takes nothing.
+    // The master fader scales the decks: a -6 dBFS tone with the master at
+    // half its travel. The crossfader moved to deck A, so its centre takes
+    // nothing.
     assert_eq!(f.dj.state().xfade, 0.0);
     let mut out = vec![0.0; 4096 * 2];
     f.dj.process(&mut out);
     let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-    assert!((peak - 0.5 * 0.501).abs() < 0.01, "{peak}");
+    let want = playr_app::mix::Law::Db.gain(0.5) * 0.501;
+    assert!((peak - want).abs() < want * 0.02, "{peak}, not {want}");
+    // Muting the decks reaches their engine at the next poll.
+    use playr_app::mix::{MixAction, Strip};
+    dispatch(
+        Action::Mix(MixAction::Mute(Strip::Decks, Some(true))),
+        &mut f,
+    );
+    run_decks(&mut f, 1);
+    // The first block holds the 10 ms fade.
+    f.dj.process(&mut out);
+    f.dj.process(&mut out);
+    assert!(out.iter().all(|s| *s == 0.0), "the decks played on muted");
 
     // A playing deck is not taken over.
     f.session.send(playr_core::audio::Cmd::TogglePause);
@@ -1346,4 +1368,147 @@ fn not_strict_a_pick_replaces_the_playing_track_and_marks_are_jumped_to() {
     run_decks(&mut f, 1);
     let pos = f.dj.status().unwrap().deck(A).pos();
     assert!((16_000.0..16_600.0).contains(&pos), "{pos}");
+}
+
+/// The faders reach the player at once and the tape at its next poll; a
+/// law switch keeps the positions and changes the gains.
+#[test]
+fn the_mixer_sets_the_player_and_the_tape() {
+    use playr_app::mix::{Law, MixAction as M, Strip};
+    use playr_app::tape::TapeAction as T;
+    let mix = |f: &mut Headless, m| dispatch(Action::Mix(m), f);
+    let (mut f, _dir) = loaded_tape();
+    let player = |f: &Headless| f.session.player().volume();
+
+    dispatch(Action::SetVolume(0.8), &mut f);
+    mix(&mut f, M::Set(Strip::Player, 0.5));
+    assert_eq!(player(&f), Law::Db.gain(0.8) * Law::Db.gain(0.5));
+    mix(&mut f, M::Mute(Strip::Player, None));
+    assert_eq!(player(&f), 0.0);
+    mix(&mut f, M::Mute(Strip::Player, None));
+    assert_eq!(player(&f), Law::Db.gain(0.8) * Law::Db.gain(0.5));
+
+    mix(&mut f, M::Law(None));
+    assert_eq!(last(&f), Some(&Message::FaderLaw(Law::Cubic)));
+    assert_eq!(f.mix.level(Strip::Master), 0.8);
+    assert_eq!(player(&f), Law::Cubic.gain(0.8) * Law::Cubic.gain(0.5));
+    mix(&mut f, M::Law(Some(Law::Db)));
+
+    mix(&mut f, M::Show);
+    assert_eq!(last(&f), Some(&Message::Mix(f.mix.clone())));
+
+    // The tape, with the master at the top: its peak before the fader, and
+    // what is heard after it.
+    dispatch(Action::SetVolume(1.0), &mut f);
+    dispatch(Action::Tape(T::Play), &mut f);
+    let heard = |f: &mut Headless| {
+        let mut out = vec![0.0; 512 * 2];
+        let mut peak = 0.0f32;
+        for _ in 0..20 {
+            f.tape.process(&mut out);
+            peak = out.iter().fold(peak, |m, x| m.max(x.abs()));
+        }
+        playr_app::tape::poll(f);
+        peak
+    };
+    heard(&mut f);
+    let full = heard(&mut f);
+    assert!(full > 0.1, "{full}");
+    mix(&mut f, M::Set(Strip::Tape, 0.5));
+    heard(&mut f);
+    heard(&mut f);
+    let half = heard(&mut f);
+    let want = full * Law::Db.gain(0.5);
+    assert!((half - want).abs() < want * 0.05, "{half}, not {want}");
+    let metered = f.tape.status().unwrap().take_peak();
+    assert!(
+        (metered - full).abs() < full * 0.05,
+        "the meter followed the fader: {metered}"
+    );
+}
+
+/// A headless frontend playing a 6 s tone at 8 kHz, with the sampler's range
+/// at `start..end` frames.
+fn playing_with_range(start: u64, end: u64) -> (Headless, tempfile::TempDir) {
+    let (mut f, dir) = headless();
+    let file = dir.path().join("song.wav");
+    common::tone(&file, 8000, 6.0, -6.0);
+    let track = Track {
+        path: file.to_string_lossy().into(),
+        ..Default::default()
+    };
+    f.session.play(&[track], 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.player().status().state != playr_core::audio::State::Playing {
+        assert!(std::time::Instant::now() < deadline, "never played");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    f.sampler.range = Some(playr_app::sampler::Range {
+        path: file,
+        start: Some(start),
+        end: Some(end),
+    });
+    (f, dir)
+}
+
+#[test]
+fn a_tape_take_inside_the_range_continues_from_the_player() {
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    let (mut f, _dir) = playing_with_range(0, 40_000);
+    dispatch(Action::Tape(T::Take), &mut f);
+    tape_until(&mut f, |m| m == &Message::Tape(M::Took));
+    let player_at = f.session.player().position().as_secs_f64() * 8000.0;
+    // A manual tape publishes its status as it runs.
+    run_tape(&mut f, 1);
+    let e = f.tape.loaded().unwrap();
+    let head = f.tape.status().unwrap().voice(0) - e.range.start as f64;
+    assert!(
+        (head - player_at).abs() < 800.0,
+        "head {head}, player {player_at}"
+    );
+    assert!(f.tape.status().unwrap().playing());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.player().status().state != playr_core::audio::State::Paused {
+        assert!(std::time::Instant::now() < deadline, "the player played on");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_tape_take_before_the_range_waits_for_its_start() {
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    let (mut f, _dir) = playing_with_range(8000, 40_000);
+    dispatch(Action::Tape(T::Take), &mut f);
+    tape_until(&mut f, |m| m == &Message::Tape(M::TakeWaiting));
+    assert!(f.session.player().position().as_secs_f64() < 1.0);
+    tape_until(&mut f, |m| m == &Message::Tape(M::Took));
+    run_tape(&mut f, 1);
+    let e = f.tape.loaded().unwrap();
+    let head = f.tape.status().unwrap().voice(0) - e.range.start as f64;
+    assert!(
+        head < 1200.0,
+        "the take landed {head} frames into the range"
+    );
+}
+
+#[test]
+fn a_tape_take_past_the_range_or_without_one_is_refused() {
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    let (mut f, _dir) = playing_with_range(0, 800);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.player().position().as_secs_f64() < 0.2 {
+        assert!(std::time::Instant::now() < deadline, "never moved");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    dispatch(Action::Tape(T::Take), &mut f);
+    tape_until(&mut f, |m| m == &Message::Tape(M::PastRange));
+    assert!(f.tape.loaded().is_some(), "the loop stays loaded");
+    assert_eq!(
+        f.session.player().status().state,
+        playr_core::audio::State::Playing
+    );
+
+    f.sampler.range = None;
+    dispatch(Action::Tape(T::Take), &mut f);
+    assert_eq!(last(&f), Some(&Message::Tape(M::NoRange)));
 }

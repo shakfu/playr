@@ -5,12 +5,10 @@
 //! - [`Looper`]: the tape in the audio callback, fed by a command ring.
 //! - [`Handle`]: the commands, status, snapshot and recording, from any
 //!   other thread.
-//! - [`device`]: the looper's own cpal output stream.
 //!
-//! Audio is interleaved `f32` at the device's rate; the caller decodes and
-//! resamples. The design is in `docs/dev/looper-engine.md`.
+//! Audio is interleaved `f32` at the stream's rate; the caller decodes,
+//! resamples, and plays [`Looper`] on its stream. The design is in `docs/dev/looper-engine.md`.
 
-pub mod device;
 mod looper;
 mod tape;
 
@@ -42,11 +40,6 @@ pub enum Error {
     /// The recording's writer thread panicked.
     Writer,
     Wav(hound::Error),
-    /// The device cannot play at this rate; resample to [`device::rate`].
-    Rate(u32),
-    NoConfig,
-    Busy,
-    Device(String),
 }
 
 impl std::fmt::Display for Error {
@@ -60,10 +53,6 @@ impl std::fmt::Display for Error {
             Error::NotRecording => write!(f, "not recording"),
             Error::Writer => write!(f, "the recording's writer thread failed"),
             Error::Wav(e) => write!(f, "{e}"),
-            Error::Rate(r) => write!(f, "the output device cannot play {r} Hz"),
-            Error::NoConfig => write!(f, "the output device offers no usable format"),
-            Error::Busy => write!(f, "the output device is busy"),
-            Error::Device(s) => write!(f, "could not open audio stream: {s}"),
         }
     }
 }

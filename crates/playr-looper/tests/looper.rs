@@ -233,3 +233,58 @@ fn a_load_while_playing_fades_out_and_in() {
     assert!(step < 0.01, "{step}");
     assert!(*left.last().unwrap() < -0.3);
 }
+
+/// The volume scales what is heard, after a ramp. The recording and the
+/// meter take the tape's mix before it.
+#[test]
+fn the_volume_leaves_the_recording_and_the_meter_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mix.wav");
+    let samples = noise(BLOCK * 300, 0.8);
+    let (mut a, ha) = writing(samples.clone(), 1);
+    let (mut b, mut hb) = writing(samples, 1);
+    hb.set_volume(0.25).unwrap();
+    hb.record(&path).unwrap();
+    let mut heard = Vec::new();
+    for i in 0..200 {
+        let (x, y) = (block(&mut a), block(&mut b));
+        // The ramp is 20 ms: under two blocks.
+        if i >= 2 {
+            assert!(x.iter().zip(&y).all(|(x, y)| (x * 0.25 - y).abs() < 1e-6));
+        }
+        if i == 0 {
+            // The ramp starts from 1, so the first frame does not step.
+            assert!(
+                (x[0] - y[0]).abs() <= x[0].abs() * 1e-3,
+                "{} {}",
+                x[0],
+                y[0]
+            );
+        }
+        assert_eq!(
+            ha.status().take_peak(),
+            hb.status().take_peak(),
+            "block {i}"
+        );
+        heard.push(x);
+    }
+    let stop = std::thread::spawn(move || hb.stop_recording());
+    while !stop.is_finished() {
+        block(&mut b);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let rec = stop.join().unwrap().unwrap();
+    assert!(rec.frames > 0);
+    let wav: Vec<f32> = hound::WavReader::open(&path)
+        .unwrap()
+        .into_samples::<f32>()
+        .map(Result::unwrap)
+        .collect();
+    // Every block recorded is one the looper at full volume played.
+    for chunk in wav.chunks(BLOCK * 2).take(150) {
+        assert!(
+            heard.iter().any(|h| h == chunk),
+            "a recorded block was scaled"
+        );
+    }
+}

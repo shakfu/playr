@@ -97,6 +97,13 @@ fn numbers_are_checked_against_their_range() {
     );
     assert_eq!(action("/playr/mode", vec![Float(1.5)]), None);
     assert_eq!(action("/playr/mode", vec![Int(4)]), None);
+    // A toggle button sends 1 on and 0 off, as a float or an int.
+    use playr_app::mix::{MixAction, Strip};
+    let mute = |on| Some(Action::Mix(MixAction::Mute(Strip::Master, Some(on))));
+    assert_eq!(action("/playr/mute", vec![Float(1.0)]), mute(true));
+    assert_eq!(action("/playr/mute", vec![Int(0)]), mute(false));
+    assert_eq!(action("/playr/mute", vec![Float(0.5)]), None);
+    assert_eq!(action("/playr/mute", vec![]), None);
 
     let seek = |args| match request(&message("/playr/progress", args)) {
         Some(Request::Seek(f)) => Some(f),
@@ -163,9 +170,14 @@ fn the_schema_lists_both_tables() {
     let sent: Vec<&str> = SENT.iter().map(|a| a.path).collect();
     assert_eq!(paths("received"), received);
     assert_eq!(paths("sent"), sent);
-    assert_eq!(schema["received"][4]["type"], "float");
-    assert_eq!(schema["received"][4]["max"], 1.0);
-    assert!(schema["received"][8].get("max").is_none());
+    let entry = |path: &str| {
+        let all = schema["received"].as_array().unwrap();
+        all.iter().find(|a| a["address"] == path).unwrap().clone()
+    };
+    assert_eq!(entry("/playr/progress")["type"], "float");
+    assert_eq!(entry("/playr/progress")["max"], 1.0);
+    assert!(entry("/playr/playlist").get("max").is_none());
+    assert_eq!(entry("/playr/mute")["max"], 1);
 }
 
 fn model() -> Model {
@@ -217,4 +229,10 @@ fn feedback_sends_everything_once_then_only_changes() {
     model.refresh();
     feedback.send(&model);
     assert_eq!(received(&tablet), ["/playr/volume"]);
+
+    model.run_command("mix master mute on");
+    model.refresh();
+    feedback.send(&model);
+    assert_eq!(received(&tablet), ["/playr/mute"]);
+    assert!(osc::values(&model).contains(&("/playr/mute", OscType::Int(1))));
 }
