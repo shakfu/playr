@@ -4,6 +4,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.18.0]
+
 ### Added
 
 - `:mix rec` records the master, everything playr plays, before the headphone cue is routed, to a 32-bit float stereo WAV under the samples directory, and adds it to the library once stopped. Overs are kept. The model holds a meter for each strip after its fader, and one for the measured master. Library API: `Sources::record`, `record::{MasterRecording, Recorded}`, `Session::start_master`, `stop_master`, `master_recording` and `master_done`, `Player::take_master_peak`, `MixAction::Record`, `Snapshot::meters`, `Mix::fader_gain`.

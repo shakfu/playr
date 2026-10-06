@@ -206,6 +206,6 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ## Not planned
 
-- Cover art, lyrics, online metadata: each breaks the no-network or minimal claim.
+- Cover art, lyrics, online metadata: each needs a service, and playr contacts none.
 
 - More EQ bands: the EQ affects playback only and reaches no other tool. Persist it and stop.

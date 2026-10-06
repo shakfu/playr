@@ -1,6 +1,6 @@
 # playr
 
-A minimal music player which plays a directory, a saved playlist, or the results of a search. Keeps a SQLite index of your library.
+A local music player for active listeners, with a sampler, a tape looper and two DJ decks. It plays from a directory, your library, a saved playlist or search results, and by design contacts no service or cloud.
 
 When you download playr, you get three implementations: `playr`, a terminal app, `playr-gui`, a desktop gui app, and `playr-server`, a server for a machine without a screen, controlled from a web page or Open Sound Control (OSC).
 
@@ -67,6 +67,8 @@ None of the three contact external services or download any metadata and images.
 
 **Library**
 
+- An SQLite index, `library.db`, shared by all three programs and the `playr` subcommands: tags and stream properties, playlists, saved searches, marks, loops, hot cues, beat-grid edits and analysis. `:sql` queries it directly
+
 - Recursive scan with tag and stream-property reading
 
 - Rescan skips files whose size and modification time are unchanged
@@ -82,8 +84,6 @@ None of the three contact external services or download any metadata and images.
 - Columns and sort order set per program in `settings.toml`, changed for the session with `:columns` and `:sort`; sorting by loudness or tempo needs `playr analyze`
 
 - Search results play directly, in library order
-
-- Playlists saved to and loaded from the database
 
 **Interface**
 

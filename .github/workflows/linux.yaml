@@ -253,7 +253,7 @@ jobs:
           name: playr
           base: core22
           version: '$version'
-          summary: A minimal music player that plays local files
+          summary: A local music player with a sampler, a tape looper and DJ decks
           description: |
             playr plays and samples a local music library, and contacts nothing.
             It has a terminal program, a desktop window and a server

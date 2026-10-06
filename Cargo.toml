@@ -2,7 +2,7 @@
 members = ["crates/playr-core", "crates/playr-app", "crates/playr-gui", "crates/playr-server", "crates/playr-looper", "crates/playr-dj", "crates/playr-dsp"]
 
 [workspace.package]
-version = "0.17.0"
+version = "0.18.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -13,11 +13,11 @@ homepage = "https://github.com/shakfu/playr"
 [workspace.dependencies]
 # Without its default features, so `--no-default-features` on a program
 # leaves Opus out; see `opus` below.
-playr-core = { path = "crates/playr-core", version = "0.17.0", default-features = false }
-playr-app = { path = "crates/playr-app", version = "0.17.0" }
-playr-looper = { path = "crates/playr-looper", version = "0.17.0" }
-playr-dj = { path = "crates/playr-dj", version = "0.17.0" }
-playr-dsp = { path = "crates/playr-dsp", version = "0.17.0" }
+playr-core = { path = "crates/playr-core", version = "0.18.0", default-features = false }
+playr-app = { path = "crates/playr-app", version = "0.18.0" }
+playr-looper = { path = "crates/playr-looper", version = "0.18.0" }
+playr-dj = { path = "crates/playr-dj", version = "0.18.0" }
+playr-dsp = { path = "crates/playr-dsp", version = "0.18.0" }
 cpal = "0.18.2"
 hound = "3.5"
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }
@@ -37,7 +37,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "A minimal TUI music player that plays local files and contacts nothing"
+description = "A local terminal music player with a sampler, a tape looper and two DJ decks; contacts no service or cloud"
 readme = "README.md"
 keywords = ["music", "player", "tui", "audio", "flac"]
 categories = ["multimedia::audio", "command-line-utilities"]

@@ -1,4 +1,4 @@
-//! playr: a minimal TUI music player.
+//! playr: a local terminal music player with a sampler, a tape looper and DJ decks.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ use playr_core::db::{self, Track};
 use playr_core::m3u;
 use playr_core::scan;
 
-/// playr - a minimal TUI music player
+/// playr - a local music player with a sampler, a tape looper and DJ decks
 ///
 /// With no command, browses the library; with paths, plays them.
 #[derive(Parser)]
