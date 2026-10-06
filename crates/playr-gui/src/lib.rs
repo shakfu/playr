@@ -25,7 +25,7 @@ use playr_app::command::{self, view_name};
 use playr_app::dispatch::Frontend;
 use playr_app::mix::Strip;
 use playr_app::model::{DraftAnswer, Input, Model};
-use playr_app::{Tab, Theme, View};
+use playr_app::{Theme, View};
 use playr_core::audio::State;
 
 /// Ids of the text fields, so keys go to a field that has focus and to the
@@ -62,7 +62,7 @@ pub struct Gui {
 
 impl Gui {
     pub fn new(mut model: Model) -> Gui {
-        model.offer_tabs();
+        model.show_views(&View::ALL);
         Gui {
             model,
             search: String::new(),
@@ -94,7 +94,7 @@ impl Gui {
         self.follow_input(ui.ctx());
         self.keys(ui.ctx());
         let over = self.model.snapshot().meters[3].is_some_and(|db| db > 0.0);
-        self.clipped = self.model.tab() != Some(Tab::Mix) && (self.clipped || over);
+        self.clipped = self.model.view() != View::Mix && (self.clipped || over);
 
         self.dropped(ui.ctx());
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
@@ -357,27 +357,20 @@ impl Gui {
                             + self.model.session().searches().len()
                     ),
                     View::Queue => format!("{} {}", view.title(), self.model.queue().len()),
-                    View::Sampler => view.title().to_string(),
-                };
-                let shown = self.model.tab().is_none() && self.model.view() == view;
-                if ui.selectable_label(shown, title).clicked() {
-                    self.perform(Action::ShowView(view));
-                }
-            }
-            for tab in Tab::ALL {
-                // Marked while a strip is muted, or the master clipped unseen.
-                let mix = self.model.mixer();
-                let marked = tab == Tab::Mix
-                    && (self.clipped || Strip::ALL.into_iter().any(|s| mix.muted(s)));
-                let title = match marked {
-                    true => format!("{} *", tab.title()),
-                    false => tab.title().to_string(),
+                    // Marked while a strip is muted, or the master clipped unseen.
+                    View::Mix
+                        if self.clipped
+                            || Strip::ALL.into_iter().any(|s| self.model.mixer().muted(s)) =>
+                    {
+                        format!("{} *", view.title())
+                    }
+                    _ => view.title().to_string(),
                 };
                 if ui
-                    .selectable_label(self.model.tab() == Some(tab), title)
+                    .selectable_label(self.model.view() == view, title)
                     .clicked()
                 {
-                    self.perform(Action::ShowTab(tab));
+                    self.perform(Action::ShowView(view));
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -504,31 +497,6 @@ impl Gui {
     }
 
     fn view(&mut self, ui: &mut egui::Ui) {
-        match self.model.tab() {
-            Some(Tab::Mix) => {
-                for action in mixer::show(&self.model, ui) {
-                    self.perform(action);
-                }
-                return;
-            }
-            Some(Tab::Dj) => {
-                let (actions, row) = dj::show(&self.model, ui, &mut self.dj_tab);
-                if row.is_some() {
-                    self.model.set_cursor(View::Library, row);
-                }
-                for action in actions {
-                    self.perform(action);
-                }
-                return;
-            }
-            Some(Tab::Tape) => {
-                for action in tape::show(&self.model, ui, &mut self.tape_tab) {
-                    self.perform(action);
-                }
-                return;
-            }
-            None => {}
-        }
         let view = self.model.view();
         let cursor = self.model.cursor(view);
         // A row the cursor moved to by a key, not a click, is scrolled into view.
@@ -540,6 +508,28 @@ impl Gui {
             View::Playlists => views::playlists(&self.model, ui, scroll),
             View::Sampler => {
                 for action in sampler::show(&mut self.model, ui, &mut self.sampler) {
+                    self.perform(action);
+                }
+                None
+            }
+            View::Tape => {
+                for action in tape::show(&self.model, ui, &mut self.tape_tab) {
+                    self.perform(action);
+                }
+                None
+            }
+            View::Dj => {
+                let (actions, row) = dj::show(&self.model, ui, &mut self.dj_tab);
+                if row.is_some() {
+                    self.model.set_cursor(View::Library, row);
+                }
+                for action in actions {
+                    self.perform(action);
+                }
+                None
+            }
+            View::Mix => {
+                for action in mixer::show(&self.model, ui) {
                     self.perform(action);
                 }
                 None

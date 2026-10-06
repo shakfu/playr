@@ -20,6 +20,8 @@ A new load replaces the tape and starts from the default settings. **Play tape**
 
 ## The tab
 
+`6` or `:view tape` opens it. Its keys, under `[keys.tape]`: `space` plays the tape, `x` stops it, `l` loads the range, `t` takes over from the player, `r` resets the loop, `w` saves it and `R` records the mix.
+
 From top to bottom:
 
 1. **Buttons.** Load range, Play tape, Stop tape, Reset, Record, Save loop.

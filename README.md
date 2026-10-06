@@ -87,7 +87,7 @@ None of the three contact external services or download any metadata and images.
 
 **Interface**
 
-- Five views: library, queue, selection, playlists, and a sampler showing the playing track's waveform or spectrogram; the web page has all but the sampler
+- Five views: library, queue, selection, playlists, and a sampler showing the playing track's waveform or spectrogram; the web page has all but the sampler. The window adds three more: tape, DJ and mix
 
 - Dark and light themes; the terminal takes its colours from its own theme, and honours `NO_COLOR`
 
@@ -406,6 +406,8 @@ These keys are the same in the terminal, the window and the web page, and any of
 
 [Search](#search) describes what `/` accepts.
 
+The window's Tape, DJ and Mix views have keys of their own, which win there over the ones above: see [Tape](#tape), [DJ](#dj) and [Mixer](#mixer). `?` lists a view's keys.
+
 Enter plays the list you are looking at, from the selected track: the library, search results, the selection, or a playlist. The selection is separate from what plays. It starts empty. In the library, `a` selects the track under the cursor, or unselects it if it is marked `+`, without interrupting playback. On a playlist, `a` adds its tracks, skipping any already selected but keeping the playlist's own repeats. `s` saves the selection as a playlist.
 
 The selection starts empty each run. As it changes, playr saves it to a playlist named `draft`, which the Playlists view lists; an empty selection leaves no draft. No other playlist may be named `draft`. The first time the selection changes in a run, if an earlier run left a draft, playr asks what to do with it: overwrite it with the selection, append it (put its tracks back in the selection, before the new ones), or save it under a name and start a new draft. Anything else leaves the old draft alone until the next change. `draft = "overwrite"` or `"append"` answers without asking, and `draft = "off"` keeps no draft. The draft holds only library tracks, as any playlist does.
@@ -558,6 +560,8 @@ The waveform glyphs are the view's only characters outside ASCII. Marks are plac
 
 `:tape load` copies the sampler's range of the playing track into a loop, or `:tape load N` copies loop slot N. Three voices read it at once, each at its own rate and over its own window. A write head records what the voices send back into the loop, with feedback, so a reversed or half-speed voice is printed into it and every voice reads that on the next pass. The terminal has the commands; the window has a Tape tab with the same controls. [`docs/guide-tape.md`](docs/guide-tape.md) explains the tab and how the voices and the write head work together.
 
+In the window, `6` opens the Tape view. Its keys are listed in [`docs/guide-tape.md`](docs/guide-tape.md#the-tab).
+
 | command | does |
 |-|-|
 | `:tape play`, `:tape stop` | play the tape, pausing the player, or stop it |
@@ -586,6 +590,8 @@ The load also reads up to a second of the track before the range, the pre-roll, 
 ### DJ
 
 Two decks play library tracks at once, each at its own rate. Each track gets a beat grid: its tempo and where a beat falls, from `playr analyze`. A deck loading a track never analysed analyses it first. With grids on both decks, sync matches one deck's tempo to the other's, at half, the same or double, and moves it into phase. A mixer blends the decks to one output. [`docs/guide-dj.md`](docs/guide-dj.md) explains the tab and how to mix with it. The terminal has the commands; the window has a DJ tab with a waveform per deck, centred on the playhead and marked with the grid, and the same controls. A click or drag on a deck's overview, the strip under its waveform, seeks there. The tab lists the library, following the search field, with A and B on each row to load it onto a deck; a library or selection row's menu does the same. A deck shows the track's marks on both its waveforms, and a click near one on the overview lands on it. The grid's edits are under each deck's Grid menu, and A, Centre and B glide the crossfader to that point over 400 ms, as a double click on it glides it to the middle.
+
+In the window, `7` opens the DJ view. It lists the library, with search, and its keys are listed in [`docs/guide-dj.md`](docs/guide-dj.md#the-tab).
 
 | command | does |
 |-|-|
@@ -637,7 +643,7 @@ The master volume, `:volume` or the Volume slider, scales everything playr plays
 - A mute silences a source without stopping it: the decks stay in sync and the tape keeps writing. The tape's recording reads before its fader.
 - `:mix rec` records the master, everything playr plays, to a 32-bit float stereo WAV under the samples directory, `master/master.wav` and then `master-2/master-2.wav`, and adds it to the library once stopped. The cue is never in it. Overs above full scale are kept in the file, though the device clips them. While it records, a track at another rate is resampled rather than changing the output's rate.
 - `master` in `settings.toml` sets the master at start. `volume`, its name before the mixer, held a level, not a position. It is still read, and plays at the level it always did; a file setting both is an error.
-- In the window, the **Mix** tab has a strip for each: a fader, its level in dB, a meter after the fader, and a mute; the master's has Record and the law. The master's meter measures what the device is sent. The tab is marked `Mix *` while a strip is muted, or once the master has gone over full scale while the tab was hidden. The server plays only the player, so its page and OSC have the master and a mute, `/playr/mute`; `:mix` works from the page's command line.
+- In the window, the **Mix** tab has a strip for each: a fader, its level in dB, a meter after the fader, and a mute; the master's has Record and the law. The master's meter measures what the device is sent. `8` opens it; `P`, `T`, `D` and `H` mute the player, tape, decks and headphones, `r` records the master and `l` switches the law. The tab is marked `Mix *` while a strip is muted, or once the master has gone over full scale while the tab was hidden. The server plays only the player, so its page and OSC have the master and a mute, `/playr/mute`; `:mix` works from the page's command line.
 
 ### Varispeed
 
@@ -718,7 +724,7 @@ ctrl-s = "save"
 q = "nop"
 "?" = "help"
 
-[keys.selection]                   # one view: library, queue, selection, playlists or sampler
+[keys.selection]                   # one view: library, queue, selection, playlists, sampler, tape, dj or mix
 x = "remove"
 ```
 

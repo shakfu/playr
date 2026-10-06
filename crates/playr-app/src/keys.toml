@@ -24,7 +24,7 @@ backtab = "view prev"
 3 = "view selection"
 4 = "view playlists"
 5 = "view sampler"
-# The window's tabs; the terminal has none.
+# The window's views; the terminal has none of these three.
 6 = "view tape"
 7 = "view dj"
 8 = "view mix"
@@ -163,3 +163,35 @@ backspace = "remove"
 D = "deselect"
 u = "undo"
 r = "redo"
+
+# The window's views only; the terminal has the commands.
+[keys.tape]
+space = "tape play"
+x = "tape stop"
+l = "tape load"
+t = "tape take"
+r = "tape reset"
+w = "tape save"
+R = "tape rec"
+
+# j, k and enter still move through and play the library listed here.
+[keys.dj]
+a = "dj a load"
+b = "dj b load"
+z = "dj a play"
+x = "dj a pause"
+c = "dj a cue"
+"," = "dj b play"
+"." = "dj b pause"
+m = "dj b cue"
+left = "dj xfade a"
+right = "dj xfade b"
+down = "dj xfade centre"
+
+[keys.mix]
+r = "mix rec"
+l = "mix law"
+P = "mix player mute"
+T = "mix tape mute"
+D = "mix decks mute"
+H = "mix headphones mute"

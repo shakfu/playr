@@ -12,7 +12,7 @@ use playr_app::dispatch::Frontend;
 use playr_app::message::Message;
 use playr_app::model::{Input, Model};
 use playr_app::sampler::Edge;
-use playr_app::{Tab, View};
+use playr_app::View;
 use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_gui::Gui;
@@ -1286,15 +1286,15 @@ fn shift_tab_moves_to_the_previous_view() {
     harness.run_steps(2);
     harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
     harness.run_steps(2);
-    assert_eq!(model(&harness).tab(), Some(Tab::Mix), "the last tab");
+    assert_eq!(model(&harness).view(), View::Mix, "the last view");
     // The binding took the key, so egui did not move focus with it.
     assert_eq!(harness.ctx.memory(|m| m.focused()), None);
     harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
     harness.run_steps(2);
-    assert_eq!(model(&harness).tab(), Some(Tab::Dj));
+    assert_eq!(model(&harness).view(), View::Dj);
     harness.key_press(egui::Key::Tab);
     harness.run_steps(2);
-    assert_eq!(model(&harness).tab(), Some(Tab::Mix));
+    assert_eq!(model(&harness).view(), View::Mix);
 }
 
 #[test]
@@ -1437,49 +1437,50 @@ fn the_mix_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
 }
 
 #[test]
-fn the_window_tabs_are_reached_by_number_and_by_tab() {
+fn the_tape_dj_and_mix_views_have_numbers_tab_order_and_keys_of_their_own() {
+    use playr_app::mix::Strip;
+
     let (mut harness, _dir) = window();
     harness.run_steps(2);
-    let at = |harness: &Harness<'_, Gui>| (model(harness).view(), model(harness).tab());
+    let view = |harness: &Harness<'_, Gui>| model(harness).view();
     typing(&mut harness, "6");
-    assert_eq!(at(&harness), (View::Library, Some(Tab::Tape)));
+    assert_eq!(view(&harness), View::Tape);
     harness.get_by_label("Tape waveform");
-    // A view key leaves a tab, even for the view under it.
-    typing(&mut harness, "1");
-    assert_eq!(at(&harness), (View::Library, None));
-    typing(&mut harness, "5");
-    typing(&mut harness, "7");
+    // The tape's key, not the player's pause.
+    typing(&mut harness, " ");
     assert_eq!(
-        at(&harness),
-        (View::Library, Some(Tab::Dj)),
-        "over the library"
+        model(&harness).message(),
+        Some(&Message::Tape(playr_app::tape::TapeMessage::NoTape))
     );
-    typing(&mut harness, "8");
-    assert_eq!(at(&harness), (View::Library, Some(Tab::Mix)));
-    harness.get_by_label("mute headphones");
 
-    // Tab steps through the views, then the tabs, and round.
+    // The DJ view moves through the library's rows.
+    typing(&mut harness, "7");
+    assert_eq!(view(&harness), View::Dj);
+    let before = model(&harness).cursor(View::Library).unwrap_or(0);
+    typing(&mut harness, "j");
+    assert_eq!(model(&harness).cursor(View::Library), Some(before + 1));
+
+    typing(&mut harness, "8");
+    assert_eq!(view(&harness), View::Mix);
+    harness.get_by_label("mute headphones");
+    typing(&mut harness, "T");
+    assert!(model(&harness).mixer().muted(Strip::Tape));
+
+    // Tab steps through all eight, and round.
     harness.key_press(egui::Key::Tab);
     harness.run_steps(2);
-    assert_eq!(at(&harness), (View::Library, None));
+    assert_eq!(view(&harness), View::Library);
     let back = |harness: &mut Harness<'_, Gui>| {
         harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
         harness.run_steps(2);
     };
     back(&mut harness);
-    assert_eq!(at(&harness), (View::Library, Some(Tab::Mix)));
+    assert_eq!(view(&harness), View::Mix);
     back(&mut harness);
     back(&mut harness);
-    assert_eq!(at(&harness), (View::Library, Some(Tab::Tape)));
+    assert_eq!(view(&harness), View::Tape);
     back(&mut harness);
-    assert_eq!(at(&harness), (View::Sampler, None));
-    harness.key_press(egui::Key::Tab);
-    harness.run_steps(2);
-    assert_eq!(
-        at(&harness),
-        (View::Sampler, Some(Tab::Tape)),
-        "over the sampler"
-    );
+    assert_eq!(view(&harness), View::Sampler);
 }
 
 #[test]

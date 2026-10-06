@@ -35,7 +35,7 @@ use crate::message::{self, Message};
 use crate::mix::{Mix, Strip};
 use crate::persist;
 use crate::sampler::{DetailRead, Sampler, Selected, Wave, DETAIL_MARGIN};
-use crate::{Tab, View};
+use crate::View;
 
 /// How long a message stays showing.
 pub const MESSAGE_FOR: Duration = Duration::from_secs(4);
@@ -160,10 +160,8 @@ pub struct Model {
     /// The library and player, and everything done with them.
     session: Session,
     view: View,
-    /// The window tab over `view`; left when the view changes.
-    tab: Option<Tab>,
-    /// The tabs the frontend shows; none until a window calls [`Model::offer_tabs`].
-    tabs: &'static [Tab],
+    /// The views the frontend draws; the terminal's until [`Model::show_views`].
+    views: &'static [View],
     /// Search results; when set, the library view shows these instead.
     results: Option<Vec<Track>>,
     cursors: Cursors,
@@ -292,8 +290,7 @@ impl Model {
         let mut model = Model {
             session,
             view: View::Library,
-            tab: None,
-            tabs: &[],
+            views: &View::TERMINAL,
             results: None,
             cursors: Cursors::default(),
             playing: Vec::new(),
@@ -774,7 +771,7 @@ impl Model {
     /// neither lists tracks to point at.
     fn info_for_cursor(&self) -> Option<TrackInfo> {
         let track = match self.view {
-            View::Library => self.cursor_row(self.listed(), self.cursors.library),
+            View::Library | View::Dj => self.cursor_row(self.listed(), self.cursors.library),
             View::Selection => self.cursor_row(self.session.selection(), self.cursors.selection),
             View::Queue => self.cursor_row(&self.queue, self.cursors.queue),
             _ => None,
@@ -820,9 +817,9 @@ impl Model {
         self.theme
     }
 
-    /// Lets `:view` and the view keys reach the window's tabs.
-    pub fn offer_tabs(&mut self) {
-        self.tabs = &Tab::ALL;
+    /// The views a frontend other than the terminal draws.
+    pub fn show_views(&mut self, views: &'static [View]) {
+        self.views = views;
     }
 
     /// Whether the window's transport buttons show words rather than symbols.
@@ -1342,22 +1339,11 @@ impl Frontend for Model {
         self.view
     }
 
-    fn tabs(&self) -> &'static [Tab] {
-        self.tabs
-    }
-
-    fn tab(&self) -> Option<Tab> {
-        self.tab
-    }
-
-    fn set_tab(&mut self, tab: Option<Tab>) {
-        self.tab = tab;
+    fn views(&self) -> &'static [View] {
+        self.views
     }
 
     fn set_view(&mut self, view: View) {
-        if view != self.view {
-            self.tab = None;
-        }
         self.view = view;
         // The queue opens on its first row: the track playing, if queued.
         if view == View::Queue && self.cursors.queue.is_none() && !self.queue.is_empty() {
@@ -1367,21 +1353,22 @@ impl Frontend for Model {
 
     fn cursor(&self, view: View) -> Option<usize> {
         match view {
-            View::Library => self.cursors.library,
+            // The DJ view lists the library, for loading onto a deck.
+            View::Library | View::Dj => self.cursors.library,
             View::Selection => self.cursors.selection,
             View::Playlists => self.cursors.playlists,
             View::Queue => self.cursors.queue,
-            View::Sampler => None,
+            View::Sampler | View::Tape | View::Mix => None,
         }
     }
 
     fn set_cursor(&mut self, view: View, row: Option<usize>) {
         match view {
-            View::Library => self.cursors.library = row,
+            View::Library | View::Dj => self.cursors.library = row,
             View::Selection => self.cursors.selection = row,
             View::Playlists => self.cursors.playlists = row,
             View::Queue => self.cursors.queue = row,
-            View::Sampler => {}
+            View::Sampler | View::Tape | View::Mix => {}
         }
     }
 

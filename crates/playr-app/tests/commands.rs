@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use playr_app::action::{Action, Key, Keymap};
 use playr_app::command::{completions, line, parse, CommandLine, History, COMMANDS, HISTORY_LEN};
-use playr_app::Tab;
 use playr_app::View::{self, Library, Playlists, Sampler, Selection};
 use playr_core::audio::Mode;
 use playr_core::gain::ReplayGain;
@@ -599,9 +598,9 @@ fn mode_and_view_take_a_name_or_its_prefix() {
     assert_eq!(lib("view sel"), Ok(Action::ShowView(Selection)));
     assert_eq!(lib("view p"), Ok(Action::ShowView(Playlists)));
     assert_eq!(lib("view q"), Ok(Action::ShowView(View::Queue)));
-    assert_eq!(lib("view t"), Ok(Action::ShowTab(Tab::Tape)));
-    assert_eq!(lib("view mix"), Ok(Action::ShowTab(Tab::Mix)));
-    assert_eq!(line(&Action::ShowTab(Tab::Dj), None), "view dj");
+    assert_eq!(lib("view t"), Ok(Action::ShowView(View::Tape)));
+    assert_eq!(lib("view mix"), Ok(Action::ShowView(View::Mix)));
+    assert_eq!(line(&Action::ShowView(View::Dj), None), "view dj");
     assert_eq!(
         lib("view nope"),
         Err("views: library, queue, selection, playlists, sampler, tape, dj, mix".into())
@@ -808,6 +807,9 @@ fn default_keys_map_to_actions_by_view() {
     assert_eq!(default_key("d", Selection), Some(Action::Remove));
     assert_eq!(default_key("d", Playlists), Some(Action::DeletePlaylist));
     assert_eq!(default_key("d", Library), None);
+    // The DJ view keeps search; its deck B cue is `m`.
+    assert_eq!(default_key("/", View::Dj), Some(Action::StartSearch));
+    assert!(matches!(default_key("m", View::Dj), Some(Action::Dj(_))));
     assert_eq!(default_key("r", Library), None);
     assert_eq!(default_key("a", Selection), None);
     assert_eq!(default_key("J", Selection), Some(Action::MoveTrack(1)));
@@ -1089,11 +1091,7 @@ fn the_cheatsheet_lists_every_command_under_its_view() {
         let heading = match c.view {
             None if c.extension => "Extensions",
             None => "Every view",
-            Some(Library) => "Library",
-            Some(Selection) => "Selection",
-            Some(Playlists) => "Playlists",
-            Some(View::Sampler) => "Sampler",
-            Some(View::Queue) => "Queue",
+            Some(view) => view.title(),
         };
         let usage = format!("`:{} {}", c.name, c.args.replace('|', "\\|"));
         let usage = format!("{}`", usage.trim_end());
@@ -1354,11 +1352,14 @@ fn views_step_forward_and_back_in_tab_order() {
     assert_eq!(parse("prev-view", Library), Ok(Action::PrevView));
     assert_eq!(default_key("backtab", Library), Some(Action::PrevView));
     for view in View::ALL {
-        assert_eq!(view.next().prev(), view);
+        assert_eq!(view.step(&View::ALL, 1).step(&View::ALL, -1), view);
     }
-    assert_eq!(Library.prev(), Sampler);
-    assert_eq!(View::Queue.prev(), Library);
-    assert_eq!(Sampler.prev(), Playlists);
+    assert_eq!(Library.step(&View::ALL, -1), View::Mix);
+    assert_eq!(Library.step(&View::TERMINAL, -1), Sampler);
+    assert_eq!(Sampler.step(&View::TERMINAL, 1), Library);
+    assert_eq!(View::Queue.step(&View::ALL, -1), Library);
+    // From a view not shown, the first that is.
+    assert_eq!(View::Dj.step(&View::TERMINAL, 1), Library);
 }
 
 #[test]

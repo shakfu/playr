@@ -153,10 +153,10 @@ pub fn run(
     requests: Receiver<Request>,
     mut publish: impl FnMut(&Model),
 ) -> Model {
+    model.show_views(&web::VIEWS);
     // A request taken from the queue while merging seeks, to run next.
     let mut held = None;
     loop {
-        let before = model.view();
         let wait = match model.snapshot().status.state {
             State::Playing => FRAME,
             _ => IDLE,
@@ -233,15 +233,10 @@ pub fn run(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        // The page has no sampler. A step onto it goes one further the same
-        // way; anything else that reaches it goes back to the library.
-        if model.view() == View::Sampler {
-            let view = match before {
-                v if v.next() == View::Sampler => View::Sampler.next(),
-                v if v.prev() == View::Sampler => View::Sampler.prev(),
-                _ => View::Library,
-            };
-            model.set_view(view);
+        // Steps pass over the views the page lacks; anything else that
+        // reaches one goes back to the library.
+        if !web::VIEWS.contains(&model.view()) {
+            model.set_view(View::Library);
         }
         model.refresh();
         model.expire_message();

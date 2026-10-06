@@ -45,6 +45,8 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
         View::Playlists => drawn.lists.playlists = draw_playlists(app, f, body),
         View::Queue => drawn.lists.queue = draw_queue(app, f, body),
         View::Sampler => (drawn.zoom, drawn.scale) = draw_sampler(app, f, body),
+        // The window's only; dispatch does not show them here.
+        View::Tape | View::Dj | View::Mix => {}
     }
     draw_bar(app, f, bar);
     drawn.help_scroll = match app.input {
@@ -456,14 +458,14 @@ fn runs(cells: impl Iterator<Item = (char, Style)>) -> Line<'static> {
 
 fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
     let p = app.palette();
-    let views = View::ALL;
+    let views = View::TERMINAL;
     let titles = views.map(|v| {
         let n = match v {
             View::Library => app.visible().len(),
             View::Selection => app.selection.len(),
             View::Playlists => app.playlists.len(),
             View::Queue => app.queue.len(),
-            View::Sampler => return format!(" {} ", view_title(v)),
+            _ => return format!(" {} ", view_title(v)),
         };
         format!(" {} {} ", view_title(v), n)
     });

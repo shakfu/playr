@@ -13,7 +13,7 @@ use playr_app::config::Config;
 use playr_app::dispatch::{Confirm, Frontend};
 use playr_app::message::Message;
 use playr_app::model::{hold_peak, Input, Model, PEAK_HOLD};
-use playr_app::{Tab, View};
+use playr_app::View;
 use playr_core::audio::Mode;
 use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
@@ -3620,15 +3620,27 @@ fn the_master_is_recorded_into_the_library_and_metered() {
 }
 
 #[test]
-fn the_terminal_refuses_the_window_tabs_and_steps_over_them() {
+fn the_terminal_refuses_the_window_views_and_steps_over_them() {
     let (mut model, _dir) = model();
-    model.perform(Action::ShowTab(Tab::Mix));
-    assert_eq!(model.tab(), None);
+    model.perform(Action::ShowView(View::Mix));
+    assert_eq!(model.view(), View::Library);
     assert_eq!(
         model.message(),
-        Some(&Message::Command("no Mix tab here; use :mix".into()))
+        Some(&Message::Command("no Mix view here; use :mix".into()))
     );
     model.perform(Action::ShowView(View::Sampler));
     model.perform(Action::NextView);
-    assert_eq!((model.view(), model.tab()), (View::Library, None));
+    assert_eq!(model.view(), View::Library);
+    model.perform(Action::PrevView);
+    assert_eq!(model.view(), View::Sampler);
+}
+
+#[test]
+fn a_search_in_the_dj_view_lists_its_results_there() {
+    let (mut model, _dir) = model();
+    model.show_views(&View::ALL);
+    model.perform(Action::ShowView(View::Dj));
+    model.perform(Action::Search("nothing matches this".into()));
+    assert_eq!(model.view(), View::Dj);
+    assert!(model.listed().is_empty());
 }

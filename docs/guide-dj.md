@@ -12,7 +12,7 @@ playr has two decks and a mixer. Each deck plays a library track at its own rate
 
 ## The tab
 
-**DJ** in the tab bar opens it, over the library. `7` or `:view dj` opens it too. Keys keep acting in the library; a key that shows a view, such as `1`, leaves the tab.
+**DJ** in the tab bar, `7` or `:view dj` opens it. It lists the library: `j`, `k` and `enter` move through it and play from it, and `/` searches it. The tab has keys of its own, under `[keys.dj]`: `a` and `b` load the track under the cursor onto a deck; `z`, `x` and `c` play, pause and cue deck A, and `,`, `.` and `m` deck B; left, right and down glide the crossfader to A, B and the centre.
 
 From top to bottom:
 

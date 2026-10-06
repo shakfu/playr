@@ -65,7 +65,7 @@ fn an_empty_file_gives_the_defaults() {
     assert_eq!(config, Config::default());
     assert_eq!(config.keys, Keymap::default());
     assert_eq!(config.settings, Settings::default());
-    assert_eq!(Keymap::default().bindings().len(), 128);
+    assert_eq!(Keymap::default().bindings().len(), 152);
 }
 
 #[test]
@@ -196,7 +196,7 @@ x = "delete"
             "line 8: not a key: zz",
             "line 9: x must be a command string, not an integer",
             "line 10: a key cannot run :map or :unmap",
-            "line 12: [keys.nope] is not a view; views: library, queue, selection, playlists, sampler",
+            "line 12: [keys.nope] is not a view; views: library, queue, selection, playlists, sampler, tape, dj, mix",
             "line 16: :delete works in the playlists view; put x under [keys.playlists]",
         ]
     );

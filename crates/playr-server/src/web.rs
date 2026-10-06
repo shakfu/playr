@@ -43,8 +43,7 @@ pub fn allowed(action: &Action) -> bool {
         | Open(_)
         | Map { .. }
         | Unmap { .. } => false,
-        ShowView(View::Sampler)
-        | ShowTab(_)
+        ShowView(View::Sampler | View::Tape | View::Dj | View::Mix)
         | Slice(_)
         | FixTempo(_)
         | Audition
@@ -309,7 +308,7 @@ pub fn row_key(model: &Model, view: View, row: usize) -> Option<String> {
             }
         }
         View::Queue => model.queue().get(row).map(|t| t.path.clone()),
-        View::Sampler => None,
+        View::Sampler | View::Tape | View::Dj | View::Mix => None,
     }
 }
 

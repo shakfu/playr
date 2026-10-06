@@ -36,11 +36,29 @@ pub enum View {
     Playlists,
     /// The playing track's waveform, for marking and slicing it.
     Sampler,
+    /// The tape looper. This and the two below are the window's only; the
+    /// terminal reaches them with `:tape`, `:dj` and `:mix`.
+    Tape,
+    /// The DJ decks, over the library's list and cursor.
+    Dj,
+    Mix,
 }
 
 impl View {
     /// The views in tab order.
-    pub const ALL: [View; 5] = [
+    pub const ALL: [View; 8] = [
+        View::Library,
+        View::Queue,
+        View::Selection,
+        View::Playlists,
+        View::Sampler,
+        View::Tape,
+        View::Dj,
+        View::Mix,
+    ];
+
+    /// The views the terminal draws.
+    pub const TERMINAL: [View; 5] = [
         View::Library,
         View::Queue,
         View::Selection,
@@ -56,49 +74,18 @@ impl View {
             View::Playlists => "Playlists",
             View::Sampler => "Sampler",
             View::Queue => "Queue",
+            View::Tape => "Tape",
+            View::Dj => "DJ",
+            View::Mix => "Mix",
         }
     }
 
-    /// The view `next-view` switches to after this one.
-    pub fn next(self) -> Self {
-        match self {
-            View::Library => View::Queue,
-            View::Queue => View::Selection,
-            View::Selection => View::Playlists,
-            View::Playlists => View::Sampler,
-            View::Sampler => View::Library,
-        }
-    }
-
-    /// The view `prev-view` switches to after this one.
-    pub fn prev(self) -> Self {
-        let at = View::ALL
-            .iter()
-            .position(|v| *v == self)
-            .expect("every view");
-        View::ALL[(at + View::ALL.len() - 1) % View::ALL.len()]
-    }
-}
-
-/// A tab the window shows over a view. Keys keep acting in the view under it.
-/// The terminal has none; it reaches these with `:tape`, `:dj` and `:mix`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Tape,
-    Dj,
-    Mix,
-}
-
-impl Tab {
-    /// The tabs in tab order, after the views.
-    pub const ALL: [Tab; 3] = [Tab::Tape, Tab::Dj, Tab::Mix];
-
-    /// The tab's name on its tab.
-    pub fn title(self) -> &'static str {
-        match self {
-            Tab::Tape => "Tape",
-            Tab::Dj => "DJ",
-            Tab::Mix => "Mix",
+    /// The view `by` places from this one among `shown`, round the ends; the
+    /// first of `shown` from a view not in it.
+    pub fn step(self, shown: &[View], by: isize) -> Self {
+        match shown.iter().position(|v| *v == self) {
+            Some(at) => shown[(at as isize + by).rem_euclid(shown.len() as isize) as usize],
+            None => shown[0],
         }
     }
 }

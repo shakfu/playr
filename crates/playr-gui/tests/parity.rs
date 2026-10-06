@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use playr_app::action::{Action, Key, Keymap, Slicing, Zoom};
-use playr_app::{Tab, Theme, View};
+use playr_app::{Theme, View};
 use playr_core::audio::Mode;
 use playr_core::gain::ReplayGain;
 use playr_gui::controls;
@@ -19,7 +19,6 @@ fn every_action() -> Vec<Action> {
         Action::Help,
         Action::CommandHelp,
         Action::ShowView(View::Library),
-        Action::ShowTab(Tab::Mix),
         Action::NextView,
         Action::PrevView,
         Action::Cursor(1),
@@ -133,7 +132,6 @@ fn every_action() -> Vec<Action> {
             | Action::Help
             | Action::CommandHelp
             | Action::ShowView(_)
-            | Action::ShowTab(_)
             | Action::NextView
             | Action::PrevView
             | Action::Cursor(_)

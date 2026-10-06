@@ -40,11 +40,11 @@ struct Headless {
 
 fn slot(view: View) -> Option<usize> {
     match view {
-        Library => Some(0),
+        Library | View::Dj => Some(0),
         Selection => Some(1),
         Playlists => Some(2),
         View::Queue => Some(3),
-        Sampler => None,
+        Sampler | View::Tape | View::Mix => None,
     }
 }
 
@@ -65,13 +65,9 @@ impl Frontend for Headless {
     fn set_view(&mut self, view: View) {
         self.view = view;
     }
-    fn tabs(&self) -> &'static [playr_app::Tab] {
-        &[]
+    fn views(&self) -> &'static [View] {
+        &View::TERMINAL
     }
-    fn tab(&self) -> Option<playr_app::Tab> {
-        None
-    }
-    fn set_tab(&mut self, _: Option<playr_app::Tab>) {}
     fn cursor(&self, view: View) -> Option<usize> {
         slot(view).and_then(|i| self.cursors[i])
     }

@@ -20,10 +20,11 @@ use playr_core::session::Session;
 use playr_core::wave::Peaks;
 
 use crate::action::{Action, Keymap, Slicing, Zoom};
+use crate::command::view_name;
 use crate::message::Message;
 use crate::mix::{MixAction, Strip};
 use crate::sampler::{self, Before, Sampler, Selected};
-use crate::{Display, Tab, Theme, View};
+use crate::{Display, Theme, View};
 
 /// A destructive action held until the listener confirms it.
 #[derive(Debug, Clone, PartialEq)]
@@ -189,11 +190,8 @@ pub trait Frontend {
 
     fn view(&self) -> View;
     fn set_view(&mut self, view: View);
-    /// The tabs this frontend shows over its views: none in the terminal.
-    fn tabs(&self) -> &'static [Tab];
-    /// The tab showing over the view, if any.
-    fn tab(&self) -> Option<Tab>;
-    fn set_tab(&mut self, tab: Option<Tab>);
+    /// The views this frontend draws, in tab order; it is not shown the others.
+    fn views(&self) -> &'static [View];
 
     /// The row under `view`'s cursor, if it has rows and one is chosen.
     fn cursor(&self, view: View) -> Option<usize>;
@@ -267,7 +265,7 @@ pub fn sql_done(f: &mut impl Frontend, then: SqlThen, result: Result<Vec<PathBuf
     };
     match then {
         SqlThen::Show(statement) => {
-            f.set_view(View::Library);
+            show_library(f);
             let empty = tracks.is_empty();
             f.session_mut().set_shown(Some(Query::Sql(statement)));
             f.set_results(Some(tracks));
@@ -300,40 +298,17 @@ pub fn dispatch(action: Action, f: &mut impl Frontend) {
     settle(f, before);
 }
 
-/// Shows `tab`, over the library for the DJ tab, which lists it for loading.
-fn show_tab(f: &mut impl Frontend, tab: Tab) {
-    if !f.tabs().contains(&tab) {
-        let name = tab.title().to_lowercase();
-        f.notify(Message::Command(format!(
-            "no {} tab here; use :{name}",
-            tab.title()
-        )));
-        return;
+/// Shows `view`, or says the frontend has no such view.
+fn show_view(f: &mut impl Frontend, view: View) {
+    if f.views().contains(&view) {
+        return f.set_view(view);
     }
-    if tab == Tab::Dj {
-        f.set_view(View::Library);
-    }
-    f.set_tab(Some(tab));
-}
-
-/// Moves `by` places along the views, then the frontend's tabs.
-fn step_view(f: &mut impl Frontend, by: isize) {
-    let tabs = f.tabs();
-    let at = match f.tab() {
-        Some(tab) => View::ALL.len() + tabs.iter().position(|t| *t == tab).expect("shown"),
-        None => View::ALL
-            .iter()
-            .position(|v| *v == f.view())
-            .expect("every view"),
+    let name = view_name(view);
+    let text = match view {
+        View::Tape | View::Dj | View::Mix => format!("no {} view here; use :{name}", view.title()),
+        _ => format!("no {} view here", view.title()),
     };
-    let to = (at as isize + by).rem_euclid((View::ALL.len() + tabs.len()) as isize) as usize;
-    match View::ALL.get(to) {
-        Some(view) => {
-            f.set_tab(None);
-            f.set_view(*view);
-        }
-        None => show_tab(f, tabs[to - View::ALL.len()]),
-    }
+    f.notify(Message::Command(text));
 }
 
 fn act(action: Action, f: &mut impl Frontend) {
@@ -341,13 +316,15 @@ fn act(action: Action, f: &mut impl Frontend) {
         Action::Quit => f.present(Presentation::Quit),
         Action::Help => f.present(Presentation::KeyList),
         Action::CommandHelp => f.present(Presentation::CommandList),
-        Action::ShowView(view) => {
-            f.set_tab(None);
-            f.set_view(view);
+        Action::ShowView(view) => show_view(f, view),
+        Action::NextView => {
+            let next = f.view().step(f.views(), 1);
+            f.set_view(next);
         }
-        Action::ShowTab(tab) => show_tab(f, tab),
-        Action::NextView => step_view(f, 1),
-        Action::PrevView => step_view(f, -1),
+        Action::PrevView => {
+            let prev = f.view().step(f.views(), -1);
+            f.set_view(prev);
+        }
         Action::Cursor(rows) => move_cursor(f, rows),
         Action::CursorFirst => select(f, 0),
         Action::CursorLast => {
@@ -374,7 +351,7 @@ fn act(action: Action, f: &mut impl Frontend) {
         Action::Enqueue(next) => enqueue(f, next),
         Action::EnqueueAll => {
             let tracks = match f.view() {
-                View::Library if f.searching() => f.listed().to_vec(),
+                View::Library | View::Dj if f.searching() => f.listed().to_vec(),
                 View::Selection => f.session().selection().to_vec(),
                 _ => Vec::new(),
             };
@@ -969,10 +946,17 @@ fn confirmed_now(question: Confirm, f: &mut impl Frontend) {
     }
 }
 
+/// Shows the library view, unless the DJ view, which lists it too, is showing.
+fn show_library(f: &mut impl Frontend) {
+    if f.view() != View::Dj {
+        f.set_view(View::Library);
+    }
+}
+
 /// Shows the tracks matching `query` in the library view, or the whole library
 /// for an empty query, with the cursor on the first.
 pub fn search(f: &mut impl Frontend, query: &str) {
-    f.set_view(View::Library);
+    show_library(f);
     let results = (!query.is_empty()).then(|| f.session().search(query));
     let shown = (!query.is_empty()).then(|| Query::Text(query.to_string()));
     f.session_mut().set_shown(shown);
@@ -987,7 +971,7 @@ fn show_search(f: &mut impl Frontend, search: &SavedSearch) {
     if let Query::Sql(statement) = &search.query {
         return run_sql(f, statement.clone(), SqlThen::Show(statement.clone()));
     }
-    f.set_view(View::Library);
+    show_library(f);
     let results = f.session().run_search(search);
     let empty = results.is_empty();
     f.session_mut().set_shown(Some(search.query.clone()));
@@ -1058,11 +1042,11 @@ pub fn rename(f: &mut impl Frontend, from: &Playlist, name: &str) {
 /// The number of rows `view` lists.
 fn len(f: &impl Frontend, view: View) -> usize {
     match view {
-        View::Library => f.listed().len(),
+        View::Library | View::Dj => f.listed().len(),
         View::Selection => f.session().selection().len(),
         View::Playlists => f.session().playlists().len() + f.session().searches().len(),
         View::Queue => f.session().played().len() + f.session().queue_rows().len(),
-        View::Sampler => 0,
+        View::Sampler | View::Tape | View::Mix => 0,
     }
 }
 
@@ -1117,7 +1101,7 @@ fn library_track(f: &impl Frontend) -> Option<Track> {
 /// The track under the cursor in the library or the selection.
 pub(crate) fn cursor_track(f: &impl Frontend) -> Option<Track> {
     match f.view() {
-        View::Library => library_track(f),
+        View::Library | View::Dj => library_track(f),
         View::Selection => f
             .session()
             .selection()
@@ -1129,7 +1113,7 @@ pub(crate) fn cursor_track(f: &impl Frontend) -> Option<Track> {
 
 fn activate(f: &mut impl Frontend) {
     match f.view() {
-        View::Library => {
+        View::Library | View::Dj => {
             let Some(i) = f.cursor(View::Library) else {
                 return;
             };
@@ -1169,7 +1153,7 @@ fn activate(f: &mut impl Frontend) {
                 f.session_mut().play_queue_row(row);
             }
         }
-        View::Sampler => {}
+        View::Sampler | View::Tape | View::Mix => {}
     }
 }
 
@@ -1177,7 +1161,7 @@ fn activate(f: &mut impl Frontend) {
 /// the cursor on a row, so a run of tracks takes one key each.
 fn enqueue(f: &mut impl Frontend, next: bool) {
     let tracks: Vec<Track> = match f.view() {
-        View::Library => library_track(f).into_iter().collect(),
+        View::Library | View::Dj => library_track(f).into_iter().collect(),
         View::Selection => f
             .cursor(View::Selection)
             .and_then(|i| f.session().selection().get(i).cloned())
@@ -1198,7 +1182,7 @@ fn enqueue(f: &mut impl Frontend, next: bool) {
             (None, Some(search)) => f.session().run_search(&search),
             (None, None) => Vec::new(),
         },
-        View::Sampler | View::Queue => Vec::new(),
+        View::Sampler | View::Queue | View::Tape | View::Mix => Vec::new(),
     };
     if tracks.is_empty() {
         return;
@@ -1213,7 +1197,7 @@ fn enqueue(f: &mut impl Frontend, next: bool) {
 /// of tracks takes one key each.
 fn add(f: &mut impl Frontend) {
     let outcome = match f.view() {
-        View::Library => {
+        View::Library | View::Dj => {
             let Some(i) = f.cursor(View::Library) else {
                 return;
             };
@@ -1255,7 +1239,7 @@ fn add(f: &mut impl Frontend) {
             };
             f.session_mut().add_to_selection(track)
         }
-        View::Selection | View::Sampler => return,
+        View::Selection | View::Sampler | View::Tape | View::Mix => return,
     };
     // Keep the selection's cursor on a track: on the first once a track is
     // added, and within the list when unselecting shortens it.

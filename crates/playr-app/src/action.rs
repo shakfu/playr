@@ -12,7 +12,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::{Tab, View};
+use crate::View;
 use playr_core::audio::eq::Band;
 use playr_core::audio::Mode;
 
@@ -25,8 +25,6 @@ pub enum Action {
     /// Show the command list.
     CommandHelp,
     ShowView(View),
-    /// Show a window tab; the terminal refuses.
-    ShowTab(Tab),
     NextView,
     PrevView,
     /// Move the cursor this many rows; negative is up.
