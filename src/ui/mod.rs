@@ -211,9 +211,10 @@ impl App {
     }
 
     /// Registers with the system's media keys and now-playing panel. Called
-    /// once, by `main`, so tests that build an `App` stay off the bus.
+    /// once, by `main`, so tests that build an `App` stay off the bus. A
+    /// terminal has no window, so Windows gets neither.
     pub fn attach_media(&mut self) {
-        self.model.attach_media();
+        self.model.attach_media(None);
     }
 
     /// Sets the library file `:scan` writes to when playr started without one.

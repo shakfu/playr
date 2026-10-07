@@ -3818,6 +3818,7 @@ dependencies = [
  "playr-app",
  "playr-core",
  "playr-looper",
+ "raw-window-handle",
  "rfd",
  "rtrb",
  "rusqlite",

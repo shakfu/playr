@@ -15,6 +15,7 @@ use playr_core::audio::Player;
 use playr_core::db::{self, Track};
 use playr_core::scan;
 use playr_gui::{Errors, Gui};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// playr - a music player, in a window
 #[derive(Parser)]
@@ -81,7 +82,7 @@ fn main() -> eframe::Result {
                     );
                     // `:scan` creates the library here when there is none yet.
                     model.session_mut().set_library_path(start.library);
-                    model.attach_media();
+                    model.attach_media(window_handle(cc));
                     Ok(Box::new(Gui::new(model)))
                 }),
             )
@@ -89,6 +90,15 @@ fn main() -> eframe::Result {
         Err(errors) => {
             eframe::run_native("playr", options, Box::new(|_| Ok(Box::new(Errors(errors)))))
         }
+    }
+}
+
+/// The window's `HWND`, which Windows shows the now-playing panel against.
+/// Other systems need none.
+fn window_handle(window: &impl HasWindowHandle) -> Option<*mut std::ffi::c_void> {
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get() as *mut std::ffi::c_void),
+        _ => None,
     }
 }
 

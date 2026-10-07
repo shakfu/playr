@@ -11,9 +11,10 @@
 //! this until it calls that method.
 //!
 //! None of it is load bearing. A machine with no session bus, no panel, or a
-//! terminal on Windows, where the panel needs a window handle playr has not
-//! got, leaves [`Media::new`] with nothing attached and every call a no-op.
+//! terminal on Windows, where the panel needs a window handle the terminal has
+//! not got, leaves [`Media::new`] with nothing attached and every call a no-op.
 
+use std::ffi::c_void;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -51,11 +52,15 @@ impl Media {
     /// the handler's thread each time one arrives, so a frontend that sleeps
     /// between frames draws the result.
     ///
+    /// `window` is the frontend's window handle, an `HWND`, which Windows
+    /// shows the panel against; other systems ignore it. Without one, Windows
+    /// has no panel.
+    ///
     /// Failure is not an error: playr runs without the panel.
-    pub fn new(wake: impl Fn() + Send + 'static) -> Media {
+    pub fn new(window: Option<*mut c_void>, wake: impl Fn() + Send + 'static) -> Media {
         let (send, events) = mpsc::channel();
         Media {
-            controls: attach(send, wake),
+            controls: attach(window, send, wake),
             events,
             shown: Shown::default(),
         }
@@ -128,6 +133,7 @@ impl Media {
 /// Registers with the system's controls, or gives nothing back when there are
 /// none to register with.
 fn attach(
+    window: Option<*mut c_void>,
     send: Sender<MediaControlEvent>,
     wake: impl Fn() + Send + 'static,
 ) -> Option<MediaControls> {
@@ -135,10 +141,12 @@ fn attach(
         // The MPRIS bus name, which is `org.mpris.MediaPlayer2.playr`.
         dbus_name: "playr",
         display_name: "playr",
-        // Windows shows the panel against a window; the terminal has none, so
-        // there it attaches only from the window build.
-        hwnd: None,
+        hwnd: window,
     };
+    // souvlaki panics on Windows without a window, rather than failing.
+    if cfg!(windows) && config.hwnd.is_none() {
+        return None;
+    }
     let mut controls = MediaControls::new(config).ok()?;
     controls
         .attach(move |event| {

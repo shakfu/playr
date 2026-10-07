@@ -618,10 +618,12 @@ impl Model {
     }
 
     /// Registers playr with the system's media keys and now-playing panel.
-    /// A frontend calls this once; without it playr has neither.
-    pub fn attach_media(&mut self) {
+    /// A frontend calls this once; without it playr has neither. `window` is
+    /// the frontend's `HWND`, without which Windows has neither; see
+    /// [`Media::new`].
+    pub fn attach_media(&mut self, window: Option<*mut std::ffi::c_void>) {
         let wake = self.wake.clone();
-        self.media = Media::new(move || wake());
+        self.media = Media::new(window, move || wake());
     }
 
     /// Hands the panel the playing track and position, once a frame.
