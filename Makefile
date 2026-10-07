@@ -1,6 +1,8 @@
 INSTALL_DIR := $(HOME)/.local/bin
 VERSION := $(shell sed -n 's/^version = "\(.*\)"$$/\1/p' Cargo.toml | head -1)
 UNAME := $(shell uname -s)
+# The programs' suffix: Windows's install, under PowerShell or cmd, adds none.
+EXE := $(if $(filter Windows_NT,$(OS)),.exe)
 DIAGRAMS := $(patsubst %.d2,%.svg,$(wildcard docs/media/*.d2))
 
 .PHONY: all build release debug test test-devices fmt clippy run gui app clean install install-dev diagrams icons touchosc touchosc-test page-test install-service
@@ -73,9 +75,9 @@ install-dev: STRIP := -s
 install-dev: debug
 install install-dev:
 	@install -d $(INSTALL_DIR)
-	@install $(STRIP) -m 755 $(FROM)/playr $(INSTALL_DIR)/playr
-	@install $(STRIP) -m 755 $(FROM)/playr-gui $(INSTALL_DIR)/playr-gui
-	@install $(STRIP) -m 755 $(FROM)/playr-server $(INSTALL_DIR)/playr-server
+	@install $(STRIP) -m 755 $(FROM)/playr$(EXE) $(INSTALL_DIR)/playr$(EXE)
+	@install $(STRIP) -m 755 $(FROM)/playr-gui$(EXE) $(INSTALL_DIR)/playr-gui$(EXE)
+	@install $(STRIP) -m 755 $(FROM)/playr-server$(EXE) $(INSTALL_DIR)/playr-server$(EXE)
 	@echo "installed playr, playr-gui and playr-server from $(FROM) to $(INSTALL_DIR)"
 ifeq ($(UNAME),Darwin)
 	@install -d $(HOME)/Applications
