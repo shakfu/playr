@@ -6,9 +6,13 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
+- The Mix tab's headphones strip has a meter, as the other strips do: the cued deck's peak after the headphone fader, held for 1.5 s. Library API: `Mixer::take_cue_peak` and `Status::take_cue_peak` in `playr-dj`; `Snapshot::meters` gains a fifth entry, the headphones.
+
 - Each program shows its version while running. The keys help title of all three reads `Keys in the library view (playr 0.18.0)`. `playr-server` prints `playr-server 0.18.0: ADDRESS` on start, and `GET /config` returns it. The window's Help, About playr shows it with the author and links to the repository, its releases and its issues. Before, only `--version` gave it, which says nothing about a process already running. Library API: `playr_app::VERSION`.
 
 ### Fixed
+
+- The window draws library text in scripts its fonts lack, such as Chinese, Japanese, Korean, Arabic or Thai, where before it drew boxes. When the library, queue, selection or playlists change, the characters egui cannot draw are looked up in the system's fonts, and each font that covers some of them is added. A library without such characters loads none. On macOS and Windows each script has a list of files, smallest first, and only the scripts present are read; Linux asks `fc-match`. The window holds what it loads: on macOS 8 MB for Japanese and 15 MB for Korean. System fonts over bundled ones: bundling CJK alone would add 10 MB or more to each binary. Only the macOS list is tested.
 
 - `[` and `]` centre the sampler's view on the range end they select, turning Fit on if it was off. Before, with Fit off, they selected the end but the view stayed on the playhead, so they seemed to do nothing. A drag from an end now selects it with `:select-edge`, which leaves the view and Fit alone, so the waveform does not jump under the pointer. Library API: `Action::SelectEdge`.
 

@@ -17,16 +17,14 @@ const FADER: f32 = 150.0;
 /// The bottom of a meter, in dBFS.
 const FLOOR_DB: f32 = -60.0;
 
-/// The meter shown for `s`: [`playr_app::model::Snapshot::meters`] holds
-/// the player's, the tape's, the decks' and the master's; the headphones
-/// have none.
-fn meter_of(s: Strip) -> Option<usize> {
+/// The meter shown for `s`: its index in [`playr_app::model::Snapshot::meters`].
+fn meter_of(s: Strip) -> usize {
     match s {
-        Strip::Player => Some(0),
-        Strip::Tape => Some(1),
-        Strip::Decks => Some(2),
-        Strip::Master => Some(3),
-        Strip::Headphones => None,
+        Strip::Player => 0,
+        Strip::Tape => 1,
+        Strip::Decks => 2,
+        Strip::Master => 3,
+        Strip::Headphones => 4,
     }
 }
 
@@ -42,7 +40,7 @@ pub fn show(model: &Model, ui: &mut egui::Ui) -> Vec<Action> {
             for strip in Strip::ALL {
                 ui.group(|ui| {
                     ui.vertical(|ui| {
-                        let held = meter_of(strip).map(|i| snapshot.meters[i]);
+                        let held = snapshot.meters[meter_of(strip)];
                         fader(ui, &mix, strip, held, &mut actions);
                     });
                 });
@@ -56,13 +54,7 @@ pub fn show(model: &Model, ui: &mut egui::Ui) -> Vec<Action> {
 }
 
 /// A strip's name, fader and meter, its level in dB, and its mute.
-fn fader(
-    ui: &mut egui::Ui,
-    mix: &Mix,
-    strip: Strip,
-    held: Option<Option<f32>>,
-    actions: &mut Vec<Action>,
-) {
+fn fader(ui: &mut egui::Ui, mix: &Mix, strip: Strip, held: Option<f32>, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         let mut p = (mix.level(strip) * 100.0).round();
         let slider = egui::Slider::new(&mut p, 0.0..=100.0)
@@ -72,9 +64,7 @@ fn fader(
         if ui.add(slider).changed() {
             actions.push(Action::Mix(MixAction::Set(strip, p / 100.0)));
         }
-        if let Some(held) = held {
-            meter(ui, held);
-        }
+        meter(ui, held);
     });
     ui.monospace(match mix.law().gain(mix.level(strip)) {
         0.0 => "off".to_string(),

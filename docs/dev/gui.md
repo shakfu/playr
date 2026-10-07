@@ -335,7 +335,7 @@ The sampler's buttons were cut from five rows to two, and a Sampler menu replace
 
 ## Open questions
 
-- **Non-Latin text.** egui's default fonts cover Latin, Greek and Cyrillic. The GUI shows library text in other scripts (tags, titles, paths) as boxes; a terminal uses its own font. Users with Chinese, Japanese or Korean (CJK) libraries cannot read their tracks in the GUI. CJK needs a font with those glyphs: bundling Noto Sans CJK adds about 16 MB per binary (estimate), and loading a system font differs per platform. egui 0.36 shapes text with `harfrust` but has no bidi algorithm, so a title mixing right-to-left and left-to-right text may show out of order (inference).
+- **Right-to-left text.** Other scripts are drawn with system fonts; see `crates/playr-gui/src/fonts.rs`. egui 0.36 shapes text with `harfrust` but has no bidi algorithm, so a title mixing right-to-left and left-to-right text may show out of order (inference).
 
 - **Native paths.** Both frontends use `~/.local/share/playr` and `~/.config/playr` on every platform, which is unusual on Windows and macOS. Moving to each platform's directories would move existing libraries.
 

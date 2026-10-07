@@ -18,13 +18,11 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Desktop window
 
-- [ ] **Non-Latin text in the GUI.** egui's default fonts cover Latin, Greek and Cyrillic. Library text in other scripts (tags, titles, paths) renders as boxes. Users with Chinese, Japanese or Korean (CJK) libraries cannot read their tracks in the GUI; the terminal is unaffected. Each script needs a system or bundled font. egui 0.36 shapes text with `harfrust` but has no bidi algorithm, so a title mixing right-to-left and left-to-right text may show out of order (inference).
-
 - [ ] **macOS signing and notarization.** `playr.app` is unsigned, so a downloaded copy is refused until allowed in System Settings. Needs an Apple Developer account and the workflow's secrets.
 
 ### Mixer
 
-- [ ] **A headphone meter, and a frame-exact tape Take.** The mixer is built (`docs/dev/mixer.md`, phases 1 to 3). Left: the cue has no meter of its own, and the tape's Take is checked each refresh, about 16 ms, rather than on the frame, which needs a hook in the bus's callback.
+- [ ] **A frame-exact tape Take.** The mixer is built (`docs/dev/mixer.md`, phases 1 to 3). Left: the tape's Take is checked each refresh, about 16 ms, rather than on the frame, which needs a hook in the bus's callback.
 
 ## Medium
 
@@ -85,6 +83,10 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 - [ ] **Relative rows from 0.1.0.** A 0.1.0 scan with a relative path stored relative rows. Rescanning adds absolute duplicates, and pruning never matches the old rows. A one-off cleanup would delete them, and their playlist entries with them.
 
 ### Interface
+
+- [ ] **No emoji fonts in the window.** egui's `default_fonts` feature bundles `NotoEmoji-Regular.ttf` and `emoji-icon-font.ttf`, 726 KB of the 16.7 MB binary. The window uses them for five symbols only: Pause, Previous, Stop and Next (U+23F8, U+23EE, U+23F9, U+23ED) from the icon font, and the sampler's zoom-all arrow (U+2194) from NotoEmoji. Turn the feature off and bundle Ubuntu-Light and Hack alone; paint the five as shapes, as Play and From start already are. Emoji in library tags then show as boxes: the system fallback in `fonts.rs` loads no emoji font, and egui cannot draw Apple Color Emoji's colour glyphs.
+
+- [ ] **System fonts on Windows and Linux.** The window draws other scripts with system fonts, tested on macOS only. The Windows list of files and the `fc-match` query on Linux are untried there. Right-to-left text may show out of order: egui 0.36 has no bidi algorithm (inference).
 
 - [ ] **One list for the selection and the queue.** Both are hand-edited track lists that save as playlists, in two views. Option B in `docs/dev/selection-and-queue.md` merges them. Weigh it with "Multi-row selection", which uses "selection" for rows picked in any view.
 

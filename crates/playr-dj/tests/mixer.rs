@@ -563,7 +563,8 @@ fn a_leader_started_after_its_follower_is_locked_in_phase() {
 }
 
 /// The master volume scales the main mix only, and the headphones the cue
-/// only. The peak is the main mix's, before the master.
+/// only. The peak is the main mix's, before the master; the cue's peak is
+/// the cue's, before the headphones.
 #[test]
 fn the_master_and_the_headphones_scale_their_own_side() {
     let mut m = Mixer::new(SR);
@@ -581,6 +582,7 @@ fn the_master_and_the_headphones_scale_their_own_side() {
     m.set(Setting::Volume(0.0));
     run(&mut m, SETTLE);
     m.take_peak();
+    m.take_cue_peak();
     let out = block(&mut m);
     for f in out.chunks(2) {
         assert_eq!(f[0], 0.0, "main");
@@ -590,6 +592,7 @@ fn the_master_and_the_headphones_scale_their_own_side() {
         (m.take_peak() - 0.2).abs() < 1e-6,
         "the peak followed the master"
     );
+    assert!((m.take_cue_peak() - 0.3).abs() < 1e-6, "the cue's peak");
 
     m.set(Setting::Volume(1.0));
     m.set(Setting::Headphones(0.5));
@@ -599,4 +602,15 @@ fn the_master_and_the_headphones_scale_their_own_side() {
         assert!((f[0] - 0.2).abs() < 1e-6, "main: {}", f[0]);
         assert!((f[1] - 0.15).abs() < 1e-6, "cue: {}", f[1]);
     }
+    assert!(
+        (m.take_cue_peak() - 0.3).abs() < 1e-6,
+        "the cue's peak followed the headphones"
+    );
+
+    // Nothing cued, nothing measured.
+    m.set(Setting::CueBus(None));
+    run(&mut m, SETTLE);
+    m.take_cue_peak();
+    block(&mut m);
+    assert_eq!(m.take_cue_peak(), 0.0);
 }

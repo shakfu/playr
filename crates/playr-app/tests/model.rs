@@ -3535,7 +3535,7 @@ fn the_tape_plays_on_the_player_s_stream() {
 
 /// The decks play on the player's stream: Take hands the player's track to a
 /// deck there, and cue-out 3-4 asks the stream for 4 channels, which a
-/// stereo device refuses.
+/// stereo device refuses. The headphone meter reads the cued deck.
 #[test]
 fn the_decks_play_on_the_player_s_stream() {
     use playr_app::dj::{CueOut, DjAction, DjMessage, Side};
@@ -3578,6 +3578,16 @@ fn the_decks_play_on_the_player_s_stream() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(control.opened.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+    assert_eq!(
+        m.snapshot().meters[4],
+        None,
+        "nothing cued, no headphone meter"
+    );
+    m.perform(Action::Dj(DjAction::CueBus(Some(Side::A))));
+    model_until(&mut m, "the cue metered", |m| {
+        m.snapshot().meters[4].is_some_and(|db| (db + 6.0).abs() < 0.5)
+    });
 
     m.perform(Action::Dj(DjAction::CueOut(CueOut::Channels)));
     assert_eq!(m.message(), Some(&Message::Dj(DjMessage::NoCueChannels(2))));

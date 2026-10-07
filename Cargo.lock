@@ -3821,6 +3821,7 @@ dependencies = [
  "rfd",
  "rtrb",
  "rusqlite",
+ "skrifa",
  "tempfile",
 ]
 

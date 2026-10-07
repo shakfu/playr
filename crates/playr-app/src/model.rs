@@ -142,9 +142,9 @@ pub struct Snapshot {
     /// The highest recent sample peak in dBFS, held for [`PEAK_HOLD`].
     pub peak: Option<f32>,
     /// The mixer's meters: the player's, the tape's and the decks' peaks
-    /// after their own faders, then the master's as measured, in dBFS, each
-    /// held for [`PEAK_HOLD`].
-    pub meters: [Option<f32>; 4],
+    /// after their own faders, the master's as measured, then the headphone
+    /// cue's after its fader, in dBFS, each held for [`PEAK_HOLD`].
+    pub meters: [Option<f32>; 5],
     /// Marks in the playing track, as times into it, earliest first.
     pub marks: Vec<Duration>,
     /// Loops saved in the playing track, by slot from 1, in source frames.
@@ -215,7 +215,7 @@ pub struct Model {
     /// The peak shown, as a sample magnitude, and when it was reached.
     peak_hold: Option<(f32, Instant)>,
     /// The mixer's meters, as `Snapshot::meters`, as magnitudes.
-    meter_holds: [Option<(f32, Instant)>; 4],
+    meter_holds: [Option<(f32, Instant)>; 5],
     snapshot: Snapshot,
     /// The playing track's tempo, and which track it was read for. Read on
     /// each track change rather than every frame.
@@ -319,7 +319,7 @@ impl Model {
             message: None,
             quit: false,
             peak_hold: None,
-            meter_holds: [None; 4],
+            meter_holds: [None; 5],
             bpm: None,
             bpm_for: (None, 0),
             tape: crate::tape::Deck::new(
@@ -381,6 +381,8 @@ impl Model {
             self.tape.status().map_or(0.0, |s| s.take_peak()) * self.mix.fader_gain(Strip::Tape),
             self.dj.status().map_or(0.0, |s| s.take_peak()) * self.mix.fader_gain(Strip::Decks),
             player.take_master_peak(),
+            self.dj.status().map_or(0.0, |s| s.take_cue_peak())
+                * self.mix.fader_gain(Strip::Headphones),
         ];
         for (held, reading) in self.meter_holds.iter_mut().zip(readings) {
             *held = hold_peak(*held, reading, now);

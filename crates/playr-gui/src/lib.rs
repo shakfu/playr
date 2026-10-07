@@ -7,6 +7,7 @@
 
 pub mod controls;
 mod dj;
+mod fonts;
 pub mod keys;
 mod mixer;
 pub mod palette;
@@ -60,6 +61,7 @@ pub struct Gui {
     dj_tab: dj::State,
     /// The About window is open.
     about: bool,
+    fonts: fonts::Fallbacks,
 }
 
 impl Gui {
@@ -78,6 +80,7 @@ impl Gui {
             tape_tab: tape::State::default(),
             dj_tab: dj::State::default(),
             about: false,
+            fonts: fonts::Fallbacks::default(),
         }
     }
 
@@ -94,6 +97,7 @@ impl Gui {
         self.model.refresh();
         self.model.expire_message();
         self.follow_theme(ui.ctx());
+        self.fonts.update(ui.ctx(), &self.model);
         self.follow_input(ui.ctx());
         self.keys(ui.ctx());
         let over = self.model.snapshot().meters[3].is_some_and(|db| db > 0.0);

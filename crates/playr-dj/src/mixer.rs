@@ -159,6 +159,8 @@ pub struct Mixer {
     headphones: Ramp,
     /// The largest magnitude of the main mix before the volume, since taken.
     peak: f32,
+    /// The largest magnitude of the cue before the headphones, since taken.
+    cue_peak: f32,
     knee: f32,
     /// Each deck's EQ bands, in dB, and whether each is killed.
     bands: [[(f64, bool); 3]; 2],
@@ -179,6 +181,7 @@ impl Mixer {
             volume: Ramp::new(1.0),
             headphones: Ramp::new(1.0),
             peak: 0.0,
+            cue_peak: 0.0,
             knee: DEFAULT_KNEE,
             bands: [[(0.0, false); 3]; 2],
             cue_out: CueOut::default(),
@@ -212,6 +215,12 @@ impl Mixer {
     /// last call, which resets it.
     pub fn take_peak(&mut self) -> f32 {
         std::mem::take(&mut self.peak)
+    }
+
+    /// The largest magnitude of the cue before the headphones since the last
+    /// call, which resets it; 0 with no deck cued.
+    pub fn take_cue_peak(&mut self) -> f32 {
+        std::mem::take(&mut self.cue_peak)
     }
 
     fn smooth(&self) -> u32 {
@@ -658,10 +667,11 @@ impl Mixer {
             self.peak = self.peak.max(m[0].abs()).max(m[1].abs());
             *mo = [m[0] * vol, m[1] * vol];
             *co = match self.cue_bus {
-                Some(_) => [
-                    soft_clip(cue[0], knee) * phones,
-                    soft_clip(cue[1], knee) * phones,
-                ],
+                Some(_) => {
+                    let c = [soft_clip(cue[0], knee), soft_clip(cue[1], knee)];
+                    self.cue_peak = self.cue_peak.max(c[0].abs()).max(c[1].abs());
+                    [c[0] * phones, c[1] * phones]
+                }
                 None => [0.0; 2],
             };
         }

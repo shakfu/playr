@@ -2097,3 +2097,97 @@ fn a_range_end_dragged_with_fit_off_leaves_fit_off() {
         Some(Edge::End)
     );
 }
+
+/// A window over a library of one track per title.
+fn titled(titles: &[&str]) -> (Harness<'static, Gui>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    for title in titles {
+        let track = Track {
+            path: format!("/m/{title}.flac"),
+            title: Some(title.to_string()),
+            mtime: 1,
+            size: 1,
+            ..Default::default()
+        };
+        db::upsert(&conn, &track).unwrap();
+    }
+    let model = Model::new(conn, common::fake_player().0, Vec::new(), Config::default());
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 720.0))
+        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
+    harness.run_steps(3);
+    (harness, dir)
+}
+
+fn drawable(harness: &Harness<'_, Gui>, c: char) -> bool {
+    harness
+        .ctx
+        .fonts_mut(|f| f.has_glyph(&egui::FontId::proportional(14.0), c))
+}
+
+#[test]
+fn a_latin_library_adds_no_font() {
+    // Accents, Cyrillic, and invisible characters: a zero-width joiner, a
+    // soft hyphen and a byte order mark.
+    let (harness, _dir) = titled(&[
+        "Caf\u{e9}",
+        "\u{416}\u{438}\u{437}\u{43d}\u{44c}",
+        "a\u{200d}b\u{ad}c\u{feff}",
+    ]);
+    let fonts = egui::FontDefinitions::default().font_data.len();
+    assert_eq!(
+        harness.ctx.fonts(|f| f.definitions().font_data.len()),
+        fonts
+    );
+}
+
+/// A combining mark in Latin text loads the small Latin font, not a CJK one.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_combining_mark_is_drawn_with_the_small_latin_font() {
+    let (harness, _dir) = titled(&["u\u{308}ber"]);
+    assert!(drawable(&harness, '\u{308}'));
+    assert_eq!(
+        added_fonts(&harness),
+        ["/System/Library/Fonts/Geneva.ttf#0"]
+    );
+}
+
+/// The fonts added to egui's own, by name, in name order.
+#[cfg(target_os = "macos")]
+fn added_fonts(harness: &Harness<'_, Gui>) -> Vec<String> {
+    harness.ctx.fonts(|f| {
+        let defaults = egui::FontDefinitions::default().font_data;
+        (f.definitions().font_data.keys())
+            .filter(|k| !defaults.contains_key(*k))
+            .cloned()
+            .collect()
+    })
+}
+
+/// macOS ships these fonts; a Linux runner may have none for CJK.
+#[cfg(target_os = "macos")]
+#[test]
+fn titles_in_other_scripts_are_drawn_with_system_fonts() {
+    let titles = [
+        "\u{4e2d}\u{6587}",
+        "\u{d55c}\u{ad6d}\u{c5b4}",
+        "\u{e44}\u{e17}\u{e22}",
+        "\u{3072}\u{3089}\u{304c}\u{306a}",
+    ];
+    let (harness, _dir) = titled(&titles);
+    for c in titles.iter().flat_map(|t| t.chars()) {
+        assert!(drawable(&harness, c), "{c} is drawn as a box");
+    }
+    // Each script's first choice, and no larger fallback that also covers
+    // another's: STHeiti, 56 MB, covers Hangul too.
+    assert_eq!(
+        added_fonts(&harness),
+        [
+            "/System/Library/Fonts/Supplemental/AppleGothic.ttf#0",
+            "/System/Library/Fonts/ThonburiUI.ttc#0",
+            "/System/Library/Fonts/\u{30d2}\u{30e9}\u{30ae}\u{30ce}\u{89d2}\u{30b4}\u{30b7}\u{30c3}\u{30af} W3.ttc#0",
+        ]
+    );
+}

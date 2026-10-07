@@ -163,6 +163,7 @@ impl DeckStatus {
 pub struct Status {
     decks: [DeckStatus; 2],
     peak: AtomicU32,
+    cue_peak: AtomicU32,
     xfade: AtomicU64,
 }
 
@@ -180,6 +181,12 @@ impl Status {
     /// resets it. Measured before the master volume.
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    }
+
+    /// The largest magnitude of the cue since the last call, which resets
+    /// it. Measured before the headphones.
+    pub fn take_cue_peak(&self) -> f32 {
+        f32::from_bits(self.cue_peak.swap(0, Ordering::Relaxed))
     }
 }
 
@@ -199,6 +206,7 @@ pub fn new(sample_rate: u32) -> (Engine, Handle) {
     let status = Arc::new(Status {
         decks: [DeckStatus::new(), DeckStatus::new()],
         peak: AtomicU32::new(0),
+        cue_peak: AtomicU32::new(0),
         xfade: AtomicU64::new(0.5f64.to_bits()),
     });
     let engine = Engine {
@@ -251,6 +259,10 @@ impl Engine {
         self.status
             .peak
             .fetch_max(peak.to_bits(), Ordering::Relaxed);
+        let cue = self.mixer.take_cue_peak();
+        self.status
+            .cue_peak
+            .fetch_max(cue.to_bits(), Ordering::Relaxed);
     }
 
     pub fn mixer(&self) -> &Mixer {
