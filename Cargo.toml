@@ -3,6 +3,7 @@ members = ["crates/playr-core", "crates/playr-app", "crates/playr-gui", "crates/
 
 [workspace.package]
 version = "0.18.0"
+authors = ["Shakeeb Alireza"]
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -32,6 +33,7 @@ toml = { version = "1.1", default-features = false, features = ["parse", "preser
 [package]
 name = "playr"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -25,6 +25,9 @@ pub mod persist;
 pub mod sampler;
 pub mod tape;
 
+/// playr's version; the workspace gives every crate the same one.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// A part of the interface that scopes key bindings and commands. A terminal
 /// shows one at a time; a GUI maps its panels or focus onto them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

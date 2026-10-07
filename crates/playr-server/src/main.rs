@@ -140,7 +140,7 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
         terminal,
         &token::default_path(),
     );
-    println!("playr-server: {address}");
+    println!("playr-server {}: {address}", playr_app::VERSION);
     if let Some(socket) = osc_socket {
         let requests = requests.clone();
         std::thread::spawn(move || osc::listen(socket, requests));

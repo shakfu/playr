@@ -242,7 +242,10 @@ fn handle(stream: &mut TcpStream, context: &Context) -> io::Result<()> {
             context.streams.fetch_sub(1, Ordering::SeqCst);
             streamed
         }
-        ("GET", "/config") => json(stream, &json!({ "rescan": config.rescan })),
+        ("GET", "/config") => json(
+            stream,
+            &json!({ "rescan": config.rescan, "version": playr_app::VERSION }),
+        ),
         ("POST", "/command") => {
             let line = body.trim().to_string();
             refusable(stream, context, |reply| Request::Command { line, reply })

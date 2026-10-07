@@ -282,6 +282,21 @@ fn the_menu_bar_performs_its_items() {
     harness.get_by_label(":rescan");
 }
 
+#[test]
+fn help_about_shows_the_version_and_the_project_s_links() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    harness.get_by_label("Help").click();
+    harness.run_steps(2);
+    harness.get_by_label("About playr").click();
+    harness.run_steps(2);
+    harness.get_by_label(&format!("playr {}", playr_app::VERSION));
+    harness.get_by_label("Shakeeb Alireza");
+    harness.get_by_label("https://github.com/shakfu/playr");
+    harness.get_by_label("Releases");
+    harness.get_by_label("Issues");
+}
+
 /// The command bar's text field.
 fn bar<'h>(harness: &'h Harness<'_, Gui>) -> egui_kittest::Node<'h> {
     harness.get(

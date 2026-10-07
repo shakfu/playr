@@ -407,7 +407,10 @@ fn reads_answer_with_what_the_owner_returns() {
 #[test]
 fn a_rescan_covers_the_recorded_roots_and_names_no_directory() {
     let server = start(true, Some(TOKEN));
-    assert_eq!(server.json("GET", "/config", ""), json!({ "rescan": true }));
+    assert_eq!(
+        server.json("GET", "/config", ""),
+        json!({ "rescan": true, "version": playr_app::VERSION })
+    );
     // A body naming a directory is ignored: the page cannot choose one.
     assert_eq!(server.send("POST", "/rescan", "/etc").status, 204);
     assert_eq!(server.requests(), ["perform Rescan"]);
@@ -415,7 +418,7 @@ fn a_rescan_covers_the_recorded_roots_and_names_no_directory() {
     let server = self::server();
     assert_eq!(
         server.json("GET", "/config", ""),
-        json!({ "rescan": false })
+        json!({ "rescan": false, "version": playr_app::VERSION })
     );
     assert_eq!(server.send("POST", "/rescan", "").status, 404);
     assert!(server.requests().is_empty());

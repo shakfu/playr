@@ -58,6 +58,8 @@ pub struct Gui {
     /// The master went over full scale while the Mix tab was hidden.
     clipped: bool,
     dj_tab: dj::State,
+    /// The About window is open.
+    about: bool,
 }
 
 impl Gui {
@@ -75,6 +77,7 @@ impl Gui {
             clipped: false,
             tape_tab: tape::State::default(),
             dj_tab: dj::State::default(),
+            about: false,
         }
     }
 
@@ -102,6 +105,7 @@ impl Gui {
         egui::Panel::bottom("transport").show(ui, |ui| self.bottom(ui));
         egui::CentralPanel::default().show(ui, |ui| self.view(ui));
         self.dialogs(ui.ctx());
+        self.about_dialog(ui.ctx());
 
         if self.model.quitting() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -332,7 +336,14 @@ impl Gui {
                     chosen = Some(action);
                 }
             });
-            ui.menu_button("Help", |ui| items(ui, controls::HELP_MENU, &mut chosen));
+            ui.menu_button("Help", |ui| {
+                items(ui, controls::HELP_MENU, &mut chosen);
+                ui.separator();
+                if ui.button("About playr").clicked() {
+                    self.about = true;
+                    ui.close();
+                }
+            });
         });
         if let Some(action) = chosen {
             self.perform(action);
@@ -585,7 +596,11 @@ impl Gui {
             }
             Input::Help => {
                 let rows = command::key_rows(self.model.keymap(), self.model.view());
-                let title = format!("Keys in the {} view", view_name(self.model.view()));
+                let title = format!(
+                    "Keys in the {} view (playr {})",
+                    view_name(self.model.view()),
+                    playr_app::VERSION
+                );
                 self.list(ctx, &title, &rows);
             }
             Input::CommandHelp => {
@@ -653,6 +668,22 @@ impl Gui {
         if !open {
             self.model.set_input(Input::None);
         }
+    }
+
+    /// The version, the author and links to the project.
+    fn about_dialog(&mut self, ctx: &egui::Context) {
+        const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+        egui::Window::new("About playr")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut self.about)
+            .show(ctx, |ui| {
+                ui.heading(format!("playr {}", playr_app::VERSION));
+                ui.label(env!("CARGO_PKG_AUTHORS").replace(':', ", "));
+                ui.hyperlink(REPOSITORY);
+                ui.hyperlink_to("Releases", format!("{REPOSITORY}/releases"));
+                ui.hyperlink_to("Issues", format!("{REPOSITORY}/issues"));
+            });
     }
 
     /// A dialog collecting a playlist name, which saves or renames on enter.

@@ -54,7 +54,11 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
             let rows = command::key_rows(app.keys, app.view);
             let rows: Vec<(&str, &str)> =
                 rows.iter().map(|(k, c)| (k.as_str(), c.as_str())).collect();
-            let name = format!("Keys in the {} view", view_name(app.view));
+            let name = format!(
+                "Keys in the {} view (playr {})",
+                view_name(app.view),
+                playr_app::VERSION
+            );
             draw_help(app.palette(), f, f.area(), &name, &rows, app.help_scroll)
         }
         Input::CommandHelp => {

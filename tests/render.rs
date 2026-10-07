@@ -705,7 +705,10 @@ fn help_lists_the_keys_that_work_in_the_view() {
             .text();
         let name = format!("{view:?}").to_lowercase();
         assert!(
-            joined.contains(&format!("Keys in the {name} view")),
+            joined.contains(&format!(
+                "Keys in the {name} view (playr {})",
+                playr_app::VERSION
+            )),
             "{joined}"
         );
         // Rows by their text inside the popup border.

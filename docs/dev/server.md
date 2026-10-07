@@ -69,7 +69,7 @@ playr-server
 | `POST /row` | a view, row, the row's key and a command: set the cursor there, then run it |
 | `POST /search` | the query as typed, and whether the search is done |
 | `POST /answer`, `POST /name`, `POST /close` | answer a question, name a playlist, close a prompt or list |
-| `GET /config`, `POST /rescan` | whether the library has a recorded root; re-scan them |
+| `GET /config`, `POST /rescan` | the version, and whether the library has a recorded root; re-scan them |
 
 - **Server-sent events over WebSocket.** Plain HTTP in one direction, and `EventSource` reconnects on its own. WebSocket needs another crate, and axum brings tokio into a core built on threads.
 

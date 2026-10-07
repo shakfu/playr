@@ -334,6 +334,7 @@ const PAGE = 200;
 let state = null;         // the latest screen from the server
 let keys = {};            // view -> key name -> command line, or null for nothing
 let rescan = false;
+let version = "";
 let errorUntil = 0;
 let shownInput = "none";
 
@@ -709,7 +710,7 @@ async function followInput() {
     $("name").focus();
   }
   if (kind === "keys" || kind === "commands") {
-    $("list-heading").textContent = kind === "keys" ? `Keys in the ${state.view} view` : "Commands";
+    $("list-heading").textContent = kind === "keys" ? `Keys in the ${state.view} view (playr ${version})` : "Commands";
     $("list-rows").replaceChildren();
     const rows = await call("/help?list=" + kind) || [];
     $("list-rows").replaceChildren(...rows.flatMap(([a, b]) =>
@@ -938,7 +939,7 @@ window.addEventListener("resize", () => requestAnimationFrame(drawRows));
 (async () => {
   const [bindings, config] = await Promise.all([call("/keys"), call("/config")]);
   if (bindings) keys = bindings;
-  if (config) rescan = config.rescan;
+  if (config) ({ rescan, version } = config);
 })();
 
 const events = new EventSource("/events");

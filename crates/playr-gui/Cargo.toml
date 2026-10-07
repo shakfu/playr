@@ -1,6 +1,7 @@
 [package]
 name = "playr-gui"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 # egui and eframe 0.36 need 1.95; the rest of the workspace builds on 1.89.
 rust-version = "1.95"

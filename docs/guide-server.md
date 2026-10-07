@@ -21,7 +21,7 @@ playr scan ~/Music                   # once, to build the library
 playr-server                         # prints the address to open
 ```
 
-It prints `playr-server: http://127.0.0.1:8080/?token=...`. Open that address on the same machine. It stops on Ctrl-C. Run as a service, its output goes to a log, so it names the token's file there rather than printing the token.
+It prints `playr-server VERSION: http://127.0.0.1:8080/?token=...`. Open that address on the same machine. It stops on Ctrl-C. Run as a service, its output goes to a log, so it names the token's file there rather than printing the token.
 
 The page's Menu has Rescan library, which re-scans the directories `playr scan` recorded. The page cannot name a directory of its own, so it re-scans those and nothing else. It appears only once the library has a recorded directory; `playr scan DIR` adds one.
 
