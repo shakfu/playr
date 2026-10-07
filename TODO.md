@@ -16,10 +16,6 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ## High
 
-### Sampler
-
-- [ ] `[` and `]` keys only work if `[Fit]` button is enabled.
-
 ### Desktop window
 
 - [ ] **Non-Latin text in the GUI.** egui's default fonts cover Latin, Greek and Cyrillic. Library text in other scripts (tags, titles, paths) renders as boxes. Users with Chinese, Japanese or Korean (CJK) libraries cannot read their tracks in the GUI; the terminal is unaffected. Each script needs a system or bundled font. egui 0.36 shapes text with `harfrust` but has no bidi algorithm, so a title mixing right-to-left and left-to-right text may show out of order (inference).

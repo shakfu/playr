@@ -365,8 +365,8 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         // still wins and the drag that was there before this behaves as it did.
         state.edge_drag = origin.and_then(edge_at);
         if let Some(edge) = state.edge_drag {
-            // As `[` or `]`: the keys that move an end go on with this one.
-            actions.push(Action::PickEdge(edge));
+            // The keys that move an end go on with this one; the view stays put.
+            actions.push(Action::SelectEdge(edge));
         }
         state.mark_drag = origin
             .filter(|_| state.edge_drag.is_none())

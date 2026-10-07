@@ -229,6 +229,7 @@ fn nudge_snap_and_range_parse_in_the_sampler_and_round_trip() {
         "range",
         "loop on",
         "edge end",
+        "select-edge start",
         "move -3",
         "move +10%",
         "onset",

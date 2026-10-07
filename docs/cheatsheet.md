@@ -146,7 +146,8 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:scrub TIME`                     | drag, with Scrub on     | play a moment from a time              |
 | `:select TIME`                    | click a mark            | select the mark at a time              |
 | `:select-slice TIME`              | click a slice's start   | select the planned slice starting at a time |
-| `:edge start\|end`                 | `[` `]`                 | select a range end                     |
+| `:edge start\|end`                 | `[` `]`                 | select a range end and centre on it, turning fit on |
+| `:select-edge start\|end`          | drag a range end        | select a range end, leaving the view   |
 | `:deselect`                       | `D`                     | select nothing                         |
 | `:move +N\|-N\|N%`                 | `<` `>`                 | move the selected mark, range end or slice start |
 | `:move-to TIME`                   | drag a mark or slice start | move the selection to a time        |
@@ -156,7 +157,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:discard`                         | `esc`                   | discard the planned slices             |
 | `:mark-slices`                     |                         | mark each planned slice's start        |
 
-In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view; `[` or `]` then centres it on that end, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; a selected end moves the loop with it.
+In this view `:slice` plans slices and draws their edges as `+` under the waveform; `:write` writes them. The arrows nudge by a column, or with shift a tenth of the view, so zooming in makes them finer. A range, drawn as `[` and `]`, replaces the region for every cut, and `:slice marks` cuts only at the marks inside it. With snap on, nudges, marks, seeks and range ends made in this view move to the nearest zero crossing within 10 ms; turning snap on moves the ends of a range already set. With `:fit on`, the view centres on the range rather than the playhead, so zooming keeps the range in view. `[` or `]` centres it on that end, turning fit on if it was off, and `|` on the whole range again. Marks made in this view may be a frame apart; elsewhere they stay 500 ms apart. `l` loops the range; a selected end moves the loop with it.
 
 The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a click, a range end, selected by `[` `]`, or a planned slice, selected by `,` `.`. A slice is edited by its start, which moves the end of the slice before; `backspace` joins it to that slice. A selected end is shown reversed, and a selection out of view as a reversed `<` or `>` at that edge. `{` `}` play from the mark to the next, and step from the selected mark rather than the playhead. With nothing selected, `backspace` clears the range and the other edit keys refuse. `u` undoes the last change to the marks, the range or the planned slices, up to 100 back, until the track changes; `r` puts back what `u` took, until the next change.
 

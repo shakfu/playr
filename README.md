@@ -518,7 +518,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | F1-F8   | `:loop 1` ... `:loop 8` | loop a saved loop, or save the range to an empty slot |
 | shift-F1-F8 | `:loop N save`      | save the range as loop N, over what it holds      |
 | `{` `}` | `:mark-prev`, `:mark-next` | select the previous or next mark, and play it to the next |
-| `[` `]` | `:edge start`, `:edge end` | select the range's start or end, shown reversed |
+| `[` `]` | `:edge start`, `:edge end` | select the range's start or end and centre on it |
 | `<` `>` | `:move -1`, `:move +1`  | move the selected mark or range end a column      |
 | `#`     | `:onset`                | move it to the nearest rise in the sound          |
 | backspace | `:remove`             | remove the selected mark, join the selected slice to the one before; with an end or nothing selected, clear the range |
@@ -557,7 +557,7 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **Range.** `i` and `o` set a range's start and end at the playhead, drawn as `[` and `]`; the window sets one by dragging across the waveform. With both ends set, every cut uses the range in place of the region: `:slice region` cuts it whole, `:slice 8` in equal parts, `:slice onsets` at its onsets, `:slice beats 4` every 4 beats, and `:slice marks` at the marks inside it. The range lasts until cleared or the track changes, and is not saved. In the window, a drag that starts on a range's edge, within 8 points of it, moves that edge and selects it; the pointer turns to a left-right arrow over an edge, mark or slice start that can be dragged, and keeps it while dragging.
 
-- **Fit.** `f`, or the window's Fit button, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. While it is on, `[` and `]` centre the view on that end, keeping the zoom, so `<` and `>` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
+- **Fit.** `f`, or the window's Fit button, zooms to the deepest step that shows the range, then centres the view on the range rather than the playhead. Zooming then stays on the range, and the playhead may leave the view; then `<` or `>` at that side of the axis, or an arrow in the window, points to it. It applies once both ends are set, and shows as `fit` in the title. `[` and `]` centre the view on that end, keeping the zoom, and turn it on if it was off, so `<` and `>` move the end while it stays still on screen; `z` then zooms in on it. `|` returns to the whole range, zoomed to fit and centred.
 
 - **Loop.** `l` plays the range over and over, or with no range sets it to the region and loops that, starting a paused track, and returns from its end to its start without a gap. Moving either end, with `i` or `o`, with `<` or `>` after `[` or `]` selects it, with `:range` or a drag, moves the loop at once; clearing the range, a new track, `l` again or `:loop off` in any view ends it. When the decoder has already read past a new end, the change discards what it read, which can leave a short gap.
 

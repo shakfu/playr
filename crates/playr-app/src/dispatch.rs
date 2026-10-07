@@ -761,22 +761,14 @@ fn act(action: Action, f: &mut impl Frontend) {
             Ok((path, count)) => f.confirm(Confirm::ClearLoops { path, count }),
             Err(refusal) => f.notify(refusal.into()),
         },
+        // Centring needs Fit: without it the view follows the playhead.
         Action::PickEdge(edge) => {
-            f.sampler_mut().edge = edge;
-            f.sampler_mut().fit_edge = true;
-            let path = f.session().player().status().current().cloned();
-            let (start, end) = f.sampler().range_ends(path.as_ref());
-            let set = match edge {
-                sampler::Edge::Start => start.is_some(),
-                sampler::Edge::End => end.is_some(),
-            };
-            match path.filter(|_| set) {
-                Some(path) => {
-                    f.sampler_mut().selected = Some((path, Selected::Edge(edge)));
-                    f.notify(Message::Edge(edge));
-                }
-                None => f.notify(Message::NoEdge(edge)),
+            if select_edge(f, edge) {
+                f.sampler_mut().fit = true;
             }
+        }
+        Action::SelectEdge(edge) => {
+            select_edge(f, edge);
         }
         Action::Snap(on) => {
             let on = on.unwrap_or(!f.sampler().snap);
@@ -1645,6 +1637,29 @@ fn remove_slice(f: &mut impl Frontend, start: u64) {
     f.sampler_mut().pending = Some(plan);
     f.sampler_mut().selected = None;
     f.notify(Message::SlicesJoined { slice: i });
+}
+
+/// Selects a range end, and centres on it while fitting. False when that end is not set.
+fn select_edge(f: &mut impl Frontend, edge: sampler::Edge) -> bool {
+    f.sampler_mut().edge = edge;
+    f.sampler_mut().fit_edge = true;
+    let path = f.session().player().status().current().cloned();
+    let (start, end) = f.sampler().range_ends(path.as_ref());
+    let set = match edge {
+        sampler::Edge::Start => start.is_some(),
+        sampler::Edge::End => end.is_some(),
+    };
+    match path.filter(|_| set) {
+        Some(path) => {
+            f.sampler_mut().selected = Some((path, Selected::Edge(edge)));
+            f.notify(Message::Edge(edge));
+            true
+        }
+        None => {
+            f.notify(Message::NoEdge(edge));
+            false
+        }
+    }
 }
 
 /// Sets `edge` of the range at `at`, or at the playhead, snapped when snap is on.

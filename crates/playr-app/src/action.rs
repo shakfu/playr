@@ -191,8 +191,10 @@ pub enum Action {
     AuditionSlice(bool),
     /// Play a moment from this time once; what a drag does with Scrub on.
     Scrub(Duration),
-    /// Select an end of the range.
+    /// Select an end of the range and centre the view on it, turning Fit on.
     PickEdge(crate::sampler::Edge),
+    /// Select an end of the range, leaving the view; what a drag from it does.
+    SelectEdge(crate::sampler::Edge),
     /// Write the slices planned in the sampler view.
     WriteSlices,
     DiscardSlices,

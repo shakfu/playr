@@ -69,6 +69,7 @@ pub fn allowed(action: &Action) -> bool {
         | LoopSlot(..)
         | ClearLoops
         | PickEdge(_)
+        | SelectEdge(_)
         | WriteSlices
         | DiscardSlices
         | MarkSlices

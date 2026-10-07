@@ -328,7 +328,18 @@ pub const COMMANDS: &[Command] = &[
         "play a slice, the range or region once",
     ),
     only(Sampler, "scrub", "TIME", "play a moment from a time"),
-    only(Sampler, "edge", "start|end", "select a range end"),
+    only(
+        Sampler,
+        "edge",
+        "start|end",
+        "select a range end and centre on it",
+    ),
+    only(
+        Sampler,
+        "select-edge",
+        "start|end",
+        "select a range end, leaving the view",
+    ),
     only(Sampler, "write", "", "write the slices :slice planned"),
     only(Sampler, "discard", "", "discard the planned slices"),
     only(
@@ -610,6 +621,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         RangeOut(Some(t)) => format!("out {}", time(t)),
         SetRange(None) => "range".into(),
         PickEdge(edge) => format!("edge {}", edge.name()),
+        SelectEdge(edge) => format!("select-edge {}", edge.name()),
         Audition => "audition".into(),
         AuditionSlice(true) => "audition next".into(),
         AuditionSlice(false) => "audition prev".into(),
@@ -1457,11 +1469,17 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         },
         "theme" => choose(rest, THEMES, "theme").map(Action::Theme),
         "nudge" => nudge(rest).map(Action::Nudge).ok_or_else(usage),
-        "edge" => match rest {
-            "start" => Ok(Action::PickEdge(crate::sampler::Edge::Start)),
-            "end" => Ok(Action::PickEdge(crate::sampler::Edge::End)),
-            _ => Err(usage()),
-        },
+        "edge" | "select-edge" => {
+            let edge = match rest {
+                "start" => crate::sampler::Edge::Start,
+                "end" => crate::sampler::Edge::End,
+                _ => return Err(usage()),
+            };
+            Ok(match name {
+                "edge" => Action::PickEdge(edge),
+                _ => Action::SelectEdge(edge),
+            })
+        }
         "snap" => match rest {
             "" => Ok(Action::Snap(None)),
             "on" => Ok(Action::Snap(Some(true))),
@@ -1667,7 +1685,7 @@ pub fn completions(
             .to_vec(),
         "loop" if command.view.is_none() => vec!["off".into()],
         "snap" | "fit" | "loop" => vec!["on".into(), "off".into()],
-        "edge" => vec!["start".into(), "end".into()],
+        "edge" | "select-edge" => vec!["start".into(), "end".into()],
         "audition" => vec!["next".into(), "prev".into()],
         "loops" => vec!["clear".into()],
         "view" => VIEWS

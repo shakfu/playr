@@ -2055,3 +2055,45 @@ fn a_zoom_while_paused_reads_the_frames_without_another_input() {
         "no read was started"
     );
 }
+
+#[test]
+fn bracket_keys_centre_the_view_on_a_range_end_with_fit_off() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    // Zoomed in, so the view cannot show the whole track and must scroll;
+    // far enough in that centring either end is not stopped by the track's start.
+    command(&mut harness, "range 4 6");
+    command(&mut harness, "zoom 2");
+    assert!(!model(&harness).sampler().fit);
+    let middle = harness.get_by_label("Track waveform").rect().center().x;
+    let current = model(&harness).snapshot().status.current().cloned();
+    for (key, edge, frame) in [("[", Edge::Start, 32_000), ("]", Edge::End, 48_000)] {
+        typing(&mut harness, key);
+        harness.run_steps(2);
+        assert_eq!(
+            model(&harness).sampler().selected_edge(current.as_ref()),
+            Some(edge),
+            "{key}"
+        );
+        let x = x_of(&harness, frame).x;
+        assert!(
+            (x - middle).abs() < 2.0,
+            "{key}: end at {x}, middle {middle}"
+        );
+    }
+}
+
+#[test]
+fn a_range_end_dragged_with_fit_off_leaves_fit_off() {
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, _dir) = sampling(samples.path());
+    command(&mut harness, "range 1 2");
+    let current = model(&harness).snapshot().status.current().cloned();
+    let end = x_of(&harness, 16_000);
+    drag_between(&mut harness, end, end - egui::vec2(20.0, 0.0));
+    assert!(!model(&harness).sampler().fit);
+    assert_eq!(
+        model(&harness).sampler().selected_edge(current.as_ref()),
+        Some(Edge::End)
+    );
+}

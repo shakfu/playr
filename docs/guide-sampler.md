@@ -60,7 +60,7 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 - **Placing a point.** The arrows nudge the playhead a column. With `:snap on`, nudges, marks and range ends move to the nearest zero crossing within 10 ms, so a slice can start where the waveform crosses zero. Turning snap on moves the ends of a range already set. Marks made in this view may be a frame apart.
 
-- **Looping.** `l` plays the range over and over, returning to its start sample-exactly. `[` or `]` selects an end and `<` `>` move it a column, so the ends can be tuned by ear while it loops. With `:fit on`, the view centres on the selected end.
+- **Looping.** `l` plays the range over and over, returning to its start sample-exactly. `[` or `]` selects an end and `<` `>` move it a column, so the ends can be tuned by ear while it loops. `[` and `]` also centre the view on that end, turning `:fit` on.
 
 - **Planning.** In this view `:slice` plans instead of writing. The planned edges draw as `+` under the waveform; enter writes exactly those slices and esc discards them. A change of track discards them too. Outside the view, `:slice` plans and writes in one step.
 

@@ -280,6 +280,15 @@ fn snap_on_snaps_the_range_and_fit_zooms_to_it() {
     assert_eq!(model.message(), Some(&Message::Fit(false)));
     assert_eq!(model.sampler().centre(current.as_ref()), None);
     assert_eq!(model.sampler().zoom, 2, "turning it off keeps the zoom");
+    // With Fit off, picking an end turns it on to centre there, keeping the
+    // zoom; selecting one, as a drag does, leaves the view.
+    model.perform(Action::SelectEdge(Edge::Start));
+    assert_eq!(model.sampler().centre(current.as_ref()), None);
+    model.perform(Action::PickEdge(Edge::End));
+    assert!(model.sampler().fit);
+    assert_eq!(model.sampler().centre(current.as_ref()), Some(12_000));
+    assert_eq!(model.sampler().zoom, 2);
+    model.perform(Action::Fit(Some(false)));
     // The window's slider sets a step directly.
     model.perform(Action::Zoom(playr_app::action::Zoom::To(7)));
     assert_eq!(model.sampler().zoom, 7);

@@ -352,6 +352,7 @@ pub const WITH_VALUES: &[(&str, &str)] = &[
         "SelectSliceAt",
         "a click or drag on a planned slice's start",
     ),
+    ("SelectEdge", "a drag from a range end"),
     (
         "SelectMarkAt",
         "a click on a mark, and the mark's entries in the waveform's menu",

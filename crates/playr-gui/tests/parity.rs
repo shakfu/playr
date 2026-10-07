@@ -107,6 +107,7 @@ fn every_action() -> Vec<Action> {
         Action::SnapSelected,
         Action::RemoveSelected,
         Action::PickEdge(playr_app::sampler::Edge::Start),
+        Action::SelectEdge(playr_app::sampler::Edge::Start),
         Action::WriteSlices,
         Action::DiscardSlices,
         Action::MarkSlices,
@@ -219,6 +220,7 @@ fn every_action() -> Vec<Action> {
             | Action::SnapSelected
             | Action::RemoveSelected
             | Action::PickEdge(_)
+            | Action::SelectEdge(_)
             | Action::WriteSlices
             | Action::DiscardSlices
             | Action::MarkSlices

@@ -8,6 +8,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - Each program shows its version while running. The keys help title of all three reads `Keys in the library view (playr 0.18.0)`. `playr-server` prints `playr-server 0.18.0: ADDRESS` on start, and `GET /config` returns it. The window's Help, About playr shows it with the author and links to the repository, its releases and its issues. Before, only `--version` gave it, which says nothing about a process already running. Library API: `playr_app::VERSION`.
 
+### Fixed
+
+- `[` and `]` centre the sampler's view on the range end they select, turning Fit on if it was off. Before, with Fit off, they selected the end but the view stayed on the playhead, so they seemed to do nothing. A drag from an end now selects it with `:select-edge`, which leaves the view and Fit alone, so the waveform does not jump under the pointer. Library API: `Action::SelectEdge`.
+
 ### Changed
 
 - The README shows how to start `playr-gui` detached from the terminal: `open -a playr` on macOS, `&!` in zsh, `& disown` in bash. A plain `&` dies when the terminal closes. The binary does not detach itself, so the terminal, `cargo run` and debuggers still see its exit status and output.
