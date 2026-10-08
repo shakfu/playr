@@ -34,6 +34,16 @@ pub const FORMATS: [&str; 16] = [
     "sxt",
 ];
 
+/// The most zones a preset of a format holds, where one is known. A kit with
+/// more is converted in parts, as AudioHit splits `.ot` files.
+/// `docs/dev/hardware_samplers.md` lists the devices' slice limits.
+pub const LIMITS: [(&str, usize); 1] = [("opxy", 24)];
+
+/// The most zones a preset of `format` holds, if known.
+pub fn limit(format: &str) -> Option<usize> {
+    LIMITS.iter().find(|(f, _)| *f == format).map(|(_, n)| *n)
+}
+
 /// Where ConvertWithMoss's installer puts its command line. Only the Linux
 /// path is confirmed; the other two follow each installer's usual layout.
 pub fn default_program() -> PathBuf {
@@ -67,6 +77,9 @@ pub fn is_format_name(format: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Converted {
     pub dir: PathBuf,
+    /// The presets written: more than one where the kit passed the format's
+    /// [`limit`].
+    pub parts: usize,
     /// What ConvertWithMoss said it left out, a line each, such as zones
     /// past a device's limit.
     pub warnings: Vec<String>,
@@ -96,8 +109,10 @@ fn warnings(stdout: &str, stderr: &str) -> Vec<String> {
 }
 
 /// Converts the kit at `kit` to `format` with the ConvertWithMoss at
-/// `program`, into a new directory named `format` beside the kit. A
-/// conversion that fails leaves no directory.
+/// `program`, into a new directory named `format` beside the kit. A kit with
+/// more regions than the format's [`limit`] is converted in parts of at most
+/// that many, each a preset with its keys from the first again. A conversion
+/// that fails leaves no directory.
 pub fn convert(program: &Path, kit: &Path, format: &str) -> Result<Converted, String> {
     if !is_format_name(format) {
         return Err(format!("{format} is not a format name"));
@@ -105,44 +120,118 @@ pub fn convert(program: &Path, kit: &Path, format: &str) -> Result<Converted, St
     if !program.is_file() {
         return Err(not_installed(program));
     }
-    if !kit.is_file() {
-        return Err(format!("no kit at {}", kit.display()));
-    }
+    let text = fs::read_to_string(kit).map_err(|_| format!("no kit at {}", kit.display()))?;
     let dest = kit.with_file_name(format);
     // An export's slices never change, so neither would a second conversion.
     fs::create_dir(&dest).map_err(|e| match e.kind() {
         std::io::ErrorKind::AlreadyExists => format!("{} exists already", dest.display()),
         _ => format!("cannot create {}: {e}", dest.display()),
     })?;
-    let fail = |error: String| {
-        let _ = fs::remove_dir_all(&dest);
-        Err(error)
+    let split = parts(&text, limit(format));
+    let kits = match &split {
+        None => Ok(vec![kit.to_path_buf()]),
+        Some(parts) => write_parts(kit, parts),
     };
+    let result = kits.and_then(|kits| {
+        let mut warnings = Vec::new();
+        for k in &kits {
+            warnings.extend(run(program, k, format, &dest)?);
+        }
+        Ok((kits.len(), warnings))
+    });
+    // The parts are written beside the kit, so their samples are found; only
+    // the presets made from them are kept.
+    for n in 1..=split.map_or(0, |p| p.len()) {
+        _ = fs::remove_file(part_path(kit, n));
+    }
+    match result {
+        Ok((parts, warnings)) => Ok(Converted {
+            dir: dest,
+            parts,
+            warnings,
+        }),
+        Err(e) => {
+            let _ = fs::remove_dir_all(&dest);
+            Err(e)
+        }
+    }
+}
+
+/// The kit's text in parts of at most `limit` regions, each region on its
+/// key from the first again; `None` when it fits whole.
+fn parts(text: &str, limit: Option<usize>) -> Option<Vec<String>> {
+    let limit = limit.filter(|&n| n > 0)?;
+    let regions: Vec<&str> = text
+        .lines()
+        .filter(|l| l.trim_start().starts_with("<region>"))
+        .collect();
+    if regions.len() <= limit {
+        return None;
+    }
+    let rekey = |line: &str, i: usize| {
+        let key = crate::samples::FIRST_KEY + i;
+        line.split(' ')
+            .map(|word| match word.starts_with("key=") {
+                true => format!("key={key}"),
+                false => word.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let parts = regions
+        .chunks(limit)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .enumerate()
+                .map(|(i, line)| rekey(line, i) + "\n")
+                .collect()
+        })
+        .collect();
+    Some(parts)
+}
+
+/// Where the parts of `kit` are written: beside it, numbered from 1.
+fn part_path(kit: &Path, n: usize) -> PathBuf {
+    let stem = kit.file_stem().unwrap_or_default().to_string_lossy();
+    kit.with_file_name(format!("{stem}-{n}.sfz"))
+}
+
+/// Writes `parts` beside `kit`, and returns their paths.
+fn write_parts(kit: &Path, parts: &[String]) -> Result<Vec<PathBuf>, String> {
+    (1..)
+        .zip(parts)
+        .map(|(n, text)| {
+            let path = part_path(kit, n);
+            fs::write(&path, text)
+                .map(|()| path.clone())
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))
+        })
+        .collect()
+}
+
+/// Runs ConvertWithMoss on one kit into `dest`, and returns what it said it
+/// left out.
+fn run(program: &Path, kit: &Path, format: &str, dest: &Path) -> Result<Vec<String>, String> {
+    let before = fs::read_dir(dest).map_or(0, Iterator::count);
     // The kit itself, not its directory, which holds earlier conversions.
-    let run = Command::new(program)
+    let output = Command::new(program)
         .args(["-s", "sfz", "-d", format])
         .arg(kit)
-        .arg(&dest)
-        .output();
-    let output = match run {
-        Ok(output) => output,
-        Err(e) => return fail(format!("cannot run {}: {e}", program.display())),
-    };
-    let wrote = fs::read_dir(&dest).is_ok_and(|mut entries| entries.next().is_some());
+        .arg(dest)
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", program.display()))?;
+    let wrote = fs::read_dir(dest).map_or(0, Iterator::count) > before;
     if output.status.success() && wrote {
-        let warnings = warnings(
+        return Ok(warnings(
             &String::from_utf8_lossy(&output.stdout),
             &String::from_utf8_lossy(&output.stderr),
-        );
-        return Ok(Converted {
-            dir: dest,
-            warnings,
-        });
+        ));
     }
     // It exits 0 whatever happened, having written nothing, and says why on
     // its error output, first line first.
     let said = String::from_utf8_lossy(&output.stderr);
-    fail(match said.lines().find(|l| !l.trim().is_empty()) {
+    Err(match said.lines().find(|l| !l.trim().is_empty()) {
         Some(line) => format!("ConvertWithMoss: {}", line.trim()),
         None => "ConvertWithMoss wrote nothing".into(),
     })

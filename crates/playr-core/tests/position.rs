@@ -2,7 +2,7 @@
 //!
 //! These are pure calculations, so they need no audio device.
 
-use playr_core::audio::{speed_for, track_position};
+use playr_core::audio::{speed_at, track_position};
 use std::time::Duration;
 
 const RATE: u32 = 44100;
@@ -94,23 +94,23 @@ fn a_track_start_ahead_of_the_count_does_not_underflow() {
 
 #[test]
 fn semitone_steps_are_geometric() {
-    assert!((speed_for(0) - 1.0).abs() < 1e-12);
+    assert!((speed_at(0) - 1.0).abs() < 1e-12);
     // Twelve steps is exactly an octave, in both directions.
     assert!(
-        (speed_for(12) - 2.0).abs() < 1e-9,
+        (speed_at(1200) - 2.0).abs() < 1e-9,
         "12 up is {}",
-        speed_for(12)
+        speed_at(1200)
     );
     assert!(
-        (speed_for(-12) - 0.5).abs() < 1e-9,
+        (speed_at(-1200) - 0.5).abs() < 1e-9,
         "12 down is {}",
-        speed_for(-12)
+        speed_at(-1200)
     );
     // One step is about 5.95%.
     assert!(
-        (speed_for(1) - 1.059463).abs() < 1e-5,
+        (speed_at(100) - 1.059463).abs() < 1e-5,
         "1 up is {}",
-        speed_for(1)
+        speed_at(100)
     );
 }
 
@@ -118,9 +118,9 @@ fn semitone_steps_are_geometric() {
 fn each_step_is_the_same_musical_interval() {
     // Geometric steps mean the ratio between neighbours is constant, which is
     // what makes every press sound like the same amount of change.
-    let step = speed_for(1);
+    let step = speed_at(100);
     for n in -11..11 {
-        let ratio = speed_for(n + 1) / speed_for(n);
+        let ratio = speed_at((n + 1) * 100) / speed_at(n * 100);
         assert!(
             (ratio - step).abs() < 1e-9,
             "step {n} to {} was {ratio}",
@@ -130,9 +130,17 @@ fn each_step_is_the_same_musical_interval() {
 }
 
 #[test]
+fn a_cent_is_a_hundredth_of_a_semitone() {
+    // Half a semitone is the square root of one.
+    let half = speed_at(50);
+    assert!((half * half - speed_at(100)).abs() < 1e-12, "{half}");
+    assert!((speed_at(1) - 2f64.powf(1.0 / 1200.0)).abs() < 1e-15);
+}
+
+#[test]
 fn speed_is_clamped_to_one_octave_either_way() {
-    assert_eq!(speed_for(99), speed_for(12));
-    assert_eq!(speed_for(-99), speed_for(-12));
+    assert_eq!(speed_at(9900), speed_at(1200));
+    assert_eq!(speed_at(-9900), speed_at(-1200));
 }
 
 #[test]

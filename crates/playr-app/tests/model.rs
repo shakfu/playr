@@ -1767,6 +1767,195 @@ fn wait_for_plan(model: &mut Model) {
     }
 }
 
+/// `:preview` shows a list row's waveform without playing it, refuses the
+/// sampler's edits while it does, and ends from the sampler or once the
+/// track plays.
+#[test]
+fn a_preview_shows_a_row_and_refuses_edits_until_it_ends() {
+    use playr_app::sampler::Wave;
+    use playr_core::audio::Cmd;
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.wav"), dir.path().join("b.wav"));
+    common::silence(&a, 8000, 10.0);
+    common::silence(&b, 8000, 5.0);
+    let tracks = vec![track(&a.to_string_lossy()), track(&b.to_string_lossy())];
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        tracks.clone(),
+        Config::default(),
+    );
+    let wave_of = |model: &mut Model, file: &Path| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            model.refresh();
+            if let Wave::Ready { path, peaks } = &model.sampler().wave {
+                if path == file {
+                    return peaks.frames;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no waveform of {}",
+                file.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    model.session_mut().set_selection(tracks);
+    model.perform(Action::ShowView(View::Selection));
+    model.perform(Action::CursorLast);
+    model.perform(Action::Preview);
+    assert_eq!(model.view(), View::Sampler);
+    assert_eq!(model.message(), Some(&Message::Previewing(b.clone())));
+    assert_eq!(wave_of(&mut model, &b), 40_000);
+
+    model.perform(Action::SeekTo(Duration::from_secs(1)));
+    assert_eq!(model.message(), Some(&Message::PreviewOnly(b.clone())));
+    model.perform(Action::Mark);
+    assert_eq!(model.message(), Some(&Message::PreviewOnly(b.clone())));
+    assert!(model.snapshot().marks.is_empty());
+    model.perform(Action::Zoom(playr_app::action::Zoom::In));
+    assert_eq!(model.sampler().zoom, 1);
+
+    model.perform(Action::Preview);
+    assert_eq!(model.message(), Some(&Message::PreviewEnded));
+    assert_eq!(wave_of(&mut model, &a), 80_000);
+    model.perform(Action::Preview);
+    assert_eq!(model.message(), Some(&Message::NotPreviewing));
+
+    // The playing track's row shows it as it plays; no preview.
+    model.perform(Action::ShowView(View::Selection));
+    model.perform(Action::CursorFirst);
+    model.perform(Action::Preview);
+    assert_eq!(model.view(), View::Sampler);
+    assert!(model.sampler().preview.is_none());
+
+    // A preview of the track that comes to play ends.
+    model.perform(Action::ShowView(View::Selection));
+    model.perform(Action::CursorLast);
+    model.perform(Action::Preview);
+    assert!(model.sampler().preview.is_some());
+    model.session().send(Cmd::Jump(1));
+    assert_eq!(wave_of(&mut model, &b), 40_000);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.snapshot().status.current() != Some(&b) {
+        assert!(Instant::now() < deadline, "b never played");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model.refresh();
+    assert!(model.sampler().preview.is_none());
+}
+
+/// `:label` names the selected mark, shown with it and kept in the library;
+/// `:mark-export` writes the marks with their labels beside the samples.
+#[test]
+fn a_selected_mark_is_labelled_and_the_marks_exported() {
+    use playr_core::labels::MarkFile;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("long.wav");
+    common::silence(&file, 8000, 10.0);
+    let mut model = sampler_model(dir.path(), &file);
+    model
+        .session_mut()
+        .set_samples_dir(dir.path().join("samples"));
+    model.perform(Action::Label("solo".into()));
+    assert_eq!(model.message(), Some(&Message::NothingSelected));
+    model.perform(Action::MarkAt(Duration::from_secs(2)));
+    model.perform(Action::MarkAt(Duration::from_secs(5)));
+    model.perform(Action::SelectMarkAt(Duration::from_secs(5)));
+    model.run_command("label solo two");
+    model.refresh();
+    assert_eq!(
+        model.snapshot().labels,
+        [None, Some("solo two".to_string())]
+    );
+
+    model.perform(Action::ExportMarks(MarkFile::Audacity));
+    let written = dir.path().join("samples/long-labels.txt");
+    assert_eq!(
+        std::fs::read_to_string(&written).unwrap(),
+        "2.000000\t2.000000\t\n5.000000\t5.000000\tsolo two\n"
+    );
+    model.perform(Action::ExportMarks(MarkFile::Cue));
+    let sheet = std::fs::read_to_string(dir.path().join("samples/long.cue")).unwrap();
+    assert!(
+        sheet.contains("TITLE \"solo two\"\n    INDEX 01 00:05:00"),
+        "{sheet}"
+    );
+
+    // Moved, the mark keeps its label; `:label -` clears it.
+    model.perform(Action::MoveSelectedTo(Duration::from_secs(6)));
+    model.refresh();
+    assert_eq!(
+        model.snapshot().labels,
+        [None, Some("solo two".to_string())]
+    );
+    model.run_command("label -");
+    model.refresh();
+    assert_eq!(model.snapshot().labels, [None, None]);
+}
+
+/// An edited plan left by a track change comes back with its track, and so
+/// does its undo.
+#[test]
+fn an_edited_plan_and_its_undo_wait_for_their_track() {
+    use playr_app::sampler::{Scale, Wave};
+    use playr_core::audio::Cmd;
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.wav"), dir.path().join("b.wav"));
+    common::silence(&a, 8000, 10.0);
+    common::silence(&b, 8000, 10.0);
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        vec![track(&a.to_string_lossy()), track(&b.to_string_lossy())],
+        Config::default(),
+    );
+    model.perform(Action::ShowView(View::Sampler));
+    let on = |model: &mut Model, file: &Path| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while model.snapshot().status.current().map(|p| p.as_path()) != Some(file)
+            || !matches!(model.sampler().wave, Wave::Ready { .. })
+        {
+            assert!(Instant::now() < deadline, "not on {}", file.display());
+            model.refresh();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    on(&mut model, &a);
+    model.perform(Action::Slice(playr_app::action::Slicing::Equal(4)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.sampler().pending.is_none() {
+        assert!(Instant::now() < deadline, "no plan");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model.set_scale(Scale {
+        start: 0,
+        per_column: 64,
+        per_frame: 1,
+        columns: 100,
+    });
+    model.perform(Action::SelectSliceAt(Duration::from_millis(2_505)));
+    model.perform(Action::MoveSelectedTo(Duration::from_secs(3)));
+    assert_eq!(starts(&model), [0, 24_000, 40_000, 60_000]);
+
+    model.session().send(Cmd::Jump(1));
+    on(&mut model, &b);
+    assert!(model.sampler().pending.is_none());
+    model.perform(Action::Undo);
+    assert_eq!(model.message(), Some(&Message::NothingToUndo));
+
+    model.session().send(Cmd::Jump(0));
+    on(&mut model, &a);
+    model.refresh();
+    assert_eq!(starts(&model), [0, 24_000, 40_000, 60_000]);
+    model.perform(Action::Undo);
+    assert_eq!(starts(&model), [0, 20_000, 40_000, 60_000]);
+}
+
 #[test]
 fn undo_brings_back_an_edited_plan_a_new_cut_replaced() {
     use playr_app::action::{Nudge, Slicing};
@@ -1957,6 +2146,84 @@ fn a_selected_range_end_snaps_to_the_nearest_rise() {
     );
 }
 
+/// `:tempo` sets the speed, to a cent, that plays the track at that tempo;
+/// a tempo more than an octave away, or a track with none, is refused.
+#[test]
+fn tempo_sets_the_speed_for_a_bpm() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.wav");
+    common::silence(&path, 8000, 30.0);
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let mut t = track(path.to_str().unwrap());
+    let meta = std::fs::metadata(&path).unwrap();
+    t.size = meta.len() as i64;
+    t.mtime = meta
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+    db::upsert(&conn, &t).unwrap();
+    db::analysis::put(
+        &conn,
+        &t,
+        playr_core::analysis::Analysis {
+            bpm_tag: Some(120.0),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut model = Model::new(conn, common::fake_player().0, vec![t], Config::default());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.session().playing_track().is_err() {
+        assert!(Instant::now() < deadline, "never played");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    model.run_command("tempo 128");
+    // 1200 log2(128 / 120) is 111.7 cents.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while model.snapshot().status.cents != 112 {
+        assert!(Instant::now() < deadline, "{:?}", model.message());
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let bpm = model.bpm().unwrap();
+    assert!((bpm - 128.0).abs() < 0.05, "{bpm}");
+    model.run_command("tempo 250");
+    assert_eq!(
+        model.message(),
+        Some(&Message::TempoOutOfReach {
+            bpm: 250.0,
+            found: 120.0
+        })
+    );
+}
+
+/// `:interp` switches the read heads from the setting, and toggles back.
+#[test]
+fn interp_switches_the_read_heads_and_toggles() {
+    use playr_dsp::Interp;
+    let config = Config {
+        interp: Interp::Hermite,
+        ..Config::default()
+    };
+    let mut model = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        config,
+    );
+    assert_eq!(model.mixer().interp(), Interp::Hermite);
+    model.run_command("interp");
+    assert_eq!(model.mixer().interp(), Interp::Sinc);
+    assert_eq!(model.message(), Some(&Message::Interp(Interp::Sinc)));
+    model.run_command("interp sinc");
+    assert_eq!(model.mixer().interp(), Interp::Sinc);
+    model.run_command("interp");
+    assert_eq!(model.mixer().interp(), Interp::Hermite);
+}
+
 #[test]
 fn the_tempo_shown_follows_varispeed() {
     let dir = tempfile::tempdir().unwrap();
@@ -1988,7 +2255,7 @@ fn the_tempo_shown_follows_varispeed() {
     assert_eq!(model.bpm(), Some(120.0));
     // Twelve semitones is twice the speed, so the music is twice as fast.
     // The engine publishes the speed on its own pass, so wait for it.
-    model.perform(Action::SetSpeed(12));
+    model.perform(Action::SetSpeed(1200));
     let deadline = Instant::now() + Duration::from_secs(5);
     while model.bpm() != Some(240.0) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -2432,6 +2699,7 @@ fn the_slices_last_written_are_converted_into_a_directory_beside_them() {
         converted,
         Message::Core(Notice::Done(Outcome::Converted {
             dir: dest.clone(),
+            parts: 1,
             warnings: Vec::new()
         }))
     );
@@ -2882,6 +3150,39 @@ fn eq_moves_from_where_the_player_is_stays_in_range_and_says_so() {
     assert_eq!(model.message_text(), Some("eq flat"));
     model.refresh();
     assert_eq!(model.snapshot().eq, [0.0; 3]);
+}
+
+/// A bypass holds the bands flat and puts them back; a band set meanwhile
+/// ends it, and a flat EQ has nothing to bypass.
+#[test]
+fn eq_bypass_holds_the_bands_and_puts_them_back() {
+    use playr_core::audio::eq::Band;
+    let mut model = Model::new(
+        db::open_memory().unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        Config::default(),
+    );
+    model.perform(Action::BypassEq);
+    assert_eq!(model.message_text(), Some("eq flat"));
+    model.run_command("eq bass +3");
+    model.run_command("eq treble -2");
+    model.run_command("eq bypass");
+    assert_eq!(model.message_text(), Some("eq bass +3 treble -2 bypassed"));
+    model.refresh();
+    assert_eq!(model.snapshot().eq, [0.0; 3]);
+    assert_eq!(model.mixer().eq_held(), Some([3.0, 0.0, -2.0]));
+    model.perform(Action::BypassEq);
+    assert_eq!(model.message_text(), Some("eq bass +3 treble -2"));
+    model.refresh();
+    assert_eq!(model.snapshot().eq, [3.0, 0.0, -2.0]);
+
+    model.perform(Action::BypassEq);
+    model.perform(Action::SetEq(Band::Mid, 1.0));
+    assert_eq!(model.mixer().eq_held(), None);
+    model.perform(Action::BypassEq);
+    model.perform(Action::BypassEq);
+    assert_eq!(model.message_text(), Some("eq mid +1"));
 }
 
 #[test]

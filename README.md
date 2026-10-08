@@ -39,7 +39,7 @@ None of the three contact external services or download any metadata and images.
 
 - The sampler's region shows its peak, loudness in LUFS and stereo correlation
 
-- Varispeed in semitone steps, 0.5x to 2.0x, pitch moving with tempo
+- Varispeed in semitones or cents, or to a tempo, 0.5x to 2.0x, pitch moving with tempo
 
 - A three-band EQ: bass, mid and treble
 
@@ -356,7 +356,7 @@ There is no OR, NOT or exclusion: every term narrows the results. `:sql` answers
 
 - `playlists`: `playlist`, `position`, `path`, one row per entry.
 
-- `marks`: `path`, `time` (seconds).
+- `marks`: `path`, `time` (seconds), `label`.
 
 ```
 :sql SELECT path FROM library WHERE tempo BETWEEN 120 AND 130 AND NOT lossless ORDER BY tempo
@@ -408,6 +408,7 @@ These keys are the same in the terminal, the window and the web page, and any of
 | `C`                      | clear all marks in this track; asks y/n     |
 | `(` `)`                  | varispeed down or up, one semitone a press  |
 | `\`                      | back to normal speed                        |
+| `t`                      | the EQ flat, and back                       |
 | `+` `-`                  | volume                                      |
 | `:`                      | type a command; see [Commands](#commands)   |
 | `?`                      | list the keys for this view                 |
@@ -481,7 +482,7 @@ Each export writes a new directory, named after the track, under `samples` in [`
 
 The `sliced` files follow published layouts and match what other tools write; none has been loaded on a device. [docs/dev/hardware_samplers.md](docs/dev/hardware_samplers.md) has the layouts and what is unchecked.
 
-`:convert FORMAT`, or Sampler, Slice, Convert to in the window, turns the slices last written into another sampler's format with [ConvertWithMoss](https://github.com/git-moss/ConvertWithMoss), which must be installed. It is an extension: it runs a program that is not part of playr, so it is off, and left out of `:help`, Tab completion and the window's menu, until `convert-with-moss.enable = true` is set under `[extensions]` in `settings.toml`. The result goes into a directory named after the format inside the export's: `amen/sf2`. `:convert sf2 amen` converts an earlier export instead, named by its directory under `samples`, which Tab completes, or by a path; Sampler, Slice, Convert an export to picks one in a dialog. Exports written before 0.15.0 have no `.sfz` file, so they are refused. Tab completes `1010music`, `ableton`, `bento`, `deluge`, `distingex`, `emulti` (Elektron Tonverk), `exs24` (Logic's Sampler), `mc707`, `mpc` (MPC keygroups), `nki` (Kontakt), `opxy`, `renoise`, `s2400`, `sf2`, `sp404mk2` and `sxt` (Reason's NN-XT); any other name ConvertWithMoss takes for `-d` works too. It resamples where a device needs it. A format already converted is refused, since the slices have not changed. playr runs ConvertWithMoss from where its installer puts it, or from `convert-with-moss.path`; it does not search `PATH`. Until it is there, `:convert` says where it looked and the window's Convert to is disabled.
+`:convert FORMAT`, or Sampler, Slice, Convert to in the window, turns the slices last written into another sampler's format with [ConvertWithMoss](https://github.com/git-moss/ConvertWithMoss), which must be installed. It is an extension: it runs a program that is not part of playr, so it is off, and left out of `:help`, Tab completion and the window's menu, until `convert-with-moss.enable = true` is set under `[extensions]` in `settings.toml`. The result goes into a directory named after the format inside the export's: `amen/sf2`. `:convert sf2 amen` converts an earlier export instead, named by its directory under `samples`, which Tab completes, or by a path; Sampler, Slice, Convert an export to picks one in a dialog. Exports written before 0.15.0 have no `.sfz` file, so they are refused. Tab completes `1010music`, `ableton`, `bento`, `deluge`, `distingex`, `emulti` (Elektron Tonverk), `exs24` (Logic's Sampler), `mc707`, `mpc` (MPC keygroups), `nki` (Kontakt), `opxy`, `renoise`, `s2400`, `sf2`, `sp404mk2` and `sxt` (Reason's NN-XT); any other name ConvertWithMoss takes for `-d` works too. It resamples where a device needs it. An export with more slices than a device's preset holds is converted as several presets, each on keys from C1: 40 slices to `opxy`, whose presets hold 24, give `amen-1` with 24 and `amen-2` with 16. The OP-XY's is the only limit playr knows. A format already converted is refused, since the slices have not changed. playr runs ConvertWithMoss from where its installer puts it, or from `convert-with-moss.path`; it does not search `PATH`. Until it is there, `:convert` says where it looked and the window's Convert to is disabled.
 
 Slices are read from the source file, so volume and speed do not apply. They are 24-bit WAV at the source's sample rate and channel count; 16- and 24-bit sources are copied bit for bit. Without `S`, `:slice onsets` uses `onset_sensitivity` from `settings.toml`, 0.5 by default. Onset detection is rtrack's: a hit within 50 ms of the region's start stays in the first slice, and each slice starts up to 10 ms before its hit. It reads the region into memory, up to about 23 minutes at 48 kHz, and keeps it: finding onsets again in the same region at another sensitivity reads nothing, which is what lets the window's Sensitivity slider replan the slices as it moves, a few milliseconds a step (60 s of audio, one machine). Export runs in the background, and the bottom line reports when it is done.
 
@@ -531,11 +532,13 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 | `esc`   | `:discard`              | discard them                                      |
 |         | `:mark-slices`          | mark each slice's start, to keep the cuts         |
 
+- **Preview.** `v`, or `:preview`, in the library, queue or selection shows the row's waveform in this view without playing it, with its marks and no playhead; the window has Preview in sampler on a row's menu. A preview is for looking: the keys and commands that seek, mark, set a range, loop, slice or audition are refused until the track plays. `v` in this view, or End preview in the window, shows the playing track again, and so does playing the track previewed.
+
 - **Displays.** The envelope draws each column as two bars in eighth blocks: its RMS level in the bright colour, inside its peak level in a darker one. The waveform is folded, with negative samples counted by their size, so the bars use the full height. RMS shows loudness, such as a verse against a chorus, where a mastered track's peaks are near full scale everywhere; peak shows where each hit starts. The Braille display, which the view starts with, draws the waveform around a centre line, two dots across and four down a cell, which shows its shape. Both scale to the loudest sample in the track.
 
 - **dB.** The dB display draws the same bars on a scale from -48 dBFS to full scale, not scaled to the track. A linear scale puts RMS 12 dB below full scale a quarter of the way up; this puts it three quarters of the way, which spreads out quiet passages and the level changes between sections. Levels below -48 dB draw nothing.
 
-- **Spectrogram.** `:display spectrogram` draws level by frequency and time: 20 Hz at the bottom to half the sample rate at the top, on a log scale, brighter where louder, down to 90 dB below the loudest level in the track. It separates hits that the waveform merges, such as a kick under a hi-hat, and shows a lossy source's cutoff: an MP3 transcoded to FLAC stops somewhere from 16 to 20 kHz, by bitrate. On the log scale the top 16 to 22 kHz is about 3% of the height, so the cutoff shows in the window but seldom in the terminal. Both draw in magma, black through purple and orange to pale yellow, with the track outside the region dimmed: the terminal two rows a cell from the 256-colour table, the window as one image with 100 Hz, 1 kHz and 10 kHz marked. Each column is a 2048-point transform every 512 frames, 11.6 ms at 44.1 kHz, so at closer zoom neighbouring columns repeat. The transform resolves 21.5 Hz at 44.1 kHz, so below about 340 Hz a row is narrower than that; those rows blend between the neighbouring frequencies it does resolve, and bass shows as a smooth blur, not detail.
+- **Spectrogram.** `:display spectrogram` draws level by frequency and time: 20 Hz at the bottom to half the sample rate at the top, on a log scale, brighter where louder, down to 90 dB below the loudest level in the track. It separates hits that the waveform merges, such as a kick under a hi-hat, and shows a lossy source's cutoff: an MP3 transcoded to FLAC stops somewhere from 16 to 20 kHz, by bitrate. On the log scale the top 16 to 22 kHz is about 3% of the height, so the cutoff shows in the window but seldom in the terminal. Both draw in magma, black through purple and orange to pale yellow, with the track outside the region dimmed: the terminal two rows a cell from the 256-colour table, the window as one image with 100 Hz, 1 kHz and 10 kHz marked. Each column is a transform of about 46 ms every 512 frames, 11.6 ms at 44.1 kHz, so at closer zoom neighbouring columns repeat: 2048 points to 48 kHz, 4096 to 96 kHz and 8192 above. The transform resolves 21.5 Hz at 44.1 kHz and 23.4 Hz at 96 or 192 kHz, so below about 340 Hz a row is narrower than that; those rows blend between the neighbouring frequencies it does resolve, and bass shows as a smooth blur, not detail.
 
 - **Measurements.** The region's line under the waveform gives the region's or range's peak in dBFS, its loudness in LUFS as `playr analyze` measures a track, and its channels' correlation: +1 for mono, 0 for one channel alone, and below 0 where they partly cancel when summed to mono. Under 400 ms is too short for LUFS, so the RMS level shows instead. All three are read from the file, before ReplayGain and the volume.
 
@@ -543,13 +546,15 @@ For MP3 and AAC, frame positions follow playr's decoder. Another decoder can cou
 
 - **The selection.** The edit keys act on one selected item, a mark, a range end or a planned slice, wherever the playhead has moved since. `{` and `}` select the mark before or after the selected one, or the playhead with none selected, and play from it to the next mark. `b` and a click on a mark in the window select it too, `[` and `]` select a range end, and `,` and `.` a planned slice, as does a click on its start. While a plan is shown, a click or drag on a slice start that sits on a mark takes the slice; discard the plan to drag the mark. Out of view, it shows as an arrow at that edge: reversed in the terminal, and above the playhead's in the window. The selection goes when its mark, end or slice is removed, on `D`, and on a change of track. With nothing selected the edit keys say so.
 
-- **Editing.** `<` and `>` move the selected mark or range end a column at a time, and `:move-to TIME` puts it at a time; in the window, a mark or slice start is dragged. backspace removes the selected mark, wherever it sits in the chain `B` undoes; with a range end selected it clears the range. A selected slice is edited by its start: `<` and `>` move it, taking the end of the slice before with it, and backspace joins it to the slice before. Each start stays a frame inside its neighbours, and the first stays inside the range or region. The plan shows `edited`, and keeps the starts when `:slice-edges` plans it again; a new `:slice` replaces them. The marks do not move. `#` moves the selection to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
+- **Editing.** `<` and `>` move the selected mark or range end a column at a time, and `:move-to TIME` puts it at a time; in the window, a mark or slice start is dragged. backspace removes the selected mark, wherever it sits in the chain `B` undoes; with a range end selected it clears the range. A selected slice is edited by its start: `<` and `>` move it, taking the end of the slice before with it, and backspace joins it to the slice before. Each start stays a frame inside its neighbours, and the first stays inside the range or region. The plan shows `edited`, and the window's Slice drop-down `Edited`; it keeps the starts when `:slice-edges` plans it again; a new `:slice` replaces them. The marks do not move. `#` moves the selection to the nearest rise in the sound, looked for in the two seconds either side: a mark placed by reaction time lands late, and this puts it on the hit. The window around it is read in the background, so it costs the same on a long track as a short one. A move onto another mark is refused rather than merging the two.
 
-- **Undo.** `u` undoes the last change to the playing track's marks, range or planned slices, by any key, command or drag, and again for the one before, and selects what was selected then. Making or replacing a plan is not a change it undoes, unless the plan replaced or discarded was edited. It keeps the last 100 changes, until the track changes. `r` puts back what `u` took, until a new change.
+- **Labels.** `:label solo` labels the selected mark, `:label -` clears it, and `:label` alone opens the command line on its label to edit; in the window, a mark's menu has Label.... The label moves with its mark, shows in quotes on the detail line while the mark is selected, and in the window beside the mark. `:mark-export audacity` writes the playing track's marks to `samples/NAME-labels.txt`, which Audacity imports with File, Import, Labels; `:mark-export cue` writes `samples/NAME.cue`, a track starting at each mark and titled by its label. Either replaces the file it wrote before. The `:sql` view `marks` has a `label` column.
+
+- **Undo.** `u` undoes the last change to the playing track's marks, range or planned slices, by any key, command or drag, and again for the one before, and selects what was selected then. Making or replacing a plan is not a change it undoes, unless the plan replaced or discarded was edited. It keeps the last 100 changes, until the track changes; an edited plan keeps its changes with it. `r` puts back what `u` took, until a new change.
 
 - **Audition.** `a` plays the selected mark up to the next, the selected slice, or the range when an end is selected; with nothing selected, the planned slice the playhead is in, or the range, or the region around it. It plays once, and pauses at the end rather than returning to the start as `l` does. Pressed again, during it or at its end, it plays the same span again from its start. With slices planned, `,` and `.`, or Previous slice and Next slice in the window, select and play the previous or next one, wrapping round at either end, so each can be checked before `enter` writes them. With `slice_edges = "fade"`, an audition fades as the written slice will. Playing on afterwards continues the track from there.
 
-- **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track. Outside the view, `:slice` writes at once.
+- **Planning.** In this view, `:slice` plans slices instead of writing them, and draws their edges as `+`. Enter writes exactly those slices; esc discards them, and so does a change of track, unless a slice was moved or joined: an edited plan waits, with its undo, until its track plays again, and is lost at quit. Outside the view, `:slice` writes at once.
 
 - **Nudging.** Stopped, a seek, a click or a nudge opens the track paused at that point, so it can be placed and marked before playing. The arrows move the playhead a column, and with shift a tenth of the view, so zooming in makes each step finer, down to one frame. Outside this view they seek 5 and 30 s. Pause first to place a point without hearing each step.
 
@@ -604,7 +609,7 @@ In the window, `7` opens the DJ view. It lists the library, with search, and its
 
 | command | does |
 |-|-|
-| `:dj a load` | load the track under the cursor onto deck A; `b` for deck B. A playing deck fades out, takes it and plays it; with strict on, it keeps it as its next track and loads it once it stops |
+| `:dj a load` | load the track under the cursor onto deck A; `b` for deck B. A playing deck plays on while it is read, then crossfades into it over 1 s; with strict on, it keeps it as its next track and loads it once it stops |
 | `:dj a take` | load the track the player is playing onto deck A and play it from where the player is, at its speed and ReplayGain; the player pauses. See [the DJ guide](docs/guide-dj.md#taking-over-from-the-player) |
 | `:dj strict on\|off` | strict: a track picked for a playing deck waits until the deck stops, so a mis-click cannot cut into a mix. Off until set |
 | `:dj a mark next\|prev` | jump to the next or previous mark, as the sampler set them |
@@ -656,13 +661,13 @@ The master volume, `:volume` or the Volume slider, scales everything playr plays
 
 ### Varispeed
 
-`(` and `)` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal.
+`(` and `)` change playback speed in semitone steps, and pitch moves with it, as on a tape machine or a turntable. Twelve presses is exactly an octave, so the range is 0.5x to 2.0x. The speed shows in the status bar as `1.19x (+3 st)` and `\` returns to normal. Between the steps, `:speed +50c` moves the speed by 50 cents, a hundredth of a semitone each, and `:speed 1.25` sets it in semitones to a hundredth: a semitone moves 120 BPM to 127.1. `:fade 2` fades each track in over its first 2 s and out over its last, from what is decoded next, about 2 s later; `:fade off` plays tracks as they are, gapless, which is the default, and `fade` in `settings.toml` sets it at start. A loop or an audition keeps its own edges. On an analysed track, `:tempo 128` sets the speed, to the nearest cent, that plays it at 128 BPM. The window's speed slider moves in cents and sets the speed where a drag stops. OSC's `/playr/speed` stays in whole semitones.
 
 This is not the pitch-preserving speed change of a podcast app. That is time-stretching, which needs a phase vocoder; this is a change of resampling ratio, which is what varispeed means.
 
 ### EQ
 
-`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass 3` sets a band, `:eq bass =-3` sets it below 0, and `:eq treble -2` moves one; `:eq flat` returns all three to 0. In the window, the EQ button beside Mode opens a popup with a slider for each and Flat, which a click elsewhere closes; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
+`:eq` cuts or boosts three bands, each -12 to 12 dB: `bass`, a shelf below 100 Hz; `mid`, a wide peak at 1 kHz; and `treble`, a shelf above 10 kHz. `:eq bass 3` sets a band, `:eq bass =-3` sets it below 0, and `:eq treble -2` moves one; `:eq flat` returns all three to 0. `:eq bypass`, or `t`, plays flat and keeps the bands; again, it puts them back, and setting a band ends the bypass. In the window, the EQ button beside Mode opens a popup with a slider for each, Flat and Bypass, which a click elsewhere closes; the web page takes the command. The status bar shows the bands away from 0, as `eq bass +3 treble -2`.
 
 A boost raises its band and leaves the rest, so at full volume a large one can clip a loud track. The volume applies after the EQ, so turning it down makes room: at 50, a 6 dB boost cannot clip. The level meter reads after the EQ and before the volume. `:slice` and the sampler's measurements read the file, so the EQ does not reach them. The EQ starts flat each time playr does, and changes last until it exits.
 
@@ -697,9 +702,11 @@ An error in the file stops playr before it plays. Subcommands such as `scan` and
 ```toml
 master = 60                        # the master fader, percent, 0 to 100; see Mixer
 fader = "cubic"                    # how faders map to levels: db or cubic
+interp = "sinc"                    # how deck and tape heads read: sinc or hermite
 mode = "shuffle"                   # normal, shuffle, repeat or repeat-one, in full
 after_queue = "stop"               # after the queue: resume the library, or stop
 speed = -3                         # semitones, -12 to 12
+fade = 0                           # seconds each track fades in and out, 0 to 10
 onset_sensitivity = 0.7            # for :slice onsets without a number, 0 to 1
 dj_knee = -0.5                     # dBFS where the DJ master's soft clip starts, -24 to -0.1
 tape_knee = -3                     # and the tape write head's

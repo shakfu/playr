@@ -109,14 +109,28 @@ pub enum Action {
     VolumeBy(f32),
     /// Set the master fader's position, from 0 to 1.
     SetVolume(f32),
+    /// Shift the speed by this many cents, 100 a semitone.
     SpeedBy(i32),
+    /// Set the speed shift, in cents.
     SetSpeed(i32),
+    /// Set the speed that plays the playing track at this tempo, in BPM.
+    Tempo(f32),
+    /// Fade each track in and out over this long; zero for none.
+    Fade(Duration),
+    /// How the decks' and the tape's heads read between frames, or the
+    /// other one for `None`.
+    Interp(Option<playr_dsp::Interp>),
     /// Set a tone control band, in dB.
     SetEq(Band, f32),
     /// Cut or boost a tone control band further, in dB.
     EqBy(Band, f32),
     /// Return every band to 0.
     FlatEq,
+    /// Show the track under the cursor in the sampler without playing it;
+    /// in the sampler, show the playing track again.
+    Preview,
+    /// Hold the bands at 0, keeping them, or put back those held.
+    BypassEq,
     /// Next playback mode, or the previous one when false.
     CycleMode(bool),
     SetMode(Mode),
@@ -198,6 +212,12 @@ pub enum Action {
     /// Write the slices planned in the sampler view.
     WriteSlices,
     DiscardSlices,
+    /// Label the selected mark, or clear its label when blank.
+    Label(String),
+    /// Open the command line on `label` and the selected mark's label.
+    StartLabel,
+    /// Write the playing track's marks as a label file or a cue sheet.
+    ExportMarks(playr_core::labels::MarkFile),
     /// Mark the start of each planned slice, keeping the marks there are, so
     /// the cuts outlast the plan.
     MarkSlices,

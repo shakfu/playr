@@ -88,7 +88,7 @@ fn numbers_are_checked_against_their_range() {
     // A fader's float is rounded to a semitone.
     assert_eq!(
         action("/playr/speed", vec![Float(-2.6)]),
-        Some(Action::SetSpeed(-3))
+        Some(Action::SetSpeed(-300))
     );
     assert_eq!(action("/playr/speed", vec![Int(13)]), None);
     assert_eq!(
@@ -152,7 +152,7 @@ fn the_listener_opens_bundles_and_skips_what_it_cannot_read() {
             other => panic!("{other:?}"),
         }
     }
-    assert_eq!(got, [Action::Stop, Action::SetSpeed(2)]);
+    assert_eq!(got, [Action::Stop, Action::SetSpeed(200)]);
 }
 
 #[test]

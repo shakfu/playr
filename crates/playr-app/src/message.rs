@@ -5,7 +5,7 @@
 //! is turned into words, so every frontend says the same thing, and tests
 //! assert on messages while one test checks the wording of each.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use playr_core::notice::{Notice, Outcome, Refusal, Task};
@@ -34,6 +34,8 @@ pub enum Message {
     Theme(Theme),
     /// The tone control's gains in dB, by band.
     Eq([f32; 3]),
+    /// The bands `:eq bypass` holds while the EQ plays flat.
+    EqBypassed([f32; 3]),
     /// The columns a list shows, as `:columns` set them.
     Columns(Vec<Column>),
     /// What lists are sorted by, as `:sort` set it.
@@ -92,6 +94,25 @@ pub enum Message {
     FirstSlice,
     /// No planned slice starts where one was asked for.
     NoSliceHere,
+    /// The decks' and the tape's heads now read with this.
+    Interp(playr_dsp::Interp),
+    /// Tracks fade in and out over this long from now; zero for none.
+    Fade(std::time::Duration),
+    /// `:tempo` asked for more than an octave from the track's tempo.
+    TempoOutOfReach {
+        bpm: f32,
+        found: f32,
+    },
+    /// The sampler shows this track without playing it.
+    Previewing(PathBuf),
+    /// The sampler shows the playing track again.
+    PreviewEnded,
+    /// `:preview` in a list with no track under the cursor.
+    NothingToPreview,
+    /// `:preview` in the sampler with nothing previewed.
+    NotPreviewing,
+    /// An edit refused while the sampler previews this track.
+    PreviewOnly(PathBuf),
     /// A `map` command took effect; holds the `Action::Map`.
     Mapped(Action),
     Unmapped(Key),
@@ -233,6 +254,7 @@ pub fn text(message: &Message) -> String {
         Message::Display(display) => format!("display: {}", display.name()),
         Message::Theme(theme) => format!("theme: {}", theme.name()),
         Message::Eq(gains) => eq(*gains),
+        Message::EqBypassed(gains) => format!("{} bypassed", eq(*gains)),
         Message::Columns(columns) => {
             let names: Vec<&str> = columns.iter().map(|c| c.name()).collect();
             format!("columns: {}", names.join(", "))
@@ -296,6 +318,23 @@ pub fn text(message: &Message) -> String {
         Message::SlicesJoined { slice } => format!("joined slice {} to slice {slice}", slice + 1),
         Message::FirstSlice => "the first slice has none before it to join".into(),
         Message::NoSliceHere => "no planned slice starts here".into(),
+        Message::Previewing(path) => {
+            format!("previewing {}; :preview here ends it", file_name(path))
+        }
+        Message::PreviewEnded => "preview ended".into(),
+        Message::Interp(i) => format!("read heads: {}", i.name()),
+        Message::Fade(d) if d.is_zero() => "fades off: tracks play as they are".into(),
+        Message::Fade(d) => format!(
+            "each track fades in and out over {} s",
+            (d.as_secs_f64() * 100.0).round() / 100.0
+        ),
+        Message::TempoOutOfReach { bpm, found } => format!(
+            "{bpm} BPM is more than 12 semitones from the track's {:.1}",
+            found
+        ),
+        Message::NothingToPreview => "no track under the cursor to preview".into(),
+        Message::NotPreviewing => "nothing previewed: :preview in a list shows its row".into(),
+        Message::PreviewOnly(path) => format!("previewing {}: play it to edit", file_name(path)),
         Message::Mapped(map) => command::line(map, None),
         Message::Unmapped(key) => format!("unmapped {key}"),
         Message::NotBound { key, view } => {
@@ -372,6 +411,25 @@ fn outcome_text(outcome: &Outcome) -> String {
             format!("marked {}{kept}", fmt_time(*at))
         }
         Outcome::MarkRemoved { at } => format!("removed mark at {}", fmt_time(*at)),
+        Outcome::Labelled { at, label: Some(l) } => {
+            format!("labelled the mark at {} \"{l}\"", fmt_time(*at))
+        }
+        Outcome::Labelled { at, label: None } => {
+            format!("cleared the label of the mark at {}", fmt_time(*at))
+        }
+        Outcome::MarksExported {
+            path,
+            format,
+            marks,
+        } => format!(
+            "wrote {} as {} to {}",
+            count(*marks, "mark"),
+            match format {
+                playr_core::labels::MarkFile::Audacity => "Audacity labels",
+                playr_core::labels::MarkFile::Cue => "a cue sheet",
+            },
+            home_as_tilde(path)
+        ),
         Outcome::MarkMoved { from, to } => {
             format!("moved mark from {} to {}", fmt_time(*from), fmt_time(*to))
         }
@@ -386,9 +444,16 @@ fn outcome_text(outcome: &Outcome) -> String {
             format!("exported {} to {}", slices(*n), home_as_tilde(dir))
         }
         Outcome::ConvertStarted { format } => format!("converting to {format}"),
-        Outcome::Converted { dir, warnings } => {
+        Outcome::Converted {
+            dir,
+            parts,
+            warnings,
+        } => {
             // The loss first: a narrow status line cuts the end.
-            let done = format!("converted to {}", home_as_tilde(dir));
+            let done = match parts {
+                1 => format!("converted to {}", home_as_tilde(dir)),
+                n => format!("converted to {} as {n} presets", home_as_tilde(dir)),
+            };
             match warnings.as_slice() {
                 [] => done,
                 [one] => format!("ConvertWithMoss: {one} {done}"),
@@ -673,9 +738,10 @@ fn dj_text(m: &crate::dj::DjMessage) -> String {
         DjMessage::Empty(s) => format!("deck {} is empty; :dj {} load first", deck(s), deck(s)),
         DjMessage::NoTrack => "no track under the cursor to load".into(),
         DjMessage::Playing(s) => format!("deck {} is playing; pause it first", deck(s)),
-        DjMessage::SpeedOutOfReach(st) => {
-            format!("a deck reaches +7 semitones at most; the player is at {st:+}")
-        }
+        DjMessage::SpeedOutOfReach(cents) => format!(
+            "a deck reaches +7 semitones at most; the player is at {}",
+            semitones(*cents)
+        ),
         DjMessage::Took(s) => format!("deck {} took over from the player", deck(s)),
         DjMessage::OutOfReach(s) => format!(
             "deck {} cannot reach the other deck's tempo within 50%",
@@ -852,4 +918,23 @@ pub fn info_rows(
         rows.push((finding.name().into(), finding_detail(&finding)));
     }
     rows
+}
+
+/// The last part of `path`, or all of it when it has none.
+fn file_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// A speed shift of `cents` in signed semitones, to a hundredth: `+3`, `-0.5`.
+pub fn semitones(cents: i32) -> String {
+    let sign = if cents < 0 { "-" } else { "+" };
+    let (whole, part) = (cents.abs() / 100, cents.abs() % 100);
+    match part {
+        0 => format!("{sign}{whole}"),
+        p if p % 10 == 0 => format!("{sign}{whole}.{}", p / 10),
+        p => format!("{sign}{whole}.{p:02}"),
+    }
 }

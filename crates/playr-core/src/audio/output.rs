@@ -5,7 +5,7 @@
 //! track reaches the device without passing through a resampler at all.
 
 use std::any::Any;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use cpal::{
     SupportedStreamConfigRange,
 };
 
-use super::bus::{Bus, BusControl, Cue};
+use super::bus::{Bus, BusControl, Cue, Handover};
 use super::decode::Spec;
 use super::eq::{Eq, Gains};
 use super::meter::Meter;
@@ -425,7 +425,20 @@ pub struct Shared {
     /// Commands sent to the engine, and those it has acted on and published.
     pub sent: AtomicU64,
     pub taken: AtomicU64,
+    /// The `frames_out` the player hands over to a source at, or
+    /// [`NO_HANDOVER`]. Stored last, after `handover_id` and `handover`.
+    pub handover_at: AtomicU64,
+    /// The source a handover starts.
+    pub handover_id: AtomicU64,
+    /// Where the last handover got to, a [`Handover`] as `u8`.
+    pub handover: AtomicU8,
+    /// Raised by the callback when it pauses for a handover; the engine
+    /// lowers it and pauses too.
+    pub handed: AtomicBool,
 }
+
+/// `Shared::handover_at` with no handover armed.
+pub const NO_HANDOVER: u64 = u64::MAX;
 
 impl Shared {
     pub fn new() -> Self {
@@ -452,6 +465,10 @@ impl Shared {
             lost: AtomicU64::new(0),
             sent: AtomicU64::new(0),
             taken: AtomicU64::new(0),
+            handover_at: AtomicU64::new(NO_HANDOVER),
+            handover_id: AtomicU64::new(0),
+            handover: AtomicU8::new(Handover::None as u8),
+            handed: AtomicBool::new(false),
         }
     }
 
@@ -620,6 +637,11 @@ pub fn render<T>(
             chunk.commit_all();
         }
         shared.flush_done.store(requested, Ordering::Relaxed);
+        if shared.handover_at.swap(NO_HANDOVER, Ordering::Relaxed) != NO_HANDOVER {
+            shared
+                .handover
+                .store(Handover::Cancelled as u8, Ordering::Relaxed);
+        }
     }
     bus.commands();
     let ch = channels as usize;
@@ -694,10 +716,14 @@ fn mixed<T>(
         shared.volume(),
     );
     let step = (to - from) / frames.max(1) as f32;
-    let filled = match playing {
+    let mut filled = match playing {
         true => consumer.slots().min(out.len()) / ch * ch,
         false => 0,
     };
+    // The player stops on the handover's frame, so pops none after it.
+    if let Some(k) = handover_frame(bus, shared, filled / ch) {
+        filled = k * ch;
+    }
     if playing {
         eq.follow(shared.eq.get());
     }
@@ -773,6 +799,36 @@ fn mixed<T>(
             .frames_out
             .fetch_add(filled as u64 / ch as u64, Ordering::Relaxed);
     }
+}
+
+/// The frame of this callback a handover falls on, among the `frames` the
+/// player plays in it. On that frame the player pauses and the bus starts
+/// the handover's source. A frame already behind the device is missed.
+fn handover_frame(bus: &mut Bus, shared: &Shared, frames: usize) -> Option<usize> {
+    let at = shared.handover_at.load(Ordering::Acquire);
+    if at == NO_HANDOVER {
+        return None;
+    }
+    let base = shared.frames_out.load(Ordering::Relaxed);
+    let id = shared.handover_id.load(Ordering::Relaxed);
+    let missed = at < base || !bus.has(id);
+    if !missed && at - base >= frames as u64 {
+        return None;
+    }
+    shared.handover_at.store(NO_HANDOVER, Ordering::Relaxed);
+    let reached = match missed {
+        true => Handover::Missed,
+        false => Handover::Done,
+    };
+    shared.handover.store(reached as u8, Ordering::Relaxed);
+    if missed {
+        return None;
+    }
+    let k = (at - base) as usize;
+    bus.start_at(id, k);
+    shared.paused.store(true, Ordering::Relaxed);
+    shared.handed.store(true, Ordering::Relaxed);
+    Some(k)
 }
 
 /// Maps interleaved audio from `src_ch` channels to `dst_ch`, appending to `out`.

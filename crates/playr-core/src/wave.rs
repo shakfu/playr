@@ -16,9 +16,10 @@
 //! the sampler view's displays and its region's [`Stats`] need one decode
 //! between them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use crate::analysis::loudness::Histogram;
 use crate::audio::decode::AudioStream;
@@ -113,6 +114,15 @@ pub struct Peaks {
 }
 
 impl Peaks {
+    /// The memory its levels, signs, spectrogram and loudness hold, in bytes.
+    pub fn bytes(&self) -> usize {
+        let levels: usize = self.levels.iter().map(Vec::len).sum();
+        levels * std::mem::size_of::<Entry>()
+            + self.signs.len() * 8
+            + self.momentary.len() * 4
+            + self.spectrum.bytes()
+    }
+
     /// The peaks of interleaved `samples` with `channels` channels.
     pub fn from_interleaved(samples: &[f32], channels: usize, rate: u32) -> Peaks {
         let mut builder = Builder::new(rate, channels);
@@ -468,5 +478,66 @@ impl Builder {
             channels: self.channels,
             momentary: self.momentary,
         }
+    }
+}
+
+/// A file's modification time and size, which a cached read must match.
+pub type Stamp = (SystemTime, u64);
+
+/// The [`Stamp`] of the file at `path`; `None` if it cannot be read.
+pub fn stamp(path: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// Recently read peaks by path, up to a number of bytes, the least recently
+/// used dropped first. The newest is kept whatever its size: the sampler
+/// shows it, so it holds those bytes anyway.
+#[derive(Debug)]
+pub struct Cache {
+    cap: usize,
+    /// Least recently used first.
+    entries: Vec<(PathBuf, Stamp, Arc<Peaks>)>,
+}
+
+impl Cache {
+    /// An empty cache holding up to `cap` bytes.
+    pub fn new(cap: usize) -> Cache {
+        Cache {
+            cap,
+            entries: Vec::new(),
+        }
+    }
+
+    /// The peaks read from `path` when it had `stamp`, now the most recently
+    /// used. Peaks of a file changed since are dropped.
+    pub fn get(&mut self, path: &Path, stamp: Stamp) -> Option<Arc<Peaks>> {
+        let i = self.entries.iter().position(|(p, ..)| p == path)?;
+        let entry = self.entries.remove(i);
+        if entry.1 != stamp {
+            return None;
+        }
+        let peaks = entry.2.clone();
+        self.entries.push(entry);
+        Some(peaks)
+    }
+
+    /// Keeps `peaks`, read from `path` at `stamp`, as the most recently used.
+    pub fn put(&mut self, path: PathBuf, stamp: Stamp, peaks: Arc<Peaks>) {
+        self.entries.retain(|(p, ..)| *p != path);
+        self.entries.push((path, stamp, peaks));
+        while self.entries.len() > 1 && self.bytes() > self.cap {
+            self.entries.remove(0);
+        }
+    }
+
+    /// The bytes the peaks held take.
+    pub fn bytes(&self) -> usize {
+        self.entries.iter().map(|(.., p)| p.bytes()).sum()
+    }
+
+    /// The paths held, least recently used first.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.entries.iter().map(|(p, ..)| p.as_path())
     }
 }

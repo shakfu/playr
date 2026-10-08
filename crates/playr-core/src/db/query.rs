@@ -595,6 +595,25 @@ pub fn marks(conn: &Connection, path: &str) -> Result<Vec<Mark>> {
     rows.collect()
 }
 
+/// The labelled marks in the track at `path`: frame and label, earliest first.
+pub fn labels(conn: &Connection, path: &str) -> Result<Vec<(u64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT frame, label FROM marks WHERE path = ?1 AND label IS NOT NULL ORDER BY frame",
+    )?;
+    let rows = stmt.query_map([path], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?)))?;
+    rows.collect()
+}
+
+/// Labels the mark at `frame` in the track at `path`, or clears its label
+/// for `None`. Returns whether a mark was there.
+pub fn set_label(conn: &Connection, path: &str, frame: u64, label: Option<&str>) -> Result<bool> {
+    let set = conn.execute(
+        "UPDATE marks SET label = ?3 WHERE path = ?1 AND frame = ?2",
+        rusqlite::params![path, frame as i64, label],
+    )?;
+    Ok(set > 0)
+}
+
 /// Adds a mark; a mark already at the same frame is left as it is.
 pub fn add_mark(conn: &Connection, path: &str, mark: Mark) -> Result<()> {
     conn.execute(

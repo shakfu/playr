@@ -318,6 +318,8 @@ Step 4, 2026-10-06. `make test` passes: 954 tests. Differences from the design:
 - **The tab's mark is `Mix *`**, for a mute, or for a master over full scale while the tab was hidden. The clip half is not under test: the fake device cannot be driven over full scale without a test-only path.
 - **The EQ popup closes on a click outside it**; the Mix tab's EQ is the same state.
 
+Frame-exact Take, 2026-10-08. The tape's Take arms a handover at a `frames_out` value. The callback pauses the player on that frame and calls the source's `Source::start` between two `process` calls, splitting the chunk there. A seek or speed change cancels it; a frame already behind the device is missed, and the take arms again. The DJ Take still starts its deck at once and pauses the player through the engine.
+
 ### Steps
 
 1. `Source` and the bus in `playr-core`, with the player as its only source. The device and engine tests pass unchanged. Built.

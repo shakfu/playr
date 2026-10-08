@@ -28,7 +28,7 @@ Recommendation first.
 
 - **FLAC MD5.** Symphonia 0.6.1 checks it: `AudioDecoderOptions::verify(true)`, then `finalize().verify_ok` (`symphonia-bundle-flac-0.6.1/src/decoder.rs:300`). No MD5 crate is needed.
 
-- **FFT.** `realfft` is a dependency. `spectrum.rs` computes a 2048-point Hann transform every 512 frames, into 128 log-spaced bands.
+- **FFT.** `realfft` is a dependency. `spectrum.rs` computes a Hann transform of about 46 ms (`fft_size`) every 512 frames, into 128 log-spaced bands.
 
 - **Onsets.** `samples::onsets` finds discrete hits from an energy envelope, for slicing. A tempo estimate needs a continuous novelty curve, so it reuses the envelope, not the onset list.
 

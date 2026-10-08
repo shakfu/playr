@@ -160,6 +160,8 @@ pub struct Looper {
 
 /// A looper at `sample_rate` and the handle that controls it.
 pub fn new(sample_rate: u32) -> (Looper, Handle) {
+    // The sinc's table, built here so the callback never allocates it.
+    playr_dsp::interp::warm();
     let (cmd_tx, cmd_rx) = RingBuffer::new(COMMANDS);
     let (ret_tx, ret_rx) = RingBuffer::new(RETURNS);
     let (rec_tx, rec_rx) = RingBuffer::new(sample_rate as usize * RECORD_SECONDS * 2);
@@ -220,6 +222,12 @@ impl Looper {
 
     pub fn tape(&self) -> &Tape {
         &self.tape
+    }
+
+    /// Plays from the next frame, as [`Setting::Play`] does, without waiting
+    /// for the command ring: for a start on an exact frame.
+    pub fn play(&mut self) {
+        self.tape.set(Setting::Play);
     }
 
     fn commands(&mut self) {

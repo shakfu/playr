@@ -40,10 +40,10 @@ What happens when the deck is already playing depends on **Strict**, next to Qua
 
 | Strict | a track picked for a playing deck |
 |-|-|
-| off, as playr starts | replaces the playing track: the deck fades out over 5 ms, loads it, and plays it from its start |
+| off, as playr starts | replaces the playing track: it is read while the deck plays on, then the deck crossfades into it from its start over 1 s. A pick made during that second waits as Next |
 | on | waits as the deck's **Next** track, shown under its title, and loads once the deck stops, by pause or at its end |
 
-Strict off suits listening to one track after another, and correcting a wrong pick by picking again. Strict on suits a set: a mis-click on the deck that is playing to the room cannot cut it. While a track waits, **x** beside it, or `:dj a unqueue`, forgets it.
+Strict off suits listening to one track after another, and correcting a wrong pick by picking again. Strict on suits a set: a mis-click on the deck that is playing to the room cannot cut it. While a track waits, **x** beside it, or `:dj a unqueue`, forgets it; `:dj a unqueue` also drops a replace still being read.
 
 A library or selection row's right-click menu has **Load to deck A** and **Load to deck B** too. In the terminal, `:dj a load` loads the row under the cursor.
 
@@ -213,6 +213,10 @@ Split puts the main mix and the cue on one stereo output, so it suits practising
 6. Move the crossfader towards **B**, bringing deck B's low back as deck A's goes.
 
 7. At **B**, pause deck A and load the next track onto it.
+
+## Read heads
+
+A deck off 0% reads between the stored samples. **Heads** in the Mix tab, `:interp`, or `i` in the DJ view chooses how: **sinc**, the default, filters out what a fast read would fold back into the audible band; **hermite** is the older 4-point cubic, cheaper, slightly brighter at the very top, and with distortion above about 5 kHz. The choice applies to the tape too. `docs/dev/aliasing.md` has the measurements.
 
 ## What it does not do
 

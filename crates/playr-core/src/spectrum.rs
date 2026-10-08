@@ -1,7 +1,7 @@
 //! A track's spectrogram: the level in each of [`BANDS`] frequency bands for
 //! every [`HOP`] frames, read in the same pass as its peaks.
 //!
-//! Each entry is a [`FFT`]-point Hann-windowed transform of the channels'
+//! Each entry is a [`fft_size`]-point Hann-windowed transform of the channels'
 //! mean, centred on its hop. Bands are spaced evenly in log frequency from
 //! [`LOWEST_HZ`] to half the sample rate. A band holding a bin keeps its
 //! loudest, so a narrow tone is not averaged away. A band narrower than a
@@ -18,8 +18,15 @@ use std::sync::Arc;
 use realfft::num_complex::Complex;
 use realfft::{RealFftPlanner, RealToComplex};
 
-/// Points in each transform: 21.5 Hz a bin at 44.1 kHz.
-pub const FFT: usize = 2048;
+/// Points in each transform at `rate`: about 46 ms, and 21.5 to 23.4 Hz a
+/// bin, at any rate to 192 kHz.
+pub const fn fft_size(rate: u32) -> usize {
+    match rate {
+        0..=48_000 => 2048,
+        48_001..=96_000 => 4096,
+        _ => 8192,
+    }
+}
 
 /// Frames between entries: 11.6 ms at 44.1 kHz.
 pub const HOP: u64 = 512;
@@ -55,6 +62,11 @@ impl std::fmt::Debug for Spectrogram {
 }
 
 impl Spectrogram {
+    /// The memory its levels hold, in bytes.
+    pub fn bytes(&self) -> usize {
+        self.levels.iter().map(Vec::len).sum::<usize>() + self.edges.len() * 4
+    }
+
     /// Entries at the finest scale.
     pub fn entries(&self) -> usize {
         self.levels.first().map_or(0, |l| l.len() / BANDS)
@@ -141,11 +153,16 @@ enum Read {
     Between(usize, f32),
 }
 
-/// Zeros before the first frame, so entry `i` is centred on hop `i`.
-const LEAD: usize = FFT / 2 - HOP as usize / 2;
+/// Zeros before the first frame of a `size`-point transform, so entry `i`
+/// is centred on hop `i`.
+fn lead(size: usize) -> usize {
+    size / 2 - HOP as usize / 2
+}
 
 pub(crate) struct Builder {
     rate: u32,
+    /// Points in each transform.
+    size: usize,
     fft: Arc<dyn RealToComplex<f32>>,
     window: Vec<f32>,
     edges: Vec<f32>,
@@ -162,15 +179,16 @@ pub(crate) struct Builder {
 
 impl Builder {
     pub(crate) fn new(rate: u32) -> Self {
-        let fft = RealFftPlanner::<f32>::new().plan_fft_forward(FFT);
-        let window = (0..FFT)
+        let size = fft_size(rate);
+        let fft = RealFftPlanner::<f32>::new().plan_fft_forward(size);
+        let window = (0..size)
             .map(|i| {
-                let x = std::f32::consts::TAU * i as f32 / FFT as f32;
+                let x = std::f32::consts::TAU * i as f32 / size as f32;
                 0.5 - 0.5 * x.cos()
             })
             .collect();
-        let bin_hz = rate.max(1) as f32 / FFT as f32;
-        let top = FFT / 2;
+        let bin_hz = rate.max(1) as f32 / size as f32;
+        let top = size / 2;
         let edges = edges(rate);
         let bins = edges
             .windows(2)
@@ -188,6 +206,7 @@ impl Builder {
             .collect();
         Builder {
             rate,
+            size,
             input: fft.make_input_vec(),
             output: fft.make_output_vec(),
             scratch: fft.make_scratch_vec(),
@@ -195,7 +214,7 @@ impl Builder {
             window,
             edges,
             bins,
-            history: vec![0.0; LEAD],
+            history: vec![0.0; lead(size)],
             frames: 0,
             base: Vec::new(),
         }
@@ -205,7 +224,7 @@ impl Builder {
     pub(crate) fn push(&mut self, mean: f32) {
         self.frames += 1;
         self.history.push(mean);
-        if self.history.len() == FFT {
+        if self.history.len() == self.size {
             self.analyse();
         }
     }
@@ -219,8 +238,8 @@ impl Builder {
         self.fft
             .process_with_scratch(&mut self.input, &mut self.output, &mut self.scratch)
             .expect("buffers from the plan");
-        // A full-scale sine peaks at FFT / 4 through a Hann window.
-        let scale = (4.0 / FFT as f32).powi(2);
+        // A full-scale sine peaks at size / 4 through a Hann window.
+        let scale = (4.0 / self.size as f32).powi(2);
         let db = |power: f32| 10.0 * (power * scale).max(1e-30).log10();
         for &read in &self.bins {
             let db = match read {
@@ -244,7 +263,7 @@ impl Builder {
         // Zeros after the last frame, until every hop has its entry.
         let wanted = self.frames.div_ceil(HOP) as usize;
         while self.base.len() / BANDS < wanted {
-            self.history.resize(FFT, 0.0);
+            self.history.resize(self.size, 0.0);
             self.analyse();
         }
         let loudest = self.base.iter().copied().max().unwrap_or(0);

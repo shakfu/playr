@@ -503,6 +503,28 @@ fn eq_names_a_band_and_a_sign_makes_it_relative() {
     assert_eq!(lib("eq mid +2"), Ok(Action::EqBy(Band::Mid, 2.0)));
     assert_eq!(lib("eq b -1"), Ok(Action::EqBy(Band::Bass, -1.0)));
     assert_eq!(lib("eq flat"), Ok(Action::FlatEq));
+    assert_eq!(lib("eq bypass"), Ok(Action::BypassEq));
+    assert_eq!(lib("preview"), Ok(Action::Preview));
+    use playr_core::labels::MarkFile;
+    assert_eq!(
+        lib("mark-export cue"),
+        Ok(Action::ExportMarks(MarkFile::Cue))
+    );
+    assert_eq!(
+        lib("mark-export a"),
+        Ok(Action::ExportMarks(MarkFile::Audacity))
+    );
+    assert!(lib("mark-export").is_err());
+    for action in [
+        Action::Label("big break".into()),
+        Action::Label(String::new()),
+        Action::StartLabel,
+    ] {
+        let text = line(&action, Some(View::Sampler));
+        assert_eq!(parse(&text, View::Sampler), Ok(action), "{text}");
+    }
+    assert_eq!(line(&Action::Preview, None), "preview");
+    assert!(lib("eq bypass 3").is_err());
     assert_eq!(lib("eq bass =13"), Err("eq is -12 to 12 dB".into()));
     // Unsigned sets, as for :volume and :speed.
     assert_eq!(lib("eq bass 3"), Ok(Action::SetEq(Band::Bass, 3.0)));
@@ -517,6 +539,7 @@ fn eq_names_a_band_and_a_sign_makes_it_relative() {
         Action::EqBy(Band::Treble, -1.0),
         Action::EqBy(Band::Bass, 0.5),
         Action::FlatEq,
+        Action::BypassEq,
     ] {
         let text = line(&action, None);
         assert_eq!(lib(&text), Ok(action), "{text}");
@@ -524,28 +547,89 @@ fn eq_names_a_band_and_a_sign_makes_it_relative() {
 }
 
 #[test]
-fn speed_is_whole_semitones_and_a_sign_makes_it_relative() {
-    assert_eq!(lib("speed 3"), Ok(Action::SetSpeed(3)));
+fn speed_is_semitones_or_cents_and_a_sign_makes_it_relative() {
+    // Actions count in cents, 100 a semitone.
+    assert_eq!(lib("speed 3"), Ok(Action::SetSpeed(300)));
     assert_eq!(lib("speed 0"), Ok(Action::SetSpeed(0)));
-    assert_eq!(lib("speed +1"), Ok(Action::SpeedBy(1)));
-    assert_eq!(lib("speed -12"), Ok(Action::SpeedBy(-12)));
-    assert_eq!(lib("speed =-3"), Ok(Action::SetSpeed(-3)));
-    assert_eq!(lib("speed =3"), Ok(Action::SetSpeed(3)));
+    assert_eq!(lib("speed +1"), Ok(Action::SpeedBy(100)));
+    assert_eq!(lib("speed -12"), Ok(Action::SpeedBy(-1200)));
+    assert_eq!(lib("speed =-3"), Ok(Action::SetSpeed(-300)));
+    assert_eq!(lib("speed =3"), Ok(Action::SetSpeed(300)));
+    assert_eq!(lib("speed +50c"), Ok(Action::SpeedBy(50)));
+    assert_eq!(lib("speed -5c"), Ok(Action::SpeedBy(-5)));
+    assert_eq!(lib("speed =-250c"), Ok(Action::SetSpeed(-250)));
+    assert_eq!(lib("speed 1.5"), Ok(Action::SetSpeed(150)));
+    assert_eq!(lib("speed 0.125"), Ok(Action::SetSpeed(13)));
     assert_eq!(lib("speed 13"), Err("speed is -12 to 12 semitones".into()));
+    assert_eq!(
+        lib("speed 1201c"),
+        Err("speed is -12 to 12 semitones".into())
+    );
     assert_eq!(
         lib("speed =-13"),
         Err("speed is -12 to 12 semitones".into())
     );
     for bad in [
         "speed",
-        "speed 1.5",
         "speed +x",
         "speed +25",
+        "speed +2401c",
+        "speed 1.5c",
+        "speed c",
         "speed =",
         "speed =--3",
+        "speed nan",
     ] {
         assert!(lib(bad).is_err(), "{bad:?} parsed");
     }
+    for action in [
+        Action::SpeedBy(100),
+        Action::SpeedBy(-50),
+        Action::SetSpeed(-300),
+        Action::SetSpeed(1150),
+        Action::SetSpeed(0),
+    ] {
+        let text = line(&action, None);
+        assert_eq!(lib(&text), Ok(action), "{text}");
+    }
+}
+
+#[test]
+fn fade_takes_seconds_or_off() {
+    assert_eq!(lib("fade 2"), Ok(Action::Fade(secs(2.0))));
+    assert_eq!(lib("fade 0.5"), Ok(Action::Fade(secs(0.5))));
+    assert_eq!(lib("fade off"), Ok(Action::Fade(Duration::ZERO)));
+    for bad in ["fade", "fade 11", "fade -1", "fade x"] {
+        assert!(lib(bad).is_err(), "{bad:?} parsed");
+    }
+    for action in [Action::Fade(secs(1.5)), Action::Fade(Duration::ZERO)] {
+        let text = line(&action, None);
+        assert_eq!(lib(&text), Ok(action), "{text}");
+    }
+}
+
+#[test]
+fn interp_names_a_kernel_or_toggles() {
+    use playr_dsp::Interp;
+    assert_eq!(lib("interp"), Ok(Action::Interp(None)));
+    assert_eq!(lib("interp sinc"), Ok(Action::Interp(Some(Interp::Sinc))));
+    assert_eq!(lib("interp h"), Ok(Action::Interp(Some(Interp::Hermite))));
+    assert!(lib("interp linear").is_err());
+    for action in [Action::Interp(None), Action::Interp(Some(Interp::Hermite))] {
+        let text = line(&action, None);
+        assert_eq!(lib(&text), Ok(action), "{text}");
+    }
+}
+
+#[test]
+fn tempo_takes_a_bpm() {
+    assert_eq!(lib("tempo 128"), Ok(Action::Tempo(128.0)));
+    assert_eq!(lib("tempo 92.5"), Ok(Action::Tempo(92.5)));
+    for bad in ["tempo", "tempo 0", "tempo -3", "tempo fast", "tempo inf"] {
+        assert!(lib(bad).is_err(), "{bad:?} parsed");
+    }
+    let text = line(&Action::Tempo(92.5), None);
+    assert_eq!(lib(&text), Ok(Action::Tempo(92.5)), "{text}");
 }
 
 #[test]
@@ -646,7 +730,7 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     };
     assert_eq!(
         completions("p", Library, &playlists, &Vec::new, true),
-        ["play", "playlist", "prune", "pause", "prev",]
+        ["play", "playlist", "prune", "preview", "pause", "prev",]
     );
     assert_eq!(
         completions("", Library, &playlists, &Vec::new, true).len(),
@@ -709,7 +793,7 @@ fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     assert_eq!(line.text, "play");
     line.complete(true, Library, &[], &Vec::new, true);
     assert_eq!(line.text, "playlist");
-    for _ in 0..4 {
+    for _ in 0..5 {
         line.complete(true, Library, &[], &Vec::new, true);
     }
     assert_eq!(line.text, "play", "the cycle does not wrap");
@@ -880,8 +964,8 @@ fn default_keys_map_to_actions_by_view() {
         Some(Action::PickEdge(Edge::Start))
     );
     assert_eq!(default_key("[", Library), None);
-    assert_eq!(default_key("(", Library), Some(Action::SpeedBy(-1)));
-    assert_eq!(default_key(")", View::Sampler), Some(Action::SpeedBy(1)));
+    assert_eq!(default_key("(", Library), Some(Action::SpeedBy(-100)));
+    assert_eq!(default_key(")", View::Sampler), Some(Action::SpeedBy(100)));
 }
 
 /// Every default binding is a command line that parses back to its action,

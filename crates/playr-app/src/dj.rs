@@ -126,7 +126,7 @@ pub enum DjMessage {
     Playing(Side),
     /// Sync to a tempo no rate range reaches.
     OutOfReach(Side),
-    /// A take while the player's speed, in semitones, is beyond any range.
+    /// A take while the player's speed, in cents, is beyond any range.
     SpeedOutOfReach(i32),
     /// The deck took over from the player.
     Took(Side),
@@ -187,6 +187,8 @@ struct Live {
     attached: Option<Attachment>,
     engine: Option<Engine>,
     rate: u32,
+    /// The interpolation last sent; `None` until one is.
+    interp: Option<playr_dsp::Interp>,
 }
 
 /// A track read and ready to load.
@@ -281,8 +283,8 @@ pub struct Decks {
     /// The track picked for each deck while it played, to load once it stops.
     next: [Option<Track>; 2],
     sent: Sent,
-    /// Plays the next track once it loads: it replaced one playing.
-    autoplay: [bool; 2],
+    /// The track reading for each deck replaces the one playing, crossfading.
+    crossfade: [bool; 2],
     /// Takes over from the player once the track loads.
     handover: [bool; 2],
     /// The main mix's and the cue's volumes last sent.
@@ -323,7 +325,7 @@ impl Decks {
             loads: [0; 2],
             next: [None, None],
             sent: [None, None],
-            autoplay: [false; 2],
+            crossfade: [false; 2],
             handover: [false; 2],
             volume: (f32::NAN, f32::NAN),
             state: DjState::default(),
@@ -400,6 +402,7 @@ impl Decks {
                 attached,
                 engine,
                 rate,
+                interp: None,
             });
         }
         Ok(self.live.as_mut().expect("opened above"))
@@ -433,6 +436,15 @@ impl Decks {
         }
         if cue != self.volume.1 && live.handle.set(Setting::Headphones(f64::from(cue))).is_ok() {
             self.volume.1 = cue;
+        }
+    }
+
+    /// Sends the heads' interpolation, when it changed. A new engine has
+    /// none sent, so it gets it too.
+    fn follow_interp(&mut self, interp: playr_dsp::Interp) {
+        let Some(live) = &mut self.live else { return };
+        if live.interp != Some(interp) && live.handle.set(Setting::Interp(interp)).is_ok() {
+            live.interp = Some(interp);
         }
     }
 
@@ -519,7 +531,8 @@ pub fn poll(f: &mut impl Frontend) {
     // Old tracks, and tracks a playing deck refused, are dropped here.
     while let Some(r) = f.dj().live.as_mut().and_then(|l| l.handle.poll()) {
         let message = match r {
-            Returned::Replaced(side, _) => taken(f, side),
+            Returned::Replaced(side, _) | Returned::Fading(side) => taken(f, side),
+            Returned::Faded(..) => None,
             Returned::Refused(side, _) => {
                 let d = f.dj();
                 d.arriving[i(side)] = None;
@@ -562,6 +575,8 @@ pub fn poll(f: &mut impl Frontend) {
     let mix = f.mix();
     let (main, cue) = (mix.gain(Strip::Decks), mix.gain(Strip::Headphones));
     f.dj().follow_volume(main, cue);
+    let interp = f.mix().interp();
+    f.dj().follow_interp(interp);
     for side in [Side::A, Side::B] {
         if let Err(e) = keep_hot_cues(f, side) {
             f.notify(DjMessage::Failed(e).into());
@@ -632,8 +647,13 @@ fn start(f: &mut impl Frontend, side: Side, loading: Loading, read: Read) -> Res
     let track = playr_dj::Track::new(read.samples, read.channels, grid.and_then(dj_grid))
         .map_err(|e| e.to_string())?
         .with_hot_cues(hot);
+    let crossfade = std::mem::take(&mut f.dj().crossfade[i(side)]);
     let live = f.dj().live.as_mut().ok_or("no engine")?;
-    live.handle.load(side, track).map_err(|e| e.to_string())?;
+    match crossfade {
+        true => live.handle.replace(side, track),
+        false => live.handle.load(side, track),
+    }
+    .map_err(|e| e.to_string())?;
     f.dj().arriving[i(side)] = Some(Loaded {
         path: loading.path,
         title: loading.title,
@@ -662,11 +682,6 @@ fn taken(f: &mut impl Frontend, side: Side) -> Option<DjMessage> {
     d.taps[i(side)].clear();
     d.loads[i(side)] += 1;
     d.loaded[i(side)] = Some(loaded.clone());
-    if std::mem::take(&mut d.autoplay[i(side)]) {
-        if let Err(e) = d.set(Setting::Play(side)) {
-            return Some(DjMessage::Failed(e));
-        }
-    }
     let took = match std::mem::take(&mut f.dj().handover[i(side)]) {
         true => hand_over(f, side, &loaded.path),
         false => Ok(false),
@@ -749,20 +764,28 @@ fn load(f: &mut impl Frontend, side: Side) {
     };
     let d = f.dj();
     if d.status().is_some_and(|s| s.deck(side).playing()) {
-        let title = track.display_title();
-        d.next[i(side)] = Some(track);
         if d.state.strict {
+            let title = track.display_title();
+            d.next[i(side)] = Some(track);
             return f.notify(DjMessage::Queued { side, title }.into());
         }
-        // Not strict: the deck fades out, takes the track, and plays it.
-        d.autoplay[i(side)] = true;
-        if let Err(e) = d.set(Setting::Pause(side)) {
-            return f.notify(DjMessage::Failed(e).into());
-        }
-        return f.notify(DjMessage::Loading(side).into());
+        // Not strict: read now, while the deck plays on, then crossfade.
+        d.next[i(side)] = None;
+        d.crossfade[i(side)] = true;
+        d.handover[i(side)] = false;
+        return match d.load(side, &track) {
+            Ok(()) => {
+                d.sent[i(side)] = Some(track);
+                f.notify(DjMessage::Loading(side).into())
+            }
+            Err(e) => {
+                d.crossfade[i(side)] = false;
+                f.notify(DjMessage::Failed(e).into())
+            }
+        };
     }
     d.next[i(side)] = None;
-    d.autoplay[i(side)] = false;
+    d.crossfade[i(side)] = false;
     d.handover[i(side)] = false;
     match f.dj().load(side, &track) {
         Ok(()) => f.notify(DjMessage::Loading(side).into()),
@@ -770,10 +793,10 @@ fn load(f: &mut impl Frontend, side: Side) {
     }
 }
 
-/// The deck rate, in percent, that plays as the player's speed of `semitones`,
+/// The deck rate, in percent, that plays as the player's speed of `cents`,
 /// and the narrowest range that holds it; `None` past every range.
-fn rate_for(semitones: i32) -> Option<(f64, Range)> {
-    let pct = (2f64.powf(f64::from(semitones) / 12.0) - 1.0) * 100.0;
+fn rate_for(cents: i32) -> Option<(f64, Range)> {
+    let pct = (playr_core::audio::speed_at(cents) - 1.0) * 100.0;
     [Range::Narrow, Range::Medium, Range::Wide]
         .into_iter()
         .find(|r| pct.abs() <= r.percent() + 1e-9)
@@ -790,9 +813,9 @@ fn take(f: &mut impl Frontend, side: Side) {
         Ok(track) => track,
         Err(refusal) => return f.notify(refusal.into()),
     };
-    let semitones = f.session().player().status().semitones;
-    if rate_for(semitones).is_none() {
-        return f.notify(DjMessage::SpeedOutOfReach(semitones).into());
+    let cents = f.session().player().status().cents;
+    if rate_for(cents).is_none() {
+        return f.notify(DjMessage::SpeedOutOfReach(cents).into());
     }
     // A track played from outside the library has no row.
     let track = (f.session().tracks_at(std::slice::from_ref(&path)).pop()).unwrap_or(Track {
@@ -802,7 +825,7 @@ fn take(f: &mut impl Frontend, side: Side) {
     });
     let d = f.dj();
     d.next[i(side)] = None;
-    d.autoplay[i(side)] = false;
+    d.crossfade[i(side)] = false;
     match d.load(side, &track) {
         Ok(()) => {
             d.handover[i(side)] = true;
@@ -823,8 +846,8 @@ fn hand_over(f: &mut impl Frontend, side: Side, path: &Path) -> Result<bool, DjM
         return Ok(false);
     }
     let status = f.session().player().status();
-    let Some((pct, range)) = rate_for(status.semitones) else {
-        return Err(DjMessage::SpeedOutOfReach(status.semitones));
+    let Some((pct, range)) = rate_for(status.cents) else {
+        return Err(DjMessage::SpeedOutOfReach(status.cents));
     };
     let trim = status.gain_db.unwrap_or(0.0);
     let playing = status.state == State::Playing;
@@ -985,8 +1008,13 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         }
         D::Mute(s, on) => &[Setting::Mute(s, on)],
         D::Unqueue(s) => {
-            f.dj().next[i(s)] = None;
-            f.dj().autoplay[i(s)] = false;
+            let d = f.dj();
+            d.next[i(s)] = None;
+            // A replace still reading is dropped with its read.
+            if std::mem::take(&mut d.crossfade[i(s)]) {
+                d.loading[i(s)] = None;
+                d.sent[i(s)] = None;
+            }
             &[]
         }
         D::Strict(on) => {

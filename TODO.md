@@ -20,47 +20,23 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **macOS signing and notarization.** `playr.app` is unsigned, so a downloaded copy is refused until allowed in System Settings. Needs an Apple Developer account and the workflow's secrets.
 
-### Mixer
-
-- [ ] **A frame-exact tape Take.** The mixer is built (`docs/dev/mixer.md`, phases 1 to 3). Left: the tape's Take is checked each refresh, about 16 ms, rather than on the frame, which needs a hook in the bus's callback.
-
 ## Medium
 
 ### DJ decks and tape
-
-- [ ] **A crossfade when a deck's track is replaced.** With strict off, a track picked for a playing deck fades it out over 5 ms, then plays silence while the new track decodes and resamples, which takes seconds (inference). A crossfade needs the new track read before the old one stops, and both in memory. From the review in `docs/dev/261005-review.md`.
-
-- [ ] **Anti-aliasing in the read heads.** The deck and tape heads interpolate with a 4-point Hermite and no anti-alias filter. Above about +16% rate, bright material likely aliases (inference). Measure first: the aliased energy of a sweep at +16%, +50% and the tape's 4x. A fix filters ahead of the head by the rate, or uses a longer windowed-sinc kernel. From the review.
 
 ### Playlists
 
 ### Playback
 
-- [ ] **Crossfade.** `:crossfade 2` overlaps a track's last 2 s with the next one's first, fading one out as the other fades in. Needs two decoders and a mixer stage in the engine. Tracks at different sample rates cannot share one output stream, so one side must be resampled; see "Gapless across a sample-rate change". A first step without overlap: fade a track's end and the next one's start, with one decoder, reusing the gain ramp at an audition's ends (`Cmd::PlayOnce`). Both change the audio at track boundaries, against gapless playback and exact samples, so both are settings, off by default.
-
-- [ ] **Fine varispeed.** `:speed` parses whole semitones. A semitone is 5.9%, so 120 BPM moves to 127.1 or 113.3 with nothing between. Add `:speed +50c`, and `:tempo 128` on an analysed track to set the ratio that gives 128 BPM. Check first whether the resampler takes an arbitrary ratio.
-
-- [ ] **A key for the EQ.** Every other playback control has one.
+- [ ] **Crossfade.** `:crossfade 2` overlaps a track's last 2 s with the next one's first, fading one out as the other fades in. Needs two decoders and a mixer stage in the engine. Tracks at different sample rates cannot share one output stream, so one side must be resampled; see "Gapless across a sample-rate change". The first step is built: `:fade` fades each end with one decoder, no overlap. Off by default, as the crossfade must be.
 
 ### Sampler
 
-- [ ] **Waveform cache.** The sampler keeps one track's `Peaks` and decodes the whole file again on each return to a track. Time `Peaks::read` on a few tracks first; skip this if a read is short. Otherwise keep recent `Arc<Peaks>` in memory, capped at 100 MB and evicting the least recently used. Cap by bytes, not tracks: a 4-minute track is about 17 MB, a 60-minute mix about 250 MB. Check modification time and size on a hit. Optionally read the selection's tracks ahead, so a first visit is fast too. A file cache survives restarts but needs a format, invalidation and cleanup; not worth it for 4 or 5 working tracks.
-
-- [ ] **Preview in the sampler.** Show the waveform of the track highlighted in a list without playing it. The range, marks, `:in`, `:out` and loop all assume the playing track, so decide what each does on a track not playing.
-
-- [ ] **Spectrogram at high sample rates.** The transform is 2048 frames at every rate, so a bin is 21.5 Hz at 44.1 kHz and 94 Hz at 192 kHz, and bass on hi-res files blurs further. Scaling the transform with the rate, 4096 at 96 kHz and 8192 at 192 kHz, keeps about 46 ms and 21 Hz everywhere, at more CPU per read on those files.
-
-- [ ] **Name an edited plan in the Slice drop-down.** After a planned slice is moved or joined, the drop-down still shows the method that made the plan, such as "At onsets". Only the plan line says "edited". Moving the sensitivity slider then plans again and replaces the edits; undo brings them back. An "Edited" entry in the drop-down would say so before the slider moves.
-
-- [ ] **Keep an edited plan across a track change.** Changing tracks drops the planned slices and clears undo, so starts set by hand are lost for good. Options: confirm before leaving a track with an edited plan, or keep each track's plan until it is written or discarded. `:mark-slices` keeps the starts as marks meanwhile, and `:slice marks` plans them again.
-
-- [ ] **Mark labels and export.** `marks` has `path`, `frame` and `rate`, and no text. A label column would allow notes such as "solo" or "break". Export as an Audacity label file or a cue sheet; `docs/guide-sampler.md` already designs a `marks.jsonl` line. Since slices serve any sampler (decision 3), SFZ output may reach the most samplers (inference, not researched).
+- [ ] **Read the selection's waveforms ahead.** The sampler keeps recent waveforms in memory (`wave::Cache`), so a return to a track is fast; a first visit still decodes, 0.35 to 2.7 s on one machine. Reading the selection's tracks ahead, in the background, would make a first visit fast too, at the cost of decoding tracks never opened.
 
 - [ ] **OP-XY frame counts at other rates.** ConvertWithMoss 20.3.0 resamples a 48 or 96 kHz slice to 44.1 kHz for the OP-XY, but `patch.json` keeps the old counts: `framecount`, `sample.end` and `loop.end` say 24,000 or 48,000 for a file of 22,050 frames. Every playr export keeps its source's rate, so a 48 kHz track hits it. What the device does with an end past the file is X6 in `docs/dev/device_tests.md`. Fix upstream: the report is drafted in `docs/dev/issues/convertwithmoss-issue.md`. Until then `:convert opxy` could resample to 44.1 kHz first, or warn. Found 2026-10-01.
 
-- [ ] **Which samplers read the `smpl` loop.** A range cut whole while it loops carries its loop in a `smpl` chunk since 2026-10-04, in frames, like the cue points. No device or sampler has read one yet; "Which devices read `smpl` loops" in `docs/dev/hardware_samplers.md` stays open, and `docs/dev/device_tests.md` needs a test for it beside the cue point ones.
-
-- [ ] **Refuse or split past a format's limit.** ConvertWithMoss keeps 24 zones for the OP-XY and drops the rest; `:convert` now says so, after the fact. A table of limits per format would let `:convert` refuse first, or write one preset per 24 slices, as AudioHit splits `.ot` files. The OP-XY's is the only limit known; `docs/dev/hardware_samplers.md` lists the devices' slice limits.
+- [ ] **Which samplers read the `smpl` loop.** A range cut whole while it loops carries its loop in a `smpl` chunk since 2026-10-04, in frames, like the cue points. No device or sampler has read one yet; "Which devices read `smpl` loops" in `docs/dev/hardware_samplers.md` stays open. `docs/dev/device_tests.md` has the test, M8; run it.
 
 ### Library
 

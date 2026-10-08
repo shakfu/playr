@@ -62,6 +62,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:columns NAME...`                    |                         | which columns a track list shows, in order  |
 | `:sort KEY[ desc]... \| off`          |                         | sort every track list by these columns      |
 | `:info`                               |                         | what analysis measured about this track     |
+| `:preview`                            | `v`                     | show the row's waveform without playing it  |
 | `:analyze [DIR]`                      |                         | measure loudness, tempo and file health     |
 | `:prune [DIR]`                        |                         | remove tracks and marks of missing files    |
 | `:open PATH`                          |                         | play a file or directory, and select it     |
@@ -73,8 +74,11 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:seek TIME \| +TIME \| -TIME`        | left, right, with shift | seek to a time, or by one: 1:23, +10        |
 | `:volume PERCENT \| +N \| -N`         | `+` `-`                 | set the master, or change it: 60, +10       |
 | `:mix [STRIP N\|mute] \| law \| rec` |                         | faders and mutes; `:mix` alone shows them   |
-| `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | set varispeed in semitones, or change it    |
-| `:eq BAND =N \| +N \| -N \| flat`     |                         | bass, mid or treble, -12 to 12 dB           |
+| `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | varispeed in semitones, or Nc in cents      |
+| `:tempo BPM`                          |                         | varispeed to this tempo, once analysed      |
+| `:fade SECONDS \| off`                |                         | fade each track in and out                  |
+| `:interp [sinc\|hermite]`             | `i` in Tape, DJ, Mix    | how deck and tape heads read; toggles       |
+| `:eq BAND =N\|+N\|-N \| flat\|bypass` | `t` bypass              | bass, mid or treble, -12 to 12 dB           |
 | `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |
 | `:replaygain SETTING`                 |                         | level by loudness: off, track, album, auto  |
 | `:slice-edges exact\|zero\|fade`       |                         | slice edges: exact, at zeros, or faded      |
@@ -83,6 +87,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:mark-clear`                         | `C`                     | clear all marks in this track; asks y/n     |
 | `:mark-next`                          | `}`; `.` but in the sampler | next mark: seek, or select in the sampler |
 | `:mark-prev`                          | `{`; `,` but in the sampler | prev mark: seek, or select in the sampler |
+| `:mark-export audacity\|cue`         |                         | write the marks as labels or a cue sheet    |
 | `:undo`                               | `u` in the sampler      | undo the last edit to marks, range or plan  |
 | `:redo`                               | `r` in the sampler      | put back the last edit undone               |
 | `:slice region\|marks\|N\|...`        |                         | write samples; `:slice` alone lists all     |
@@ -145,6 +150,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:audition [next\|prev]`          | `a`, `,` `.`            | play the selection, a slice, the range or region once; select and step slices |
 | `:scrub TIME`                     | drag, with Scrub on     | play a moment from a time              |
 | `:select TIME`                    | click a mark            | select the mark at a time              |
+| `:label [TEXT \| -]`              | a mark's menu, Label... | label the selected mark; - clears      |
 | `:select-slice TIME`              | click a slice's start   | select the planned slice starting at a time |
 | `:edge start\|end`                 | `[` `]`                 | select a range end and centre on it, turning fit on |
 | `:select-edge start\|end`          | drag a range end        | select a range end, leaving the view   |

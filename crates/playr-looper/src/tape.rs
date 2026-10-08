@@ -3,7 +3,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use playr_dsp::{clip, flush, hermite, one_pole, soft_clip};
+use playr_dsp::{clip, flush, one_pole, soft_clip, Interp};
 
 use crate::{Error, COLUMNS, VOICES};
 
@@ -305,22 +305,14 @@ impl Loop {
             .fold(0.0, |m, s| m.max(s.abs()))
     }
 
-    /// Frame `pos`, cubic Hermite interpolated, into `out[..channels]`.
-    /// Neighbours wrap around the whole loop.
-    fn read(&self, pos: f64, out: &mut [f32; 2]) {
+    /// Frame `pos`, read at `rate` frames a frame with `interp`, into
+    /// `out[..channels]`. Neighbours wrap around the whole loop.
+    fn read(&self, pos: f64, rate: f64, interp: Interp, out: &mut [f32; 2]) {
         let frames = self.frames() as isize;
-        let i = pos.floor();
-        let t = (pos - i) as f32;
-        let i = i as isize;
+        let k = interp.kernel(pos, rate);
         let c = self.channels;
-        let at = |k: isize, ch: usize| self.samples[(k.rem_euclid(frames) as usize) * c + ch];
         for (ch, o) in out.iter_mut().enumerate().take(c) {
-            let x0 = at(i, ch);
-            if t == 0.0 {
-                *o = x0;
-                continue;
-            }
-            *o = hermite(at(i - 1, ch), x0, at(i + 1, ch), at(i + 2, ch), t);
+            *o = k.apply(|j| self.samples[(j.rem_euclid(frames) as usize) * c + ch]);
         }
     }
 }
@@ -330,6 +322,8 @@ impl Loop {
 /// voice, are ignored.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Setting {
+    /// How every voice's head reads between frames.
+    Interp(Interp),
     Play,
     /// Silences the output and holds every head.
     Stop,
@@ -519,6 +513,7 @@ impl Voice {
         &mut self,
         lp: &Loop,
         sample_rate: u32,
+        interp: Interp,
         mix: &mut [f32; 2],
         send: &mut [f32; 2],
     ) -> bool {
@@ -540,11 +535,12 @@ impl Voice {
         }
 
         let mut s = [0.0; 2];
-        lp.read(self.pos, &mut s);
+        let speed = rate as f64 * self.dir;
+        lp.read(self.pos, speed, interp, &mut s);
         if let Some(old) = self.old {
             let phi = FRAC_PI_2 * self.faded as f32 / self.fade_len as f32;
             let mut o = [0.0; 2];
-            lp.read(old, &mut o);
+            lp.read(old, speed, interp, &mut o);
             let (gin, gout) = (phi.sin(), phi.cos());
             for (s, o) in s.iter_mut().zip(o) {
                 *s = *s * gin + o * gout;
@@ -917,6 +913,8 @@ pub struct Tape {
     smooth: u32,
     edge: usize,
     dc_r: f32,
+    /// How the voices' heads read between frames.
+    interp: Interp,
 }
 
 impl Tape {
@@ -932,6 +930,7 @@ impl Tape {
             smooth: (SMOOTH_MS * sr / 1000.0) as u32,
             edge: (EDGE_MS * sr / 1000.0) as usize,
             dc_r: (-std::f32::consts::TAU * DC_HZ / sr).exp(),
+            interp: Interp::default(),
         }
     }
 
@@ -955,6 +954,7 @@ impl Tape {
         let sr = self.sample_rate;
         let finite = |v: f32| v.is_finite();
         match s {
+            Setting::Interp(interp) => self.interp = interp,
             Setting::Play => self.playing = true,
             Setting::Stop => self.playing = false,
             Setting::Write(on) => {
@@ -1067,7 +1067,7 @@ impl Tape {
             let mut send = [0.0; 2];
             let mut sending = false;
             for v in &mut self.voices {
-                sending |= v.render(&self.lp, sr, &mut mix, &mut send);
+                sending |= v.render(&self.lp, sr, self.interp, &mut mix, &mut send);
             }
             self.writer
                 .write(&mut self.lp, sr, self.edge, self.dc_r, send, sending);

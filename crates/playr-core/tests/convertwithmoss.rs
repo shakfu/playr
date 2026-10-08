@@ -145,3 +145,57 @@ fn nothing_runs_without_the_program_a_kit_and_a_plain_format_name() {
         1
     );
 }
+
+/// A kit past the format's limit is converted in parts of at most that many
+/// regions, each on its keys from C1 again; the parts are removed after.
+#[test]
+fn a_kit_past_the_format_s_limit_is_converted_in_parts() {
+    use playr_core::convertwithmoss::limit;
+    let _alone = alone();
+    let dir = tempfile::tempdir().unwrap();
+    // Copies each kit it is given into the destination, as a preset.
+    let program = program(
+        dir.path(),
+        r#"for last; do :; done; kit="$5"; cp "$kit" "$last/$(basename "$kit")""#,
+    );
+    let export = dir.path().join("amen");
+    std::fs::create_dir(&export).unwrap();
+    let kit = export.join("amen.sfz");
+    let region = |i: usize| format!("<region> sample={i:03}-amen_S{i:02}.wav key={}", 36 + i);
+    let text: String = (0..30).map(|i| region(i) + "\n").collect();
+    std::fs::write(&kit, &text).unwrap();
+
+    assert_eq!(limit("opxy"), Some(24));
+    let converted = convert(&program, &kit, "opxy").unwrap();
+    assert_eq!(converted.parts, 2);
+    let preset = |name: &str| std::fs::read_to_string(converted.dir.join(name)).unwrap();
+    let first = preset("amen-1.sfz");
+    assert_eq!(first.lines().count(), 24);
+    assert_eq!(first.lines().next(), Some(region(0).as_str()));
+    let second = preset("amen-2.sfz");
+    assert_eq!(
+        second.lines().collect::<Vec<_>>(),
+        (24..30)
+            .map(|i| format!(
+                "<region> sample={i:03}-amen_S{i:02}.wav key={}",
+                36 + i - 24
+            ))
+            .collect::<Vec<_>>()
+    );
+    // Only the kit and the conversion stay in the export.
+    let mut left: Vec<String> = std::fs::read_dir(&export)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["amen.sfz", "opxy"]);
+
+    // Within the limit, or with no limit known, the kit goes whole.
+    let converted = convert(&program, &kit, "sf2").unwrap();
+    assert_eq!(converted.parts, 1);
+    assert_eq!(preset_in(&converted.dir, "amen.sfz"), text);
+}
+
+fn preset_in(dir: &Path, name: &str) -> String {
+    std::fs::read_to_string(dir.join(name)).unwrap()
+}

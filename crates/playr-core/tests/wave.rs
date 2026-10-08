@@ -235,3 +235,39 @@ fn stats_loudness_is_the_analysis_s_and_reads_only_the_range() {
     assert!(peaks.stats(44_100, 44_100 + 17_640).unwrap().lufs.is_some());
     assert_eq!(peaks.stats(44_100, 44_100 + 17_639).unwrap().lufs, None);
 }
+
+/// Least recently used goes first once the cap is passed; the newest stays
+/// whatever its size; a file changed since its read is not served.
+#[test]
+fn the_peaks_cache_drops_the_least_recently_used_and_changed_files() {
+    use playr_core::wave::Cache;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+    let peaks = Arc::new(Peaks::from_interleaved(&vec![0.1; 8000 * 2], 2, 8000));
+    let one = peaks.bytes();
+    let stamp = (SystemTime::UNIX_EPOCH, 1);
+    let path = |name: &str| PathBuf::from(name);
+    let held = |c: &Cache| {
+        c.paths()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+    };
+
+    let mut cache = Cache::new(2 * one);
+    cache.put(path("a"), stamp, peaks.clone());
+    cache.put(path("b"), stamp, peaks.clone());
+    assert!(Arc::ptr_eq(&cache.get(&path("a"), stamp).unwrap(), &peaks));
+    cache.put(path("c"), stamp, peaks.clone());
+    assert_eq!(held(&cache), ["a", "c"]);
+    assert_eq!(cache.bytes(), 2 * one);
+
+    let later = (SystemTime::UNIX_EPOCH + Duration::from_secs(1), 1);
+    assert!(cache.get(&path("a"), later).is_none());
+    assert_eq!(held(&cache), ["c"]);
+
+    let mut small = Cache::new(one / 2);
+    small.put(path("a"), stamp, peaks.clone());
+    small.put(path("b"), stamp, peaks.clone());
+    assert_eq!(held(&small), ["b"]);
+}

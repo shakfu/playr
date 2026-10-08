@@ -73,10 +73,15 @@ pub const PLAYBACK_MENU: &[Control] = &[
     control("Next mode", Action::CycleMode(true)),
     control("Previous mode", Action::CycleMode(false)),
     control("Normal speed", Action::SetSpeed(0)),
+    control("Fade tracks over 2 s", Action::Fade(Duration::from_secs(2))),
+    control("No fades", Action::Fade(Duration::ZERO)),
 ];
 
 /// In the EQ dialog, under its sliders.
-pub const EQ: &[Control] = &[control("Flat", Action::FlatEq)];
+pub const EQ: &[Control] = &[
+    control("Flat", Action::FlatEq),
+    control("Bypass", Action::BypassEq),
+];
 
 /// Sampler, Slice: slicing the playing track; in the sampler view these plan
 /// instead of write.
@@ -106,6 +111,7 @@ pub const LIBRARY_ROW: &[Control] = &[
     control("Play next", Action::Enqueue(true)),
     control("Add to queue", Action::Enqueue(false)),
     control("Track info", Action::ShowInfo),
+    control("Preview in sampler", Action::Preview),
     control("Load to deck A", Action::Dj(DjAction::Load(Side::A))),
     control("Load to deck B", Action::Dj(DjAction::Load(Side::B))),
 ];
@@ -116,6 +122,7 @@ pub const SELECTION_ROW: &[Control] = &[
     control("Play next", Action::Enqueue(true)),
     control("Add to queue", Action::Enqueue(false)),
     control("Track info", Action::ShowInfo),
+    control("Preview in sampler", Action::Preview),
     control("Load to deck A", Action::Dj(DjAction::Load(Side::A))),
     control("Load to deck B", Action::Dj(DjAction::Load(Side::B))),
     control("Move up", Action::MoveTrack(-1)),
@@ -127,6 +134,7 @@ pub const QUEUE_ROW: &[Control] = &[
     control("Remove from queue", Action::Remove),
     control("Add to selection", Action::Add),
     control("Track info", Action::ShowInfo),
+    control("Preview in sampler", Action::Preview),
     control("Move up", Action::MoveTrack(-1)),
     control("Move down", Action::MoveTrack(1)),
 ];
@@ -168,6 +176,9 @@ pub const PLAYLIST_ROW: &[Control] = &[
     control("Rename", Action::StartRename),
     control("Delete", Action::DeletePlaylist),
 ];
+
+/// Right of the sampler's header while it previews a track.
+pub const END_PREVIEW: Control = control("End preview", Action::Preview);
 
 /// Buttons right of the sampler's header, drawn as `+`, `-`, U+2194 and `info`.
 pub const SAMPLER_HEADER: &[Control] = &[
@@ -211,11 +222,21 @@ pub const EDIT_MENU: &[Control] = &[
     control("Deselect", Action::Deselect),
     control("Undo", Action::Undo),
     control("Redo", Action::Redo),
+    control("Label mark...", Action::StartLabel),
+    control(
+        "Export marks for Audacity",
+        Action::ExportMarks(playr_core::labels::MarkFile::Audacity),
+    ),
+    control(
+        "Export marks as cue sheet",
+        Action::ExportMarks(playr_core::labels::MarkFile::Cue),
+    ),
 ];
 
 /// A mark's entries in the waveform's menu; the mark is selected first.
 pub const MARK_ROW: &[Control] = &[
     control("Snap to rise", Action::SnapSelected),
+    control("Label...", Action::StartLabel),
     control("Delete mark", Action::RemoveSelected),
 ];
 

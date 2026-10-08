@@ -1,8 +1,12 @@
 //! The DSP `playr-looper` and `playr-dj` share: linear ramps, a
-//! state-variable filter, a one-pole coefficient, a soft clip and the cubic
-//! Hermite kernel of their read heads. No allocation, no threads.
+//! state-variable filter, a one-pole coefficient, a soft clip and the
+//! interpolation of their read heads ([`interp`]). No threads, and no
+//! allocation once [`interp::warm`] has built the sinc's table.
 
 use std::ops::{Add, Div, Mul, Sub};
+
+pub mod interp;
+pub use interp::{Interp, Kernel};
 
 /// What a [`Ramp`] moves: `f32` or `f64`.
 pub trait Value:

@@ -48,6 +48,8 @@ pub struct Config {
     pub theme: Theme,
     /// How the mixer's faders map to gains.
     pub fader: crate::mix::Law,
+    /// How the decks' and the tape's heads read between frames.
+    pub interp: playr_dsp::Interp,
     /// `[gui] transport_text_buttons`: the window's transport buttons as
     /// words rather than media symbols.
     pub transport_text_buttons: bool,
@@ -63,6 +65,7 @@ impl Default for Config {
             keys: Keymap::empty(),
             theme: Theme::Dark,
             fader: crate::mix::Law::Db,
+            interp: playr_dsp::Interp::default(),
             transport_text_buttons: false,
             program: Program::Terminal,
         };
@@ -151,7 +154,9 @@ impl Config {
 
     fn apply_for(&mut self, program: Option<Program>, text: &str) -> Result<(), Vec<String>> {
         let mine = program.map(Program::table).unwrap_or("keys");
-        let (tables, mut errors) = self.settings.apply(text, &["keys", "theme", "fader", mine]);
+        let (tables, mut errors) = self
+            .settings
+            .apply(text, &["keys", "theme", "fader", "interp", mine]);
         for (name, value) in tables {
             if let Some(program) = program.filter(|p| name.get_ref() == p.table()) {
                 self.apply_program(program, value.get_ref(), value.span().start, &mut errors);
@@ -159,6 +164,12 @@ impl Config {
             }
             if name.get_ref() == "fader" {
                 if let Err(e) = self.set_fader(value.get_ref()) {
+                    errors.add(value.span().start, e);
+                }
+                continue;
+            }
+            if name.get_ref() == "interp" {
+                if let Err(e) = self.set_interp(value.get_ref()) {
                     errors.add(value.span().start, e);
                 }
                 continue;
@@ -240,6 +251,21 @@ impl Config {
         self.fader = Law::named(s).ok_or_else(|| {
             let names = Law::NAMES.map(|l| l.0).join(", ");
             format!("unknown fader {s}; faders: {names}")
+        })?;
+        Ok(())
+    }
+
+    fn set_interp(&mut self, value: &DeValue) -> Result<(), String> {
+        use playr_dsp::Interp;
+        let DeValue::String(s) = value else {
+            return Err(format!("interp cannot be {}", kind(value)));
+        };
+        let found = Interp::NAMES
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(s));
+        self.interp = found.map(|(_, i)| *i).ok_or_else(|| {
+            let names = Interp::NAMES.map(|i| i.0).join(", ");
+            format!("unknown interp {s}; choices: {names}")
         })?;
         Ok(())
     }

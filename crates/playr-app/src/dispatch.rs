@@ -290,12 +290,129 @@ pub fn sql_done(f: &mut impl Frontend, then: SqlThen, result: Result<Vec<PathBuf
 
 /// Does `action`, keeping what it changes in the marks or range for undo.
 pub fn dispatch(action: Action, f: &mut impl Frontend) {
+    if let Some(p) = &f.sampler().preview {
+        if f.view() == View::Sampler && edits_sampler(&action) {
+            let path = p.path.clone();
+            return f.notify(Message::PreviewOnly(path));
+        }
+    }
     if matches!(action, Action::Undo | Action::Redo) {
         return undo(f, action == Action::Redo);
     }
     let before = before(f);
     act(action, f);
     settle(f, before);
+}
+
+/// Whether `action` moves the playhead, or edits the playing track's marks,
+/// range, loops or slices: what the sampler refuses while it previews.
+fn edits_sampler(action: &Action) -> bool {
+    use Action::*;
+    matches!(
+        action,
+        Restart
+            | SeekBy(_)
+            | SeekTo(_)
+            | Mark
+            | MarkAt(_)
+            | UndoMark
+            | ClearMarks
+            | NextMark
+            | PrevMark
+            | Undo
+            | Redo
+            | Slice(_)
+            | Nudge(_)
+            | RangeIn(_)
+            | RangeOut(_)
+            | SetRange(_)
+            | Loop(_)
+            | LoopSlot(..)
+            | ClearLoops
+            | SelectMarkAt(_)
+            | SelectSliceAt(_)
+            | MoveSelected(_)
+            | MoveSelectedTo(_)
+            | SnapSelected
+            | RemoveSelected
+            | Audition
+            | AuditionSlice(_)
+            | Scrub(_)
+            | PickEdge(_)
+            | SelectEdge(_)
+            | WriteSlices
+            | DiscardSlices
+            | MarkSlices
+            | Label(_)
+            | StartLabel
+            | ExportMarks(_)
+    )
+}
+
+/// Labels the selected mark `text`, or with `None` opens the command line on
+/// its label, to edit.
+fn label(f: &mut impl Frontend, text: Option<String>) {
+    let current = f.session().player().status().current().cloned();
+    let Some(frame) = f.sampler().selected_mark(current.as_ref()) else {
+        return f.notify(Message::NothingSelected);
+    };
+    match text {
+        Some(text) => {
+            let notice = f.session_mut().label_mark(frame, &text);
+            f.notify(notice.into());
+        }
+        None => {
+            let labels = f.session_mut().labels_for(current.as_ref());
+            let now = labels
+                .iter()
+                .find(|(m, _)| *m == frame)
+                .map(|(_, l)| l.as_str());
+            let line = format!("label {}", now.unwrap_or_default());
+            f.prompt(Prompt::Command(line));
+        }
+    }
+}
+
+/// Shows the track under the cursor in the sampler without playing it, or
+/// in the sampler ends the preview. The playing track needs none.
+fn preview(f: &mut impl Frontend) {
+    if f.view() == View::Sampler {
+        let message = match f.sampler_mut().preview.take() {
+            Some(_) => Message::PreviewEnded,
+            None => Message::NotPreviewing,
+        };
+        return f.notify(message);
+    }
+    let track = match f.view() {
+        View::Queue => f
+            .cursor(View::Queue)
+            .and_then(|i| f.session().queue_tracks().get(i).cloned()),
+        _ => cursor_track(f),
+    };
+    let Some(track) = track else {
+        return f.notify(Message::NothingToPreview);
+    };
+    let path = PathBuf::from(&track.path);
+    let playing = f.session().player().status().current() == Some(&path);
+    f.sampler_mut().preview = match playing {
+        true => None,
+        false => {
+            let marks = f
+                .session()
+                .marks_of(&path)
+                .iter()
+                .map(playr_core::db::query::Mark::time)
+                .collect();
+            Some(crate::sampler::Preview {
+                path: path.clone(),
+                marks,
+            })
+        }
+    };
+    show_view(f, View::Sampler);
+    if !playing {
+        f.notify(Message::Previewing(path));
+    }
 }
 
 /// Shows `view`, or says the frontend has no such view.
@@ -541,14 +658,37 @@ fn act(action: Action, f: &mut impl Frontend) {
         }
         Action::VolumeBy(delta) => crate::mix::act(f, MixAction::By(Strip::Master, delta)),
         Action::SetVolume(v) => crate::mix::act(f, MixAction::Set(Strip::Master, v)),
-        Action::SpeedBy(semitones) => f.session().send(Cmd::SpeedBy(semitones)),
-        Action::SetSpeed(semitones) => f.session().send(Cmd::SetSpeed(semitones)),
+        Action::SpeedBy(cents) => f.session().send(Cmd::CentsBy(cents)),
+        Action::SetSpeed(cents) => f.session().send(Cmd::SetCents(cents)),
+        Action::Tempo(bpm) => tempo(f, bpm),
+        Action::Interp(interp) => {
+            use playr_dsp::Interp;
+            let other = match f.mix().interp() {
+                Interp::Sinc => Interp::Hermite,
+                Interp::Hermite => Interp::Sinc,
+            };
+            let interp = interp.unwrap_or(other);
+            f.mix().set_interp(interp);
+            f.notify(Message::Interp(interp));
+        }
+        Action::Fade(d) => {
+            f.session().send(Cmd::SetFade(d));
+            f.notify(Message::Fade(d));
+        }
         Action::SetEq(band, db) => set_eq(f, &[(band, db)]),
         Action::EqBy(band, db) => {
             let now = f.session().player().eq()[band as usize];
             set_eq(f, &[(band, now + db)]);
         }
         Action::FlatEq => set_eq(f, &Band::ALL.map(|b| (b, 0.0))),
+        Action::BypassEq => bypass_eq(f),
+        Action::Preview => preview(f),
+        Action::Label(text) => label(f, Some(text)),
+        Action::StartLabel => label(f, None),
+        Action::ExportMarks(format) => {
+            let notice = f.session_mut().export_marks(format);
+            f.notify(notice.into());
+        }
         Action::CycleMode(forward) => {
             let notice = f.session().cycle_mode(forward);
             f.notify(notice.into());
@@ -1043,12 +1183,49 @@ fn len(f: &impl Frontend, view: View) -> usize {
 }
 
 /// Sets each band to its gain in dB, and says what the tone control is now.
+/// Sets the speed that plays the playing track at `bpm`, to the nearest cent,
+/// from its analysed tempo.
+fn tempo(f: &mut impl Frontend, bpm: f32) {
+    let path = match f.session().playing_track() {
+        Ok((path, _)) => path,
+        Err(refusal) => return f.notify(refusal.into()),
+    };
+    let Some(found) = f.session().bpm(&path) else {
+        return f.notify(Refusal::NoTempo.into());
+    };
+    let cents = (1200.0 * f64::from(bpm / found).log2()).round();
+    if cents.abs() > f64::from(playr_core::audio::MAX_CENTS) {
+        return f.notify(Message::TempoOutOfReach { bpm, found });
+    }
+    f.session().send(Cmd::SetCents(cents as i32));
+}
+
+/// Sets `bands`, which ends a bypass.
 fn set_eq(f: &mut impl Frontend, bands: &[(Band, f32)]) {
+    f.mix().hold_eq(None);
     for &(band, db) in bands {
         f.session().send(Cmd::SetEq(band, db));
     }
     let gains = f.session().player().eq();
     f.notify(Message::Eq(gains));
+}
+
+/// Flattens the EQ and holds its bands, or puts back the bands held. A flat
+/// EQ with none held stays flat.
+fn bypass_eq(f: &mut impl Frontend) {
+    let now = f.session().player().eq();
+    let flat = now == [0.0; 3];
+    match f.mix().eq_held() {
+        Some(held) if flat => set_eq(f, &Band::ALL.map(|b| (b, held[b as usize]))),
+        _ if flat => set_eq(f, &[]),
+        _ => {
+            for band in Band::ALL {
+                f.session().send(Cmd::SetEq(band, 0.0));
+            }
+            f.mix().hold_eq(Some(now));
+            f.notify(Message::EqBypassed(now));
+        }
+    }
 }
 
 /// Puts the current view's cursor on row `i`, or its last row.

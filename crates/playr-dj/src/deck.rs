@@ -9,6 +9,8 @@ pub(crate) type Ramp = playr_dsp::Ramp<f64>;
 const SMOOTH_MS: f64 = 10.0;
 /// How long play and pause fade, and a jump crossfades.
 const DECLICK_MS: f64 = 5.0;
+/// How long a track replaced while playing crossfades into the new one.
+pub const REPLACE_MS: f64 = 1000.0;
 /// The rate factor a held nudge applies. A typical bend; not measured.
 const NUDGE: f64 = 0.04;
 
@@ -96,6 +98,19 @@ pub struct Deck {
     looping: Option<(f64, f64)>,
     /// Tracks loaded so far.
     loads: u64,
+    /// A track replaced while playing, fading out from its head.
+    outgoing: Option<Outgoing>,
+    /// How the head reads between frames.
+    pub(crate) interp: playr_dsp::Interp,
+}
+
+/// A track a replace took off a playing deck: it plays on from `pos`,
+/// fading out over `left` more frames, then waits to be taken back.
+#[derive(Debug, Clone)]
+struct Outgoing {
+    track: Box<Track>,
+    pos: f64,
+    left: u32,
 }
 
 /// Hot cues per deck.
@@ -128,6 +143,8 @@ impl Deck {
             hot: [None; HOT_CUES],
             looping: None,
             loads: 0,
+            outgoing: None,
+            interp: playr_dsp::Interp::default(),
         }
     }
 
@@ -230,6 +247,32 @@ impl Deck {
         self.loads += 1;
         self.set_lock(1.0);
         std::mem::replace(&mut self.track, track)
+    }
+
+    /// Swaps in `track` from its start while this one plays on, fading out
+    /// over [`REPLACE_MS`] as the new one fades in. A paused deck loads it as
+    /// [`Deck::load`] does and hands back the old track; a deck still fading
+    /// one out refuses, handing `track` back.
+    pub(crate) fn replace(&mut self, track: Box<Track>) -> Replace {
+        if !self.playing {
+            return Replace::Loaded(self.load(track));
+        }
+        if self.outgoing.is_some() {
+            return Replace::Refused(track);
+        }
+        let pos = self.pos;
+        let old = self.load(track);
+        self.outgoing = Some(Outgoing {
+            track: old,
+            pos,
+            left: self.frames(REPLACE_MS).max(1),
+        });
+        Replace::Fading
+    }
+
+    /// The track a replace faded out, once it has.
+    pub(crate) fn take_faded(&mut self) -> Option<Box<Track>> {
+        self.outgoing.take_if(|o| o.left == 0).map(|o| o.track)
     }
 
     pub(crate) fn set_grid(&mut self, grid: Option<Grid>) {
@@ -398,13 +441,23 @@ impl Deck {
         if !self.playing && self.gate.value() == 0.0 {
             return [0.0; 2];
         }
-        let mut s = self.track.read(self.pos);
+        let mut s = self.track.read(self.pos, rate, self.interp);
         if self.fade_left > 0 {
             let w = self.fade_left as f32 / self.frames(DECLICK_MS) as f32;
-            let o = self.track.read(self.from);
+            let o = self.track.read(self.from, rate, self.interp);
             s = [0, 1].map(|c| s[c] * (1.0 - w) + o[c] * w);
             self.fade_left -= 1;
             self.from += rate;
+        }
+        // Equal power: the tracks are unrelated, so their powers add.
+        let total = self.frames(REPLACE_MS).max(1) as f32;
+        if let Some(o) = self.outgoing.as_mut().filter(|o| o.left > 0) {
+            let w = o.left as f32 / total;
+            let (out, into) = (w * std::f32::consts::FRAC_PI_2).sin_cos();
+            let old = o.track.read(o.pos, rate, self.interp);
+            s = [0, 1].map(|c| s[c] * into + old[c] * out);
+            o.pos += rate;
+            o.left -= 1;
         }
         let g = self.gate.next() as f32 * trim;
         self.pos += rate;
@@ -423,4 +476,14 @@ impl Deck {
         }
         s.map(|x| x * g)
     }
+}
+
+/// What [`Deck::replace`] did.
+#[derive(Debug)]
+pub(crate) enum Replace {
+    /// The deck was paused: loaded, with the old track handed back.
+    Loaded(Box<Track>),
+    /// Crossfading; the old track comes back through [`Deck::take_faded`].
+    Fading,
+    Refused(Box<Track>),
 }

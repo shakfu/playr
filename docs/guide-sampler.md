@@ -52,7 +52,9 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 `5` opens the sampler view. It draws the playing track's waveform, its marks as `|`, the playhead as `^`, and the region in the accent colour. The detail line gives the region's times to the millisecond.
 
-- **Peaks.** The waveform is read from the file on a background thread while the view is open, the first time the view opens for a track. playr keeps the minimum, maximum and mean square of every 32 frames, and coarser levels built from them, so any zoom draws from exact values. The same pass keeps the spectrogram: 128 bands for every 512 frames, about 2.6 MB for a 4-minute track at 44.1 kHz, and adds about 90 ms to the read (one machine, release build).
+- **Preview.** `:preview` in a list shows the row's waveform without playing it. It is for looking: edits wait until the track plays, since the range, marks, `:in`, `:out` and loop all act on the playing track.
+
+- **Peaks.** The waveform is read from the file on a background thread while the view is open, the first time the view opens for a track. playr keeps the minimum, maximum and mean square of every 32 frames, and coarser levels built from them, so any zoom draws from exact values. The same pass keeps the spectrogram: 128 bands for every 512 frames, about 2.6 MB for a 4-minute track at 44.1 kHz, and adds about 90 ms to the read (one machine, release build). The peaks of tracks read recently stay in memory, up to 100 MB, so returning to one draws at once; a file changed since is read again.
 
 - **Displays.** `w` switches between four: an envelope (RMS inside peak, in eighth blocks), the same bars on a dB scale from -48 dBFS, a spectrogram, and a Braille waveform around a centre line. The README describes when each helps.
 
@@ -62,7 +64,7 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 - **Looping.** `l` plays the range over and over, returning to its start sample-exactly. `[` or `]` selects an end and `<` `>` move it a column, so the ends can be tuned by ear while it loops. `[` and `]` also centre the view on that end, turning `:fit` on.
 
-- **Planning.** In this view `:slice` plans instead of writing. The planned edges draw as `+` under the waveform; enter writes exactly those slices and esc discards them. A change of track discards them too. Outside the view, `:slice` plans and writes in one step.
+- **Planning.** In this view `:slice` plans instead of writing. The planned edges draw as `+` under the waveform; enter writes exactly those slices and esc discards them. A change of track discards them too, unless one was moved or joined: an edited plan comes back with its track, until quit. Outside the view, `:slice` plans and writes in one step.
 
 - **Editing a plan.** `,` `.`, or a click on its start in the window, select a planned slice; `<` `>`, `#` and a drag move its start, and backspace joins it to the slice before. A slice start on a mark takes the click or drag while the plan is shown. The plan keeps the starts set by hand when `:slice-edges` plans it again, and zero edges still move them to crossings then. A new `:slice` replaces them. Editing a plan cut at marks does not move the marks.
 

@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -60,6 +60,10 @@ fn reserved(name: &str) -> bool {
 /// How many loops a track can keep.
 pub const LOOP_SLOTS: u8 = 8;
 
+/// The bytes of peaks kept for tracks read recently: about six 4-minute
+/// tracks at 44.1 kHz.
+pub const PEAKS_CACHE: usize = 100_000_000;
+
 /// A track's loops by slot, from 1 at index 0, as source frames, end exclusive.
 pub type Loops = [Option<(u64, u64)>; LOOP_SLOTS as usize];
 
@@ -96,6 +100,8 @@ pub struct Session {
     /// Marks in the track `marks_for`, earliest first.
     marks: Vec<Mark>,
     marks_for: Option<PathBuf>,
+    /// The labelled marks of `marks_for`: frame and label, earliest first.
+    labels: Vec<(u64, String)>,
     /// Loops saved in the track `loops_for`, by slot, from 1.
     loops: Loops,
     loops_for: Option<PathBuf>,
@@ -117,6 +123,8 @@ pub struct Session {
     next_job: JobId,
     /// Stops the peaks read in progress, which a newer read replaces.
     reading: Option<Arc<AtomicBool>>,
+    /// Peaks read recently, so a return to a track does not decode it again.
+    peaks: Arc<Mutex<crate::wave::Cache>>,
     /// The library file a scan writes to.
     library: Option<PathBuf>,
     /// Set while a scan or a prune runs.
@@ -161,6 +169,7 @@ impl Session {
             editing: None,
             marks: Vec::new(),
             marks_for: None,
+            labels: Vec::new(),
             loops: [None; LOOP_SLOTS as usize],
             loops_for: None,
             samples: PathBuf::new(),
@@ -173,6 +182,7 @@ impl Session {
             events,
             next_job: 1,
             reading: None,
+            peaks: Arc::new(Mutex::new(crate::wave::Cache::new(PEAKS_CACHE))),
             library,
             scanning: Arc::default(),
             analysing: Arc::default(),
@@ -1280,9 +1290,92 @@ impl Session {
             self.marks = path
                 .and_then(|p| query::marks(&self.conn, &p.to_string_lossy()).ok())
                 .unwrap_or_default();
+            self.labels = path
+                .and_then(|p| query::labels(&self.conn, &p.to_string_lossy()).ok())
+                .unwrap_or_default();
             self.marks_for = path.cloned();
         }
         &self.marks
+    }
+
+    /// The labels of the marks in the track at `path`: frame and label,
+    /// earliest first, read as [`Session::marks_for`] reads the marks.
+    pub fn labels_for(&mut self, path: Option<&PathBuf>) -> &[(u64, String)] {
+        self.marks_for(path);
+        &self.labels
+    }
+
+    /// Reads the labels of the marks kept for `path` again, after an edit.
+    fn relabel(&mut self, path: &Path) {
+        self.labels = query::labels(&self.conn, &path.to_string_lossy()).unwrap_or_default();
+    }
+
+    /// Labels the mark at `frame` in the playing track, or clears its label
+    /// when `label` is blank.
+    pub fn label_mark(&mut self, frame: u64, label: &str) -> Notice {
+        let (path, rate) = match self.playing_track() {
+            Ok(track) => track,
+            Err(refusal) => return refusal.into(),
+        };
+        self.marks_for(Some(&path));
+        let label = Some(label.trim()).filter(|l| !l.is_empty());
+        match query::set_label(&self.conn, &path.to_string_lossy(), frame, label) {
+            Ok(true) => {
+                self.relabel(&path);
+                Outcome::Labelled {
+                    at: Duration::from_secs_f64(frame as f64 / rate.max(1) as f64),
+                    label: label.map(String::from),
+                }
+                .into()
+            }
+            Ok(false) => Refusal::NoMarkHere.into(),
+            Err(e) => Notice::Failed {
+                task: Task::Mark,
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Writes the playing track's marks, with their labels, as `format`, to
+    /// the samples directory, named after the track. A file written before
+    /// is replaced: it is made from the marks, which may have changed.
+    pub fn export_marks(&mut self, format: crate::labels::MarkFile) -> Notice {
+        let (path, _) = match self.playing_track() {
+            Ok(track) => track,
+            Err(refusal) => return refusal.into(),
+        };
+        let marks = self.marks_for(Some(&path)).to_vec();
+        if marks.is_empty() {
+            return Refusal::NoMarks.into();
+        }
+        let labelled: Vec<(Duration, Option<String>)> = marks
+            .iter()
+            .map(|m| {
+                let label = self.labels.iter().find(|(f, _)| *f == m.frame);
+                (m.time(), label.map(|(_, l)| l.clone()))
+            })
+            .collect();
+        let text = match format {
+            crate::labels::MarkFile::Audacity => crate::labels::audacity(&labelled),
+            crate::labels::MarkFile::Cue => crate::labels::cue(&path, &labelled),
+        };
+        let file = self
+            .samples
+            .join(format!("{}{}", samples::name_for(&path), format.suffix()));
+        let written =
+            std::fs::create_dir_all(&self.samples).and_then(|()| std::fs::write(&file, text));
+        match written {
+            Ok(()) => Outcome::MarksExported {
+                path: file,
+                format,
+                marks: marks.len(),
+            }
+            .into(),
+            Err(e) => Notice::Failed {
+                task: Task::Export,
+                error: format!("{}: {e}", file.display()),
+            },
+        }
     }
 
     /// The marks in the track at `path`, earliest first, read afresh: for a
@@ -1457,6 +1550,7 @@ impl Session {
         match query::remove_mark(&self.conn, &path.to_string_lossy(), frame) {
             Ok(true) => {
                 self.marks.retain(|m| m.frame != frame);
+                self.relabel(&path);
                 Outcome::MarkRemoved {
                     at: Duration::from_secs_f64(frame as f64 / rate.max(1) as f64),
                 }
@@ -1496,6 +1590,7 @@ impl Session {
         self.marks.retain(|m| !remove.contains(&m.frame));
         self.marks.extend(add);
         self.marks.sort_by_key(|m| m.frame);
+        self.relabel(&path);
         Ok(())
     }
 
@@ -1525,6 +1620,7 @@ impl Session {
         match query::remove_last_mark(&self.conn, &path.to_string_lossy()) {
             Ok(Some(mark)) => {
                 self.marks.retain(|m| m.frame != mark.frame);
+                self.relabel(&path);
                 Outcome::MarkRemoved { at: mark.time() }.into()
             }
             Ok(None) => Refusal::NoMarks.into(),
@@ -1555,6 +1651,7 @@ impl Session {
             Ok(_) => {
                 if self.marks_for.as_deref() == Some(path) {
                     self.marks.clear();
+                    self.labels.clear();
                 }
                 Some(Outcome::MarksCleared.into())
             }
@@ -1613,11 +1710,24 @@ impl Session {
         self.cancel_peaks();
         let cancel = Arc::new(AtomicBool::new(false));
         self.reading = Some(cancel.clone());
+        let cache = self.peaks.clone();
         self.spawn(move |job| {
-            let result = match Peaks::read(&track, &cancel) {
-                Ok(Some(peaks)) => Ok(Arc::new(peaks)),
-                Ok(None) => return None,
-                Err(e) => Err(e),
+            // Taken before the read, so a file changed during it reads again.
+            let stamp = crate::wave::stamp(&track);
+            let held = stamp.and_then(|s| cache.lock().ok()?.get(&track, s));
+            let result = match held {
+                Some(peaks) => Ok(peaks),
+                None => match Peaks::read(&track, &cancel) {
+                    Ok(Some(peaks)) => {
+                        let peaks = Arc::new(peaks);
+                        if let (Some(s), Ok(mut c)) = (stamp, cache.lock()) {
+                            c.put(track.clone(), s, peaks.clone());
+                        }
+                        Ok(peaks)
+                    }
+                    Ok(None) => return None,
+                    Err(e) => Err(e),
+                },
             };
             Some(Event::Peaks { job, track, result })
         })

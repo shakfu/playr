@@ -108,6 +108,22 @@ impl Drop for Watched {
     }
 }
 
+/// Silent until started, then `level` in both channels.
+struct Gated(bool, f32);
+
+impl Source for Gated {
+    fn process(&mut self, main: &mut [f32], _cue: &mut [f32]) -> Cue {
+        if self.0 {
+            main.fill(self.1);
+        }
+        Cue::None
+    }
+
+    fn start(&mut self) {
+        self.0 = true;
+    }
+}
+
 /// One callback of `out.len()` samples at `channels`, with a flat EQ.
 fn callback(
     out: &mut [f32],
@@ -167,6 +183,79 @@ fn a_paused_player_leaves_the_sources_playing() {
     callback(&mut out, &mut consumer, &mut bus, &shared, 2);
     assert_eq!(out, [0.25, 0.5, 0.25, 0.5]);
     assert_eq!(consumer.slots(), 2, "the paused player's ring was read");
+}
+
+/// The player plays to the handover's frame and pauses there; the source
+/// starts on it. What the player had after stays in its ring.
+#[test]
+fn a_handover_moves_the_output_on_one_frame() {
+    use playr_core::audio::bus::Handover;
+    let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
+    for _ in 0..16 {
+        producer.push(0.5).unwrap();
+    }
+    let (mut bus, mut control) = bus();
+    control
+        .attach(7, Box::new(Gated(false, 0.25)))
+        .ok()
+        .unwrap();
+    let shared = Shared::new();
+    shared.frames_out.store(100, Ordering::Relaxed);
+    shared.handover_id.store(7, Ordering::Relaxed);
+    shared.handover_at.store(103, Ordering::Relaxed);
+    let mut out = [9.0f32; 12];
+    callback(&mut out, &mut consumer, &mut bus, &shared, 2);
+    assert_eq!(
+        out,
+        [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+    );
+    assert_eq!(shared.frames_out.load(Ordering::Relaxed), 103);
+    assert_eq!(consumer.slots(), 10);
+    assert!(shared.paused.load(Ordering::Relaxed));
+    assert!(shared.handed.load(Ordering::Relaxed));
+    assert_eq!(
+        shared.handover.load(Ordering::Relaxed),
+        Handover::Done as u8
+    );
+}
+
+/// A handover behind the device, or for a source not attached, is missed
+/// and changes nothing; a flush cancels one armed.
+#[test]
+fn a_handover_missed_or_flushed_leaves_the_player_playing() {
+    use playr_core::audio::bus::Handover;
+    let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
+    for _ in 0..8 {
+        producer.push(0.5).unwrap();
+    }
+    let (mut bus, mut control) = bus();
+    control
+        .attach(7, Box::new(Gated(false, 0.25)))
+        .ok()
+        .unwrap();
+    let shared = Shared::new();
+    let state = |s: &Shared| s.handover.load(Ordering::Relaxed);
+    shared.frames_out.store(100, Ordering::Relaxed);
+    shared.handover_id.store(7, Ordering::Relaxed);
+    shared.handover_at.store(99, Ordering::Relaxed);
+    let mut out = [9.0f32; 4];
+    callback(&mut out, &mut consumer, &mut bus, &shared, 2);
+    assert_eq!(out, [0.5; 4]);
+    assert_eq!(state(&shared), Handover::Missed as u8);
+
+    shared.handover_id.store(8, Ordering::Relaxed);
+    shared.handover_at.store(103, Ordering::Relaxed);
+    callback(&mut out, &mut consumer, &mut bus, &shared, 2);
+    assert_eq!(out, [0.5; 4]);
+    assert_eq!(state(&shared), Handover::Missed as u8);
+
+    shared.handover_id.store(7, Ordering::Relaxed);
+    shared.handover_at.store(110, Ordering::Relaxed);
+    shared.flush_requested.store(1, Ordering::Relaxed);
+    callback(&mut out, &mut consumer, &mut bus, &shared, 2);
+    assert_eq!(out, [0.0; 4], "the flush emptied the ring");
+    assert_eq!(state(&shared), Handover::Cancelled as u8);
+    assert!(!shared.paused.load(Ordering::Relaxed));
 }
 
 #[test]
@@ -425,6 +514,42 @@ fn a_source_plays_without_a_track_and_through_a_stop() {
         heard,
         "a closed stream played"
     );
+}
+
+/// A handover set by track position lands on its frame: the player pauses
+/// there, reporting that position, and the source follows with no frame of
+/// both or of neither.
+#[test]
+fn a_player_hands_over_to_a_source_at_a_position() {
+    use playr_core::audio::bus::Handover;
+    use playr_core::audio::State;
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.wav");
+    common::levels(&a, 8000, &[(30.0, 0.5)]);
+    let (player, control) = common::fake_player();
+    player.send(Cmd::Play(vec![a], 0));
+    let sources = player.sources();
+    let attached = sources.attach(8000, Box::new(Gated(false, 0.25)));
+    until(&control, "the track", || {
+        player.status().state == State::Playing && player.position() > Duration::ZERO
+    });
+    let at = player.position() + Duration::from_millis(300);
+    // The source may not be on the bus yet; the callback misses it then.
+    until(&control, "the handover armed", || {
+        player.handover() != Handover::Armed && player.hand_over(attached.id(), at)
+    });
+    until(&control, "the handover", || {
+        player.handover() != Handover::Armed
+    });
+    assert_eq!(player.handover(), Handover::Done);
+    until(&control, "the pause", || {
+        player.status().state == State::Paused
+    });
+    assert_eq!(player.position(), at);
+    let played = control.played.lock().unwrap().clone();
+    let first = played.iter().position(|&s| s == 0.25).unwrap();
+    assert!(played[first - 1] > 0.49, "{}", played[first - 1]);
+    assert!(played[first..].iter().all(|&s| s == 0.25));
 }
 
 /// A lost device takes every source with it, and says so.

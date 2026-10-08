@@ -421,11 +421,11 @@ An instrument file holding the audio and its slices. [polyend/tracker-lib](https
 
 - **Frame index or byte offset in a cue point's sample start.** Check what the M8 and the Blackbox expect.
 
-- **Which devices read `smpl` loops.** A looped range now writes one; see "Built".
+- **Which devices read `smpl` loops.** A looped range now writes one; see "Built". `docs/dev/device_tests.md` tests the M8 (M8); the OP-XY takes its loop from the `.sfz` kit through ConvertWithMoss (X4), not from the WAV.
 
 - **Bit depth and rate each device accepts.** playr writes 24-bit at the source's rate; ot_utils assumes 16-bit 44.1 kHz mono.
 
-- **Slice limits.** 64 on the Octatrack, 24 on the OP-1, 32 reported for the M8, 24 zones on the OP-XY. An export must refuse or split past the limit. ConvertWithMoss drops the OP-XY's extra zones itself, and `:convert` reports it; see "Second test conversion".
+- **Slice limits.** 64 on the Octatrack, 24 on the OP-1, 32 reported for the M8, 24 zones on the OP-XY. An export must refuse or split past the limit. `:convert opxy` splits since 2026-10-08: a part kit of at most 24 regions each, keys from 36 again, so ConvertWithMoss drops nothing; see "Second test conversion". `convertwithmoss::LIMITS` holds the OP-XY's alone; the others are not formats ConvertWithMoss writes.
 
 - **Whether the converted kits load.** Each was written without error; none was opened in Live, Renoise or on a device.
 

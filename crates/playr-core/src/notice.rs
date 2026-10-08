@@ -125,6 +125,17 @@ pub enum Outcome {
         at: Duration,
     },
     MarksCleared,
+    /// The mark at `at` labelled, or its label cleared for `None`.
+    Labelled {
+        at: Duration,
+        label: Option<String>,
+    },
+    /// The playing track's `marks` written as `format` to `path`.
+    MarksExported {
+        path: PathBuf,
+        format: crate::labels::MarkFile,
+        marks: usize,
+    },
     /// Seeked to the mark at `at`.
     AtMark {
         at: Duration,
@@ -144,6 +155,8 @@ pub enum Outcome {
     /// An export, converted into `dir`, with what ConvertWithMoss left out.
     Converted {
         dir: PathBuf,
+        /// The presets written, more than one for a kit past the format's limit.
+        parts: usize,
         warnings: Vec<String>,
     },
     ScanStarted {

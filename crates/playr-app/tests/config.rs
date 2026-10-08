@@ -65,7 +65,7 @@ fn an_empty_file_gives_the_defaults() {
     assert_eq!(config, Config::default());
     assert_eq!(config.keys, Keymap::default());
     assert_eq!(config.settings, Settings::default());
-    assert_eq!(Keymap::default().bindings().len(), 152);
+    assert_eq!(Keymap::default().bindings().len(), 157);
 }
 
 #[test]
@@ -360,5 +360,19 @@ fn the_fader_law_is_a_top_level_setting() {
     assert_eq!(
         Config::parse("fader = 3").unwrap_err(),
         ["line 1: fader cannot be an integer"]
+    );
+}
+
+#[test]
+fn the_read_heads_interpolation_is_a_top_level_setting() {
+    use playr_dsp::Interp;
+    assert_eq!(Config::default().interp, Interp::Sinc);
+    assert_eq!(
+        Config::parse("interp = 'hermite'").unwrap().interp,
+        Interp::Hermite
+    );
+    assert_eq!(
+        Config::parse("interp = 'linear'").unwrap_err(),
+        ["line 1: unknown interp linear; choices: sinc, hermite"]
     );
 }

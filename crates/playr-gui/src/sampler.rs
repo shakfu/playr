@@ -178,7 +178,9 @@ impl Default for State {
 pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     let mut actions = Vec::new();
     let snapshot = model.snapshot().clone();
-    let current = snapshot.status.current().cloned();
+    let preview = model.sampler().preview.clone();
+    // What the view shows: the previewed track, or the playing one.
+    let current = model.sampler().shown(snapshot.status.current()).cloned();
     // A drag this view did not see released, as when the view or the track
     // changed under it, is dropped rather than resumed by a pointer passing.
     let held = ui.input(|i| i.pointer.any_down() || i.pointer.any_released());
@@ -214,12 +216,16 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         width as u64,
         model.sampler().zoom,
         snapshot.position,
-        &snapshot.marks,
+        preview.as_ref().map_or(&snapshot.marks, |p| &p.marks),
         POINTS_PER_FRAME,
     )
     .with_centre(model.sampler().centre(current.as_ref()))
     .with_range(model.sampler().range_ends(current.as_ref()))
     .with_detail(model.sampler().detail(current.as_ref()));
+    match preview {
+        Some(_) => layout = layout.previewed(),
+        None => layout = layout.with_labels(&snapshot.labels),
+    }
     if state.drag.is_none() && state.mark_drag.is_none() {
         state.held_start = None;
     }
@@ -243,6 +249,9 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     egui::Sides::new().shrink_left().truncate().show(
         ui,
         |ui| {
+            if preview.is_some() {
+                ui.label("Preview:");
+            }
             ui.strong(&name);
             ui.weak(format!("{}  one column {}", layout.shown(), layout.scale()));
             let read = layout
@@ -255,6 +264,9 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         },
         // Right to left.
         |ui| {
+            if preview.is_some() && named(ui, model, "End preview", &controls::END_PREVIEW) {
+                actions.push(controls::END_PREVIEW.action.clone());
+            }
             let shown = Action::Display(Some(display));
             let label = controls::DISPLAYS
                 .iter()
@@ -518,6 +530,15 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     if response.secondary_clicked() {
         state.menu = response.interact_pointer_pos().map(|p| (at(p), mark_at(p)));
     }
+    // A preview is for looking: its edits are the playing track's.
+    if preview.is_some() {
+        ui.horizontal(|ui| {
+            ui.weak("Not playing: play the track to edit it.");
+            ui.weak(layout.region_text());
+        });
+        measure(ui, state, top, height);
+        return actions;
+    }
     response.context_menu(|ui| {
         let Some((time, mark)) = state.menu else {
             return;
@@ -651,29 +672,48 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             _ => {}
         }
         let method = cut.map(Method::of).or(state.method.filter(|_| planning));
+        // Starts moved or joined by hand: the drop-down says so, since its
+        // method, or its control, would plan again over them.
+        let edited = !planning
+            && sampler
+                .pending
+                .as_ref()
+                .is_some_and(|p| p.job.cuts.is_some());
+        let shown = match edited {
+            true => "Edited",
+            false => Method::label(method, ranged),
+        };
         // Choosing a method plans with it, again if it is the one shown;
         // choosing None discards the plan.
         let mut chosen = None;
         let combo = egui::ComboBox::from_id_salt("slice method")
             .width(80.0)
-            .selected_text(Method::label(method, ranged))
+            .selected_text(shown)
             .show_ui(ui, |ui| {
+                if edited {
+                    _ = ui.selectable_label(true, "Edited");
+                }
                 for choice in std::iter::once(None).chain(Method::ALL.map(Some)) {
                     let label = Method::label(choice, ranged);
-                    if ui.selectable_label(method == choice, label).clicked() {
+                    if ui
+                        .selectable_label(!edited && method == choice, label)
+                        .clicked()
+                    {
                         chosen = Some(choice);
                     }
                 }
             });
-        name_combo(
-            &combo.response,
-            "Slice method",
-            Method::label(method, ranged),
-        );
-        combo.response.on_hover_text(
-            "Draws the cuts on the waveform; no file is written yet. \
-             Choose the method again to plan again.",
-        );
+        name_combo(&combo.response, "Slice method", shown);
+        combo.response.on_hover_text(match edited {
+            true => {
+                "Slice starts moved or joined by hand. Choosing a method, or \
+                     changing its setting, plans again over them; undo brings them back."
+            }
+            false => {
+                "Draws the cuts on the waveform; no file is written yet. \
+                      Choose the method again to plan again."
+            }
+        });
         // A changed count or sensitivity plans again, so the edges follow it.
         let changed = match method {
             Some(Method::Equal) => {
@@ -762,12 +802,18 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             }
         }
     });
+    measure(ui, state, top, height);
+    actions
+}
+
+/// Keeps the height the controls around the waveform took, from `top`, for
+/// the next frame's waveform, and redraws if it changed.
+fn measure(ui: &egui::Ui, state: &mut State, top: f32, height: f32) {
     let around = ui.cursor().top() - top - height;
     if state.around.is_none_or(|a| (a - around).abs() > 0.5) {
         state.around = Some(around);
         ui.ctx().request_discard("sampler controls height");
     }
-    actions
 }
 
 /// `label`, with the key that performs `action` in the sampler view.
@@ -1161,9 +1207,11 @@ fn paint(
             egui::Stroke::new(width, colour),
         );
     };
-    // The selected slice's start, end and mark are drawn thicker.
-    let current = model.snapshot().status.current();
-    if let Some(plan) = &model.sampler().pending {
+    // The selected slice's start, end and mark are drawn thicker. A preview
+    // shows none of the playing track's.
+    let current = model.sampler().shown(model.snapshot().status.current());
+    let plan = model.sampler().pending.as_ref();
+    if let Some(plan) = plan.filter(|p| Some(&p.job.path) == current) {
         let selected = model.sampler().selected_slice(current);
         for e in sampler::edges(plan) {
             if let Some(c) = layout.column_of(e) {
@@ -1186,6 +1234,18 @@ fn paint(
                 c,
                 colours.yellow,
                 if Some(m) == selected { 3.0 } else { 1.5 },
+            );
+        }
+    }
+    // Labels at the top, right of their marks.
+    for (&m, label) in layout.marks.iter().zip(&layout.labels) {
+        if let (Some(c), Some(label)) = (layout.column_of(m), label) {
+            painter.text(
+                egui::pos2(x(c) + 3.0, rect.top() + 2.0),
+                egui::Align2::LEFT_TOP,
+                label,
+                egui::FontId::proportional(11.0),
+                colours.yellow,
             );
         }
     }
@@ -1287,7 +1347,9 @@ fn overview(
     for &mark in &layout.marks {
         line(mark, colours.yellow, 1.0);
     }
-    line(layout.at, visuals.strong_text_color(), 1.5);
+    if layout.playing {
+        line(layout.at, visuals.strong_text_color(), 1.5);
+    }
     painter.rect_stroke(
         shown,
         2.0,

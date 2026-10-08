@@ -1021,6 +1021,46 @@ fn the_slice_drop_down_shows_the_plan_and_plans_or_discards_when_chosen() {
     assert!(harness.query_by_label("Discard slices").is_none());
 }
 
+/// A row's menu previews it in the sampler, which says so and offers to
+/// end the preview.
+#[test]
+fn a_row_is_previewed_in_the_sampler_and_the_preview_ended() {
+    use playr_app::sampler::Wave;
+    let samples = tempfile::tempdir().unwrap();
+    let (mut harness, dir) = sampling(samples.path());
+    let other = dir.path().join("other.wav");
+    common::silence(&other, 8000, 3.0);
+    let track = Track {
+        path: other.to_string_lossy().into_owned(),
+        title: Some("Other".into()),
+        ..Default::default()
+    };
+    harness
+        .state_mut()
+        .model_mut()
+        .session_mut()
+        .set_selection(vec![track]);
+    assert!(harness.query_by_label("End preview").is_none());
+    typing(&mut harness, "3");
+    harness.get_by_label("Other").click_secondary();
+    harness.run_steps(2);
+    harness.get_by_label("Preview in sampler").click();
+    harness.run_steps(2);
+    wait(
+        &mut harness,
+        |m| matches!(&m.sampler().wave, Wave::Ready { path, .. } if *path == other),
+    );
+    harness.run_steps(2);
+    harness.get_by_label("Preview:");
+    harness.get_by_label("End preview").click();
+    harness.run_steps(2);
+    assert!(model(&harness).sampler().preview.is_none());
+    assert_eq!(
+        model(&harness).message(),
+        Some(&playr_app::message::Message::PreviewEnded)
+    );
+}
+
 #[test]
 fn the_waveform_s_menu_acts_on_the_point_right_clicked() {
     let samples = tempfile::tempdir().unwrap();
@@ -1416,9 +1456,12 @@ fn the_mix_tab_sets_faders_mutes_records_and_the_law() {
         model(&harness).message(),
         Some(&Message::MasterRecording(path))
     );
+    // The writer may finish within a frame, so the message can pass
+    // MasterStopping before it is read: wait for the recording it ends in.
     harness.get_by_label("Stop recording").click();
-    harness.run_steps(2);
-    assert_eq!(model(&harness).message(), Some(&Message::MasterStopping));
+    wait(&mut harness, |m| {
+        matches!(m.message(), Some(Message::MasterRecorded(_)))
+    });
 }
 
 #[test]
@@ -1558,7 +1601,8 @@ fn a_planned_slice_start_is_clicked_and_dragged_over_a_mark() {
     assert_eq!(cursor(&harness), egui::CursorIcon::ResizeHorizontal);
 
     // And the drag, with the arrow throughout: the slice's start moves, the
-    // mark stays.
+    // mark stays, and the drop-down says the plan is edited.
+    assert_eq!(slice_method(&harness), "Equal");
     harness.drag_at(x(24_000));
     harness.run_steps(1);
     for k in 1..=4 {
@@ -1575,6 +1619,14 @@ fn a_planned_slice_start_is_clicked_and_dragged_over_a_mark() {
     );
     assert_eq!(selected(&harness), Some(moved));
     assert_eq!(model(&harness).snapshot().marks, marks, "the mark moved");
+    assert_eq!(slice_method(&harness), "Edited");
+    harness
+        .state_mut()
+        .model_mut()
+        .perform(playr_app::action::Action::Undo);
+    harness.run_steps(2);
+    assert_eq!(starts(&harness)[2], 24_000);
+    assert_eq!(slice_method(&harness), "Equal");
 }
 
 #[test]

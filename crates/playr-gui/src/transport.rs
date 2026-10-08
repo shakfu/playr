@@ -16,7 +16,7 @@ use playr_app::message::{self, fmt_time};
 use playr_app::meter;
 use playr_app::model::{self, Model};
 use playr_core::audio::eq::{Band, RANGE_DB};
-use playr_core::audio::{speed_for, Mode, State};
+use playr_core::audio::{speed_at, Mode, State};
 
 /// Draws the transport into `ui` and performs what its controls ask for.
 pub fn show(model: &mut Model, ui: &mut egui::Ui) {
@@ -121,16 +121,28 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
             actions.push(Action::SetVolume(volume / 100.0));
         }
 
-        let mut semitones = status.semitones;
-        let label = format!("{:.2}x", speed_for(semitones));
-        let slider = egui::Slider::new(&mut semitones, -12..=12)
+        // In semitones to a cent. A drag sends where it stops, holding its
+        // value meanwhile: each change seeks the player again, which a drag
+        // through every cent would stutter.
+        let held = ui.id().with("speed dragged");
+        let mut semitones = ui
+            .data(|d| d.get_temp::<f64>(held))
+            .unwrap_or(f64::from(status.cents) / 100.0);
+        let label = format!("{:.2}x", speed_at(status.cents));
+        let slider = egui::Slider::new(&mut semitones, -12.0..=12.0)
+            .step_by(0.01)
             .text(format!("Speed {label}"))
             .suffix(" st");
-        if ui.add(slider).changed() {
-            actions.push(Action::SetSpeed(semitones));
+        let response = ui.add(slider);
+        match response.dragged() {
+            true => ui.data_mut(|d| _ = d.insert_temp(held, semitones)),
+            false => ui.data_mut(|d| d.remove::<f64>(held)),
+        }
+        if response.drag_stopped() || (response.changed() && !response.dragged()) {
+            actions.push(Action::SetSpeed((semitones * 100.0).round() as i32));
         }
         if ui
-            .add_enabled(status.semitones != 0, egui::Button::new("Normal speed"))
+            .add_enabled(status.cents != 0, egui::Button::new("Normal speed"))
             .clicked()
         {
             actions.push(Action::SetSpeed(0));
@@ -159,8 +171,8 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
     }
 }
 
-/// The EQ, under its button while open: a slider a band, and Flat. A click
-/// elsewhere closes it.
+/// The EQ, under its button while open: a slider a band, Flat and Bypass. A
+/// click elsewhere closes it.
 fn eq_popup(model: &Model, button: &egui::Response, actions: &mut Vec<Action>) {
     let gains = model.snapshot().eq;
     egui::Popup::from_toggle_button_response(button)
@@ -177,15 +189,21 @@ fn eq_popup(model: &Model, button: &egui::Response, actions: &mut Vec<Action>) {
                     actions.push(Action::SetEq(band, db));
                 }
             }
-            for control in controls::EQ {
-                let flat = gains == [0.0; 3];
-                if ui
-                    .add_enabled(!flat, egui::Button::new(control.label))
-                    .clicked()
-                {
-                    actions.push(control.action.clone());
+            let flat = gains == [0.0; 3];
+            let held = model.mixer().eq_held().is_some();
+            ui.horizontal(|ui| {
+                for control in controls::EQ {
+                    let enabled = match control.action {
+                        Action::BypassEq => !flat || held,
+                        _ => !flat,
+                    };
+                    let button = egui::Button::new(control.label)
+                        .selected(control.action == Action::BypassEq && held);
+                    if ui.add_enabled(enabled, button).clicked() {
+                        actions.push(control.action.clone());
+                    }
                 }
-            }
+            });
         });
 }
 

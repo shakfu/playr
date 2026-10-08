@@ -76,15 +76,19 @@ fn the_callback_neither_allocates_nor_frees() {
     h.set(Setting::HotCue(Side::A, 0)).unwrap();
     h.set(Setting::Pause(Side::B)).unwrap();
     h.load(Side::B, track(-0.2)).unwrap();
+    // A replace on the playing deck, whose fade ends inside the run.
+    h.replace(Side::A, track(0.1)).unwrap();
     let n = counted(|| {
         for _ in 0..400 {
             e.process(&mut out);
         }
     });
     assert_eq!(n, 0);
-    let mut replaced = 0;
+    let (mut replaced, mut faded) = (0, 0);
     while let Some(r) = h.poll() {
         replaced += matches!(r, Returned::Replaced(..)) as usize;
+        faded += matches!(r, Returned::Faded(..)) as usize;
     }
     assert!(replaced >= 3, "{replaced}");
+    assert_eq!(faded, 1);
 }

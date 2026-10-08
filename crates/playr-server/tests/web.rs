@@ -50,7 +50,7 @@ fn the_page_may_do_what_the_window_does_but_the_sampler_and_paths() {
     use Action::*;
     for action in [
         TogglePause,
-        SetSpeed(-2),
+        SetSpeed(-200),
         Mark,
         ClearMarks,
         Activate,

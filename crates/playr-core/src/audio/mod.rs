@@ -40,18 +40,18 @@ pub use order::Mode;
 use order::Order;
 use output::{Backend, DeviceEvent, Output, Plan, Shared};
 
-/// Furthest the playback speed may be shifted, in semitones.
+/// Furthest the playback speed may be shifted, in cents: 100 a semitone.
 ///
-/// Twelve is an octave, which is 0.5x and 2.0x. Past that a music track is no
+/// 1,200 is an octave, which is 0.5x and 2.0x. Past that a music track is no
 /// longer recognisable, and the resampler is only built to span this range.
-pub const MAX_SEMITONES: i32 = 12;
+pub const MAX_CENTS: i32 = 1200;
 
-/// Playback speed for a shift of `semitones`.
+/// Playback speed for a shift of `cents`.
 ///
-/// Steps are geometric, so each is the same musical interval: twelve of them
+/// Steps are geometric, so each is the same musical interval: 1,200 of them
 /// double or halve the speed. Pitch moves with tempo, as it does on tape.
-pub fn speed_for(semitones: i32) -> f64 {
-    2f64.powf(semitones.clamp(-MAX_SEMITONES, MAX_SEMITONES) as f64 / 12.0)
+pub fn speed_at(cents: i32) -> f64 {
+    2f64.powf(f64::from(cents.clamp(-MAX_CENTS, MAX_CENTS)) / 1200.0)
 }
 
 /// Position within the current track.
@@ -106,6 +106,12 @@ impl Pending {
             .last()
             .copied()
             .unwrap_or(current)
+    }
+
+    /// The first mark after `frames_out`, where the position's terms change.
+    fn next_after(&self, frames_out: u64) -> Option<u64> {
+        let held = self.0.lock().ok()?;
+        held.iter().map(|&(at, _)| at).find(|&at| at > frames_out)
     }
 }
 
@@ -189,16 +195,20 @@ pub enum Cmd {
     SetVolume(f32),
     /// Cut or boost a band of the tone control, in dB. See [`eq`].
     SetEq(eq::Band, f32),
-    /// Shift playback speed by whole semitones; pitch moves with it.
-    SpeedBy(i32),
+    /// Shift playback speed by this many cents, 100 a semitone; pitch moves
+    /// with it.
+    CentsBy(i32),
     /// Return to normal speed.
     SpeedReset,
-    /// Set the speed shift to this many semitones.
-    SetSpeed(i32),
+    /// Set the speed shift to this many cents.
+    SetCents(i32),
     /// Change how playback moves through the list. See [`Mode`].
     SetMode(Mode),
     /// What follows the last queued track. See [`AfterQueue`].
     SetAfterQueue(AfterQueue),
+    /// Fade each track in over its first stretch this long and out over its
+    /// last, or not at all for zero. Not on a loop or a one-shot.
+    SetFade(Duration),
     /// Stop once the track playing ends, or no longer. Ignored while
     /// stopped, and cleared once playback stops. See [`Status::stop_after`].
     StopAfter(bool),
@@ -244,8 +254,8 @@ pub struct Status {
     pub error: Option<String>,
     /// Increments on every error, so a repeat of the same message is still seen.
     pub error_seq: u64,
-    /// Playback speed shift in semitones; 0 is normal speed.
-    pub semitones: i32,
+    /// Playback speed shift in cents, 100 a semitone; 0 is normal speed.
+    pub cents: i32,
     /// How playback moves through the list. Like `queue`, only
     /// [`Player::send`] writes it, so it is current as soon as `send` returns.
     pub mode: Mode,
@@ -622,6 +632,59 @@ impl Player {
         position_now(&self.shared, &self.pending)
     }
 
+    /// Hands the output over to the source attached as `id` on the frame
+    /// the device reaches `at` in the track playing: the player pauses on it
+    /// and the source's [`Source::start`](bus::Source::start) runs before
+    /// it. False, and nothing armed, while a seek is under way, or when `at`
+    /// is behind the device or past a track change or loop already queued.
+    /// A seek or a speed change cancels it. One at a time: this replaces any
+    /// armed.
+    pub fn hand_over(&self, id: u64, at: Duration) -> bool {
+        let s = &self.shared;
+        let requested = s.flush_requested.load(Ordering::Acquire);
+        if requested != s.flush_applied.load(Ordering::Acquire) {
+            return false;
+        }
+        let (rate, speed) = (s.position_rate.load(Ordering::Relaxed), s.speed());
+        if rate == 0 || speed <= 0.0 {
+            return false;
+        }
+        let frames_out = s.frames_out.load(Ordering::Relaxed);
+        let (start, offset) = self.pending.reached(
+            frames_out,
+            (
+                s.track_start.load(Ordering::Relaxed),
+                s.position_offset.load(Ordering::Relaxed),
+            ),
+        );
+        let into = (at.as_secs_f64() * f64::from(rate) - offset as f64) / speed;
+        let frame = start + into.max(0.0).round() as u64;
+        let changes = self.pending.next_after(frames_out);
+        if into < 0.0 || frame <= frames_out || changes.is_some_and(|c| frame >= c) {
+            return false;
+        }
+        s.handover_at.store(output::NO_HANDOVER, Ordering::Relaxed);
+        s.handover_id.store(id, Ordering::Relaxed);
+        s.handover
+            .store(bus::Handover::Armed as u8, Ordering::Relaxed);
+        s.handover_at.store(frame, Ordering::Release);
+        true
+    }
+
+    /// Where the last [`Player::hand_over`] got to.
+    pub fn handover(&self) -> bus::Handover {
+        bus::Handover::from_u8(self.shared.handover.load(Ordering::Relaxed))
+    }
+
+    /// Drops an armed handover. One the callback has done stays done.
+    pub fn cancel_handover(&self) {
+        let s = &self.shared;
+        if s.handover_at.swap(output::NO_HANDOVER, Ordering::Relaxed) != output::NO_HANDOVER {
+            s.handover
+                .store(bus::Handover::Cancelled as u8, Ordering::Relaxed);
+        }
+    }
+
     pub fn volume(&self) -> f32 {
         self.shared.volume()
     }
@@ -743,14 +806,16 @@ struct Engine {
     /// Which tracks of `queue` the listener queued.
     queued: Arc<[bool]>,
     after_queue: AfterQueue,
+    /// How long each track fades in and out; zero for none.
+    fade: Duration,
     /// Stop once the audible track ends. See [`Cmd::StopAfter`].
     stop_after: bool,
     /// Which track follows which, for the current mode.
     order: Order,
     index: usize,
     state: State,
-    /// Playback speed shift in semitones; 0 is normal speed.
-    semitones: i32,
+    /// Playback speed shift in cents; 0 is normal speed.
+    cents: i32,
 
     /// Total frames written into the ring since the stream was opened.
     written: u64,
@@ -811,11 +876,12 @@ impl Engine {
             queue: Arc::default(),
             queued: Arc::default(),
             after_queue: AfterQueue::default(),
+            fade: Duration::ZERO,
             stop_after: false,
             order: Order::new(0, Mode::Normal, 0, order::random_seed()),
             index: 0,
             state: State::Stopped,
-            semitones: 0,
+            cents: 0,
             written: 0,
             marks: VecDeque::new(),
             decoded: 0,
@@ -884,6 +950,7 @@ impl Engine {
             }
             self.advance_marks();
             self.pause_when_reached();
+            self.pause_when_handed();
             self.publish(taken);
             self.shared.taken.store(taken, Ordering::Release);
         }
@@ -1032,14 +1099,16 @@ impl Engine {
             }
             // Applied by `Player::send`, which never forwards it.
             Cmd::SetVolume(_) | Cmd::SetEq(..) => {}
-            Cmd::SpeedBy(delta) => self.set_semitones(self.semitones + delta),
-            Cmd::SpeedReset => self.set_semitones(0),
-            Cmd::SetSpeed(semitones) => self.set_semitones(semitones),
+            Cmd::CentsBy(delta) => self.set_cents(self.cents.saturating_add(delta)),
+            Cmd::SpeedReset => self.set_cents(0),
+            Cmd::SetCents(cents) => self.set_cents(cents),
             Cmd::SetMode(mode) => self.set_mode(mode),
             Cmd::SetAfterQueue(after) => {
                 self.after_queue = after;
                 self.discard_chosen();
             }
+            // From what is decoded next: the ring's 2 s play as they were.
+            Cmd::SetFade(fade) => self.fade = fade,
             Cmd::StopAfter(on) => {
                 self.stop_after = on && self.state != State::Stopped;
                 // As a mode change: drops or restores the next track chosen.
@@ -1304,7 +1373,7 @@ impl Engine {
                 o.pause();
             }
         }
-        self.convert_and_carry(&first);
+        self.carry_faded(&first, 0);
         if play {
             self.state = State::Playing;
             if let Some(o) = &self.out {
@@ -1561,7 +1630,7 @@ impl Engine {
     }
 
     fn speed(&self) -> f64 {
-        speed_for(self.semitones)
+        speed_at(self.cents)
     }
 
     /// Changes the playback mode.
@@ -1586,13 +1655,13 @@ impl Engine {
     /// The ring already holds up to two seconds resampled at the old ratio.
     /// Changing the ratio alone would leave that to play out first, so the key
     /// would appear dead for a second or two; re-seeking makes it immediate.
-    fn set_semitones(&mut self, semitones: i32) {
-        let want = semitones.clamp(-MAX_SEMITONES, MAX_SEMITONES);
-        if want == self.semitones {
+    fn set_cents(&mut self, cents: i32) {
+        let want = cents.clamp(-MAX_CENTS, MAX_CENTS);
+        if want == self.cents {
             return;
         }
         let at = self.elapsed();
-        self.semitones = want;
+        self.cents = want;
         self.shared.set_speed(self.speed());
         if !self.marks.is_empty() {
             self.seek(at);
@@ -1931,7 +2000,7 @@ impl Engine {
             self.push_mark(self.written, next, duration, 0);
             self.stream = Some(stream);
             self.decoded = (first.len() / spec.channels.max(1) as usize) as u64;
-            self.convert_and_carry(&first);
+            self.carry_faded(&first, 0);
         } else {
             self.finish_track();
             self.staged = Some(Staged {
@@ -1966,7 +2035,7 @@ impl Engine {
         self.shared.track_start.store(0, Ordering::Relaxed);
         // A new track starts from its own beginning, not a previous seek.
         self.shared.position_offset.store(0, Ordering::Relaxed);
-        self.convert_and_carry(&staged.first);
+        self.carry_faded(&staged.first, 0);
         if let Some(o) = &self.out {
             o.play();
         }
@@ -2011,10 +2080,46 @@ impl Engine {
                 }
             }
             _ => {
+                let from = self.decoded;
                 self.decoded += frames;
-                self.convert_and_carry(chunk);
+                self.carry_faded(chunk, from);
             }
         }
+    }
+
+    /// Converts `chunk`, whose first frame is frame `from` of the track, as
+    /// [`Engine::convert_and_carry`] does, faded where it lies within the
+    /// fade of the track's start or end. Not on a loop or a one-shot, which
+    /// have their own edges.
+    fn carry_faded(&mut self, chunk: &[f32], from: u64) {
+        let (Some(conv), Some(stream)) = (self.conv.as_ref(), self.stream.as_ref()) else {
+            return self.convert_and_carry(chunk);
+        };
+        let (rate, channels) = (conv.src().rate, conv.src().channels.max(1) as usize);
+        let n = (self.fade.as_secs_f64() * f64::from(rate)) as u64;
+        // An unknown length fades in only.
+        let len = stream
+            .duration()
+            .map_or(u64::MAX, |d| (d.as_secs_f64() * f64::from(rate)) as u64);
+        let frames = (chunk.len() / channels) as u64;
+        let inside = from >= n && from + frames <= len.saturating_sub(n);
+        if n == 0 || inside || self.loop_here().is_some() {
+            return self.convert_and_carry(chunk);
+        }
+        let faded: Vec<f32> = chunk
+            .chunks_exact(channels)
+            .zip(from..)
+            .flat_map(|(frame, f)| {
+                // Past a length estimated short, the frames play unfaded
+                // rather than silent.
+                let gain = match f < len {
+                    true => crate::samples::fade_gain(f, len, (n, n)),
+                    false => 1.0,
+                };
+                frame.iter().map(move |&s| s * gain)
+            })
+            .collect();
+        self.convert_and_carry(&faded);
     }
 
     /// The loop, when it is on the track being decoded.
@@ -2179,6 +2284,13 @@ impl Engine {
         }
     }
 
+    /// Pauses once the callback has paused for a handover.
+    fn pause_when_handed(&mut self) {
+        if self.shared.handed.swap(false, Ordering::Relaxed) && self.state == State::Playing {
+            self.state = State::Paused;
+        }
+    }
+
     /// Publishes the marks the device has yet to reach, for [`Player::position`].
     ///
     /// The first is left out: it is already in `track_start` and
@@ -2262,7 +2374,7 @@ impl Engine {
         s.source = self.conv.as_ref().map(Converter::src);
         s.output_rate = self.out.as_ref().map(|o| o.plan.rate).unwrap_or(0);
         s.resampling = self.conv.as_ref().is_some_and(Converter::resampling);
-        s.semitones = self.semitones;
+        s.cents = self.cents;
         s.stop_after = self.stop_after;
         s.gain_db = match self.replaygain {
             ReplayGain::Off => None,

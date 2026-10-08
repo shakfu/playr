@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
+use playr_core::audio::bus::Handover;
 use playr_core::audio::output::DeviceEvent;
 use playr_core::audio::resample::Resample;
 use playr_core::audio::{Attachment, Sources, State};
@@ -143,6 +144,10 @@ impl playr_core::audio::bus::Source for Played {
         self.0.process(main);
         playr_core::audio::bus::Cue::None
     }
+
+    fn start(&mut self) {
+        self.0.play();
+    }
 }
 
 /// A loop read and ready to play.
@@ -171,6 +176,8 @@ struct Live {
     state: TapeState,
     /// The volume last sent to the looper.
     volume: f32,
+    /// The interpolation last sent; `None` until one is.
+    interp: Option<playr_dsp::Interp>,
 }
 
 /// How far each side of the range a load reads, for crossfades to fade into:
@@ -273,8 +280,8 @@ impl TapeState {
             Setting::Filter(i, f) => self.voices[i].filter = f,
             Setting::Solo(i, on) => self.voices[i].solo = on,
             Setting::Thin(x) => self.thin = x,
-            // From the settings file, and a take: not controls.
-            Setting::Knee(_) | Setting::Head(..) => {}
+            // From the settings file, a take and the mixer: not the tape's controls.
+            Setting::Knee(_) | Setting::Head(..) | Setting::Interp(_) => {}
         }
     }
 }
@@ -316,7 +323,13 @@ struct Taking {
     loaded: bool,
     /// The player is before the range, and was told so.
     waiting: bool,
+    /// The player holds a handover to the tape.
+    armed: bool,
 }
+
+/// How far ahead of the device a take arms its handover from inside the
+/// range: room for the callback to see it before its frame plays.
+const TAKE_LEAD: f64 = 0.1;
 
 impl Deck {
     /// A deck playing on the player's stream through `sources`, with the
@@ -349,6 +362,16 @@ impl Deck {
         if let Some(live) = self.live.as_mut().filter(|l| l.volume != volume) {
             if live.handle.set_volume(volume).is_ok() {
                 live.volume = volume;
+            }
+        }
+    }
+
+    /// Sends the heads' interpolation, when it changed. A new looper has
+    /// none sent, so it gets it too.
+    fn follow_interp(&mut self, interp: playr_dsp::Interp) {
+        if let Some(live) = self.live.as_mut().filter(|l| l.interp != Some(interp)) {
+            if live.handle.set(Setting::Interp(interp)).is_ok() {
+                live.interp = Some(interp);
             }
         }
     }
@@ -510,6 +533,7 @@ impl Deck {
             save_to: None,
             state: TapeState::new(extent.range),
             volume: self.volume,
+            interp: None,
         });
         Ok(TapeMessage::Loaded {
             frames: extent.range.len(),
@@ -603,6 +627,8 @@ pub fn poll(f: &mut impl Frontend) {
     take_over(f);
     let volume = f.mix().gain(crate::mix::Strip::Tape);
     f.tape().follow_volume(volume);
+    let interp = f.mix().interp();
+    f.tape().follow_interp(interp);
 }
 
 fn report(f: &mut impl Frontend, found: Found) {
@@ -665,7 +691,7 @@ fn send(live: &mut Live, action: TapeAction, samples: PathBuf) -> Result<(), Tap
 
 fn load(f: &mut impl Frontend, slot: Option<u8>) {
     if let Some((path, rate, span)) = range(f, slot) {
-        f.tape().taking = None;
+        drop_take(f);
         start_load(f, path, rate, span);
     }
 }
@@ -673,14 +699,23 @@ fn load(f: &mut impl Frontend, slot: Option<u8>) {
 /// Loads the range as `load` does, to take over from the player once in.
 fn take(f: &mut impl Frontend) {
     if let Some((path, rate, span)) = range(f, None) {
+        drop_take(f);
         f.tape().taking = Some(Taking {
             path: path.clone(),
             rate,
             span,
             loaded: false,
             waiting: false,
+            armed: false,
         });
         start_load(f, path, rate, span);
+    }
+}
+
+/// Drops a take under way, and the handover it armed.
+fn drop_take(f: &mut impl Frontend) {
+    if f.tape().taking.take().is_some_and(|t| t.armed) {
+        f.session().player().cancel_handover();
     }
 }
 
@@ -723,8 +758,8 @@ fn start_load(f: &mut impl Frontend, path: PathBuf, rate: u32, span: (u64, u64))
 
 /// Hands the player over to the tape once a take's loop is in: voice 1 at
 /// the player's position inside the range, or at its start once the player
-/// reaches it. The player pauses as the tape starts; a paused player leaves
-/// the tape cued there.
+/// reaches it. On the player's stream the handover is on one frame, which
+/// the player's callback keeps; a paused player leaves the tape cued there.
 fn take_over(f: &mut impl Frontend) {
     let Some(t) = f.tape().taking.clone().filter(|t| t.loaded) else {
         return;
@@ -732,35 +767,84 @@ fn take_over(f: &mut impl Frontend) {
     let player = f.session().player();
     let state = player.status().state;
     let on_track = f.session().playing_track().is_ok_and(|(p, _)| p == t.path);
-    if !on_track || state == State::Stopped {
+    let gone = !on_track || state == State::Stopped;
+    if t.armed {
+        match f.session().player().handover() {
+            Handover::Done => return took(f),
+            Handover::Armed if !gone => return,
+            _ => {}
+        }
+        f.session().player().cancel_handover();
+        f.tape().taking.as_mut().expect("taken above").armed = false;
+    }
+    if gone {
         f.tape().taking = None;
         return f.notify(TapeMessage::TakeDropped.into());
     }
-    let at = player.position().as_secs_f64() * f64::from(t.rate);
+    let player = f.session().player();
+    let status = player.status();
+    let rate = f64::from(t.rate);
+    let now = player.position().as_secs_f64() * rate;
     let (start, end) = (t.span.0 as f64, t.span.1 as f64);
-    if at >= end {
+    let bus = f
+        .tape()
+        .live
+        .as_ref()
+        .and_then(|l| l.attached.as_ref().map(Attachment::id));
+    // The frame the tape starts on: now, or ahead by the lead on the bus.
+    let lead = match (bus, state) {
+        (Some(_), State::Playing) => TAKE_LEAD * playr_core::audio::speed_at(status.cents) * rate,
+        _ => 0.0,
+    };
+    let from = start.max(now + lead);
+    if from >= end {
         f.tape().taking = None;
         return f.notify(TapeMessage::PastRange.into());
     }
-    if at < start {
-        if !t.waiting {
-            f.tape().taking.as_mut().expect("taken above").waiting = true;
-            f.notify(TapeMessage::TakeWaiting.into());
-        }
+    if now < start && !t.waiting {
+        f.tape().taking.as_mut().expect("taken above").waiting = true;
+        f.notify(TapeMessage::TakeWaiting.into());
+    }
+    if now < start && (bus.is_none() || state != State::Playing) {
         return;
     }
-    f.tape().taking = None;
     let Some(live) = f.tape().live.as_mut() else {
         return;
     };
     let e = live.extent;
-    let head = e.range.start as f64 + (at - start) * f64::from(e.rate) / f64::from(t.rate);
+    let head = e.range.start as f64 + (from - start) * f64::from(e.rate) / rate;
     if let Err(err) = live.handle.set(Setting::Head(0, head)) {
+        f.tape().taking = None;
         return f.notify(TapeMessage::Failed(err.to_string()).into());
     }
-    if state == State::Playing {
-        // Play pauses the player, as the tape's Play does.
-        act(f, TapeAction::Play);
+    match (bus, state) {
+        (Some(id), State::Playing) => {
+            // Refused while a seek settles or before a track change: tried
+            // again next frame.
+            let at = Duration::from_secs_f64(from / rate);
+            if f.session().player().hand_over(id, at) {
+                f.tape().taking.as_mut().expect("taken above").armed = true;
+            }
+        }
+        (None, State::Playing) => {
+            // Play pauses the player, as the tape's Play does.
+            f.tape().taking = None;
+            act(f, TapeAction::Play);
+            f.notify(TapeMessage::Took.into());
+        }
+        _ => {
+            f.tape().taking = None;
+            f.notify(TapeMessage::Took.into());
+        }
+    }
+}
+
+/// Finishes a take the player's callback handed over: the tape plays and
+/// the player paused, on one frame.
+fn took(f: &mut impl Frontend) {
+    f.tape().taking = None;
+    if let Some(live) = f.tape().live.as_mut() {
+        live.state.apply(Setting::Play);
     }
     f.notify(TapeMessage::Took.into());
 }

@@ -16,7 +16,7 @@ use playr_app::message::{self, fmt_time};
 use playr_app::meter;
 use playr_app::model::{Input, Model};
 use playr_app::View;
-use playr_core::audio::{speed_for, Mode, State};
+use playr_core::audio::{speed_at, Mode, State};
 use playr_core::db::Track;
 use serde_json::{json, Value};
 
@@ -73,10 +73,15 @@ pub fn allowed(action: &Action) -> bool {
         | WriteSlices
         | DiscardSlices
         | MarkSlices
+        | Preview
+        | Label(_)
+        | StartLabel
+        | ExportMarks(_)
         | Convert(..)
         // Not in the first version: they would play on the server's device.
         | Tape(_)
-        | Dj(_) => false,
+        | Dj(_)
+        | Interp(_) => false,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection
@@ -84,8 +89,8 @@ pub fn allowed(action: &Action) -> bool {
         | SaveSearch(_) | Sql(_) | StartRename | Analyze(None) | ShowInfo | SetColumns(_)
         | SetSort(_) | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None)
         | TogglePause | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | StopAfter
-        | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | SetEq(..)
-        | EqBy(..) | FlatEq | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
+        | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | Tempo(_) | Fade(_) | SetEq(..)
+        | EqBy(..) | FlatEq | BypassEq | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
         | UndoMark | Undo | Redo | ClearMarks | NextMark | PrevMark | Theme(_) | Mix(_) => true,
     }
 }
@@ -154,8 +159,8 @@ pub fn screen(model: &Model) -> Value {
         "marks": snapshot.marks.iter().copied().map(seconds).collect::<Vec<_>>(),
         "volume": tenths(snapshot.volume * 100.0),
         "muted": model.mixer().muted(playr_app::mix::Strip::Master),
-        "speed": status.semitones,
-        "speed_label": format!("{:.2}x", speed_for(status.semitones)),
+        "speed": f64::from(status.cents) / 100.0,
+        "speed_label": format!("{:.2}x", speed_at(status.cents)),
         "mode": mode_name(status.mode),
         "sort": model.session().sort().first().map(|k| k.text()),
         "replaygain": model.replaygain().name(),

@@ -107,30 +107,23 @@ impl Track {
         }
     }
 
-    /// Frame `pos`, cubic Hermite interpolated, as stereo. Frames outside
-    /// the track are silence; a mono track feeds both channels.
-    pub(crate) fn read(&self, pos: f64) -> [f32; 2] {
-        let frames = self.frames() as i64;
-        let i = pos.floor();
-        let t = (pos - i) as f32;
-        let i = i as i64;
+    /// Frame `pos`, read at `rate` frames a frame with `interp`, as stereo.
+    /// Frames outside the track are silence; a mono track feeds both
+    /// channels.
+    pub(crate) fn read(&self, pos: f64, rate: f64, interp: playr_dsp::Interp) -> [f32; 2] {
+        let frames = self.frames() as isize;
+        let k = interp.kernel(pos, rate);
         let mut out = [0.0; 2];
         // Every tap is outside the track.
-        if i < -2 || i > frames {
+        if k.first() >= frames || k.first() + k.weights().len() as isize <= 0 {
             return out;
         }
         let c = self.channels;
-        let at = |k: i64, ch: usize| match (0..frames).contains(&k) {
-            true => self.samples[k as usize * c + ch],
-            false => 0.0,
-        };
         for (ch, o) in out.iter_mut().enumerate().take(c) {
-            let x0 = at(i, ch);
-            if t == 0.0 {
-                *o = x0;
-                continue;
-            }
-            *o = playr_dsp::hermite(at(i - 1, ch), x0, at(i + 1, ch), at(i + 2, ch), t);
+            *o = k.apply(|j| match (0..frames).contains(&j) {
+                true => self.samples[j as usize * c + ch],
+                false => 0.0,
+            });
         }
         if c == 1 {
             out[1] = out[0];

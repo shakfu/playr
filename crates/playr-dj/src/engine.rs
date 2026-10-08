@@ -20,6 +20,8 @@ const RETURNS: usize = 8;
 pub enum Cmd {
     Set(Setting),
     Load(Side, Box<Track>),
+    /// Load onto a deck even while it plays, crossfading from the old track.
+    Replace(Side, Box<Track>),
 }
 
 /// Tracks the callback hands back, since it must not free them.
@@ -29,6 +31,10 @@ pub enum Returned {
     Replaced(Side, Box<Track>),
     /// A track sent to a playing deck, which refuses it.
     Refused(Side, Box<Track>),
+    /// A replace took its track and is crossfading into it.
+    Fading(Side),
+    /// The track a replace faded out.
+    Faded(Side, Box<Track>),
 }
 
 /// One deck's state, published once per callback.
@@ -201,6 +207,8 @@ pub struct Engine {
 
 /// An engine at `sample_rate` and the handle that controls it.
 pub fn new(sample_rate: u32) -> (Engine, Handle) {
+    // The sinc's table, built here so the callback never allocates it.
+    playr_dsp::interp::warm();
     let (cmd_tx, cmd_rx) = RingBuffer::new(COMMANDS);
     let (ret_tx, ret_rx) = RingBuffer::new(RETURNS);
     let status = Arc::new(Status {
@@ -237,6 +245,7 @@ impl Engine {
         self.commands();
         self.mixer.process_channels(out, channels);
         self.publish();
+        self.hand_back();
     }
 
     /// As [`Engine::process`], filling the main mix and the cue apart, as
@@ -245,6 +254,7 @@ impl Engine {
         self.commands();
         let routed = self.mixer.process_buses(main, cue);
         self.publish();
+        self.hand_back();
         routed
     }
 
@@ -269,10 +279,23 @@ impl Engine {
         &self.mixer
     }
 
+    /// Returns the tracks replaces faded out; one the ring has no room for
+    /// waits, silent, for the next callback.
+    fn hand_back(&mut self) {
+        for side in [Side::A, Side::B] {
+            if self.returns.slots() == 0 {
+                return;
+            }
+            if let Some(old) = self.mixer.take_faded(side) {
+                _ = self.returns.push(Returned::Faded(side, old));
+            }
+        }
+    }
+
     fn commands(&mut self) {
         while let Ok(cmd) = self.commands.peek() {
             // Left in the ring until the handle has drained room for its return.
-            if matches!(cmd, Cmd::Load(..)) && self.returns.slots() == 0 {
+            if matches!(cmd, Cmd::Load(..) | Cmd::Replace(..)) && self.returns.slots() == 0 {
                 return;
             }
             let Ok(cmd) = self.commands.pop() else { return };
@@ -282,6 +305,14 @@ impl Engine {
                     _ = self.returns.push(match self.mixer.load(side, track) {
                         Ok(old) => Returned::Replaced(side, old),
                         Err(new) => Returned::Refused(side, new),
+                    });
+                }
+                Cmd::Replace(side, track) => {
+                    use crate::deck::Replace;
+                    _ = self.returns.push(match self.mixer.replace(side, track) {
+                        Replace::Loaded(old) => Returned::Replaced(side, old),
+                        Replace::Fading => Returned::Fading(side),
+                        Replace::Refused(new) => Returned::Refused(side, new),
                     });
                 }
             }
@@ -313,6 +344,13 @@ impl Handle {
     /// arrives through [`Handle::poll`].
     pub fn load(&mut self, side: Side, track: Track) -> Result<(), Error> {
         self.send(Cmd::Load(side, Box::new(track)))
+            .map_err(|_| Error::Full)
+    }
+
+    /// Loads `track` onto `side`, crossfading from the track playing there;
+    /// a paused deck loads it as [`Handle::load`] does.
+    pub fn replace(&mut self, side: Side, track: Track) -> Result<(), Error> {
+        self.send(Cmd::Replace(side, Box::new(track)))
             .map_err(|_| Error::Full)
     }
 

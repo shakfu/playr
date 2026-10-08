@@ -3,7 +3,7 @@
 use cpal::SampleFormat;
 use playr_core::audio::convert::Converter;
 use playr_core::audio::output::Plan;
-use playr_core::audio::{speed_for, Spec};
+use playr_core::audio::{speed_at, Spec};
 
 const STEREO_44K: Plan = Plan {
     rate: 44100,
@@ -36,7 +36,7 @@ fn max_diff(a: &[f32], b: &[f32]) -> f32 {
 
 #[test]
 fn a_continued_track_matches_resampling_one_stream() {
-    let (src, speed) = (spec(44100, 2), speed_for(1));
+    let (src, speed) = (spec(44100, 2), speed_at(100));
     let input = noise(40_000, 2);
     // Not on a chunk boundary, and not on a whole output frame.
     let (a, b) = input.split_at(17_333 * 2);
@@ -60,12 +60,12 @@ fn a_continued_track_matches_resampling_one_stream() {
 
 #[test]
 fn a_track_continues_only_with_the_same_format_and_speed() {
-    let (src, speed) = (spec(44100, 2), speed_for(1));
+    let (src, speed) = (spec(44100, 2), speed_at(100));
     let conv = Converter::new(src, STEREO_44K, speed);
     assert!(conv.continues(src, STEREO_44K, speed));
     assert!(!conv.continues(spec(48000, 2), STEREO_44K, speed));
     assert!(!conv.continues(spec(44100, 1), STEREO_44K, speed));
-    assert!(!conv.continues(src, STEREO_44K, speed_for(2)));
+    assert!(!conv.continues(src, STEREO_44K, speed_at(200)));
     let other = Plan {
         rate: 48000,
         ..STEREO_44K
@@ -82,7 +82,7 @@ fn a_track_continues_only_with_the_same_format_and_speed() {
 
 #[test]
 fn finishing_twice_adds_nothing() {
-    let mut conv = Converter::new(spec(44100, 2), STEREO_44K, speed_for(1));
+    let mut conv = Converter::new(spec(44100, 2), STEREO_44K, speed_at(100));
     let mut out = Vec::new();
     conv.push(&noise(5_000, 2), &mut out);
     conv.finish(&mut out);
@@ -96,7 +96,7 @@ fn a_mono_source_is_resampled_as_mono() {
     // Mono fanned out to stereo must match a stereo source whose channels are
     // equal. Resampling mono as if it were stereo paired up adjacent samples
     // and distorted everything above a few kHz.
-    let speed = speed_for(1);
+    let speed = speed_at(100);
     let mut from_mono = Vec::new();
     let mut conv = Converter::new(spec(44100, 1), STEREO_44K, speed);
     conv.push(&noise(20_000, 1), &mut from_mono);

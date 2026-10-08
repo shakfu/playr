@@ -269,6 +269,24 @@ fn the_knees_are_in_dbfs_and_stay_in_range() {
 }
 
 #[test]
+fn fade_defaults_to_none_and_stays_in_range() {
+    use std::time::Duration;
+    assert_eq!(Settings::default().fade, Duration::ZERO);
+    assert_eq!(parse("fade = 2").unwrap().fade, Duration::from_secs(2));
+    assert_eq!(
+        parse("fade = 0.5").unwrap().fade,
+        Duration::from_millis(500)
+    );
+    for bad in ["fade = 11", "fade = -1", "fade = \"long\""] {
+        assert_eq!(
+            parse(bad).unwrap_err(),
+            ["line 1: fade is a number of seconds from 0 to 10"],
+            "{bad}"
+        );
+    }
+}
+
+#[test]
 fn onset_sensitivity_defaults_to_the_middle_and_stays_in_range() {
     assert_eq!(Settings::default().onset_sensitivity, 0.5);
     assert_eq!(

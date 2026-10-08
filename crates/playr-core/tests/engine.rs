@@ -89,13 +89,13 @@ fn varispeed_status(rates: &[u32], index: usize) -> Status {
         })
         .collect();
 
-    player.send(Cmd::SpeedBy(3));
+    player.send(Cmd::CentsBy(300));
     player.send(Cmd::Play(queue, 0));
     let s = wait_for(&player, |s| {
         s.state == State::Playing && s.index == index && s.source.is_some()
     });
     assert_eq!(s.index, index, "track {index} never started");
-    assert_eq!(s.semitones, 3);
+    assert_eq!(s.cents, 300);
     s
 }
 
@@ -486,7 +486,7 @@ fn the_queue_is_current_as_soon_as_send_returns() {
     // Resampling 192 kHz keeps the engine decoding between messages, which
     // is when a stale publish would happen.
     silence(&track, 192_000, 30.0);
-    player.send(Cmd::SpeedBy(1));
+    player.send(Cmd::CentsBy(100));
     for n in 1..=60 {
         player.send(Cmd::Enqueue(vec![track.clone()]));
         assert_eq!(player.queue().len(), n);
@@ -988,4 +988,40 @@ fn a_one_shot_with_fades_ramps_in_and_out_as_a_written_slice_does() {
     assert!(near(run[7], level), "{}", run[7]);
     assert!(near(run[200], level));
     assert!(near(run[397], level / 40.0), "{}", run[397]);
+}
+
+/// With a fade set, each track ramps up from silence over its first stretch
+/// and down to silence over its last; between, it plays as it is. The second
+/// of two tracks fades in too, on the gapless path.
+#[test]
+fn a_fade_ramps_each_track_in_and_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.wav"), dir.path().join("b.wav"));
+    levels(&a, 8000, &[(2.0, 0.5)]);
+    levels(&b, 8000, &[(2.0, -0.5)]);
+    let (player, control) = fake_player();
+    player.send(Cmd::SetFade(Duration::from_millis(250)));
+    player.send(Cmd::Play(vec![a, b], 0));
+    wait_for(&player, |s| s.state == State::Stopped && s.index == 1);
+    let played = control.played.lock().unwrap();
+    // Left channel, from the first sound: the stream's priming is silent.
+    let left: Vec<f32> = played.iter().step_by(2).copied().collect();
+    let first = left.iter().position(|&s| s != 0.0).unwrap();
+    let left = &left[first - 1..];
+    let full = 0.5;
+    let n = 2_000;
+    // a: rising over 2,000 frames, level, falling to its end at 16,000.
+    assert!(left[0].abs() < 1e-6);
+    assert!((left[n / 2] / full - 0.5).abs() < 0.01, "{}", left[n / 2]);
+    assert!((left[8_000] / full - 1.0).abs() < 0.01, "{}", left[8_000]);
+    assert!((left[16_000 - n / 2] / full - 0.5).abs() < 0.01);
+    // b, straight after: rising from silence, negative.
+    assert!(left[16_000].abs() < 1e-3, "{}", left[16_000]);
+    assert!((left[16_000 + n / 2] / full + 0.5).abs() < 0.01);
+    assert!((left[24_000] / full + 1.0).abs() < 0.01);
+    let step = left[..32_000]
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0, f32::max);
+    assert!(step < 0.01, "a step of {step}");
 }

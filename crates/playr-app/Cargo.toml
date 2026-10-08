@@ -14,6 +14,7 @@ categories = ["multimedia::audio"]
 [dependencies]
 playr-core.workspace = true
 playr-looper.workspace = true
+playr-dsp.workspace = true
 playr-dj.workspace = true
 # The looper's and the decks' output streams, on the device playr-core finds.
 cpal.workspace = true

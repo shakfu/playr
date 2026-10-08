@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::action::{Action, Key, Keymap, Nudge, Slicing, Zoom};
 use crate::{Display, Theme, View};
 use playr_core::audio::eq::{Band, RANGE_DB};
-use playr_core::audio::Mode;
+use playr_core::audio::{Mode, MAX_CENTS};
 use playr_core::columns::{Column, SortKey};
 use playr_core::gain::ReplayGain;
 use playr_core::samples::MAX_SLICES;
@@ -106,6 +106,7 @@ pub const COMMANDS: &[Command] = &[
     ),
     any("prune", "[DIR]", "remove tracks and marks of missing files"),
     any("info", "", "what analysis measured about this track"),
+    any("preview", "", "show the row's waveform without playing it"),
     any(
         "columns",
         "NAME...",
@@ -144,11 +145,18 @@ pub const COMMANDS: &[Command] = &[
     any(
         "speed",
         "N | =-N | +N | -N",
-        "set varispeed in semitones, or change it",
+        "varispeed in semitones, or Nc in cents",
+    ),
+    any("tempo", "BPM", "varispeed to this tempo, once analysed"),
+    any("fade", "SECONDS | off", "fade each track in and out"),
+    any(
+        "interp",
+        "[sinc|hermite]",
+        "how deck and tape heads read; toggles",
     ),
     any(
         "eq",
-        "BAND =N | +N | -N | flat",
+        "BAND =N|+N|-N | flat|bypass",
         "bass, mid or treble, -12 to 12 dB",
     ),
     any(
@@ -176,6 +184,11 @@ pub const COMMANDS: &[Command] = &[
     any("mark-clear", "", "clear all marks in this track; asks y/n"),
     any("mark-next", "", "next mark: seek, or select in the sampler"),
     any("mark-prev", "", "prev mark: seek, or select in the sampler"),
+    any(
+        "mark-export",
+        "audacity|cue",
+        "write the marks as labels or a cue sheet",
+    ),
     any("undo", "", "undo the last edit to marks, range or plan"),
     any("redo", "", "put back the last edit undone"),
     any(
@@ -295,6 +308,12 @@ pub const COMMANDS: &[Command] = &[
         "clear this track's loops; asks y/n",
     ),
     only(Sampler, "select", "TIME", "select the mark at a time"),
+    only(
+        Sampler,
+        "label",
+        "[TEXT | -]",
+        "label the selected mark; - clears",
+    ),
     only(
         Sampler,
         "select-slice",
@@ -574,9 +593,14 @@ pub fn line(action: &Action, view: Option<View>) -> String {
             number(f64::from(v.abs()) * 100.0)
         ),
         SetVolume(v) => format!("volume {}", number(f64::from(*v) * 100.0)),
-        SpeedBy(n) => format!("speed {n:+}"),
-        SetSpeed(n) if *n < 0 => format!("speed ={n}"),
-        SetSpeed(n) => format!("speed {n}"),
+        SpeedBy(n) => format!("speed {}{}", if *n < 0 { "-" } else { "+" }, cents(*n)),
+        SetSpeed(n) if *n < 0 => format!("speed =-{}", cents(*n)),
+        SetSpeed(n) => format!("speed {}", cents(*n)),
+        Tempo(bpm) => format!("tempo {}", number(f64::from(*bpm))),
+        Interp(None) => "interp".into(),
+        Interp(Some(i)) => format!("interp {}", i.name()),
+        Fade(d) if d.is_zero() => "fade off".into(),
+        Fade(d) => format!("fade {}", number(d.as_secs_f64())),
         SetEq(band, db) => format!("eq {} ={}", band.name(), number(f64::from(*db))),
         EqBy(band, db) => format!(
             "eq {} {}{}",
@@ -585,6 +609,8 @@ pub fn line(action: &Action, view: Option<View>) -> String {
             number(f64::from(db.abs()))
         ),
         FlatEq => "eq flat".into(),
+        BypassEq => "eq bypass".into(),
+        Preview => "preview".into(),
         CycleMode(true) => "mode +".into(),
         CycleMode(false) => "mode -".into(),
         SetMode(m) => format!(
@@ -645,6 +671,10 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         WriteSlices => "write".into(),
         DiscardSlices => "discard".into(),
         MarkSlices => "mark-slices".into(),
+        Label(text) if text.trim().is_empty() => "label -".into(),
+        Label(text) => format!("label {text}"),
+        StartLabel => "label".into(),
+        ExportMarks(f) => format!("mark-export {}", f.name()),
         Tape(t) => format!("tape {}", tape_line(t)),
         Dj(d) => format!("dj {}", dj_line(d)),
         Mix(m) => mix_line(m),
@@ -1149,6 +1179,15 @@ fn signed(text: &str) -> Option<(f64, &str)> {
 
 /// A number to set or to change by, as `:volume`, `:speed` and `:eq` take
 /// it: a sign makes it a change, and `=` makes it a value, so `=-3` sets a
+/// The size of a speed shift of `n` cents: whole semitones as a number, the
+/// rest in cents, as `:speed` reads them.
+fn cents(n: i32) -> String {
+    match n.abs() {
+        c if c % 100 == 0 => (c / 100).to_string(),
+        c => format!("{c}c"),
+    }
+}
+
 /// negative one. Returns whether it is a change, its sign, and its digits.
 fn amount(text: &str) -> (bool, f64, &str) {
     match (text.strip_prefix('='), signed(text)) {
@@ -1335,6 +1374,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             _ => Err(usage()),
         },
         "info" => nothing(Action::ShowInfo),
+        "preview" => nothing(Action::Preview),
         "columns" if rest.is_empty() => Err(usage()),
         "columns" => {
             let names = rest.split([',', ' ']).filter(|n| !n.trim().is_empty());
@@ -1397,26 +1437,50 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             }
         }
         "speed" => {
-            let semitones = |t: &str| {
-                t.parse::<u32>()
-                    .ok()
-                    .filter(|n| *n <= 24)
-                    .map(|n| n as i32)
-                    .ok_or_else(|| format!("not a number of semitones: {rest}"))
+            // Semitones, to a hundredth, or cents with a `c`.
+            let cents = |t: &str| {
+                let n = match t.strip_suffix('c') {
+                    Some(c) => c.parse::<u32>().ok().map(f64::from),
+                    None => t.parse::<f64>().ok().map(|n| n * 100.0),
+                };
+                n.filter(|n| n.is_finite() && (0.0..=2400.0).contains(n))
+                    .map(|n| n.round() as i32)
+                    .ok_or_else(|| format!("not a number of semitones or cents: {rest}"))
             };
             match amount(rest) {
                 _ if rest.is_empty() => Err(usage()),
-                (true, sign, n) => Ok(Action::SpeedBy(sign as i32 * semitones(n)?)),
-                (false, sign, n) => match sign as i32 * semitones(n)? {
-                    n if n.abs() <= 12 => Ok(Action::SetSpeed(n)),
+                (true, sign, n) => Ok(Action::SpeedBy(sign as i32 * cents(n)?)),
+                (false, sign, n) => match sign as i32 * cents(n)? {
+                    n if n.abs() <= MAX_CENTS => Ok(Action::SetSpeed(n)),
                     _ => Err("speed is -12 to 12 semitones".into()),
                 },
             }
         }
+        "interp" if rest.is_empty() => Ok(Action::Interp(None)),
+        "interp" => {
+            choose(rest, &playr_dsp::Interp::NAMES, "interp").map(|i| Action::Interp(Some(i)))
+        }
+        "fade" => match rest {
+            "" => Err(usage()),
+            "off" => Ok(Action::Fade(Duration::ZERO)),
+            _ => match rest.parse::<f64>() {
+                Ok(n) if (0.0..=playr_core::settings::MAX_FADE_SECS).contains(&n) => {
+                    Ok(Action::Fade(Duration::from_secs_f64(n)))
+                }
+                _ => Err("fade is 0 to 10 seconds, or off".into()),
+            },
+        },
+        "tempo" => match rest.parse::<f32>() {
+            Ok(bpm) if bpm.is_finite() && bpm > 0.0 => Ok(Action::Tempo(bpm)),
+            _ if rest.is_empty() => Err(usage()),
+            _ => Err(format!("not a tempo in BPM: {rest}")),
+        },
         "eq" => {
             let (band, change) = rest.split_once(' ').unwrap_or((rest, ""));
-            if band == "flat" && change.is_empty() {
-                return Ok(Action::FlatEq);
+            match (band, change) {
+                ("flat", "") => return Ok(Action::FlatEq),
+                ("bypass", "") => return Ok(Action::BypassEq),
+                _ => {}
             }
             let band = choose(band, &Band::NAMES, "band")?;
             let db = |t: &str| {
@@ -1572,6 +1636,14 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         "write" => nothing(Action::WriteSlices),
         "discard" => nothing(Action::DiscardSlices),
         "mark-slices" => nothing(Action::MarkSlices),
+        "label" => Ok(match rest {
+            "" => Action::StartLabel,
+            "-" => Action::Label(String::new()),
+            text => Action::Label(text.to_string()),
+        }),
+        "mark-export" => {
+            choose(rest, &playr_core::labels::MarkFile::NAMES, "format").map(Action::ExportMarks)
+        }
         "slice" => match first_word(rest) {
             ("region", "") => Ok(Action::Slice(Slicing::Region)),
             ("marks", "") => Ok(Action::Slice(Slicing::Marks)),

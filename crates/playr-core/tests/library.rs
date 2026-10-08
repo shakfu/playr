@@ -405,6 +405,47 @@ fn a_library_from_before_marks_gains_the_table_and_keeps_its_version() {
     );
 }
 
+/// A label stays with its mark when the mark moves, and goes with it; a
+/// library from before labels gains the column with its marks kept.
+#[test]
+fn a_label_moves_with_its_mark_and_old_libraries_gain_the_column() {
+    use query::Mark;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let conn = db::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP TABLE marks;
+         CREATE TABLE marks (path TEXT NOT NULL, frame INTEGER NOT NULL,
+                             rate INTEGER NOT NULL, PRIMARY KEY (path, frame));
+         INSERT INTO marks VALUES ('/m/a.flac', 100, 44100), ('/m/a.flac', 200, 44100);",
+    )
+    .unwrap();
+    drop(conn);
+
+    let conn = db::open(&path).unwrap();
+    assert_eq!(query::marks(&conn, "/m/a.flac").unwrap().len(), 2);
+    assert!(query::labels(&conn, "/m/a.flac").unwrap().is_empty());
+    assert!(query::set_label(&conn, "/m/a.flac", 200, Some("solo")).unwrap());
+    assert!(!query::set_label(&conn, "/m/a.flac", 300, Some("x")).unwrap());
+    assert!(query::move_mark(&conn, "/m/a.flac", 200, 250).unwrap());
+    assert_eq!(
+        query::labels(&conn, "/m/a.flac").unwrap(),
+        [(250, "solo".to_string())]
+    );
+    query::set_label(&conn, "/m/a.flac", 250, None).unwrap();
+    assert!(query::labels(&conn, "/m/a.flac").unwrap().is_empty());
+    query::add_mark(
+        &conn,
+        "/m/a.flac",
+        Mark {
+            frame: 400,
+            rate: 44100,
+        },
+    )
+    .unwrap();
+    assert_eq!(query::marks(&conn, "/m/a.flac").unwrap().len(), 3);
+}
+
 #[test]
 fn marks_are_undone_in_the_order_they_were_added() {
     use query::Mark;

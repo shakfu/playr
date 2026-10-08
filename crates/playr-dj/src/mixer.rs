@@ -121,6 +121,8 @@ pub enum Setting {
     Seek(Side, f64),
     /// Silences the deck in the main mix; the cue still hears it.
     Mute(Side, bool),
+    /// How both decks' heads read between frames.
+    Interp(playr_dsp::Interp),
 }
 
 impl Setting {
@@ -240,6 +242,22 @@ impl Mixer {
         Ok(old)
     }
 
+    /// Replaces `side`'s track while it plays, crossfading over
+    /// [`REPLACE_MS`](crate::deck::REPLACE_MS); see [`Deck::replace`]. A deck
+    /// synced to it stops following.
+    pub(crate) fn replace(&mut self, side: Side, track: Box<Track>) -> crate::deck::Replace {
+        let r = self.deck_mut(side).replace(track);
+        if !matches!(r, crate::deck::Replace::Refused(_)) {
+            self.deck_mut(side.other()).synced = None;
+        }
+        r
+    }
+
+    /// The track a replace on `side` faded out, once it has.
+    pub(crate) fn take_faded(&mut self, side: Side) -> Option<Box<Track>> {
+        self.deck_mut(side).take_faded()
+    }
+
     pub fn set(&mut self, s: Setting) {
         if !s.finite() {
             return;
@@ -304,6 +322,11 @@ impl Mixer {
                 self.headphones.set(v.clamp(0.0, 1.0), n);
             }
             Setting::Knee(v) => self.knee = v.clamp(0.0, 0.99),
+            Setting::Interp(interp) => {
+                for side in [Side::A, Side::B] {
+                    self.deck_mut(side).interp = interp;
+                }
+            }
             Setting::Eq(d, b, db) => {
                 self.bands[d.index()][b.index()].0 = db.clamp(EQ_DB.0, EQ_DB.1);
                 self.retune(d);

@@ -361,7 +361,7 @@ fn now_playing_shows_title_position_and_source_format() {
             resampling: false,
             error: None,
             error_seq: 0,
-            semitones: 0,
+            cents: 0,
             mode: Default::default(),
             looping: None,
             gain_db: None,
@@ -514,11 +514,17 @@ fn varispeed_is_shown_but_not_as_a_rate_conversion() {
     });
     snapshot.status.output_rate = 44100;
     snapshot.status.resampling = true;
-    snapshot.status.semitones = 3;
+    snapshot.status.cents = 300;
 
     let joined = Case::new(View::Selection, &snapshot).text();
     assert!(
         joined.contains("1.19x (+3 st)"),
+        "speed not shown:\n{joined}"
+    );
+    snapshot.status.cents = -350;
+    let joined = Case::new(View::Selection, &snapshot).text();
+    assert!(
+        joined.contains("0.82x (-3.5 st)"),
         "speed not shown:\n{joined}"
     );
     assert!(
@@ -806,7 +812,7 @@ fn help_command_lists_every_command_with_its_arguments_by_view() {
     // Tall enough for the whole list; 80 columns, the smallest common width.
     let joined = Case::new(View::Library, &stopped())
         .input(&input)
-        .size(80, 100)
+        .size(80, 120)
         .text();
     for c in playr_app::command::COMMANDS {
         let usage = format!(":{} {}", c.name, c.args);
@@ -821,7 +827,7 @@ fn help_command_lists_every_command_with_its_arguments_by_view() {
     let enabled = Case::new(View::Library, &stopped())
         .input(&input)
         .extensions(true)
-        .size(80, 100)
+        .size(80, 120)
         .text();
     assert!(
         enabled.contains(":convert FORMAT"),
@@ -1611,6 +1617,38 @@ fn the_braille_display_draws_the_same_waveform_around_a_centre_line() {
     assert_eq!(bits(bottom[5]), 0, "quiet column reaches the bottom");
     let top = columns(&lines[2]);
     assert_eq!(bits(top[25]), 0, "a negative-only column reaches the top");
+}
+
+/// A preview draws the previewed track with its own marks, no playhead and
+/// no region, and says so in the title and the line under it.
+#[test]
+fn the_sampler_draws_a_preview_with_its_marks_and_no_playhead() {
+    use playr_app::sampler::{Display, Preview};
+    let ms = Duration::from_millis;
+    // Playing another track, with marks of its own.
+    let snapshot = sampling("/m/playing.wav", ms(1500), &[ms(1000), ms(2500)]);
+    let mut sampler = sampler_with("/m/t.wav", Display::Envelope);
+    sampler.preview = Some(Preview {
+        path: "/m/t.wav".into(),
+        marks: vec![ms(500)],
+    });
+    let lines = Case::new(View::Sampler, &snapshot)
+        .sampler(sampler)
+        .size(100, 20)
+        .render();
+    assert!(
+        lines[1].contains("preview  envelope  0:00.000-0:04.000") && lines[1].contains("t.wav"),
+        "{:?}",
+        lines[1]
+    );
+    let axis: Vec<char> = lines[13].chars().skip(1).take(98).collect();
+    let marked: Vec<char> = axis.iter().copied().filter(|c| *c != ' ').collect();
+    assert_eq!(marked, ['|'], "{axis:?}");
+    assert!(
+        lines[14].contains(":preview ends the preview"),
+        "{:?}",
+        lines[14]
+    );
 }
 
 #[test]

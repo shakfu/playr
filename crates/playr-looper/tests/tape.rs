@@ -839,3 +839,26 @@ fn a_head_is_placed_inside_its_window() {
     run(&mut t, 100);
     assert!((t.voice(0) - 6100.0).abs() < 1.0, "{}", t.voice(0));
 }
+
+/// The interpolation switches what a head reads between frames: on noise at
+/// rate 1.5 the two differ, by the cubic's error and the folding it lets
+/// through; at rate 1 they are the same.
+#[test]
+fn the_interpolation_changes_what_a_fast_head_reads() {
+    use playr_dsp::Interp;
+    let heard = |interp, rate| {
+        let mut t = tape(
+            noise(48_000, 0.5),
+            1,
+            &[Setting::Interp(interp), Setting::Rate(0, rate)],
+        );
+        run(&mut t, 4_800);
+        run(&mut t, 4_800)
+    };
+    let rms = |a: &[f32], b: &[f32]| {
+        (a.iter().zip(b).map(|(x, y)| (x - y).powi(2)).sum::<f32>() / a.len() as f32).sqrt()
+    };
+    let (sinc, hermite) = (heard(Interp::Sinc, 1.5), heard(Interp::Hermite, 1.5));
+    assert!(rms(&sinc, &hermite) > 0.01, "{}", rms(&sinc, &hermite));
+    assert_eq!(heard(Interp::Sinc, 1.0), heard(Interp::Hermite, 1.0));
+}

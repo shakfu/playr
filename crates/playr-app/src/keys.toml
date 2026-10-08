@@ -12,6 +12,12 @@ theme = "dark"
 # the session.
 fader = "db"
 
+# How the DJ decks' and the tape's read heads find a sample between stored
+# ones: sinc, a 32-tap windowed sinc that filters what a fast read would fold
+# back; or hermite, a 4-point cubic, cheaper and brighter, with images and
+# folding above about 5 kHz. :interp switches it for the session.
+interp = "sinc"
+
 # Keys for every view. Each value is a : command; "nop" makes a key do nothing.
 [keys]
 q = "quit"
@@ -59,6 +65,11 @@ _ = "volume -5"
 ")" = "speed +1"
 "(" = "speed -1"
 '\' = "speed 0"
+# The player's EQ flat, and back.
+t = "eq bypass"
+# The row's waveform in the sampler, without playing it; there, the playing
+# track's again.
+v = "preview"
 m = "mode +"
 M = "mode -"
 b = "mark"
@@ -173,6 +184,8 @@ t = "tape take"
 r = "tape reset"
 w = "tape save"
 R = "tape rec"
+# The read heads' interpolation, sinc or hermite, to compare by ear.
+i = "interp"
 
 # j, k and enter still move through and play the library listed here.
 [keys.dj]
@@ -187,6 +200,7 @@ m = "dj b cue"
 left = "dj xfade a"
 right = "dj xfade b"
 down = "dj xfade centre"
+i = "interp"
 
 [keys.mix]
 r = "mix rec"
@@ -195,3 +209,4 @@ P = "mix player mute"
 T = "mix tape mute"
 D = "mix decks mute"
 H = "mix headphones mute"
+i = "interp"

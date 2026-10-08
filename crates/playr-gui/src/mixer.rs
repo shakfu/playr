@@ -100,7 +100,8 @@ fn meter(ui: &mut egui::Ui, held: Option<f32>) {
     painter.rect_filled(bar, 1.0, colour);
 }
 
-/// The master's recording, the file it goes to, and the fader law.
+/// The master's recording, the file it goes to, the fader law, and how the
+/// decks' and the tape's heads read, for an A/B by ear.
 fn master(
     ui: &mut egui::Ui,
     mix: &Mix,
@@ -123,6 +124,17 @@ fn master(
         for (name, law) in Law::NAMES {
             if ui.selectable_label(mix.law() == law, name).clicked() && mix.law() != law {
                 actions.push(Action::Mix(MixAction::Law(Some(law))));
+            }
+        }
+        ui.add_space(8.0);
+        ui.label("Heads").on_hover_text(
+            "How the decks and the tape read between samples: sinc filters \
+             what a fast read would fold back; hermite is cheaper and brighter",
+        );
+        for (name, interp) in playr_dsp::Interp::NAMES {
+            let on = mix.interp() == interp;
+            if ui.selectable_label(on, name).clicked() && !on {
+                actions.push(Action::Interp(Some(interp)));
             }
         }
     });

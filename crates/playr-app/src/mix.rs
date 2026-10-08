@@ -102,6 +102,10 @@ pub struct Mix {
     law: Law,
     level: [f32; 5],
     muted: [bool; 5],
+    /// The player's EQ bands, in dB, while `:eq bypass` holds them flat.
+    eq_held: Option<[f32; 3]>,
+    /// How the decks' and the tape's heads read between frames.
+    interp: playr_dsp::Interp,
 }
 
 impl Mix {
@@ -111,6 +115,8 @@ impl Mix {
             law,
             level: [1.0; 5],
             muted: [false; 5],
+            eq_held: None,
+            interp: playr_dsp::Interp::default(),
         };
         mix.set_level(Strip::Master, master);
         mix
@@ -142,6 +148,25 @@ impl Mix {
 
     pub fn set_muted(&mut self, s: Strip, on: bool) {
         self.muted[s.index()] = on;
+    }
+
+    /// How the decks' and the tape's heads read between frames; they follow
+    /// it on their next poll.
+    pub fn interp(&self) -> playr_dsp::Interp {
+        self.interp
+    }
+
+    pub fn set_interp(&mut self, interp: playr_dsp::Interp) {
+        self.interp = interp;
+    }
+
+    /// The EQ bands a bypass holds, which `:eq bypass` restores.
+    pub fn eq_held(&self) -> Option<[f32; 3]> {
+        self.eq_held
+    }
+
+    pub fn hold_eq(&mut self, bands: Option<[f32; 3]>) {
+        self.eq_held = bands;
     }
 
     /// The gain `s` plays at: its own fader's, and for a source the master's

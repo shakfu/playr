@@ -51,6 +51,8 @@ In playr, play each file and slice it whole into equal parts, outside the sample
 
 The export is `samples/tones/`: the slice files, `tones.sfz`, and `sliced/tones.wav` with a cue point at each slice's start. For the slice-count test, also run `:slice 40` on `tones.wav`. A second export of one track goes to the next free name, so that one is `samples/tones-2/`, with `sliced/tones-2.wav` and `tones-2.sfz`.
 
+For the loop test, cut `tones.wav` whole while it loops, in the sampler view: `i` at the start, `o` at the end, `l` to loop the range, then `:slice region` and enter. That export is `samples/tones-3/`. Its slice file, `000-tones-3_S00.wav`, and `sliced/tones-3.wav` each carry a `smpl` chunk with one loop over the whole 4 s.
+
 ## Dirtywave M8
 
 Reported: the M8 reads WAV cue points as slices since firmware 2.5.0, at most 32. The Sampler's SLICE parameter set to `01 FILE` uses them, and notes from C-1 up play slices 1, 2, and so on. It takes 8, 16 and 24-bit PCM WAV, mono or stereo, with the whole path under 128 characters.
@@ -66,10 +68,13 @@ Copy each `sliced/*.wav` to the SD card, in a folder near the root to keep the p
 | M5 | More than 32 cue points | Load the 40-slice `sliced/tones-2.wav`. Count the markers in the editor. Play the 33rd note. | Record: 32 markers, 40, none, or an error. |
 | M6 | The first marker at frame 0 | In M1, check the first slice. | Slice 1 starts at the file's start, with no empty slice before it. |
 | M7 | The slice files | Load `001-tones_S01.wav` as a plain sample. | Plays 247 Hz, 0.5 s. |
+| M8 | A `smpl` loop | Load `000-tones-3_S00.wav` from the loop export into a Sampler instrument, leaving PLAY as it loads. Hold a note for 6 s. Then set PLAY to a loop mode by hand and hold it again. | Record which: the 8 tones start again from 220 Hz at 4 s with PLAY as loaded (it read the loop), only once a loop mode is set, or never. Note the loop start and length the instrument shows. |
 
 **What each result changes in playr:**
 
 - **M1 or M2 fails as a byte reading:** `sliced::cue_chunk` must write bytes for the M8. Other readers may expect frames, so check the 1010music blackbox before changing the default. Record it per device.
+
+- **M8 loops as loaded, or with a loop mode set:** the `smpl` chunk is read; record it under "Which devices read `smpl` loops" in `hardware_samplers.md`. **Never:** the M8 takes loops only by hand, and the chunk serves other samplers.
 
 - **M5 shows no markers or an error:** an export past 32 slices should warn, or write a second sliced file, as AudioHit does for the Octatrack.
 
@@ -95,7 +100,7 @@ For the loop test, make a looped export: in the sampler view, drag a range over 
 | X2 | One slice a key, at pitch | Play the keys from MIDI note 36 up. | Each key plays the next tone at its own pitch: 220, 247, ... 440 Hz. Record which on-screen key is note 36. |
 | X3 | Keys below the first slice | Play keys below note 36. | Reported in `patch.json`: the first zone reaches down to note 0, so these play slice 1 transposed. Confirm. |
 | X4 | A looped slice loops | Load the looped preset: one 4 s slice of all 8 tones, on note 36. Hold that key for 6 s. | The 8 tones play, then start again from 220 Hz at 4 s. Without the loop it stops at 4 s. |
-| X5 | Many slices | Convert and load the 40-slice export: `:convert opxy tones-2`. | ConvertWithMoss keeps 24 zones, on notes 36-59, and `:convert` names the 16 it dropped. Check all 24 load and play, and that note 60 up plays nothing new. |
+| X5 | Many slices | Convert and load the 40-slice export: `:convert opxy tones-2`. | Two presets, `tones-2-1` with 24 zones on notes 36-59 and `tones-2-2` with 16 on notes 36-51; `:convert` says "as 2 presets". Check both load, and that every zone plays its slice. |
 | X6 | 96 kHz source | Load `tones96`, converted with `:convert opxy tones96`. ConvertWithMoss made each slice 44.1 kHz, 22,050 frames, but `patch.json` gives `sample.end` 48,000, the count before resampling. | Record whether each key plays its whole 0.5 s tone at pitch and stops cleanly, or plays past the end, clicks, or is refused. |
 
 **What each result changes in playr:**
@@ -117,6 +122,7 @@ For the loop test, make a looped export: in the sampler view, drag a range over 
 | M5 | | | |
 | M6 | | | |
 | M7 | | | |
+| M8 | | | |
 | X1 | | | |
 | X2 | | | |
 | X3 | | | |

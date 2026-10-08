@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS marks (
   path  TEXT NOT NULL,
   frame INTEGER NOT NULL,  -- source frame index, exact at any playback speed
   rate  INTEGER NOT NULL,  -- the source sample rate `frame` counts in
+  label TEXT,              -- a note, such as "solo"; moves with the mark
   PRIMARY KEY (path, frame)
 );
 

@@ -67,11 +67,19 @@ fn every_action() -> Vec<Action> {
         Action::SeekTo(Duration::ZERO),
         Action::VolumeBy(0.05),
         Action::SetVolume(1.0),
-        Action::SpeedBy(1),
+        Action::SpeedBy(100),
         Action::SetSpeed(0),
+        Action::Tempo(128.0),
+        Action::Fade(Duration::from_secs(2)),
+        Action::Interp(None),
         Action::SetEq(Band::Bass, 1.0),
         Action::EqBy(Band::Bass, 1.0),
         Action::FlatEq,
+        Action::BypassEq,
+        Action::Preview,
+        Action::Label("solo".into()),
+        Action::StartLabel,
+        Action::ExportMarks(playr_core::labels::MarkFile::Cue),
         Action::CycleMode(true),
         Action::SetMode(Mode::Normal),
         Action::SetReplayGain(ReplayGain::Off),
@@ -182,9 +190,17 @@ fn every_action() -> Vec<Action> {
             | Action::SetVolume(_)
             | Action::SpeedBy(_)
             | Action::SetSpeed(_)
+            | Action::Tempo(_)
+            | Action::Fade(_)
+            | Action::Interp(_)
             | Action::SetEq(..)
             | Action::EqBy(..)
             | Action::FlatEq
+            | Action::BypassEq
+            | Action::Preview
+            | Action::Label(_)
+            | Action::StartLabel
+            | Action::ExportMarks(_)
             | Action::CycleMode(_)
             | Action::SetMode(_)
             | Action::SetReplayGain(_)
@@ -276,6 +292,14 @@ const ELSEWHERE: &[(&str, &str)] = &[
     (
         "EqBy",
         "the EQ sliders set a band directly; typed in the command bar",
+    ),
+    (
+        "Label",
+        "Label... opens the command bar on the mark's label, which sets it",
+    ),
+    (
+        "Tempo",
+        "the speed slider sets the speed directly; typed in the command bar",
     ),
 ];
 

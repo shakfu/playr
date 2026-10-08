@@ -142,7 +142,7 @@ fn open(library: &Path) -> rusqlite::Result<Connection> {
            JOIN main.playlist_items i ON i.playlist_id = p.id
            JOIN main.tracks t ON t.id = i.track_id;
          CREATE TEMP VIEW marks AS
-         SELECT path, frame * 1.0 / rate AS time FROM main.marks;
+         SELECT path, frame * 1.0 / rate AS time, label FROM main.marks;
          PRAGMA query_only = ON;",
         conf = tempo::MIN_CONFIDENCE,
     ))?;

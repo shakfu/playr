@@ -180,12 +180,14 @@ fn draw_help(
 }
 
 /// The playing track's waveform, with its region, marks, playhead and any
-/// slices planned, above an axis row marking them and a line of detail.
-/// Returns the zoom, clamped to what the track and width allow, and the
-/// columns drawn.
+/// slices planned, above an axis row marking them and a line of detail; or a
+/// previewed track's, with its marks alone. Returns the zoom, clamped to what
+/// the track and width allow, and the columns drawn.
 fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sampler::Scale>) {
     let p = app.palette();
-    let current = app.snapshot.status.current();
+    let preview = app.sampler.preview.as_ref();
+    // What the view shows: the previewed track, or the playing one.
+    let current = app.sampler.shown(app.snapshot.status.current());
     let name = current
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned());
@@ -212,21 +214,33 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
         inner_width,
         app.sampler.zoom,
         app.snapshot.position,
-        &app.snapshot.marks,
+        preview.map_or(&app.snapshot.marks, |p| &p.marks),
         // A cell is the finest a terminal can place a frame.
         1,
     )
     .with_centre(app.sampler.centre(current))
     .with_range(app.sampler.range_ends(current))
     .with_detail(app.sampler.detail(current));
+    let layout = match preview {
+        Some(_) => layout,
+        None => layout.with_labels(&app.snapshot.labels),
+    };
+    let layout = match preview {
+        Some(_) => layout.previewed(),
+        None => layout,
+    };
     let zoom = layout.zoom;
     let scale = Some(layout.columns());
     // The file name last: it is the longest part, and the bar below names the
     // track too, so a narrow terminal cuts it rather than the view's scale.
     // Saved loops by slot; `*` on the one the range is.
     let range = app.sampler.range(current);
+    let loops = match preview {
+        Some(_) => Default::default(),
+        None => app.snapshot.loops,
+    };
     let slots: Vec<String> = (1..)
-        .zip(app.snapshot.loops)
+        .zip(loops)
         .filter_map(|(slot, saved)| {
             saved.map(|s| format!("{slot}{}", if Some(s) == range { "*" } else { "" }))
         })
@@ -236,7 +250,8 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
         false => format!("  loops {}", slots.join(" ")),
     };
     let title = format!(
-        "{}  {}  1 col = {}{}{}{}{loops}  {}",
+        "{}{}  {}  1 col = {}{}{}{}{loops}  {}",
+        if preview.is_some() { "preview  " } else { "" },
         app.sampler.display.name(),
         layout.shown(),
         layout.scale(),
@@ -246,7 +261,7 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
         } else {
             ""
         },
-        if app.snapshot.status.looping.is_some() {
+        if app.snapshot.status.looping.is_some() && preview.is_none() {
             "  loop"
         } else {
             ""
@@ -355,7 +370,8 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
     // Planned slice edges, the range's ends, marks, then the playhead: the
     // later wins a column.
     let mut axis: Vec<(char, Style)> = vec![(' ', Style::default()); width];
-    if let Some(pending) = &app.sampler.pending {
+    let pending = app.sampler.pending.as_ref();
+    if let Some(pending) = pending.filter(|p| Some(&p.job.path) == current) {
         for c in sampler::edges(pending).filter_map(|e| layout.column_of(e)) {
             axis[c] = ('+', Style::default().fg(p.edge));
         }
@@ -422,12 +438,21 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
     lines.push(runs(axis.into_iter()));
 
     // First, so a narrow terminal cuts the region detail rather than the keys.
-    let mut plan = sampler::plan_text(app.sampler);
+    let mut plan = match preview {
+        Some(_) => "not playing: :preview ends the preview".into(),
+        None => sampler::plan_text(app.sampler),
+    };
     if !plan.is_empty() {
         plan.push_str("  ");
     }
+    // The selected mark's label, quoted, before the region it may name.
+    let label = selected
+        .and_then(|f| layout.label_at(f))
+        .map(|l| format!("\"{l}\"  "))
+        .unwrap_or_default();
     lines.push(Line::from(vec![
         Span::styled(plan, Style::default().fg(p.edge)),
+        Span::styled(label, Style::default().fg(p.mark)),
         Span::styled(layout.region_text(), Style::default().fg(p.dim)),
     ]));
     // A short view keeps the axis and detail lines and loses waveform rows.
@@ -955,7 +980,7 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         .map(|b| b.key)
         .find(|&key| app.keys.lookup(key, app.view) == Some(&Action::Help))
         .map(|key| key.to_string());
-    let indicators = indicators(p, status.semitones, app.snapshot, playing, help_key);
+    let indicators = indicators(p, status.cents, app.snapshot, playing, help_key);
     let [left, right] = Layout::horizontal([
         Constraint::Min(0),
         Constraint::Length(indicators.width() as u16),
@@ -1062,7 +1087,7 @@ fn level_readout(p: &Palette, loudness: Option<f32>, peak: Option<f32>) -> Vec<S
 /// not normal, the volume, and the help key. The readout comes first, next to its bar.
 fn indicators(
     p: &Palette,
-    semitones: i32,
+    cents: i32,
     snapshot: &Snapshot,
     playing: bool,
     help_key: Option<String>,
@@ -1086,10 +1111,13 @@ fn indicators(
             Style::default().fg(p.notice),
         ));
     }
-    if semitones != 0 {
-        let speed = playr_core::audio::speed_for(semitones);
+    if cents != 0 {
+        let speed = playr_core::audio::speed_at(cents);
         spans.push(Span::styled(
-            format!("{speed:.2}x ({semitones:+} st)  "),
+            format!(
+                "{speed:.2}x ({} st)  ",
+                playr_app::message::semitones(cents)
+            ),
             Style::default().fg(p.notice),
         ));
     }

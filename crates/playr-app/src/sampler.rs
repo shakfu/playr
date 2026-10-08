@@ -125,6 +125,27 @@ pub struct Sampler {
     pub history: Vec<Before>,
     /// States undone, which redo puts back, latest last. A new edit empties it.
     pub future: Vec<Before>,
+    /// A track shown without playing it, which the edit keys leave alone.
+    pub preview: Option<Preview>,
+    /// Edited plans of tracks not playing, each with its undo and redo, put
+    /// back when its track plays again. Kept until quit.
+    pub kept: Vec<Kept>,
+}
+
+/// A track the sampler shows without playing it: `:preview`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Preview {
+    pub path: PathBuf,
+    /// Its marks, as times into it, earliest first, read when it opened.
+    pub marks: Vec<Duration>,
+}
+
+/// An edited plan left by a track change, and its track's undo and redo.
+#[derive(Debug, Clone)]
+pub struct Kept {
+    pub plan: Plan,
+    pub history: Vec<Before>,
+    pub future: Vec<Before>,
 }
 
 /// What the edit keys act on.
@@ -239,6 +260,11 @@ impl Sampler {
             (true, Edge::End) => end,
             (false, _) => start.zip(end).map(|(a, b)| a + (b - a) / 2),
         }
+    }
+
+    /// The track the view shows: the one previewed, or else `playing`.
+    pub fn shown<'a>(&'a self, playing: Option<&'a PathBuf>) -> Option<&'a PathBuf> {
+        self.preview.as_ref().map(|p| &p.path).or(playing)
     }
 
     /// What is selected on `playing`.
@@ -567,8 +593,12 @@ pub struct Layout {
     pub zoom: u32,
     /// The playhead, in frames.
     pub at: u64,
+    /// Whether the track shown is the one playing, so has a playhead.
+    pub playing: bool,
     /// Marks in the track, in frames.
     pub marks: Vec<u64>,
+    /// Each mark's label, by the marks' order; empty when none were given.
+    pub labels: Vec<Option<String>>,
     /// The range when both ends are set, or else the region around the
     /// playhead, end exclusive.
     pub region: (u64, u64),
@@ -611,12 +641,35 @@ impl Layout {
             per_frame,
             zoom,
             at,
+            playing: true,
             marks,
+            labels: Vec::new(),
             region,
             range: (None, None),
             loudest,
             detail: None,
         }
+    }
+
+    /// The layout of a track previewed, not playing: no playhead, the whole
+    /// track as its region, centred on its middle.
+    pub fn previewed(mut self) -> Layout {
+        let frames = self.peaks.frames;
+        self.playing = false;
+        self.region = (0, frames);
+        self.with_centre(Some(frames / 2))
+    }
+
+    /// The layout with each mark's label, by the marks' order.
+    pub fn with_labels(mut self, labels: &[Option<String>]) -> Layout {
+        self.labels = labels.to_vec();
+        self
+    }
+
+    /// The label of the mark at `frame`, if it has one.
+    pub fn label_at(&self, frame: u64) -> Option<&str> {
+        let i = self.marks.iter().position(|&m| m == frame)?;
+        self.labels.get(i)?.as_deref()
     }
 
     /// The layout reading `detail` where it covers a column.
@@ -673,13 +726,13 @@ impl Layout {
 
     /// The column under the playhead, if it is in view.
     pub fn playhead(&self) -> Option<usize> {
-        self.column_of(self.at)
+        self.column_of(self.at).filter(|_| self.playing)
     }
 
     /// Which side of the view the playhead is past: `Less` before it,
     /// `Greater` after it, `None` in view.
     pub fn playhead_off(&self) -> Option<std::cmp::Ordering> {
-        self.off(self.at)
+        self.off(self.at).filter(|_| self.playing)
     }
 
     /// Which side of the view `frame` is past, as [`Layout::playhead_off`].

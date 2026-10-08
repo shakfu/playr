@@ -830,7 +830,7 @@ function showSliders() {
   $("volume-value").textContent = String($("volume").value).padStart(3) + "%";
   $("mute").checked = s.muted;
   if (adjusting !== "speed") $("speed").value = s.speed;
-  const st = Number($("speed").value);
+  const st = adjusting === "speed" ? Number($("speed").value) : s.speed;
   const factor = adjusting === "speed" ? Math.pow(2, st / 12).toFixed(2) + "x" : s.speed_label;
   $("speed-value").textContent = factor + " (" + (st >= 0 ? "+" : "") + st + " st)";
 }

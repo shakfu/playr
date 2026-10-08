@@ -96,12 +96,8 @@ pub struct Estimate {
 
 impl Tempo {
     pub fn new(rate: u32) -> Tempo {
-        // About 46 ms a transform and 11.6 ms a hop at any rate.
-        let size = match rate {
-            0..=48_000 => 2048,
-            48_001..=96_000 => 4096,
-            _ => 8192,
-        };
+        // 11.6 ms a hop at any rate.
+        let size = crate::spectrum::fft_size(rate);
         let fft = RealFftPlanner::<f32>::new().plan_fft_forward(size);
         let window = (0..size)
             .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / size as f32).cos())

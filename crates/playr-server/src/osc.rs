@@ -173,11 +173,11 @@ pub fn request(message: &OscMessage) -> Option<Request> {
             Some(1.0) => perform(mute(true)),
             _ => None,
         },
-        // Rounded, so a fader can send it.
+        // Rounded to whole semitones, so a fader can send it.
         "/playr/speed" => number()
             .map(f64::round)
             .filter(|n| (-12.0..=12.0).contains(n))
-            .and_then(|n| perform(Action::SetSpeed(n as i32))),
+            .and_then(|n| perform(Action::SetSpeed(n as i32 * 100))),
         "/playr/mode" => index()
             .and_then(|i| Mode::NAMES.get(i))
             .and_then(|(_, mode)| perform(Action::SetMode(*mode))),
@@ -327,7 +327,10 @@ pub fn values(model: &Model) -> Vec<(&'static str, OscType)> {
             "/playr/mute",
             OscType::Int(model.mixer().muted(Strip::Master).into()),
         ),
-        ("/playr/speed", OscType::Int(status.semitones)),
+        (
+            "/playr/speed",
+            OscType::Int((f64::from(status.cents) / 100.0).round() as i32),
+        ),
         (
             "/playr/mode",
             OscType::Int(

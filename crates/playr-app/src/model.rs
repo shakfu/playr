@@ -34,7 +34,7 @@ use crate::media::Media;
 use crate::message::{self, Message};
 use crate::mix::{Mix, Strip};
 use crate::persist;
-use crate::sampler::{DetailRead, Sampler, Selected, Wave, DETAIL_MARGIN};
+use crate::sampler::{Before, DetailRead, Kept, Sampler, Selected, Wave, DETAIL_MARGIN};
 use crate::View;
 
 /// How long a message stays showing.
@@ -147,6 +147,8 @@ pub struct Snapshot {
     pub meters: [Option<f32>; 5],
     /// Marks in the playing track, as times into it, earliest first.
     pub marks: Vec<Duration>,
+    /// Each mark's label, by the marks' order.
+    pub labels: Vec<Option<String>>,
     /// Loops saved in the playing track, by slot from 1, in source frames.
     pub loops: playr_core::session::Loops,
     /// The tone control's gains in dB, by band.
@@ -268,6 +270,7 @@ impl Model {
             sort: config.settings.sort.clone(),
             history: Vec::new(),
         };
+        values.mix.set_interp(config.interp);
         for &p in &config.settings.persist {
             if let Some(text) = session.state(&persist::key(p, config.program)) {
                 persist::decode(p, &text, &mut values);
@@ -335,7 +338,10 @@ impl Model {
         model
             .session
             .send(Cmd::SetAfterQueue(config.settings.after_queue));
-        model.session.send(Cmd::SetSpeed(config.settings.speed));
+        model
+            .session
+            .send(Cmd::SetCents(config.settings.speed * 100));
+        model.session.send(Cmd::SetFade(config.settings.fade));
         for (band, db) in Band::ALL.into_iter().zip(values.eq) {
             model.session.send(Cmd::SetEq(band, db));
         }
@@ -395,17 +401,22 @@ impl Model {
             peak: self.peak_hold.map(|(p, _)| 20.0 * p.log10()),
             meters: self.meter_holds.map(|h| h.map(|(p, _)| 20.0 * p.log10())),
             marks: Vec::new(),
+            labels: Vec::new(),
             loops: Default::default(),
             eq: player.eq(),
             sleep: self.session.sleep_left(),
         };
         let current = self.snapshot.status.current().cloned();
         self.snapshot.loops = self.session.loops_for(current.as_ref());
-        self.snapshot.marks = self
-            .session
-            .marks_for(current.as_ref())
+        let marks = self.session.marks_for(current.as_ref()).to_vec();
+        self.snapshot.marks = marks.iter().map(Mark::time).collect();
+        let labels = self.session.labels_for(current.as_ref());
+        self.snapshot.labels = marks
             .iter()
-            .map(Mark::time)
+            .map(|m| {
+                let label = labels.iter().find(|(f, _)| *f == m.frame);
+                label.map(|(_, l)| l.clone())
+            })
             .collect();
         let bpm_for = (current.clone(), self.session.tempo_rev());
         if bpm_for != self.bpm_for {
@@ -812,7 +823,7 @@ impl Model {
     /// The playing track's tempo as it sounds, so varispeed moves it.
     /// `None` until `playr analyze` has measured the track.
     pub fn bpm(&self) -> Option<f32> {
-        let speed = playr_core::audio::speed_for(self.snapshot.status.semitones) as f32;
+        let speed = playr_core::audio::speed_at(self.snapshot.status.cents) as f32;
         self.bpm.map(|bpm| bpm * speed)
     }
 
@@ -1185,6 +1196,7 @@ impl Model {
                 Event::Converted { result, .. } => match result {
                     Ok(c) => self.notify(Outcome::Converted {
                         dir: c.dir,
+                        parts: c.parts,
                         warnings: c.warnings,
                     }),
                     Err(error) => self.notify(Notice::Failed {
@@ -1226,17 +1238,28 @@ impl Model {
     }
 
     /// Keeps the sampler's waveform and planned slices on the playing track.
-    /// The waveform is only read while the view is open, since reading
-    /// decodes the whole track.
+    /// An edited plan left behind is kept, with its undo, until its track
+    /// plays again. The waveform is only read while the view is open, since
+    /// reading decodes the whole track.
     fn follow_wave(&mut self, current: Option<&PathBuf>) {
-        if self
+        let left = self
             .sampler
             .pending
-            .as_ref()
-            .is_some_and(|p| Some(&p.job.path) != current)
-        {
-            self.sampler.pending = None;
+            .take_if(|p| Some(&p.job.path) != current);
+        if let Some(plan) = left.filter(|p| p.job.cuts.is_some()) {
+            let s = &mut self.sampler;
+            let path = plan.job.path.clone();
+            let mine =
+                |stack: &[Before]| stack.iter().filter(|b| b.path == path).cloned().collect();
+            let kept = Kept {
+                history: mine(&s.history),
+                future: mine(&s.future),
+                plan,
+            };
+            s.kept.retain(|k| k.plan.job.path != path);
+            s.kept.push(kept);
         }
+        self.put_back_plan(current);
         if self
             .sampler
             .selected
@@ -1255,21 +1278,22 @@ impl Model {
         {
             self.sampler.range = None;
         }
-        if self
-            .sampler
-            .detail
-            .path()
-            .is_some_and(|p| Some(p) != current)
-        {
+        // A preview of the track that now plays is the track itself.
+        if self.sampler.preview.as_ref().map(|p| &p.path) == current {
+            self.sampler.preview = None;
+        }
+        let shown = self.sampler.shown(current).cloned();
+        let shown = shown.as_ref();
+        if self.sampler.detail.path().is_some_and(|p| Some(p) != shown) {
             self.sampler.detail = DetailRead::None;
         }
-        if self.view == View::Sampler && self.sampler.wave.path() == current {
-            self.follow_detail(current);
+        if self.view == View::Sampler && self.sampler.wave.path() == shown {
+            self.follow_detail(shown);
         }
-        if self.view != View::Sampler || self.sampler.wave.path() == current {
+        if self.view != View::Sampler || self.sampler.wave.path() == shown {
             return;
         }
-        self.sampler.wave = match current.cloned() {
+        self.sampler.wave = match shown.cloned() {
             Some(path) => Wave::Reading {
                 job: self.session.read_peaks(path.clone()),
                 path,
@@ -1283,6 +1307,32 @@ impl Model {
 }
 
 impl Model {
+    /// Puts back the edited plan kept for `current`, with its undo and redo,
+    /// once nothing else is planned for it. A plan made with other slice
+    /// edges or fades is planned again, keeping its starts.
+    fn put_back_plan(&mut self, current: Option<&PathBuf>) {
+        let s = &mut self.sampler;
+        if s.pending.is_some() || s.planning.is_some() {
+            return;
+        }
+        let Some(i) = s
+            .kept
+            .iter()
+            .position(|k| Some(&k.plan.job.path) == current)
+        else {
+            return;
+        };
+        let k = s.kept.remove(i);
+        s.history.retain(|b| Some(&b.path) == current);
+        s.future.retain(|b| Some(&b.path) == current);
+        s.history.splice(0..0, k.history);
+        s.future.splice(0..0, k.future);
+        match self.session.plans_current(&k.plan.job) {
+            true => self.sampler.pending = Some(k.plan),
+            false => self.sampler.planning = Some(self.session.replan(k.plan.job)),
+        }
+    }
+
     /// Reads the frames the drawn view shows, and [`DETAIL_MARGIN`] either
     /// side, when its columns are finer than the peaks and nothing read or
     /// reading covers them.

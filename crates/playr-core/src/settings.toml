@@ -13,6 +13,9 @@
 mode = "normal"
 # Semitones, -12 to 12.
 speed = 0
+# Seconds each track fades in at its start and out at its end, 0 to 10; 0
+# plays tracks as they are, gapless. :fade changes it for the session.
+fade = 0
 # How readily :slice onsets finds hits, 0 to 1; higher finds more.
 onset_sensitivity = 0.5
 # The levels, in dBFS from -24 to -0.1, below which a soft clip passes the

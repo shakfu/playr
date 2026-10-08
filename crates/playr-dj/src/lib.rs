@@ -14,7 +14,7 @@ mod fx;
 mod mixer;
 mod track;
 
-pub use deck::{Deck, Nudge, Range, HOT_CUES};
+pub use deck::{Deck, Nudge, Range, HOT_CUES, REPLACE_MS};
 pub use engine::{new, Cmd, DeckStatus, Engine, Handle, Returned, Status};
 pub use fx::{Band, EQ_DB};
 pub use mixer::{sync_pct, CueOut, Curve, Mixer, Setting, DEFAULT_KNEE, LOOP_BEATS};

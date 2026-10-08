@@ -39,6 +39,9 @@ pub struct ConvertWithMoss {
     pub path: PathBuf,
 }
 
+/// The longest `fade`, in seconds.
+pub const MAX_FADE_SECS: f64 = 10.0;
+
 /// What the settings file sets for the core.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -52,6 +55,8 @@ pub struct Settings {
     pub after_queue: AfterQueue,
     /// Semitones.
     pub speed: i32,
+    /// How long each track fades in and out; zero, the default, for none.
+    pub fade: std::time::Duration,
     /// Where exported slices are written.
     pub samples: PathBuf,
     pub convert_with_moss: ConvertWithMoss,
@@ -156,6 +161,7 @@ impl Default for Settings {
             mode: Mode::Normal,
             after_queue: AfterQueue::Resume,
             speed: 0,
+            fade: std::time::Duration::ZERO,
             samples: PathBuf::new(),
             convert_with_moss: ConvertWithMoss {
                 enable: false,
@@ -371,6 +377,12 @@ impl Settings {
                         self.speed = n as i32
                     }
                     _ => errors.add(at, "speed is a whole number from -12 to 12"),
+                },
+                ("fade", v) => match number(v) {
+                    Some(n) if (0.0..=MAX_FADE_SECS).contains(&n) => {
+                        self.fade = std::time::Duration::from_secs_f64(n)
+                    }
+                    _ => errors.add(at, "fade is a number of seconds from 0 to 10"),
                 },
                 ("onset_sensitivity", v) => match number(v) {
                     Some(n) if (0.0..=1.0).contains(&n) => self.onset_sensitivity = n as f32,

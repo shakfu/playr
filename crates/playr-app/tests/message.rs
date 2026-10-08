@@ -174,9 +174,18 @@ fn outcomes_are_worded() {
         (
             Outcome::Converted {
                 dir: home.join("Music/playr/samples/amen/sf2"),
+                parts: 1,
                 warnings: Vec::new(),
             },
             "converted to ~/Music/playr/samples/amen/sf2",
+        ),
+        (
+            Outcome::Converted {
+                dir: home.join("Music/playr/samples/amen/opxy"),
+                parts: 2,
+                warnings: Vec::new(),
+            },
+            "converted to ~/Music/playr/samples/amen/opxy as 2 presets",
         ),
     ] {
         assert_eq!(text(&outcome.into()), words);
@@ -536,6 +545,7 @@ fn a_conversion_names_what_convertwithmoss_left_out_first() {
         text(
             &Outcome::Converted {
                 dir: dir.clone(),
+                parts: 1,
                 warnings: warnings.iter().map(|w| w.to_string()).collect(),
             }
             .into(),
@@ -726,8 +736,12 @@ fn dj_messages_are_worded() {
             "audio device lost: gone; load the decks again",
         ),
         (
-            M::SpeedOutOfReach(8),
+            M::SpeedOutOfReach(800),
             "a deck reaches +7 semitones at most; the player is at +8",
+        ),
+        (
+            M::SpeedOutOfReach(-825),
+            "a deck reaches +7 semitones at most; the player is at -8.25",
         ),
         (M::Took(A), "deck a took over from the player"),
         (M::Failed("no device".into()), "dj: no device"),

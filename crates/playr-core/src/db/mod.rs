@@ -147,18 +147,19 @@ fn init(conn: &Connection) -> Result<()> {
     // `CREATE TABLE IF NOT EXISTS` leaves a table made by an earlier playr as
     // it was, so a column added to one needs adding here too. The rows stay:
     // `analysis::VERSION` decides which are read again.
-    for (column, kind) in [
-        ("bpm_alt", "REAL"),
-        ("grid_bpm", "REAL"),
-        ("grid_t0", "REAL"),
+    for (table, column, kind) in [
+        ("analysis", "bpm_alt", "REAL"),
+        ("analysis", "grid_bpm", "REAL"),
+        ("analysis", "grid_t0", "REAL"),
+        ("marks", "label", "TEXT"),
     ] {
         let has: bool = tx.query_row(
-            "SELECT EXISTS (SELECT 1 FROM pragma_table_info('analysis') WHERE name = ?1)",
-            [column],
+            "SELECT EXISTS (SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+            [table, column],
             |r| r.get(0),
         )?;
         if !has {
-            tx.execute_batch(&format!("ALTER TABLE analysis ADD COLUMN {column} {kind};"))?;
+            tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind};"))?;
         }
     }
     if old_index || old_triggers {

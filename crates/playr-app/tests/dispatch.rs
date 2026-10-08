@@ -127,6 +127,11 @@ impl Frontend for Headless {
 /// A headless frontend over a library file of tracks a, b and c, and
 /// playlists "early" (c) and "late" (a, b), with its directory.
 fn headless() -> (Headless, tempfile::TempDir) {
+    headless_on(common::fake_player().0)
+}
+
+/// [`headless`] playing through `player`.
+fn headless_on(player: playr_core::audio::Player) -> (Headless, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let mut conn = db::open(&dir.path().join("library.db")).unwrap();
     let ids: Vec<i64> = ["/m/a.flac", "/m/b.flac", "/m/c.flac"]
@@ -143,7 +148,7 @@ fn headless() -> (Headless, tempfile::TempDir) {
         .collect();
     query::save_playlist(&mut conn, "late", &ids[..2]).unwrap();
     query::save_playlist(&mut conn, "early", &ids[2..]).unwrap();
-    let session = Session::new(conn, common::fake_player().0, event::ignore());
+    let session = Session::new(conn, player, event::ignore());
     let frontend = Headless {
         session,
         keys: Keymap::default(),
@@ -1224,7 +1229,7 @@ fn a_deck_takes_over_the_player_s_track_where_it_is() {
         ..Default::default()
     };
     f.session.play(&[track], 0);
-    dispatch(Action::SetSpeed(-2), &mut f);
+    dispatch(Action::SetSpeed(-200), &mut f);
     dispatch(Action::SetVolume(0.5), &mut f);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while f.session.player().position().as_secs_f64() < 0.5 {
@@ -1350,6 +1355,13 @@ fn not_strict_a_pick_replaces_the_playing_track_and_marks_are_jumped_to() {
     f.cursors[0] = Some(1);
     dj(&mut f, D::Load(A));
     said(&f, M::Loading(A));
+    // The old track plays on while the new one reads, then crossfades.
+    run_decks(&mut f, 1);
+    assert!(
+        f.dj.status().unwrap().deck(A).playing(),
+        "a stopped while b read"
+    );
+    assert_eq!(f.dj.loaded(A).unwrap().title, "a");
     decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
     run_decks(&mut f, 1);
     assert_eq!(f.dj.loaded(A).unwrap().title, "b");
@@ -1475,6 +1487,71 @@ fn a_tape_take_inside_the_range_continues_from_the_player() {
         assert!(std::time::Instant::now() < deadline, "the player played on");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+/// On the player's stream the handover is on one frame: a 1 kHz tone at
+/// 8 kHz repeats every 8 frames across it at one level, with no frame lost
+/// or played by both.
+#[test]
+fn a_tape_take_on_the_player_s_stream_keeps_the_tone_s_phase() {
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    use playr_core::audio::State;
+    let (player, control) = common::fake_player();
+    let sources = player.sources();
+    let (mut f, dir) = headless_on(player);
+    f.tape = playr_app::tape::Deck::new(sources, playr_looper::DEFAULT_KNEE);
+    let file = dir.path().join("song.wav");
+    common::tone(&file, 8000, 6.0, -6.0);
+    let track = Track {
+        path: file.to_string_lossy().into(),
+        ..Default::default()
+    };
+    f.session.play(&[track], 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.player().status().state != State::Playing {
+        assert!(std::time::Instant::now() < deadline, "never played");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    f.sampler.range = Some(playr_app::sampler::Range {
+        path: file,
+        start: Some(0),
+        end: Some(40_000),
+    });
+    dispatch(Action::Tape(T::Take), &mut f);
+    tape_until(&mut f, |m| m == &Message::Tape(M::Took));
+    assert_eq!(
+        f.session.player().handover(),
+        playr_core::audio::bus::Handover::Done
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.session.player().status().state != State::Paused {
+        assert!(std::time::Instant::now() < deadline, "the player played on");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let played = control.played.lock().unwrap().clone();
+    // Left channel, from the tone's first frame, after the stream's priming.
+    let left: Vec<f32> = played.iter().step_by(2).copied().collect();
+    let first = left.iter().position(|&s| s != 0.0).unwrap();
+    let left = &left[first..];
+    let at = (f.session.player().position().as_secs_f64() * 8000.0) as usize;
+    assert!(
+        left.len() > at + 400,
+        "{} frames, the take at {at}",
+        left.len()
+    );
+    let worst = left
+        .windows(9)
+        .map(|w| (w[8] - w[0]).abs())
+        .fold(0.0f32, f32::max);
+    assert!(worst < 1e-3, "the tone jumped by {worst}");
+    // Both playing doubles the tone; neither drops it.
+    let peak = |w: &[f32]| w.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let (lo, hi) = left[..left.len() - 400]
+        .windows(8)
+        .map(peak)
+        .fold((f32::MAX, 0.0f32), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    assert!(hi - lo < 1e-3, "the tone's peak ran from {lo} to {hi}");
 }
 
 #[test]

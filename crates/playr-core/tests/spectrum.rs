@@ -1,9 +1,10 @@
 //! The spectrogram read with a track's peaks, against signals built by hand.
 
-use playr_core::spectrum::{BANDS, FFT, HOP};
+use playr_core::spectrum::{fft_size, BANDS, HOP};
 use playr_core::wave::Peaks;
 
 const RATE: u32 = 44_100;
+const FFT: usize = fft_size(RATE);
 
 /// `seconds` of a sine at `hz` and `amplitude`, mono.
 fn sine(hz: f32, amplitude: f32, seconds: f32) -> Vec<f32> {
@@ -164,4 +165,29 @@ fn heights_rise_from_0_at_20_hz_to_1_at_half_the_rate() {
     // A band's lower edge sits at its share of the height.
     let (lo, _) = s.band_hz(64);
     assert!((s.height_of(lo).unwrap() - 0.5).abs() < 1e-4);
+}
+
+/// At 192 kHz the transform is 8192 points, 23.4 Hz a bin, so 50 Hz and
+/// 150 Hz read as two tones with a dip between; 2048 points, 94 Hz a bin,
+/// would merge them. A full-scale tone still reads near 0 dB.
+#[test]
+fn bass_resolves_at_high_rates_as_at_44_1_khz() {
+    let rate = 192_000;
+    let n = rate as usize;
+    let tone = |hz: f32, i: usize| (std::f32::consts::TAU * hz * i as f32 / rate as f32).sin();
+    let two: Vec<f32> = (0..n)
+        .map(|i| 0.5 * tone(50.0, i) + 0.5 * tone(150.0, i))
+        .collect();
+    let peaks = Peaks::from_interleaved(&two, 1, rate);
+    let column = peaks.spectrum.column(n as u64 / 4, n as u64 / 2).unwrap();
+    let band = |hz: f32| band_of(&peaks, hz);
+    let dip = column[band(50.0)].min(column[band(150.0)]) - column[band(87.0)];
+    assert!(dip > 10.0, "{dip} dB between the tones");
+
+    let hz = 47.0 * rate as f32 / fft_size(rate) as f32;
+    let one: Vec<f32> = (0..n).map(|i| tone(hz, i)).collect();
+    let peaks = Peaks::from_interleaved(&one, 1, rate);
+    let column = peaks.spectrum.column(n as u64 / 4, n as u64 / 2).unwrap();
+    let level = column[band_of(&peaks, hz)];
+    assert!(level.abs() < 0.5, "{level} dB");
 }

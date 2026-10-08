@@ -31,6 +31,41 @@ pub trait Source: Send {
     /// Fills `main`, and `cue` when it has a cue, interleaved stereo at the
     /// stream's rate. Both arrive silent. Returns where the cue goes.
     fn process(&mut self, main: &mut [f32], cue: &mut [f32]) -> Cue;
+
+    /// Starts playing, on the frame a handover reaches; see
+    /// [`Player::hand_over`](super::Player::hand_over). Between two calls of
+    /// `process`, so the first frame of the next is the handover's.
+    fn start(&mut self) {}
+}
+
+/// Where the last handover from the player to a source got to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Handover {
+    /// None asked for since the player started.
+    None,
+    /// Waiting for the player to reach its frame.
+    Armed,
+    /// The player paused on its frame and the source started on it.
+    Done,
+    /// The frame was behind the device when the callback saw it, or its
+    /// source was not attached. Nothing changed.
+    Missed,
+    /// A seek, a speed change or [`Player::cancel_handover`](super::Player::cancel_handover)
+    /// dropped it.
+    Cancelled,
+}
+
+impl Handover {
+    pub(crate) fn from_u8(v: u8) -> Handover {
+        match v {
+            1 => Handover::Armed,
+            2 => Handover::Done,
+            3 => Handover::Missed,
+            4 => Handover::Cancelled,
+            _ => Handover::None,
+        }
+    }
 }
 
 /// A source as the bus keeps it: with the id it was attached under.
@@ -67,6 +102,8 @@ pub struct Bus {
     route: Cue,
     /// The master's recording ring, while recording.
     record: Option<Producer<f32>>,
+    /// The source to start in this callback, and the frame it starts on.
+    start: Option<(u64, usize)>,
 }
 
 /// The other end of a [`Bus`], which attaches and detaches its sources.
@@ -130,6 +167,7 @@ impl Bus {
             one_cue: vec![0.0; CHUNK * 2],
             route: Cue::None,
             record: None,
+            start: None,
         };
         let control = BusControl {
             commands: cmd_tx,
@@ -145,6 +183,17 @@ impl Bus {
 
     pub fn is_empty(&self) -> bool {
         self.sources.is_empty()
+    }
+
+    /// Whether the source attached as `id` plays.
+    pub(crate) fn has(&self, id: u64) -> bool {
+        self.sources.iter().any(|(s, _)| *s == id)
+    }
+
+    /// Starts the source attached as `id` on frame `frame` of this callback,
+    /// before its frames are asked for.
+    pub(crate) fn start_at(&mut self, id: u64, frame: usize) {
+        self.start = Some((id, frame));
     }
 
     /// Whether the master is being recorded.
@@ -216,23 +265,37 @@ impl Bus {
     pub(crate) fn frame(&mut self, frame: usize, frames: usize) -> ([f32; 2], [f32; 2], Cue) {
         let f = frame % CHUNK;
         if f == 0 {
-            self.render((frames - frame).min(CHUNK));
+            self.render(frame, (frames - frame).min(CHUNK));
         }
         let main = [self.mix[f * 2], self.mix[f * 2 + 1]];
         let cue = [self.cue[f * 2], self.cue[f * 2 + 1]];
         (main, cue, self.route)
     }
 
-    fn render(&mut self, frames: usize) {
+    /// Renders `frames` frames from frame `at` of the callback.
+    fn render(&mut self, at: usize, frames: usize) {
         let n = frames * 2;
         self.mix[..n].fill(0.0);
         self.cue[..n].fill(0.0);
         self.route = Cue::None;
-        for (_, source) in &mut self.sources {
+        // Where in this chunk a source starts, and which.
+        let start = self
+            .start
+            .filter(|&(_, k)| (at..at + frames).contains(&k))
+            .map(|(id, k)| (id, (k - at) * 2));
+        for (id, source) in &mut self.sources {
             let (one, one_cue) = (&mut self.one[..n], &mut self.one_cue[..n]);
             one.fill(0.0);
             one_cue.fill(0.0);
-            let route = source.process(one, one_cue);
+            let route = match start {
+                Some((s, k)) if s == *id => {
+                    source.process(&mut one[..k], &mut one_cue[..k]);
+                    source.start();
+                    self.start = None;
+                    source.process(&mut one[k..], &mut one_cue[k..])
+                }
+                _ => source.process(one, one_cue),
+            };
             self.mix[..n]
                 .iter_mut()
                 .zip(one.iter())

@@ -216,6 +216,34 @@ fn a_superseded_peaks_read_sends_nothing() {
     );
 }
 
+/// A track read again is served from memory, the same peaks; a file
+/// rewritten since is read again.
+#[test]
+fn peaks_read_again_come_from_memory_until_the_file_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a.wav");
+    common::silence(&file, 8000, 2.0);
+    let (sink, events) = channel();
+    let mut session = Session::new(db::open_memory().unwrap(), common::fake_player().0, sink);
+    let read = |session: &mut Session| {
+        let job = session.read_peaks(file.clone());
+        let seen = until(
+            &events,
+            |e| matches!(e, Event::Peaks { job: j, .. } if *j == job),
+        );
+        match seen.last().unwrap() {
+            Event::Peaks { result, .. } => result.clone().unwrap(),
+            _ => unreachable!(),
+        }
+    };
+    let first = read(&mut session);
+    let again = read(&mut session);
+    assert!(Arc::ptr_eq(&first, &again), "read twice");
+    common::silence(&file, 8000, 3.0);
+    let changed = read(&mut session);
+    assert_eq!(changed.frames, 24_000);
+}
+
 /// `n` short WAV files under `dir`, some in a subdirectory.
 fn music(dir: &Path, n: usize) {
     for i in 0..n {
