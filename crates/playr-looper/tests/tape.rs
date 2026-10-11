@@ -1,6 +1,6 @@
 //! The DSP, driven offline: the tests listed in `docs/dev/looper-engine.md`.
 
-use playr_looper::{Filter, Loop, Setting, Tape, Window};
+use playr_looper::{Filter, Loop, Setting, Tape, Window, TAPE};
 
 const SR: u32 = 48_000;
 
@@ -889,40 +889,39 @@ fn each_voice_plays_its_own_loop() {
 }
 
 #[test]
-fn voices_without_their_own_loop_follow_voice_0s() {
+fn voices_without_their_own_loop_read_the_write_loop() {
     let (a, b, z) = (noise(400, 0.5), noise(300, 0.7), noise(600, 0.2));
     let mut t = own_loops(&a, &b, &b, 2);
-    let old = t.load_voice(0, Box::new(Loop::new(z.clone(), 1).unwrap()));
+    let old = t.load_voice(TAPE, Box::new(Loop::new(z.clone(), 1).unwrap()));
     assert_eq!(old.unwrap().samples(), a);
-    assert!(!t.has_own(0));
-    assert_eq!(t.source(0).samples(), z);
+    assert_eq!(t.source(0).samples(), z, "voice 0 has none of its own");
     assert_eq!(t.source(1).samples(), b, "a voice's own loop stays");
+    // Voice 0 takes a loop of its own like any other; the write loop stays.
+    t.load_voice(0, Box::new(Loop::new(a.clone(), 1).unwrap()));
+    assert!(t.has_own(0));
+    assert_eq!(t.buffer().samples(), z);
     // A shared load takes every voice's own back.
     let (_, own) = t.load(Box::new(Loop::new(a.clone(), 1).unwrap()));
-    assert_eq!(own.iter().flatten().count(), 2);
+    assert_eq!(own.iter().flatten().count(), 3);
     assert!((0..3).all(|i| t.source(i).samples() == a));
 }
 
 #[test]
-fn writing_is_held_while_a_voice_reads_its_own_loop() {
-    let a = noise(480, 0.5);
+fn a_voice_on_its_own_loop_prints_into_the_write_loop() {
+    let b = noise(300, 0.7);
     let mut t = tape(
-        a.clone(),
+        vec![0.0; 480],
         1,
-        &[Setting::Write(true), Setting::Feedback(0.0)],
+        &[
+            Setting::Write(true),
+            Setting::Feedback(0.0),
+            Setting::Send(0, 1.0),
+        ],
     );
-    t.load_voice(1, Box::new(Loop::new(noise(300, 0.4), 1).unwrap()));
-    assert!(t.write_held());
-    // The gate closes over 20 ms, as it does when writing is turned off.
-    run(&mut t, 960);
-    let held = buffer(&t);
+    t.load_voice(0, Box::new(Loop::new(b.clone(), 1).unwrap()));
     run(&mut t, 2_000);
-    assert_eq!(buffer(&t), held, "feedback 0 would have erased it");
-    // Back to one loop, the write head writes again.
-    t.load(Box::new(Loop::new(a.clone(), 1).unwrap()));
-    assert!(!t.write_held());
-    run(&mut t, 2_000);
-    assert!(buffer(&t).iter().all(|s| s.abs() < 1e-3), "erased");
+    assert!(buffer(&t).iter().any(|s| s.abs() > 0.1), "printed");
+    assert_eq!(t.source(0).samples(), b, "its own loop is never written");
 }
 
 #[test]
@@ -947,32 +946,28 @@ fn a_clear_silences_one_loop_and_keeps_the_heads() {
 }
 
 #[test]
-fn an_unload_returns_a_voice_to_voice_0s_loop_and_writing_resumes() {
+fn an_unload_puts_a_voice_on_the_write_loop() {
     let (a, b) = (noise(400, 0.5), noise(300, 0.7));
     let mut t = own_loops(&a, &b, &b, 1);
     t.unload(2);
-    t.set(Setting::Write(true));
-    assert!(t.write_held(), "voice 1 still has its own");
     assert_eq!(t.unload(1).unwrap().samples(), b);
-    assert!(!t.has_own(1) && !t.write_held());
+    assert!(!t.has_own(1));
     assert_eq!(t.source(1).samples(), a);
     assert!(t.unload(1).is_none());
-    assert!(t.unload(0).is_none(), "voice 0's loop is not its own");
+    assert!(t.unload(0).is_none(), "voice 0 has none of its own");
 }
 
 #[test]
-fn an_empty_voice_is_silent_and_does_not_hold_the_write_head() {
+fn an_empty_voice_is_silent() {
     let (a, b) = (noise(400, 0.5), noise(300, 0.7));
     let mut t = own_loops(&a, &b, &b, 1);
     t.load_voice(1, Box::new(Loop::empty()));
     t.load_voice(2, Box::new(Loop::empty()));
-    t.set(Setting::Write(true));
-    assert!(!t.write_held(), "empty voices send nothing");
     assert!(left(&run(&mut t, 200)).iter().all(|s| *s == 0.0));
-    // Voice 0 empty too, with voice 1 back on a loop of its own.
+    // An empty write loop silences voice 0, which reads it; voice 1 plays on.
     t.load_voice(1, Box::new(Loop::new(b.clone(), 1).unwrap()));
-    t.load_voice(0, Box::new(Loop::empty()));
-    assert!(t.write_held());
+    t.set(Setting::On(0, true));
+    t.load_voice(TAPE, Box::new(Loop::empty()));
     let out = left(&run(&mut t, 250));
     assert_eq!(out, b[..250], "voice 1 plays on alone");
 }

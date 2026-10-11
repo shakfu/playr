@@ -5,7 +5,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use playr_dsp::{clip, flush, one_pole, soft_clip, Interp};
 
-use crate::{Error, COLUMNS, VOICES};
+use crate::{Error, COLUMNS, TAPE, VOICES};
 
 type Ramp = playr_dsp::Ramp<f32>;
 
@@ -917,10 +917,10 @@ impl Writer {
 #[derive(Debug, Clone)]
 pub struct Tape {
     sample_rate: u32,
-    /// Voice 0's loop, which the write head writes, and the loop of every
-    /// voice without one of its own.
+    /// The write loop: what the write head writes, and what a voice without
+    /// a loop of its own reads.
     lp: Box<Loop>,
-    /// Loops of voices 1 and up that read their own; never voice 0's.
+    /// The voices' own loops, which nothing writes.
     own: [Option<Box<Loop>>; VOICES],
     voices: [Voice; VOICES],
     writer: Writer,
@@ -939,8 +939,8 @@ impl Tape {
         Tape {
             sample_rate,
             lp: Box::new(Loop::empty()),
-            own: [None, None, None],
-            voices: [Voice::new(true), Voice::new(false), Voice::new(false)],
+            own: std::array::from_fn(|_| None),
+            voices: std::array::from_fn(|i| Voice::new(i == 0)),
             writer: Writer::new(),
             playing: false,
             smooth: (SMOOTH_MS * sr / 1000.0) as u32,
@@ -967,15 +967,15 @@ impl Tape {
         (old, own)
     }
 
-    /// Gives voice `i` a loop of its own, and returns the one it replaces.
-    /// Voice 0's is the loop every voice without its own reads, so those
-    /// follow it. The voices that change loop go to their windows' starts.
+    /// Gives voice `i` a loop of its own, or for [`TAPE`] replaces the write
+    /// loop, and returns the one it replaces. The voices reading the write
+    /// loop follow it. The voices that change loop go to their windows' starts.
     pub fn load_voice(&mut self, i: usize, lp: Box<Loop>) -> Option<Box<Loop>> {
-        if i >= VOICES {
+        if i > TAPE {
             return Some(lp);
         }
         let old = match i {
-            0 => Some(std::mem::replace(&mut self.lp, lp)),
+            TAPE => Some(std::mem::replace(&mut self.lp, lp)),
             _ => self.own[i].replace(lp),
         };
         for j in 0..VOICES {
@@ -987,21 +987,21 @@ impl Tape {
             let w = v.window.fit(frames, range);
             v.set_window(w, false, self.sample_rate);
         }
-        if i == 0 {
+        if i == TAPE {
             let (frames, range) = (self.lp.frames(), self.lp.range);
             self.writer.window = self.writer.window.fit(frames, range);
             self.writer.rewind();
         }
-        self.regate();
         old
     }
 
-    /// Puts `lp` in place of loop `k`, voice 0's or voice `k`'s own, keeping
-    /// every head and window: for a silent loop, a clear. Returns the loop
-    /// replaced, or `lp` when its shape differs or there is no loop `k`.
+    /// Puts `lp` in place of loop `k`, voice `k`'s own or the write loop for
+    /// [`TAPE`], keeping every head and window: for a silent loop, a clear.
+    /// Returns the loop replaced, or `lp` when its shape differs or there is
+    /// no loop `k`.
     pub fn clear(&mut self, k: usize, lp: Box<Loop>) -> Box<Loop> {
         let slot = match k {
-            0 => &mut self.lp,
+            TAPE => &mut self.lp,
             _ => match self.own.get_mut(k) {
                 Some(Some(own)) => own,
                 _ => return lp,
@@ -1016,22 +1016,22 @@ impl Tape {
         }
     }
 
-    /// Takes voice `i`'s own loop back, so it reads voice 0's again from its
-    /// window's start. Writing resumes once no voice has its own.
+    /// Takes voice `i`'s own loop back, so it reads the write loop from its
+    /// window's start.
     pub fn unload(&mut self, i: usize) -> Option<Box<Loop>> {
         let old = self.own.get_mut(i)?.take()?;
         let (frames, range) = (self.lp.frames(), self.lp.range);
         let v = &mut self.voices[i];
         let w = v.window.fit(frames, range);
         v.set_window(w, false, self.sample_rate);
-        self.regate();
         Some(old)
     }
 
-    /// Whether voice `j` reads the loop that a load into voice `i` replaces.
+    /// Whether voice `j` reads the loop that a load into `i`, a voice or
+    /// [`TAPE`], replaces.
     fn follows(&self, i: usize, j: usize) -> bool {
         match i {
-            0 => self.own[j].is_none(),
+            TAPE => self.own[j].is_none(),
             _ => i == j,
         }
     }
@@ -1078,27 +1078,15 @@ impl Tape {
         }
     }
 
-    /// Whether a voice reads a loop of its own with frames in it, whose sends
-    /// would print one loop into another. An empty one sends nothing.
-    fn others(&self) -> bool {
-        self.own.iter().flatten().any(|lp| lp.frames() > 0)
-    }
-
-    /// Opens the write head's gate while writing is on and no voice reads a
-    /// loop of its own, as [`Tape::others`] counts them.
+    /// Opens the write head's gate while writing is on. Every voice's send
+    /// reaches the write loop, whatever loop the voice reads.
     fn regate(&mut self) {
         let ramp = if self.playing { self.smooth } else { 0 };
-        let open = self.writer.on && !self.others();
+        let open = self.writer.on;
         let g = if open { 1.0 } else { 0.0 };
         if self.writer.gate.target() != g {
             self.writer.gate.set(g, ramp);
         }
-    }
-
-    /// Whether the write head is held off, with writing on, because a voice
-    /// reads a loop of its own.
-    pub fn write_held(&self) -> bool {
-        self.writer.on && self.others()
     }
 
     pub fn set(&mut self, s: Setting) {

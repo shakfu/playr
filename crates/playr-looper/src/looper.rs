@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::tape::{Loop, Setting, Tape};
-use crate::{Error, COLUMNS, VOICES};
+use crate::{Error, COLUMNS, TAPE, VOICES};
 
 const COMMANDS: usize = 256;
 /// Returns travel one or two per command, and the handle drains them.
@@ -53,7 +53,7 @@ impl Cmd {
     fn returns(&self) -> usize {
         match self {
             // The loop, the voices' own, and an aborted snapshot.
-            Cmd::Load(_) => 1 + (VOICES - 1) + 1,
+            Cmd::Load(_) => 1 + VOICES + 1,
             Cmd::LoadVoice(..) | Cmd::Clear(..) => 2,
             Cmd::Unload(_) => 1,
             Cmd::Snapshot(_) | Cmd::Set(Setting::WriteWindow(_)) => 1,
@@ -82,8 +82,8 @@ pub struct Status {
     voices: [AtomicU64; VOICES],
     write: AtomicU64,
     peak: AtomicU32,
-    /// Each voice's loop's peak grid.
-    columns: [[AtomicU32; COLUMNS]; VOICES],
+    /// The peak grid of each voice's loop, then the write loop's at [`TAPE`].
+    columns: [[AtomicU32; COLUMNS]; TAPE + 1],
     recording: AtomicBool,
     /// `Record` commands applied, so a stopping recorder knows the callback
     /// has stopped writing to the ring.
@@ -130,7 +130,8 @@ impl Status {
         self.voice_columns(0)
     }
 
-    /// The waveform of the loop voice `v` reads, as [`Status::columns`].
+    /// The waveform of the loop voice `v` reads, or of the write loop for
+    /// [`TAPE`], as [`Status::columns`].
     pub fn voice_columns(&self, v: usize) -> [f32; COLUMNS] {
         std::array::from_fn(|i| f32::from_bits(self.columns[v][i].load(Ordering::Relaxed)))
     }
@@ -309,7 +310,7 @@ impl Looper {
                     self.gain.set(1.0, self.fade);
                 }
                 Cmd::LoadVoice(i, lp) => {
-                    if i == 0 {
+                    if i == TAPE {
                         self.abort();
                     }
                     if let Some(old) = self.tape.load_voice(i, lp) {
@@ -319,7 +320,7 @@ impl Looper {
                     self.tape.unduck(self.fade);
                 }
                 Cmd::Clear(k, lp) => {
-                    if k == 0 {
+                    if k == TAPE {
                         self.abort();
                     }
                     _ = self.returns.push(Returned::Loop(self.tape.clear(k, lp)));
@@ -412,11 +413,22 @@ impl Looper {
 
     fn publish_columns(&self) {
         for (v, grid) in self.status.columns.iter().enumerate() {
-            for (a, p) in grid.iter().zip(self.tape.source(v).peaks()) {
+            let lp = match v {
+                TAPE => self.tape.buffer(),
+                _ => self.tape.source(v),
+            };
+            for (a, p) in grid.iter().zip(lp.peaks()) {
                 a.store(p.to_bits(), Ordering::Relaxed);
             }
         }
     }
+}
+
+/// A silent loop of `shape`'s length, channels and range; an error for no
+/// loop or an empty one.
+fn silent_like(shape: Option<&Loop>) -> Result<Loop, Error> {
+    let shape = shape.filter(|lp| lp.frames() > 0).ok_or(Error::Empty)?;
+    Loop::new(vec![0.0; shape.samples().len()], shape.channels())?.with_range(shape.range())
 }
 
 /// A recording of the mix that has finished.
@@ -446,9 +458,9 @@ pub struct Handle {
     record: Option<Consumer<f32>>,
     recorder: Option<Recorder>,
     record_sent: u64,
-    /// The loop as last loaded, for [`Handle::reset`].
+    /// The write loop as last loaded, for [`Handle::reset`].
     original: Option<Loop>,
-    /// The voices' own loops as last loaded; never voice 0's.
+    /// The voices' own loops as last loaded.
     own: [Option<Loop>; VOICES],
     sample_rate: u32,
 }
@@ -470,7 +482,8 @@ impl Handle {
         self.send(Cmd::Volume(v)).map_err(|_| Error::Full)
     }
 
-    /// Loads `lp` for every voice, keeping a copy for [`Handle::reset`].
+    /// Loads `lp` as the write loop and takes back every voice's own, so all
+    /// read it; keeps a copy for [`Handle::reset`].
     pub fn load(&mut self, lp: Loop) -> Result<(), Error> {
         let copy = lp.clone();
         self.send(Cmd::Load(Box::new(lp)))
@@ -480,17 +493,17 @@ impl Handle {
         Ok(())
     }
 
-    /// Gives voice `i` the loop `lp`, keeping a copy for [`Handle::reset`].
-    /// Voice 0's is the loop of every voice without its own.
+    /// Gives voice `i` the loop `lp`, or for [`TAPE`] makes it the write
+    /// loop, keeping a copy for [`Handle::reset`].
     pub fn load_voice(&mut self, i: usize, lp: Loop) -> Result<(), Error> {
-        if i >= VOICES {
+        if i > TAPE {
             return Err(Error::Voice(i));
         }
         let copy = lp.clone();
         self.send(Cmd::LoadVoice(i, Box::new(lp)))
             .map_err(|_| Error::Full)?;
         match i {
-            0 => self.original = Some(copy),
+            TAPE => self.original = Some(copy),
             _ => self.own[i] = Some(copy),
         }
         Ok(())
@@ -514,33 +527,35 @@ impl Handle {
         Ok(())
     }
 
-    /// Silences the loop voice `i` reads, its own or voice 0's, keeping its
-    /// length, every head and window. [`Handle::reset`] restores it.
-    pub fn clear(&mut self, i: usize) -> Result<(), Error> {
-        let k = match self.has_own(i) {
-            true => i,
-            false => 0,
-        };
+    /// Silences loop `k`, voice `k`'s own or the write loop for [`TAPE`],
+    /// keeping its length, every head and window. [`Handle::reset`] restores
+    /// it.
+    pub fn clear(&mut self, k: usize) -> Result<(), Error> {
         let shape = match k {
-            0 => self.original.as_ref(),
-            _ => self.own[k].as_ref(),
+            TAPE => self.original.as_ref(),
+            _ => self.own.get(k).and_then(Option::as_ref),
         };
-        let shape = shape.filter(|lp| lp.frames() > 0).ok_or(Error::Empty)?;
-        let silent = Loop::new(vec![0.0; shape.samples().len()], shape.channels())?
-            .with_range(shape.range())?;
+        let silent = silent_like(shape)?;
         self.send(Cmd::Clear(k, Box::new(silent)))
             .map_err(|_| Error::Full)
     }
 
-    /// Empties voice `i`: it reads nothing. Voice 0's is the loop every voice
-    /// without its own reads, so those go silent too.
+    /// Makes the write loop a silent one the shape of voice `i`'s own, for
+    /// the write head to record into.
+    pub fn blank_tape(&mut self, i: usize) -> Result<(), Error> {
+        let silent = silent_like(self.own.get(i).and_then(Option::as_ref))?;
+        self.load_voice(TAPE, silent)
+    }
+
+    /// Empties voice `i`: it reads nothing. For [`TAPE`], empties the write
+    /// loop, and the voices reading it go silent.
     pub fn eject(&mut self, i: usize) -> Result<(), Error> {
         self.load_voice(i, Loop::empty())
     }
 
-    /// Takes voice `i`'s own loop back, so it reads voice 0's again.
+    /// Takes voice `i`'s own loop back, so it reads the write loop.
     pub fn unload(&mut self, i: usize) -> Result<(), Error> {
-        if i == 0 || !self.has_own(i) {
+        if !self.has_own(i) {
             return Err(Error::Voice(i));
         }
         self.send(Cmd::Unload(i)).map_err(|_| Error::Full)?;
@@ -553,7 +568,7 @@ impl Handle {
         self.own.get(i).is_some_and(Option::is_some)
     }
 
-    /// Starts copying voice 0's loop, the one the write head writes. The copy arrives through [`Handle::poll`] as
+    /// Starts copying the write loop. The copy arrives through [`Handle::poll`] as
     /// [`Returned::Snapshot`].
     pub fn snapshot(&mut self) -> Result<(), Error> {
         let n = self.original.as_ref().ok_or(Error::Empty)?.samples().len();
@@ -575,7 +590,7 @@ impl Handle {
         self.sample_rate
     }
 
-    /// The channel count of the loop last loaded.
+    /// The channel count of the write loop last loaded.
     pub fn channels(&self) -> Option<u16> {
         self.original.as_ref().map(Loop::channels)
     }

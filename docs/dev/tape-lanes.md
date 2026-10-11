@@ -88,3 +88,23 @@ From the 2026-10-11 discussion: lanes; delay and reverb get their own design; no
 - **Lanes are independent.** A voice holds a loop of its own, voice 1's loop, or nothing; Eject empties it rather than falling back to voice 1's. In the engine an empty voice holds `Loop::empty()` as its own, so no new state reaches the audio thread; the write head's hold ignores empty loops. Sharing stays as an explicit choice, since the write head's prints only reach voices reading voice 1's loop.
 - **Voices 2 and 3 start empty**, and Load range loads voice 1 alone. Take still starts a new tape.
 - **Fixed:** a voice with an empty window and a negative rate computed its first frame as `end - 1` and panicked on the audio thread. A new tape had the bug latent; empty lanes made it reachable. `Window::last` guards the four sites.
+
+## The write loop (2026-10-11)
+
+The write head writes a loop of its own, the write loop, apart from the three lanes. Before, it wrote voice 1's loop, and was held off while any voice read a loop of its own; with independent lanes that was the usual case, so Write looked dead.
+
+- **Made by the first Write**: silent, voice 1's loop's length, channels and rolls. Voice 1 must hold a loop. Eject on the write lane drops it and turns Write off.
+- **Heard through a lane** that picks it, as a play head on a tape. No dedicated playback head: one can come later as a monitor level.
+- **No hold.** A voice's send is a signal; the write head records it whatever loop the voice reads.
+- **Engine.** `TAPE`, equal to `VOICES`, names the write loop wherever a voice index goes: loads, clears, ejects and the peak grids. Voice 0 has an own loop like the others; the old shared `lp` is the write loop.
+- **Save loop** saves the write loop, named after voice 1's loop when Write made it. Take still starts a new tape with the range in voice 1.
+
+## Four lanes (2026-10-12)
+
+The separate write lane gave way to a fourth voice, on top, whose loop is the write loop. With Write off, the tape is a four-track looper; with it on, voice 4 is the write track, and plays back what is printed at its own rate. This also gave the write loop a play head of its own: before, it was heard only through a lane that gave up its loop to read it.
+
+- **`WRITER` is voice 4**, and always reads the write loop, `TAPE`. A load into it loads the write loop; its Clear and Eject act on it. Voices 1 to 3 can read it with Share.
+- **Rejected: a track-count drop-down** (2-track, 3-track, 4-track, 3 + write). Four-track and three plus write are one layout, told apart by Write; hidden lanes could go on playing and sending.
+- **Height.** The waveforms share what the controls leave, between 40 and 96 points: 41 at 800 x 592, 73 at 800 x 720, as measured. A lane's window fields moved into its field row, and the write head's fields into a second row of voice 4's lane. `ROW` and `SEPARATOR` are measured, not derived: a change to the field rows needs them measured again.
+- **CPU.** A fourth voice with the sinc kernel: about 13% of a core at x4, scaled from 9.8% for three in `aliasing.md`. Not measured.
+

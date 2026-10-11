@@ -791,7 +791,9 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
             let s = match setting {
                 ["clear"] => return Ok(T::Clear(n)),
                 ["eject"] => return Ok(T::Eject(n)),
-                ["share"] if n == 1 => return Err("voice 1's loop is the one shared".into()),
+                ["share"] if usize::from(n) - 1 == playr_looper::WRITER => {
+                    return Err(format!("voice {n} plays the write loop"))
+                }
                 ["share"] => return Ok(T::Share(n)),
                 ["loop", id] => match id.parse::<i64>() {
                     Ok(id) => return Ok(T::Loop(n, id)),

@@ -1,7 +1,7 @@
 //! The looper as the audio callback runs it, with no device: the test calls
 //! `Looper::process` in place of cpal.
 
-use playr_looper::{Handle, Loop, Looper, Returned, Setting, Window};
+use playr_looper::{Handle, Loop, Looper, Returned, Setting, Window, TAPE};
 
 const SR: u32 = 48_000;
 const BLOCK: usize = 512;
@@ -349,8 +349,8 @@ fn a_clear_silences_the_loop_a_voice_reads_and_reset_restores_it() {
         Some(Returned::Loop(lp)) => assert_eq!(lp.samples(), vec![0.2; 2_400]),
         other => panic!("{other:?}"),
     }
-    // Voice 2 has no loop of its own, so its clear silences voice 0's.
-    h.clear(2).unwrap();
+    // The write loop, which voice 0 reads.
+    h.clear(TAPE).unwrap();
     for _ in 0..10 {
         block(&mut l);
     }
@@ -376,7 +376,7 @@ fn an_unload_puts_a_voice_back_on_voice_0s_loop() {
         other => panic!("{other:?}"),
     }
     assert!(h.unload(1).is_err(), "nothing of its own left");
-    assert!(h.unload(0).is_err());
+    assert!(h.unload(0).is_err(), "voice 0 has none of its own");
 }
 
 #[test]
@@ -393,8 +393,8 @@ fn an_eject_empties_a_voice_and_reset_keeps_it_empty() {
         block(&mut l);
     }
     assert!((block(&mut l)[0] - 0.5).abs() < 1e-6);
-    // Voice 0's eject silences it; an empty voice can share it again.
-    h.eject(0).unwrap();
+    // An empty write loop silences voice 0, and voice 1 once it reads it.
+    h.eject(TAPE).unwrap();
     h.unload(1).unwrap();
     for _ in 0..10 {
         block(&mut l);

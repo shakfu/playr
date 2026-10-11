@@ -658,7 +658,6 @@ pub fn idle_text(idle: crate::tape::Idle) -> &'static str {
             "nothing changes: Feedback is 1, Wear and Thin are 0 and every Send is 0"
         }
         Idle::Turns => "no effect: Ping turns the head at the edges, so it never wraps",
-        Idle::Held => "no effect: a voice reads a loop of its own, so writing is held off",
     }
 }
 
@@ -686,7 +685,9 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
             format!("voice {n}'s loop cleared; :tape reset restores it")
         }
         TapeMessage::Done(TapeAction::Eject(n)) => format!("voice {n} ejected"),
-        TapeMessage::Done(TapeAction::Share(n)) => format!("voice {n} reads voice 1's loop"),
+        TapeMessage::Done(TapeAction::Share(n)) => {
+            format!("voice {n} reads voice 4's loop, the write loop")
+        }
         TapeMessage::Done(a) => command::line(&Action::Tape(*a), None),
         TapeMessage::NoTape => "no tape loaded; :tape load first".into(),
         TapeMessage::Empty(n) => format!("voice {n} is empty"),

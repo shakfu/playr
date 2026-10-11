@@ -67,10 +67,9 @@ pub enum TapeAction {
     Reset,
     /// Silence the loop voice `n`, from 1, reads, keeping its length.
     Clear(u8),
-    /// Empty voice `n`, so it reads nothing; voice 1's empties every voice
-    /// reading its loop.
+    /// Empty voice `n`, so it reads nothing.
     Eject(u8),
-    /// Voice `n`, from 2, reads voice 1's loop.
+    /// Voice `n` reads the write loop.
     Share(u8),
     /// Load loop `id` of the loop library into voice `n`.
     Loop(u8, i64),
@@ -212,9 +211,10 @@ struct Live {
     looper: Option<Looper>,
     /// The source track's name, for the directories saves go in.
     name: String,
-    /// Voice 0's loop's shape, and that of every voice without its own.
+    /// The write loop's shape, and that of every voice without its own.
     extent: Extent,
-    /// The voices' own loops' shapes; never voice 0's.
+    /// The voices' own loops' shapes; `None` for a voice reading the write
+    /// loop.
     own: [Option<Extent>; playr_looper::VOICES],
     /// Where voice 0's loop lies in its source, as `loops::span_text` gives it.
     span: String,
@@ -268,8 +268,7 @@ pub struct VoiceState {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TapeState {
     pub voices: [VoiceState; playr_looper::VOICES],
-    /// Which voices read a loop of their own; while any does, the write head
-    /// is held off.
+    /// Which voices read a loop of their own, rather than the write loop.
     pub own: [bool; playr_looper::VOICES],
     /// Which voices read nothing: ejected, or never loaded.
     pub empty: [bool; playr_looper::VOICES],
@@ -303,7 +302,7 @@ impl TapeState {
             solo: false,
         };
         TapeState {
-            voices: [voice(true), voice(false), voice(false)],
+            voices: std::array::from_fn(|i| voice(i == 0)),
             own: [false; playr_looper::VOICES],
             empty: [false; playr_looper::VOICES],
             playing: false,
@@ -441,7 +440,8 @@ impl Deck {
         self.loading.is_some()
     }
 
-    /// The loaded loop's shape: voice 1's.
+    /// The write loop's shape, once there is a tape; no frames until Write
+    /// first makes one.
     pub fn loaded(&self) -> Option<Extent> {
         self.live.as_ref().map(|l| l.extent)
     }
@@ -549,9 +549,6 @@ impl Deck {
                         rate: l.rate,
                     };
                     self.start(String::new(), String::new(), None, silent)?;
-                    let live = self.live.as_mut().expect("just started");
-                    live.state.voices[0].window = Window::new(0, 0);
-                    live.refresh();
                     self.load_voice(i, loading, l)
                 }),
                 (None, None) => {
@@ -640,9 +637,11 @@ impl Deck {
             rate: loaded.rate,
         };
         let (looper, mut handle) = playr_looper::new(extent.rate);
-        handle.load(loaded.lp).map_err(|e| e.to_string())?;
-        // Each lane holds its own loop or nothing; voice 1 holds this one.
-        for i in 1..playr_looper::VOICES {
+        // No write loop until Write makes one; voice 1 holds this loop, and
+        // the other lanes nothing.
+        handle.load(Loop::empty()).map_err(|e| e.to_string())?;
+        handle.load_voice(0, loaded.lp).map_err(|e| e.to_string())?;
+        for i in 1..playr_looper::WRITER {
             handle.eject(i).map_err(|e| e.to_string())?;
         }
         handle
@@ -661,22 +660,24 @@ impl Deck {
             handle,
             attached,
             looper,
-            name,
-            span,
-            extent,
+            name: name.clone(),
+            span: span.clone(),
+            extent: empty(extent.rate),
             own: [Some(empty(extent.rate)); playr_looper::VOICES],
             own_names: Default::default(),
             beats,
             save_to: None,
-            state: TapeState::new(extent.range),
+            state: TapeState::new(Window::new(0, 0)),
             volume: self.volume,
             interp: None,
         });
         let live = self.live.as_mut().expect("set above");
-        live.own[0] = None;
-        for i in 1..playr_looper::VOICES {
-            live.state.voices[i].window = Window::new(0, 0);
-        }
+        live.own[0] = Some(extent);
+        live.own_names[0] = Some((name, span));
+        // Voice 4 plays the write loop, which there is none of yet.
+        live.own[playr_looper::WRITER] = None;
+        live.state.voices[playr_looper::WRITER].window = Window::new(0, 0);
+        live.state.voices[0].window = extent.range;
         live.refresh();
         Ok(TapeMessage::Loaded {
             frames: extent.range.len(),
@@ -700,28 +701,31 @@ impl Live {
         }
     }
 
-    /// Empties voice `i`; for voice 0, every voice reading its loop too.
+    /// The voices reading the write loop.
+    fn readers(&self) -> Vec<usize> {
+        (0..playr_looper::VOICES)
+            .filter(|j| self.own[*j].is_none())
+            .collect()
+    }
+
+    /// Empties voice `i`, or the write loop for [`playr_looper::TAPE`]; the
+    /// voices reading it go silent too, and writing goes off.
     fn eject(&mut self, i: usize) -> Result<(), playr_looper::Error> {
         self.handle.eject(i)?;
-        let followers: Vec<usize> = match i {
-            0 => (0..playr_looper::VOICES)
-                .filter(|j| self.own[*j].is_none())
-                .collect(),
-            _ => vec![i],
-        };
-        match i {
-            0 => {
+        let followers = match i {
+            playr_looper::TAPE => {
                 self.extent = empty(self.extent.rate);
-                self.name.clear();
-                self.span.clear();
-                self.beats = None;
                 self.state.write_window = Window::new(0, 0);
+                self.handle.set(Setting::Write(false))?;
+                self.state.apply(Setting::Write(false));
+                self.readers()
             }
             _ => {
                 self.own[i] = Some(empty(self.extent.rate));
                 self.own_names[i] = None;
+                vec![i]
             }
-        }
+        };
         for j in followers {
             self.state.voices[j].window = Window::new(0, 0);
         }
@@ -729,7 +733,36 @@ impl Live {
         Ok(())
     }
 
-    /// Voice `i`, from 1 up, reads voice 0's loop again.
+    /// Makes the write loop, silent and the shape of voice 0's loop, named
+    /// after it for saves; the voices reading it take its range.
+    fn blank_tape(&mut self) -> Result<(), TapeMessage> {
+        let shape = self.own[0]
+            .filter(|e| e.frames > 0)
+            .ok_or(TapeMessage::Empty(1))?;
+        let failed = |e: playr_looper::Error| TapeMessage::Failed(e.to_string());
+        self.handle.blank_tape(0).map_err(failed)?;
+        self.extent = shape;
+        if let Some((name, span)) = self.own_names[0].clone() {
+            (self.name, self.span) = (name, span);
+        }
+        let mut settings = vec![
+            Setting::WriteWindow(shape.range),
+            Setting::On(playr_looper::WRITER, true),
+        ];
+        settings.extend(
+            self.readers()
+                .into_iter()
+                .map(|j| Setting::Window(j, shape.range)),
+        );
+        for s in settings {
+            self.handle.set(s).map_err(failed)?;
+            self.state.apply(s);
+        }
+        self.refresh();
+        Ok(())
+    }
+
+    /// Voice `i` reads the write loop.
     fn share(&mut self, i: usize) -> Result<(), playr_looper::Error> {
         if self.own[i].is_none() {
             return Ok(());
@@ -761,8 +794,8 @@ fn empty(rate: u32) -> Extent {
 
 impl Deck {
     /// Puts `loaded` in voice `i` of the tape playing: its own loop, or for
-    /// voice 0 the loop of every voice without one. The voices it changes
-    /// take its range as their window, and the voice is turned on.
+    /// voice 4 the write loop. The voices it changes take its range as their
+    /// window, and voice `i` is turned on.
     fn load_voice(
         &mut self,
         i: usize,
@@ -776,34 +809,36 @@ impl Deck {
             rate: loaded.rate,
         };
         let failed = |e: playr_looper::Error| e.to_string();
-        live.handle.load_voice(i, loaded.lp).map_err(failed)?;
-        let changed: Vec<usize> = match i {
-            0 => (0..playr_looper::VOICES)
-                .filter(|j| live.own[*j].is_none())
-                .collect(),
-            _ => vec![i],
-        };
-        match i {
-            0 => {
+        // Voice 4's loop is the write loop, which every voice without its own
+        // reads, and Save loop saves.
+        let changed = match i {
+            playr_looper::WRITER => {
+                live.handle
+                    .load_voice(playr_looper::TAPE, loaded.lp)
+                    .map_err(failed)?;
                 live.extent = extent;
-                live.name = loading.name;
-                live.span = loading.span;
-                live.beats = loading.beats;
+                (live.name, live.span, live.beats) = (loading.name, loading.span, loading.beats);
                 live.state.write_window = extent.range;
+                live.handle
+                    .set(Setting::WriteWindow(extent.range))
+                    .map_err(failed)?;
+                live.readers()
             }
             _ => {
+                live.handle.load_voice(i, loaded.lp).map_err(failed)?;
+                if i == 0 {
+                    live.beats = loading.beats;
+                }
                 live.own[i] = Some(extent);
                 live.own_names[i] = Some((loading.name, loading.span));
+                vec![i]
             }
-        }
+        };
         let mut settings: Vec<Setting> = changed
             .iter()
             .map(|&j| Setting::Window(j, extent.range))
             .collect();
         settings.push(Setting::On(i, true));
-        if i == 0 {
-            settings.push(Setting::WriteWindow(extent.range));
-        }
         for s in settings {
             live.handle.set(s).map_err(failed)?;
             live.state.apply(s);
@@ -959,7 +994,7 @@ pub fn act(f: &mut impl Frontend, action: TapeAction) {
     if f.tape()
         .live
         .as_ref()
-        .is_some_and(|l| l.state.empty.iter().all(|e| *e))
+        .is_some_and(|l| l.extent.frames == 0 && l.state.empty.iter().all(|e| *e))
     {
         return eject(f);
     }
@@ -993,10 +1028,31 @@ fn send(live: &mut Live, action: TapeAction, samples: PathBuf) -> Result<(), Tap
         TapeAction::Clear(n) | TapeAction::Eject(n) if live.state.empty[usize::from(n) - 1] => {
             Err(TapeMessage::Empty(n))
         }
-        TapeAction::Clear(n) => live.handle.clear(usize::from(n) - 1).map_err(failed),
+        TapeAction::Save if live.extent.frames == 0 => Err(TapeMessage::Empty(4)),
+        // A voice reading the write loop clears it.
+        TapeAction::Clear(n) => {
+            let i = usize::from(n) - 1;
+            let k = if live.own[i].is_some() {
+                i
+            } else {
+                playr_looper::TAPE
+            };
+            live.handle.clear(k).map_err(failed)
+        }
+        // Voice 4's loop is the write loop.
+        TapeAction::Eject(n) if usize::from(n) - 1 == playr_looper::WRITER => {
+            live.eject(playr_looper::TAPE).map_err(failed)
+        }
         TapeAction::Eject(n) => live.eject(usize::from(n) - 1).map_err(failed),
         TapeAction::Share(n) => live.share(usize::from(n) - 1).map_err(failed),
-        TapeAction::Save if live.state.empty[0] => Err(TapeMessage::Empty(1)),
+        // The first Write makes the write loop.
+        TapeAction::Write(true) if live.extent.frames == 0 => {
+            live.blank_tape()?;
+            let s = Setting::Write(true);
+            live.handle.set(s).map_err(failed)?;
+            live.state.apply(s);
+            Ok(())
+        }
         TapeAction::Save if live.save_to.is_some() => Err(TapeMessage::AlreadySaving),
         TapeAction::Save => {
             live.handle.snapshot().map_err(failed)?;
@@ -1182,7 +1238,7 @@ fn take_over(f: &mut impl Frontend) {
     let Some(live) = f.tape().live.as_mut() else {
         return;
     };
-    let e = live.extent;
+    let e = live.extent_of(0);
     let head = e.range.start as f64 + (from - start) * f64::from(e.rate) / rate;
     if let Err(err) = live.handle.set(Setting::Head(0, head)) {
         f.tape().taking = None;
@@ -1280,8 +1336,6 @@ pub enum Idle {
     Unchanging,
     /// Ping turns the head at the window's edges, so it never wraps.
     Turns,
-    /// A voice reads a loop of its own, so the write head is held off.
-    Held,
 }
 
 /// Why `control` has no effect with the tape set as `s`, over a loop of
@@ -1289,12 +1343,7 @@ pub enum Idle {
 pub fn no_effect(s: &TapeState, e: Extent, control: Control) -> Option<Idle> {
     let voice = |i: usize| &s.voices[i];
     let off = |i: usize| (!voice(i).on).then_some(Idle::VoiceOff);
-    let held = s.own.iter().any(|o| *o);
-    let write_off = || match (s.write, held) {
-        (false, _) => Some(Idle::WriteOff),
-        (true, true) => Some(Idle::Held),
-        _ => None,
-    };
+    let write_off = || (!s.write).then_some(Idle::WriteOff);
     match control {
         Control::Window(i)
         | Control::Rate(i)
@@ -1319,7 +1368,6 @@ pub fn no_effect(s: &TapeState, e: Extent, control: Control) -> Option<Idle> {
                 .or(v.ping.then_some(Idle::Turns))
                 .or((x.frames == 0).then_some(Idle::NoRoom))
         }
-        Control::Write if held => Some(Idle::Held),
         Control::Write => {
             let sending = s.voices.iter().any(|v| v.on && v.send > 0.0);
             let still = s.feedback == 1.0 && s.wear == 0.0 && s.thin == 0.0;

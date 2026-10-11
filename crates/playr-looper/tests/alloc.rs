@@ -82,7 +82,7 @@ fn the_callback_neither_allocates_nor_frees() {
     h.load(lp(-0.3)).unwrap();
     h.load_voice(1, lp(0.1)).unwrap();
     h.clear(1).unwrap();
-    h.clear(0).unwrap();
+    h.clear(playr_looper::TAPE).unwrap();
     h.unload(1).unwrap();
     h.set(Setting::Cutoff(0, 0.2)).unwrap();
     let n = counted(|| {

@@ -1559,8 +1559,8 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
     }
     for (text, error) in [
         ("tape", "usage: :tape"),
-        ("tape 4 on", "voices are 1 to 3"),
-        ("tape 0 on", "voices are 1 to 3"),
+        ("tape 5 on", "voices are 1 to 4"),
+        ("tape 0 on", "voices are 1 to 4"),
         ("tape 1 rate 5", "rate is -4 to 4"),
         ("tape 1 rate nan", "rate is -4 to 4"),
         ("tape feedback 1.1", "feedback is 0 to 1"),
@@ -1729,7 +1729,7 @@ fn loops_view_commands_parse_there_and_round_trip() {
         assert_eq!(l(text), Ok(action.clone()), "{text:?}");
         assert_eq!(line(&action, Some(View::Loops)), text);
     }
-    assert_eq!(l("load 4"), Err("voices are 1 to 3".into()));
+    assert_eq!(l("load 5"), Err("voices are 1 to 4".into()));
     assert_eq!(l("beats 0"), Err("beats are 1 to 1024".into()));
     assert_eq!(l("key"), Err("usage: :key KEY | -".into()));
     assert_eq!(l("remove"), Ok(Action::Remove));

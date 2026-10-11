@@ -21,8 +21,13 @@ pub use tape::{
     DEFAULT_KNEE, DEFAULT_SLEW_MS, MAX_SLEW_MS,
 };
 
-/// Voices reading the loop.
-pub const VOICES: usize = 3;
+/// Voices reading the loops.
+pub const VOICES: usize = 4;
+/// The voice that plays the write loop: the Tape tab's top lane.
+pub const WRITER: usize = VOICES - 1;
+/// The write loop's index where a voice's goes: in loads, clears and peak
+/// grids.
+pub const TAPE: usize = VOICES;
 /// Columns in the loop's peak grid, which draws its waveform.
 pub const COLUMNS: usize = 512;
 

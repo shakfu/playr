@@ -1,6 +1,6 @@
 # The tape looper
 
-The tape plays one loop through three voices at once. Each voice reads the loop at its own rate, forward or in reverse, over its own part of it. A write head can record what the voices play back into the loop, with feedback, so the loop changes on every pass. You can save the loop as a sample, or record what you hear.
+The tape is a four-track looper with a write head. Each of four voices plays a loop at its own rate, forward or in reverse, over its own part of it. Voice 4's loop is the write loop: with **Write** on, a write head records every voice's send into it, with feedback, so it changes on every pass. Voices 1 to 3 can play it too. You can save the write loop as a sample, or record what you hear.
 
 The window shows it in the **Tape** tab; the terminal has the `:tape` commands only, listed under [Tape](../README.md#tape) in the README. The design is in [`docs/dev/looper-engine.md`](https://github.com/shakfu/playr/blob/main/docs/dev/looper-engine.md).
 
@@ -16,7 +16,7 @@ A loop comes from the playing track, so play a track first. Then either:
 
 The load reads the range, plus up to 1 s of the track before it, the **pre-roll**, and 1 s after it, the **post-roll**. The rolls give the crossfades audio to fade into, so the loop repeats exactly the range's length. A saved loop holds only the range. A loop cut to loop, such as a scanned or saved one, takes its rolls from its own other end: its tail before it and its head after it.
 
-The first load starts the tape from the default settings, with voices 2 and 3 empty. A load into a lane later changes that voice alone. **Play tape** starts it and pauses the player; **Stop tape** stops it. The player does not resume on its own; Play on the player afterwards plays both.
+The first load starts the tape from the default settings, with voices 2 to 4 empty. A load into a lane later changes that voice alone. **Play tape** starts it and pauses the player; **Stop tape** stops it. The player does not resume on its own; Play on the player afterwards plays both.
 
 **Take**, or `:tape take`, loads the range and hands the player over to the tape, as a deck's Take does. With the player inside the range, voice 1 starts where the player is and the player pauses. With the player before the range, the tape waits and takes over at the range's start. Past the range, it is refused and the loop stays loaded. The take is checked each time the interface refreshes, so it lands within about 16 ms in the window and 33 ms in the server.
 
@@ -28,17 +28,17 @@ From top to bottom:
 
 1. **Buttons.** Load range, Play tape, Stop tape, Reset, Record, Save loop.
 
-2. **The write lane.** Write and the write window on the left. On the right, a strip showing the write window on voice 1's loop, with the write head as a line, and Feedback, Wear and Thin under it.
-
-3. **A lane per voice.** On the left: on, the voice's name, **Ping**, **S** for solo, the loop it reads, its window, and **Clear** and **Eject**. On the right, its loop as it now is, redrawn as the write head changes it:
+2. **A lane per voice**, numbered from the bottom: voice 1 at the bottom, voice 4 on top. On the left: the loop it reads, with where it lies in its file; on, the voice's name, **Ping**, **S** for solo; **Clear** and **Eject**, and in voice 4's lane, **Write**. On the right, its loop. The waveforms take the height the controls leave: about 40 points in the smallest window, more in a taller one.
 
    - The voice's window shaded, its edges marked, and its head as a line. The pre-roll and post-roll are dimmed.
 
    - Its crossfade curves at the foot.
 
-   - On a lane reading voice 1's loop, the write head as a line, and what the write head cannot change tinted and hatched: everything outside the write window, or the whole loop while writing is off. The write strip labels it **frozen**.
+   - On voice 4's lane, the write window as a band along the top, which drags as a window does.
 
-   Under the loop, the voice's controls in one row.
+   - On a lane reading the write loop, the write head as a line, and what the write head cannot change tinted and hatched: everything outside the write window, or all of it while writing is off. Such a lane is redrawn as the write head changes the loop.
+
+   Under the loop, the voice's controls in one row, its window first. Voice 4's lane has a second row for the write head: its window, Feedback, Print wear and Print thin.
 
 ### Editing windows with the mouse
 
@@ -52,7 +52,7 @@ A control that does nothing as the tape is set, such as a voice's Wear while its
 
 ## Voices
 
-Voice 1 is on when a loop loads; voices 2 and 3 are off. A voice's lane has its on tick box, its name, **Ping** and **S** for solo, and these controls:
+Voice 1 is on when a loop loads; the others are off until a loop is loaded into them, and voice 4 also when Write makes its loop. A voice's lane has its on tick box, its name, **Ping** and **S** for solo, and these controls:
 
 | row | range | default | does |
 |-|-|-|-|
@@ -86,11 +86,11 @@ On a stereo loop, pan keeps the near channel and folds the far one into it, so a
 
 ## A loop per voice
 
-Each lane holds a loop of its own, voice 1's loop, or nothing. A loop picked in a lane is loaded into that voice alone: the voice is turned on, and its window becomes the loop's range. Its window and crossfades count in its own loop. In the terminal, `:load N` in the Loops view loads the loop under the cursor into voice N.
+Each lane holds a loop or nothing. A loop picked in a lane is loaded into that voice alone: the voice is turned on, and its window becomes the loop's range. Its window and crossfades count in its own loop. In the terminal, `:load N` in the Loops view loads the loop under the cursor into voice N.
 
-Voices 2 and 3 can instead pick **voice 1's loop**, at the top of their list, or `:tape N share`. They then read the loop the write head writes, as heads on one tape do: a load into voice 1 changes theirs too. This is how one voice prints into the loop the others play.
+Voices 1 to 3 hold loops nothing writes. Voice 4's loop is the write loop: a loop loaded there is written over while Write is on, and **Reset** brings it back as loaded. With Write off, the four lanes are four loops.
 
-While any voice reads a loop of its own, the write head is held off: its sends would print one loop into another of a different length. Write stays set, and the Tape tab says why it does nothing. An empty voice does not hold it.
+Voices 1 to 3 can instead pick **voice 4's loop**, at the top of their list, or `:tape N share`. They then play what the write head prints, at their own rates: a second play head on the same tape. Voice 4 plays it too, at its own rate.
 
 A loop is resampled to the tape's rate as it loads. Rates and starts are not matched across voices: set each voice's rate by hand to line up loops of different tempo.
 
@@ -100,46 +100,48 @@ A loop is resampled to the tape's rate as it loads. Rates and starts are not mat
 
 Each lane has two buttons:
 
-- **Clear**, `:tape N clear`, silences the loop the voice reads. Its length, the windows and the heads stay, so the voices play on in silence and the write head can print into it again. A voice reading voice 1's loop clears voice 1's loop, for every voice reading it. **Reset** brings back the loop as loaded.
+- **Clear**, `:tape N clear`, silences the loop the voice reads. Its length, the windows and the heads stay. A voice reading voice 4's loop clears it. **Reset** brings back the loop as loaded.
 
-- **Eject**, `:tape N eject`, empties the voice: it reads nothing, and its lane says empty. Voice 1's Eject empties every voice reading voice 1's loop too. Once every voice is empty, the tape is gone.
+- **Eject**, `:tape N eject`, empties the voice: it reads nothing, and its lane says empty. Voice 4's Eject empties the voices reading its loop too, and turns Write off. Once every voice is empty, the tape is gone.
 
 Both do nothing on an empty voice.
 
 ## The write head
 
-With **Write** off, the default, the loop plays as loaded. With it on, the write head moves through its window at the normal rate and rewrites each frame as:
+With voice 4 empty, the first **Write** makes its loop: silent, the length of voice 1's loop, with the same rolls. Voice 1 must then hold a loop. With Write on, the write head moves through its window at the normal rate and rewrites each frame of the write loop as:
 
-the loop's old content times **Feedback**, plus every voice's Send.
+the write loop's old content times **Feedback**, plus every voice's Send.
+
+Every voice sends, whatever loop it reads.
 
 | row | range | default | does |
 |-|-|-|-|
-| Window | start and end | the range | the part of the loop that is rewritten; the rest stays as loaded |
+| Window | start and end | the write loop's range | the part of the write loop that is rewritten; the rest stays as it is |
 | Feedback | 0 to 1 | 1 | how much of the old content survives each pass; 0 replaces it with the sends |
 | Wear | 0 to 1 | 0 | a low-pass on everything recorded, so the loop darkens each pass |
 | Thin | 0 to 1 | 0 | a high-pass on everything recorded, 20 Hz to 2 kHz, so the loop thins each pass |
 
 With Feedback at 1, Wear and Thin at 0, and every Send at 0, writing changes nothing. A soft clip keeps the loop within full scale when the sends and feedback add up past it. It leaves levels under `tape_knee` in `settings.toml`, -6 dBFS by default, untouched.
 
-The voices read before the write head writes, so on the next pass every voice reading voice 1's loop reads what was printed: a reversed or half-speed voice printed into the loop is played back by the others at their own rates.
+The voices read before the write head writes, so on the next pass every voice reading the write loop reads what was printed: a reversed or half-speed print is played back at that voice's own rate.
 
 ## Some starting points
 
-Voices 2 and 3 start empty. For those below that use them, pick **voice 1's loop** in their lists first.
+Voices 2 to 4 start empty.
 
-- **A slow echo of itself.** Voice 2 on, Rate -0.5, Send 0.6. Write on, Feedback 0.85. Each pass prints a reversed, octave-down copy into the loop, and older prints fade under the new ones. Send 0 then lets the whole loop fade.
+- **A slow echo.** Voice 1 on a loop, Send 0.6. Write on, which makes voice 4's loop and turns it on. Voice 4 Rate -0.5, Send 0.6; Feedback 0.85. Voice 4 plays back each print reversed and an octave down, and prints that again, so older prints fade under the new ones. Send 0 on both lets the write loop fade.
 
-- **A loop that wears out.** Write on, Feedback 0.9, Wear 0.3, every Send at 0. Each pass is a little darker and quieter.
+- **A print that wears out.** After a few passes of the echo, every Send at 0, Feedback 0.9, Wear 0.3. Each pass of the write loop is a little darker and quieter.
 
 - **A tape stop.** Slew 2000, then Rate 0: the voice slows to a halt over 2 s, pitch falling.
 
-- **Layers in time.** Voice 1 on the whole range, voices 2 and 3 on short windows inside it at rates 2 and 1.5, sends low. Ping on voice 3 keeps its short window from clicking.
+- **Layers in time.** Voice 4 on a loop, Write on. Voices 2 and 3 pick voice 4's loop, on short windows inside it at rates 2 and 1.5, sends low. Ping on voice 3 keeps its short window from clicking.
 
-- **Back to the start.** **Reset** restores the loop as loaded and puts every head at its window's start, keeping the settings.
+- **Back to the start.** **Reset** restores every voice's loop as loaded, silences the write loop, and puts every head at its window's start, keeping the settings.
 
 ## Saving
 
-- **Save loop** writes the loop as it now is, only the range, without the rolls: `samples/<track>-tape/<track>-tape-loop.wav`.
+- **Save loop** writes the write loop as it now is, only the range, without the rolls: `samples/<track>-tape/<track>-tape-loop.wav`, named after voice 4's loop, or voice 1's when Write made it.
 
 - **Record** starts recording what you hear; pressing it again stops and writes `-mix.wav` beside it. If the disk falls behind, dropped blocks are counted and reported.
 

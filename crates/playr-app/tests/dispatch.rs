@@ -675,10 +675,10 @@ fn the_tape_loads_the_range_and_saves_the_loop_and_the_mix_to_the_library() {
             rate: 8000,
         },
     );
-    // The range, with what the track holds of a second either side as pre-roll
-    // and post-roll.
+    // The range, in voice 1, with what the track holds of a second either
+    // side as pre-roll and post-roll.
     assert_eq!(
-        f.tape.loaded(),
+        f.tape.voice_extent(0),
         Some(playr_app::tape::Extent {
             frames: 16_000,
             range: playr_looper::Window::new(4000, 12_000),
@@ -790,6 +790,8 @@ fn a_save_cut_short_is_reported_and_does_not_block_the_next() {
     use playr_app::tape::{Pos, TapeAction as T, TapeMessage as M};
     let tape = |f: &mut Headless, t| dispatch(Action::Tape(t), f);
     let (mut f, _dir) = loaded_tape();
+    // Write makes the write loop that Save loop saves.
+    tape(&mut f, T::Write(true));
 
     // The new write window arrives with the snapshot and aborts it.
     tape(&mut f, T::Save);
@@ -1482,7 +1484,7 @@ fn a_tape_take_inside_the_range_continues_from_the_player() {
     let player_at = f.session.player().position().as_secs_f64() * 8000.0;
     // A manual tape publishes its status as it runs.
     run_tape(&mut f, 1);
-    let e = f.tape.loaded().unwrap();
+    let e = f.tape.voice_extent(0).unwrap();
     let head = f.tape.status().unwrap().voice(0) - e.range.start as f64;
     assert!(
         (head - player_at).abs() < 800.0,
@@ -1570,7 +1572,7 @@ fn a_tape_take_before_the_range_waits_for_its_start() {
     assert!(f.session.player().position().as_secs_f64() < 1.0);
     tape_until(&mut f, |m| m == &Message::Tape(M::Took));
     run_tape(&mut f, 1);
-    let e = f.tape.loaded().unwrap();
+    let e = f.tape.voice_extent(0).unwrap();
     let head = f.tape.status().unwrap().voice(0) - e.range.start as f64;
     assert!(
         head < 1200.0,
@@ -1645,10 +1647,14 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
     );
     assert!(matches!(last(&f), Some(Message::LoopSet(_))));
 
-    // Voices 2 and 3 start empty beside the range voice 1 plays.
+    // Voices 2 and 3 start empty beside the range voice 1 plays; voice 4
+    // plays the write loop, of which there is none yet.
     let state = *f.tape.state().unwrap();
-    assert_eq!(state.empty, [false, true, true]);
-    assert_eq!(f.tape.voice_name(2), None);
+    assert_eq!(state.empty, [false, true, true, true]);
+    assert_eq!(f.tape.voice_name(3), None);
+    assert_eq!(f.tape.loaded().unwrap().frames, 0);
+    let range = f.tape.voice_extent(0).unwrap();
+    assert_eq!(range.range.len(), 8000);
     let id = |f: &Headless, name: &str| {
         f.session
             .find_loops(name)
@@ -1678,7 +1684,6 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
         (own.frames, own.range.start, own.range.len()),
         (12_000, 4000, 4000)
     );
-    assert_eq!(f.tape.voice_extent(0), f.tape.loaded());
     assert_eq!(f.tape.voice_name(1), Some("pad"));
     // Where each loop lies in its file: the whole 0.5 s pad, and the range.
     assert_eq!(f.tape.voice_span(1), Some("0:00.0-0:00.5"));
@@ -1687,76 +1692,99 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
     let state = *f.tape.state().unwrap();
     assert!(state.own[1] && state.voices[1].on);
     assert_eq!(state.voices[1].window, own.range);
-    run(&mut f, "tape write on");
-    let state = *f.tape.state().unwrap();
-    assert_eq!(no_effect(&state, own, Control::Write), Some(Idle::Held));
 
-    // A clear keeps voice 2's loop; an empty voice has nothing to clear or eject.
-    run(&mut f, "tape 2 clear");
-    assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Clear(2)))));
-    assert!(f.tape.state().unwrap().own[1]);
-    for line in ["tape 3 eject", "tape 3 clear"] {
+    // Nothing to save, clear or eject in voice 4 before Write makes its loop.
+    for line in ["tape save", "tape 4 clear", "tape 4 eject"] {
         run(&mut f, line);
-        assert_eq!(last(&f), Some(&Message::Tape(M::Empty(3))), "{line}");
+        assert_eq!(last(&f), Some(&Message::Tape(M::Empty(4))), "{line}");
     }
-    // Voice 3 can read voice 1's loop instead.
+    // Write makes it: silent, voice 1's loop's shape, and turns voice 4 on.
+    // Voices on loops of their own do not hold it off.
+    run(&mut f, "tape write on");
+    assert_eq!(f.tape.loaded(), Some(range));
+    assert_eq!(f.tape.voice_extent(3), Some(range));
+    let state = *f.tape.state().unwrap();
+    assert!(state.write && state.voices[3].on && !state.empty[3]);
+    assert_eq!(state.write_window, range.range);
+    assert_eq!(
+        no_effect(&state, range, Control::Write),
+        Some(Idle::Unchanging),
+        "on, with nothing sent"
+    );
+
+    // Voice 3 reads voice 4's loop; voice 4 cannot share itself.
     run(&mut f, "tape 3 share");
     assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Share(3)))));
     assert_eq!(f.tape.voice_extent(2), f.tape.loaded());
-    assert_eq!(f.tape.voice_name(2), f.tape.voice_name(0));
-    let range = f.tape.loaded().unwrap().range;
-    assert_eq!(f.tape.state().unwrap().voices[2].window, range);
-    assert!(command::parse("tape 1 share", f.view).is_err());
-
-    // An eject empties voice 2: it reads nothing, not voice 1's loop.
-    run(&mut f, "tape 2 eject");
-    assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Eject(2)))));
     let state = *f.tape.state().unwrap();
-    assert!(state.empty[1] && !state.own[1]);
-    assert_eq!(f.tape.voice_name(1), None);
-    // Not held; with every send at 0 it writes nothing new.
-    assert_eq!(
-        no_effect(&state, f.tape.loaded().unwrap(), Control::Write),
-        Some(Idle::Unchanging)
-    );
+    assert!(!state.own[2] && !state.empty[2]);
+    assert_eq!(state.voices[2].window, range.range);
+    assert!(command::parse("tape 4 share", f.view).is_err());
 
-    // Enter in the Loops view loads nothing; :load loads into voice 1, and
-    // voice 3, reading its loop, follows.
+    // A lane's clear silences its own loop, or the write loop it reads.
+    for n in [2, 3, 4] {
+        run(&mut f, &format!("tape {n} clear"));
+        assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Clear(n)))));
+    }
+    assert!(f.tape.state().unwrap().own[1]);
+
+    // Ejects empty lanes; voice 4's loop stays until its own Eject.
+    run(&mut f, "tape 2 eject");
+    run(&mut f, "tape 1 eject");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Eject(1)))));
+    let state = *f.tape.state().unwrap();
+    assert_eq!(state.empty, [true, true, false, false]);
+    for line in ["tape 2 eject", "tape 2 clear"] {
+        run(&mut f, line);
+        assert_eq!(last(&f), Some(&Message::Tape(M::Empty(2))), "{line}");
+    }
+    // Voice 4's eject empties voice 3 too, which reads it; with nothing
+    // left, the tape goes.
+    run(&mut f, "tape 4 eject");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Emptied)));
+    assert!(f.tape.loaded().is_none());
+    run(&mut f, "tape 1 clear");
+    assert_eq!(last(&f), Some(&Message::Tape(M::NoTape)));
+
+    // Enter in the Loops view loads nothing; :load loads into voice 1.
     f.set_cursor(View::Loops, Some(0));
     run(&mut f, "play");
-    assert_eq!(f.tape.loaded().unwrap().range, range);
+    assert!(f.tape.loaded().is_none());
     run(&mut f, "load");
-    tape_until(&mut f, |m| {
-        matches!(m, Message::Tape(M::LoadedVoice { .. }))
-    });
-    assert_eq!(f.tape.loaded().unwrap().range.len(), 8000);
-    assert_eq!(f.tape.voice_extent(2), f.tape.loaded());
-    assert!(f.tape.state().unwrap().empty[1], "voice 2 stays empty");
+    tape_until(&mut f, |m| matches!(m, Message::Tape(M::Loaded { .. })));
+    assert_eq!(f.tape.voice_extent(0).unwrap().range.len(), 8000);
+    assert_eq!(f.tape.state().unwrap().empty, [false, true, true, true]);
 
     run(&mut f, "remove");
     assert_eq!(last(&f), Some(&Message::LoopRemoved("kick 120bpm".into())));
     assert_eq!(names(&f), ["pad"]);
     assert!(a.exists(), "the file stays");
 
-    // Voice 1's eject empties voice 3, which reads its loop; with every
-    // voice empty the tape goes.
+    // With no tape, a lane's load starts one with the other voices empty.
     run(&mut f, "tape 1 eject");
     assert_eq!(last(&f), Some(&Message::Tape(M::Emptied)));
-    assert!(f.tape.loaded().is_none());
-    run(&mut f, "tape 1 clear");
-    assert_eq!(last(&f), Some(&Message::Tape(M::NoTape)));
-
-    // With no tape, a lane's load starts one with the other voices empty.
     run(&mut f, &format!("tape 2 loop {pad}"));
     tape_until(&mut f, |m| {
         matches!(m, Message::Tape(M::LoadedVoice { .. }))
     });
-    let state = *f.tape.state().unwrap();
-    assert_eq!(state.empty, [true, false, true]);
+    assert_eq!(f.tape.state().unwrap().empty, [true, false, true, true]);
     assert_eq!(f.tape.voice_name(1), Some("pad"));
     run(&mut f, "tape 1 eject");
     assert_eq!(last(&f), Some(&Message::Tape(M::Empty(1))));
-    run(&mut f, "tape save");
+    // Voice 4 takes a loop as any lane does: it becomes the write loop.
+    run(&mut f, &format!("tape 4 loop {pad}"));
+    tape_until(&mut f, |m| {
+        matches!(m, Message::Tape(M::LoadedVoice { voice: 4, .. }))
+    });
+    assert_eq!(f.tape.loaded().unwrap().range.len(), 4000);
+    assert_eq!(f.tape.voice_name(3), Some("pad"));
+    assert!(f.tape.state().unwrap().voices[3].on);
+    run(&mut f, "tape write on");
+    assert!(f.tape.state().unwrap().write, "writes onto the loop loaded");
+    // Dropped, the next Write would need voice 1's length.
+    run(&mut f, "tape 4 eject");
+    assert!(!f.tape.state().unwrap().write);
+    run(&mut f, "tape write on");
     assert_eq!(last(&f), Some(&Message::Tape(M::Empty(1))));
     run(&mut f, "tape 2 eject");
     assert_eq!(last(&f), Some(&Message::Tape(M::Emptied)));
