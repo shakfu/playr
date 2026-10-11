@@ -123,7 +123,7 @@ A loop for a voice is resampled to the looper's rate on load. A voice load with 
 
 - `tape::load_loop(f, id, voice)`, called from the Loops view.
 - `Extent` becomes one per voice, so windows, `:tape N window 25% 75%` and the lanes count in that voice's loop.
-- The Tape tab draws the selected voice's loop. At 800 x 592 there is no room for three waveforms.
+- The Tape tab draws the selected voice's loop. At 800 x 592 there is no room for three waveforms. Superseded: `tape-lanes.md` draws every voice's.
 - Saves go to `samples/<name>-tape/`, named after voice 1's loop, as now.
 
 ## Tests
@@ -172,3 +172,5 @@ A loop for a voice is resampled to the looper's rate on load. A voice load with 
 - **Names.** The Sampler menu's Loops submenu became Loop slots, apart from the Loops view. The window's search field went from 240 to 180 points, so the ninth tab fits 800 points.
 
 - **Not checked.** The `acid` layout is from memory, tested only against files the tests write; check it against a real loop pack. The terminal's Loops view and the window's per-voice Tape drawing were not looked at by hand.
+
+- **Loading moved to the Tape tab's lanes** (2026-10-11, after use). The Loops view no longer loads on enter or `!` `@` `#`: a load landed in a voice the user had not picked, and ejecting a voice's own loop fell back to voice 1's, which kept playing. Each voice now holds a loop of its own, voice 1's loop, or nothing; see `tape-lanes.md`. `:load N` stays for the terminal, which has no lanes. The From column (origin) was dropped: it read as where the audio came from, not how the loop entered the library. From and To columns took its place: where the loop lies in its file, so slots cut from one track can be told apart.

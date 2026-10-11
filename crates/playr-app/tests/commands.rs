@@ -1509,6 +1509,8 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape play", T::Play),
         ("tape stop", T::Stop),
         ("tape reset", T::Reset),
+        ("tape 2 clear", T::Clear(2)),
+        ("tape 1 eject", T::Eject(1)),
         ("tape save", T::Save),
         ("tape rec", T::Record),
         ("tape write off", T::Write(false)),
@@ -1737,8 +1739,18 @@ fn loops_view_commands_parse_there_and_round_trip() {
         default_key("9", Library),
         Some(Action::ShowView(View::Loops))
     );
-    assert_eq!(
-        default_key("@", View::Loops),
-        Some(Action::LoopLib(LoopAction::Load(Some(2))))
-    );
+    // Loops load from the Tape tab's lanes, or with :load; no key loads.
+    for key in ["@", "enter"] {
+        assert!(
+            !matches!(
+                default_key(key, View::Loops),
+                Some(Action::LoopLib(LoopAction::Load(_)))
+            ),
+            "{key}"
+        );
+    }
+    // A Mac's delete key sends backspace.
+    for key in ["d", "backspace", "delete"] {
+        assert_eq!(default_key(key, View::Loops), Some(Action::Remove), "{key}");
+    }
 }

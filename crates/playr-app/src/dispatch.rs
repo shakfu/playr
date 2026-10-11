@@ -1371,8 +1371,8 @@ fn activate(f: &mut impl Frontend) {
                 f.session_mut().play_queue_row(row);
             }
         }
-        View::Loops => loop_lib(f, LoopAction::Load(None)),
-        View::Sampler | View::Tape | View::Mix => {}
+        // Loops load from the Tape tab's lanes, or with :load.
+        View::Loops | View::Sampler | View::Tape | View::Mix => {}
     }
 }
 

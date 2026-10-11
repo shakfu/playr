@@ -1471,6 +1471,16 @@ impl Session {
         .unwrap_or_default();
     }
 
+    /// The loops `query` matches, as `db::loops::search` reads it, or every
+    /// loop for a blank one. The Loops view's list stays as it is.
+    pub fn find_loops(&self, query: &str) -> Vec<db::loops::Loop> {
+        match query.trim() {
+            "" => db::loops::all(&self.conn),
+            q => db::loops::search(&self.conn, q),
+        }
+        .unwrap_or_default()
+    }
+
     /// Loop `id` of the library.
     pub fn library_loop(&self, id: i64) -> Option<db::loops::Loop> {
         db::loops::get(&self.conn, id).ok().flatten()

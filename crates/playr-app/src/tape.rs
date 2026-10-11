@@ -65,6 +65,15 @@ pub enum TapeAction {
     Stop,
     /// Restore the loop as loaded.
     Reset,
+    /// Silence the loop voice `n`, from 1, reads, keeping its length.
+    Clear(u8),
+    /// Empty voice `n`, so it reads nothing; voice 1's empties every voice
+    /// reading its loop.
+    Eject(u8),
+    /// Voice `n`, from 2, reads voice 1's loop.
+    Share(u8),
+    /// Load loop `id` of the loop library into voice `n`.
+    Loop(u8, i64),
     /// Save the loop as a sample.
     Save,
     /// Start or stop recording the mix.
@@ -99,6 +108,10 @@ pub enum TapeMessage {
     Done(TapeAction),
     /// A `:tape` action other than load before anything was loaded.
     NoTape,
+    /// Voice `n` reads nothing, for an action that needs a loop.
+    Empty(u8),
+    /// Every voice is empty, so the tape is gone.
+    Emptied,
     /// `:tape load` with no range set.
     NoRange,
     EmptySlot(u8),
@@ -168,6 +181,8 @@ struct Loaded {
 struct Loading {
     result: Receiver<Result<Loaded, String>>,
     name: String,
+    /// Where it lies in its source, as `loops::span_text` gives it.
+    span: String,
     /// The voice it is for, alone, from 0; `None` for every voice.
     voice: Option<usize>,
     /// The beats the loop library gives it.
@@ -201,6 +216,10 @@ struct Live {
     extent: Extent,
     /// The voices' own loops' shapes; never voice 0's.
     own: [Option<Extent>; playr_looper::VOICES],
+    /// Where voice 0's loop lies in its source, as `loops::span_text` gives it.
+    span: String,
+    /// The voices' own loops' names and spans, as `own`.
+    own_names: [Option<(String, String)>; playr_looper::VOICES],
     /// The beats the loop library gives voice 0's loop.
     beats: Option<u32>,
     /// Where the snapshot asked for is to be saved.
@@ -252,6 +271,8 @@ pub struct TapeState {
     /// Which voices read a loop of their own; while any does, the write head
     /// is held off.
     pub own: [bool; playr_looper::VOICES],
+    /// Which voices read nothing: ejected, or never loaded.
+    pub empty: [bool; playr_looper::VOICES],
     pub playing: bool,
     pub write: bool,
     pub write_window: Window,
@@ -284,6 +305,7 @@ impl TapeState {
         TapeState {
             voices: [voice(true), voice(false), voice(false)],
             own: [false; playr_looper::VOICES],
+            empty: [false; playr_looper::VOICES],
             playing: false,
             write: false,
             write_window: whole,
@@ -429,6 +451,26 @@ impl Deck {
         self.live.as_ref().map(|l| l.extent_of(i))
     }
 
+    /// The name of the loop voice `i`, from 0, reads: its own, or voice 0's
+    /// source.
+    pub fn voice_name(&self, i: usize) -> Option<&str> {
+        let live = self.live.as_ref().filter(|l| !l.state.empty[i])?;
+        Some(match live.own_names.get(i)? {
+            Some((name, _)) => name,
+            None => &live.name,
+        })
+    }
+
+    /// Where the loop voice `i`, from 0, reads lies in its source, as
+    /// `loops::span_text` gives it.
+    pub fn voice_span(&self, i: usize) -> Option<&str> {
+        let live = self.live.as_ref().filter(|l| !l.state.empty[i])?;
+        Some(match live.own_names.get(i)? {
+            Some((_, span)) => span,
+            None => &live.span,
+        })
+    }
+
     /// The settings as last sent, once a loop is loaded.
     pub fn state(&self) -> Option<&TapeState> {
         self.live.as_ref().map(|l| &l.state)
@@ -458,7 +500,8 @@ impl Deck {
     /// at its rate; with none playing it is a load for every voice.
     fn load(&mut self, mut src: Source) -> Result<(), String> {
         let live_rate = self.live.as_ref().map(|l| l.handle.sample_rate());
-        if live_rate.is_none() {
+        // With no tape, voice 1's loop starts one.
+        if live_rate.is_none() && src.voice == Some(0) {
             src.voice = None;
         }
         let to = match (src.voice, live_rate, &self.output) {
@@ -468,10 +511,12 @@ impl Deck {
         };
         let (tx, rx) = channel();
         let (name, voice, beats) = (src.name.clone(), src.voice, src.beats);
+        let span = crate::loops::span_text(src.span.0, src.span.1, src.rate);
         std::thread::spawn(move || _ = tx.send(read(&src, to)));
         self.loading = Some(Loading {
             result: rx,
             name,
+            span,
             voice,
             beats,
         });
@@ -495,9 +540,23 @@ impl Deck {
                     found.push(f);
                 }
             }
-            let started = match into_voice {
-                Some(i) => result.and_then(|l| self.load_voice(i, loading, l)),
-                None => result.and_then(|l| self.start(loading, l)),
+            let started = match (into_voice, loading.voice) {
+                (Some(i), _) => result.and_then(|l| self.load_voice(i, loading, l)),
+                // Into another voice with no tape: an empty tape, then the voice.
+                (None, Some(i)) => result.and_then(|l| {
+                    let silent = Loaded {
+                        lp: Loop::empty(),
+                        rate: l.rate,
+                    };
+                    self.start(String::new(), String::new(), None, silent)?;
+                    let live = self.live.as_mut().expect("just started");
+                    live.state.voices[0].window = Window::new(0, 0);
+                    live.refresh();
+                    self.load_voice(i, loading, l)
+                }),
+                (None, None) => {
+                    result.and_then(|l| self.start(loading.name, loading.span, loading.beats, l))
+                }
             };
             match (&started, &mut self.taking) {
                 (Ok(_), Some(t)) => t.loaded = true,
@@ -568,7 +627,13 @@ impl Deck {
     }
 
     /// Plays `loaded` on a new looper, in place of the old one.
-    fn start(&mut self, loading: Loading, loaded: Loaded) -> Result<TapeMessage, String> {
+    fn start(
+        &mut self,
+        name: String,
+        span: String,
+        beats: Option<u32>,
+        loaded: Loaded,
+    ) -> Result<TapeMessage, String> {
         let extent = Extent {
             frames: loaded.lp.frames(),
             range: loaded.lp.range(),
@@ -576,6 +641,10 @@ impl Deck {
         };
         let (looper, mut handle) = playr_looper::new(extent.rate);
         handle.load(loaded.lp).map_err(|e| e.to_string())?;
+        // Each lane holds its own loop or nothing; voice 1 holds this one.
+        for i in 1..playr_looper::VOICES {
+            handle.eject(i).map_err(|e| e.to_string())?;
+        }
         handle
             .set(Setting::Knee(self.knee))
             .map_err(|e| e.to_string())?;
@@ -592,15 +661,23 @@ impl Deck {
             handle,
             attached,
             looper,
-            name: loading.name,
+            name,
+            span,
             extent,
-            own: [None; playr_looper::VOICES],
-            beats: loading.beats,
+            own: [Some(empty(extent.rate)); playr_looper::VOICES],
+            own_names: Default::default(),
+            beats,
             save_to: None,
             state: TapeState::new(extent.range),
             volume: self.volume,
             interp: None,
         });
+        let live = self.live.as_mut().expect("set above");
+        live.own[0] = None;
+        for i in 1..playr_looper::VOICES {
+            live.state.voices[i].window = Window::new(0, 0);
+        }
+        live.refresh();
         Ok(TapeMessage::Loaded {
             frames: extent.range.len(),
             rate: extent.rate,
@@ -612,6 +689,73 @@ impl Live {
     /// The shape of the loop voice `i` reads.
     fn extent_of(&self, i: usize) -> Extent {
         self.own.get(i).copied().flatten().unwrap_or(self.extent)
+    }
+
+    /// Sets which voices read a loop of their own, and which read nothing,
+    /// from the loops' shapes.
+    fn refresh(&mut self) {
+        for i in 0..playr_looper::VOICES {
+            self.state.empty[i] = self.extent_of(i).frames == 0;
+            self.state.own[i] = self.own[i].is_some_and(|e| e.frames > 0);
+        }
+    }
+
+    /// Empties voice `i`; for voice 0, every voice reading its loop too.
+    fn eject(&mut self, i: usize) -> Result<(), playr_looper::Error> {
+        self.handle.eject(i)?;
+        let followers: Vec<usize> = match i {
+            0 => (0..playr_looper::VOICES)
+                .filter(|j| self.own[*j].is_none())
+                .collect(),
+            _ => vec![i],
+        };
+        match i {
+            0 => {
+                self.extent = empty(self.extent.rate);
+                self.name.clear();
+                self.span.clear();
+                self.beats = None;
+                self.state.write_window = Window::new(0, 0);
+            }
+            _ => {
+                self.own[i] = Some(empty(self.extent.rate));
+                self.own_names[i] = None;
+            }
+        }
+        for j in followers {
+            self.state.voices[j].window = Window::new(0, 0);
+        }
+        self.refresh();
+        Ok(())
+    }
+
+    /// Voice `i`, from 1 up, reads voice 0's loop again.
+    fn share(&mut self, i: usize) -> Result<(), playr_looper::Error> {
+        if self.own[i].is_none() {
+            return Ok(());
+        }
+        self.handle.unload(i)?;
+        self.own[i] = None;
+        self.own_names[i] = None;
+        let range = self.extent.range;
+        match range.is_empty() {
+            true => self.state.voices[i].window = range,
+            false => {
+                self.handle.set(Setting::Window(i, range))?;
+                self.state.apply(Setting::Window(i, range));
+            }
+        }
+        self.refresh();
+        Ok(())
+    }
+}
+
+/// The shape of an empty voice's loop.
+fn empty(rate: u32) -> Extent {
+    Extent {
+        frames: 0,
+        range: Window::new(0, 0),
+        rate,
     }
 }
 
@@ -643,12 +787,13 @@ impl Deck {
             0 => {
                 live.extent = extent;
                 live.name = loading.name;
+                live.span = loading.span;
                 live.beats = loading.beats;
                 live.state.write_window = extent.range;
             }
             _ => {
                 live.own[i] = Some(extent);
-                live.state.own[i] = true;
+                live.own_names[i] = Some((loading.name, loading.span));
             }
         }
         let mut settings: Vec<Setting> = changed
@@ -663,6 +808,7 @@ impl Deck {
             live.handle.set(s).map_err(failed)?;
             live.state.apply(s);
         }
+        live.refresh();
         Ok(TapeMessage::LoadedVoice {
             voice: i as u8 + 1,
             frames: extent.range.len(),
@@ -798,6 +944,7 @@ pub fn act(f: &mut impl Frontend, action: TapeAction) {
         TapeAction::Load(slot) => return load(f, slot),
         TapeAction::Take => return take(f),
         TapeAction::Record => return record(f),
+        TapeAction::Loop(n, id) => return load_loop(f, id, Some(n)),
         _ => {}
     }
     let samples = f.session().samples_dir().to_path_buf();
@@ -809,6 +956,13 @@ pub fn act(f: &mut impl Frontend, action: TapeAction) {
     if let Err(m) = sent {
         return f.notify(m.into());
     }
+    if f.tape()
+        .live
+        .as_ref()
+        .is_some_and(|l| l.state.empty.iter().all(|e| *e))
+    {
+        return eject(f);
+    }
     // The tape plays alone; the player stays paused until asked.
     if action == TapeAction::Play && playing {
         f.session().send(playr_core::audio::Cmd::TogglePause);
@@ -818,11 +972,31 @@ pub fn act(f: &mut impl Frontend, action: TapeAction) {
     }
 }
 
+/// Drops the tape once every voice is empty, finishing its recording first.
+fn eject(f: &mut impl Frontend) {
+    let deck = f.tape();
+    let Some(mut live) = deck.live.take() else {
+        return;
+    };
+    deck.taking = None;
+    if let Some(found) = stop_recording(&mut live) {
+        report(f, found);
+    }
+    f.notify(TapeMessage::Emptied.into());
+}
+
 /// Sends `action` to the looper.
 fn send(live: &mut Live, action: TapeAction, samples: PathBuf) -> Result<(), TapeMessage> {
     let failed = |e: playr_looper::Error| TapeMessage::Failed(e.to_string());
     match action {
         TapeAction::Reset => live.handle.reset().map_err(failed),
+        TapeAction::Clear(n) | TapeAction::Eject(n) if live.state.empty[usize::from(n) - 1] => {
+            Err(TapeMessage::Empty(n))
+        }
+        TapeAction::Clear(n) => live.handle.clear(usize::from(n) - 1).map_err(failed),
+        TapeAction::Eject(n) => live.eject(usize::from(n) - 1).map_err(failed),
+        TapeAction::Share(n) => live.share(usize::from(n) - 1).map_err(failed),
+        TapeAction::Save if live.state.empty[0] => Err(TapeMessage::Empty(1)),
         TapeAction::Save if live.save_to.is_some() => Err(TapeMessage::AlreadySaving),
         TapeAction::Save => {
             live.handle.snapshot().map_err(failed)?;
@@ -851,7 +1025,10 @@ fn extent_for(live: &Live, action: TapeAction) -> Extent {
 fn load(f: &mut impl Frontend, slot: Option<u8>) {
     if let Some((path, rate, span)) = range(f, slot) {
         drop_take(f);
-        start_load(f, track_source(path, rate, span));
+        let mut src = track_source(path, rate, span);
+        // Into voice 1 alone, so the other lanes keep their loops.
+        src.voice = Some(0);
+        start_load(f, src);
     }
 }
 
@@ -868,8 +1045,7 @@ fn track_source(path: PathBuf, rate: u32, span: (u64, u64)) -> Source {
     }
 }
 
-/// Loads loop `id` of the loop library for every voice, or for voice `n`,
-/// from 1, alone.
+/// Loads loop `id` of the loop library into voice `n`, from 1, or voice 1.
 pub fn load_loop(f: &mut impl Frontend, id: i64, voice: Option<u8>) {
     let Some(l) = f.session().library_loop(id) else {
         return f.notify(TapeMessage::NoSuchLoop.into());
@@ -885,7 +1061,7 @@ pub fn load_loop(f: &mut impl Frontend, id: i64, voice: Option<u8>) {
             span: (l.start, l.end),
             // A slot is a span of a track; anything else was cut to loop.
             circular: l.origin != playr_core::db::loops::Origin::Slot,
-            voice: voice.map(|n| usize::from(n).saturating_sub(1)),
+            voice: Some(voice.map_or(0, |n| usize::from(n).saturating_sub(1))),
             beats: l.beats,
         },
     );
@@ -1201,6 +1377,10 @@ pub fn settings(action: TapeAction, e: Extent) -> Result<Vec<Setting>, TapeMessa
         TapeAction::Load(_)
         | TapeAction::Take
         | TapeAction::Reset
+        | TapeAction::Clear(_)
+        | TapeAction::Eject(_)
+        | TapeAction::Share(_)
+        | TapeAction::Loop(..)
         | TapeAction::Save
         | TapeAction::Record => return Ok(Vec::new()),
     }])

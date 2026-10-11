@@ -251,7 +251,7 @@ pub const COMMANDS: &[Command] = &[
         Loops,
         "load",
         "[VOICE]",
-        "load into the tape, or into voice N",
+        "load into voice N of the tape, or voice 1",
     ),
     only(Loops, "beats", "N", "set the loop's beats, and its tempo"),
     only(Loops, "key", "KEY | -", "set the loop's key; - clears it"),
@@ -746,7 +746,7 @@ pub const MAX_BEATS: f32 = 64.0;
 
 const TAPE_USAGE: &str = "usage: :tape load [N] | take | play | stop | reset | save | rec | \
      write on|off | feedback F | wear W | thin T | window A B | \
-     V on|off | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
+     V on|off | V clear|eject|share | V loop ID | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
      ping on|off|slew MS|drive D|filter F|lp|hp|bp|solo on|off";
 
 /// Parses what follows `:tape`. Voices count from 1; windows take a time or
@@ -789,6 +789,14 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
                 return Err(format!("voices are 1 to {}", playr_looper::VOICES));
             }
             let s = match setting {
+                ["clear"] => return Ok(T::Clear(n)),
+                ["eject"] => return Ok(T::Eject(n)),
+                ["share"] if n == 1 => return Err("voice 1's loop is the one shared".into()),
+                ["share"] => return Ok(T::Share(n)),
+                ["loop", id] => match id.parse::<i64>() {
+                    Ok(id) => return Ok(T::Loop(n, id)),
+                    Err(_) => return Err(format!("not a loop id: {id}")),
+                },
                 [w] => V::On(on(w)?),
                 ["rate", r] => V::Rate(value(r, "rate", -4.0, 4.0)?),
                 ["window", a, b] => V::Window(tape_pos(a)?, tape_pos(b)?),
@@ -1104,6 +1112,10 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
         T::Play => "play".into(),
         T::Stop => "stop".into(),
         T::Reset => "reset".into(),
+        T::Clear(n) => format!("{n} clear"),
+        T::Eject(n) => format!("{n} eject"),
+        T::Share(n) => format!("{n} share"),
+        T::Loop(n, id) => format!("{n} loop {id}"),
         T::Save => "save".into(),
         T::Record => "rec".into(),
         T::Write(b) => format!("write {}", on(b)),

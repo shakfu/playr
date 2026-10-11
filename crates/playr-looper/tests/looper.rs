@@ -336,3 +336,68 @@ fn reset_restores_every_voices_loop() {
     }
     assert_eq!(back, 2, "the loop and voice 1's own came back");
 }
+
+#[test]
+fn a_clear_silences_the_loop_a_voice_reads_and_reset_restores_it() {
+    let (mut l, mut h) = two_loops(0.5, 0.2);
+    h.clear(1).unwrap();
+    for _ in 0..10 {
+        block(&mut l);
+    }
+    assert!((block(&mut l)[0] - 0.5).abs() < 1e-6, "voice 1's own alone");
+    match h.poll() {
+        Some(Returned::Loop(lp)) => assert_eq!(lp.samples(), vec![0.2; 2_400]),
+        other => panic!("{other:?}"),
+    }
+    // Voice 2 has no loop of its own, so its clear silences voice 0's.
+    h.clear(2).unwrap();
+    for _ in 0..10 {
+        block(&mut l);
+    }
+    assert!(block(&mut l)[0].abs() < 1e-6);
+    h.reset().unwrap();
+    for _ in 0..10 {
+        block(&mut l);
+    }
+    assert!((block(&mut l)[0] - 0.7).abs() < 1e-6, "reset restores both");
+}
+
+#[test]
+fn an_unload_puts_a_voice_back_on_voice_0s_loop() {
+    let (mut l, mut h) = two_loops(0.5, 0.2);
+    h.unload(1).unwrap();
+    assert!(!h.has_own(1));
+    for _ in 0..10 {
+        block(&mut l);
+    }
+    assert!((block(&mut l)[0] - 1.0).abs() < 1e-6);
+    match h.poll() {
+        Some(Returned::Loop(lp)) => assert_eq!(lp.samples(), vec![0.2; 2_400]),
+        other => panic!("{other:?}"),
+    }
+    assert!(h.unload(1).is_err(), "nothing of its own left");
+    assert!(h.unload(0).is_err());
+}
+
+#[test]
+fn an_eject_empties_a_voice_and_reset_keeps_it_empty() {
+    let (mut l, mut h) = two_loops(0.5, 0.2);
+    h.eject(1).unwrap();
+    for _ in 0..10 {
+        block(&mut l);
+    }
+    assert!((block(&mut l)[0] - 0.5).abs() < 1e-6, "voice 1 silent");
+    assert!(h.clear(1).is_err(), "nothing to clear");
+    h.reset().unwrap();
+    for _ in 0..10 {
+        block(&mut l);
+    }
+    assert!((block(&mut l)[0] - 0.5).abs() < 1e-6);
+    // Voice 0's eject silences it; an empty voice can share it again.
+    h.eject(0).unwrap();
+    h.unload(1).unwrap();
+    for _ in 0..10 {
+        block(&mut l);
+    }
+    assert!(block(&mut l)[0].abs() < 1e-6);
+}

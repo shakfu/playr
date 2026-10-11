@@ -792,3 +792,13 @@ fn mix_messages_are_worded() {
         "master recording: no room"
     );
 }
+
+#[test]
+fn a_loop_s_span_reads_in_minutes_and_tenths() {
+    use playr_app::loops::span_text;
+    assert_eq!(span_text(0, 22_050, 44_100), "0:00.0-0:00.5");
+    // 62.34 s to 66.06 s rounds to tenths.
+    assert_eq!(span_text(2_992_320, 3_170_880, 48_000), "1:02.3-1:06.1");
+    assert_eq!(span_text(0, 59_940, 1000), "0:00.0-0:59.9");
+    assert_eq!(span_text(0, 59_990, 1000), "0:00.0-1:00.0", "no 0:60.0");
+}

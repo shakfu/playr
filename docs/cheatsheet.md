@@ -171,10 +171,10 @@ The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a cl
 
 | command           | key                  | does                                   |
 |-------------------|----------------------|----------------------------------------|
-| `:load [VOICE]`   | `enter`; `!` `@` `#` | load into the tape, or into voice N    |
+| `:load [VOICE]`   |                      | load into voice N of the tape, or 1    |
 | `:beats N`        |                      | set the loop's beats, and its tempo    |
 | `:key KEY \| -`   |                      | set the loop's key; - clears it        |
-| `:remove`         | `d`, `delete`        | take the loop out of the library       |
+| `:remove`         | `d` backspace delete | take the loop out of the library       |
 | `:search-clear`   | `esc`                | list every loop again                  |
 
 `/` searches the loops: words match the name, tags and key; `bpm:120` or `bpm:118..124` matches a tempo, `key:Am` a key. A tempo shown as `~120.0` was guessed from the loop's length; `:beats` corrects it. `playr loops scan DIR` adds a directory of loops.

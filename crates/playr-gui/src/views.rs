@@ -275,7 +275,7 @@ pub fn playlists(model: &Model, ui: &mut egui::Ui, scroll: Option<usize>) -> Cli
 }
 
 /// The loop library, or the loops a search found: a row per loop under
-/// [`playr_app::loops::HEADINGS`]. A double click loads it for every voice.
+/// [`playr_app::loops::HEADINGS`]. Loops load from the Tape tab's lanes.
 pub fn loops(model: &Model, ui: &mut egui::Ui, scroll: Option<usize>) -> Clicked {
     let loops = model.session().loop_list();
     if loops.is_empty() {
@@ -300,8 +300,9 @@ pub fn loops(model: &Model, ui: &mut egui::Ui, scroll: Option<usize>) -> Clicked
         .column(Column::exact(56.0))
         .column(Column::exact(44.0))
         .column(Column::exact(40.0))
+        .column(Column::exact(52.0))
+        .column(Column::exact(52.0))
         .column(Column::exact(48.0))
-        .column(Column::exact(56.0))
         .column(Column::remainder().at_least(80.0).clip(true))
         .header(ROW, |mut header| {
             for name in playr_app::loops::HEADINGS {

@@ -24,6 +24,8 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### DJ decks and tape
 
+- [ ] **Delay and reverb sends for the tape voices.** A send per voice to a shared delay and a shared reverb. The looper has no effects (`docs/dev/looper-engine.md`); this needs two buses on the audio thread and its own design. Each lane has ~120 points free beside its fields. See `docs/dev/tape-lanes.md`.
+
 ### Playlists
 
 ### Playback

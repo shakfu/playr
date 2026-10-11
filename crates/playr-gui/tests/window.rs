@@ -1503,7 +1503,7 @@ fn the_tape_dj_and_mix_views_have_numbers_tab_order_and_keys_of_their_own() {
     let view = |harness: &Harness<'_, Gui>| model(harness).view();
     typing(&mut harness, "6");
     assert_eq!(view(&harness), View::Tape);
-    harness.get_by_label("Tape waveform");
+    harness.get_by_label("Voice 1 waveform");
     // The tape's key, not the player's pause.
     typing(&mut harness, " ");
     assert_eq!(
@@ -1639,7 +1639,9 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
     harness.get_by_label("Tape").click();
     harness.run_steps(2);
     for label in [
-        "Tape waveform",
+        "Voice 1 waveform",
+        "Voice 3 waveform",
+        "Write strip",
         "Voice 1 rate",
         "Voice 3 end",
         "Voice 3 wear",
@@ -1655,6 +1657,8 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
         "Voice 3 filter",
         "Voice 3 band-pass",
         "Write thin",
+        "Voice 1 clear",
+        "Voice 3 eject",
     ] {
         harness.get_by_label(label);
     }
@@ -1670,7 +1674,7 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
 
     typing(&mut harness, "2");
     assert_eq!(harness.state().model().view(), View::Queue);
-    assert!(harness.query_by_label("Tape waveform").is_none());
+    assert!(harness.query_by_label("Voice 1 waveform").is_none());
 }
 
 #[test]
@@ -1704,12 +1708,20 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
     );
     let window =
         |h: &Harness<'_, Gui>, i: usize| h.state().model().deck().state().unwrap().voices[i].window;
-    let rect = harness.get_by_label("Tape waveform").rect();
-    // The 12-point write strip, the 98-point waveform, then a 12-point lane a voice.
-    let strip = rect.top() + 6.0;
-    let wave = rect.top() + 12.0 + 49.0;
-    let lane = |i: usize| rect.top() + 12.0 + 98.0 + 12.0 * i as f32 + 6.0;
-    let at = |frame: usize| rect.left() + rect.width() * frame as f32 / 48_000.0;
+    let rect = |h: &Harness<'_, Gui>, label: &str| h.get_by_label(label).rect();
+    // Each lane draws its own loop across the same width.
+    let (wave, strip) = (
+        rect(&harness, "Voice 1 waveform"),
+        rect(&harness, "Write strip"),
+    );
+    let lane = |i: usize| {
+        rect(&harness, &format!("Voice {} waveform", i + 1))
+            .center()
+            .y
+    };
+    let (lane, wave_y) = ([lane(0), lane(1)], wave.center().y);
+    assert_eq!((wave.left(), wave.width()), (strip.left(), strip.width()));
+    let at = |frame: usize| wave.left() + wave.width() * frame as f32 / 48_000.0;
     let drag = |h: &mut Harness<'_, Gui>, y: f32, from: f32, to: f32| {
         h.hover_at(egui::pos2(from, y));
         h.run_steps(1);
@@ -1723,37 +1735,47 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
         h.run_steps(2);
     };
 
-    // On the waveform, voice 1's end, from the range's end to a quarter in.
-    drag(&mut harness, wave, at(40_000), at(16_000));
+    // On voice 1's waveform, its end, from the range's end to a quarter in.
+    drag(&mut harness, wave_y, at(40_000), at(16_000));
     let w = window(&harness, 0);
     assert_eq!(w.start, 8000);
     assert!(w.end.abs_diff(16_000) <= 100, "{w:?}");
 
     // The whole window, later, by its middle.
     let len = w.len();
-    drag(&mut harness, wave, at(12_000), at(28_000));
+    drag(&mut harness, wave_y, at(12_000), at(28_000));
     let w = window(&harness, 0);
     assert_eq!(w.len(), len, "a moved window keeps its length");
     assert!(w.start.abs_diff(24_000) <= 100, "{w:?}");
 
     // An end dropped within reach of the range's end lands on it exactly.
-    drag(&mut harness, wave, at(w.end), at(40_150));
+    drag(&mut harness, wave_y, at(w.end), at(40_150));
     assert_eq!(window(&harness, 0).end, 40_000);
 
-    // Voice 2's lane selects it, and the waveform then edits its window.
-    drag(&mut harness, lane(1), at(8000), at(20_000));
+    // Voices 2 and 3 start empty; voice 2's list puts it on voice 1's loop.
+    let tape = |h: &Harness<'_, Gui>| *h.state().model().deck().state().unwrap();
+    assert_eq!(tape(&harness).empty, [false, true, true]);
+    harness.get_by_label("Voice 2 loop").click();
+    harness.run_steps(2);
+    harness.get_by_label("Voice 2 loop search");
+    harness.get_by_label("voice 1's loop").click();
+    harness.run_steps(2);
+    assert_eq!(tape(&harness).empty, [false, false, true]);
+    assert!(
+        harness.query_by_label("Voice 2 loop search").is_none(),
+        "closed"
+    );
+
+    // Voice 2's waveform edits voice 2's window alone.
+    drag(&mut harness, lane[1], at(8000), at(20_000));
     assert!(window(&harness, 1).start.abs_diff(20_000) <= 100);
-    drag(&mut harness, wave, at(40_000), at(36_000));
+    drag(&mut harness, lane[1], at(40_000), at(36_000));
     assert!(window(&harness, 1).end.abs_diff(36_000) <= 100);
     assert_eq!(window(&harness, 0).end, 40_000, "voice 1 stays");
-    // Its name in the grid selects a voice too.
-    harness.get_by_label("Voice 1").click();
-    harness.run_steps(2);
-    drag(&mut harness, wave, at(40_000), at(32_000));
-    assert!(window(&harness, 0).end.abs_diff(32_000) <= 100);
+    assert_eq!(lane[0], wave_y);
 
     // The write window's start, in its strip; the voices' windows stay.
-    drag(&mut harness, strip, at(8000), at(24_000));
+    drag(&mut harness, strip.center().y, at(8000), at(24_000));
     let ww = harness.state().model().deck().state().unwrap().write_window;
     assert!(
         ww.start.abs_diff(24_000) <= 100 && ww.end == 40_000,
@@ -1781,11 +1803,31 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
     harness.key_press(egui::Key::Enter);
     harness.run_steps(2);
     assert!(
-        harness.query_by_label("Tape waveform").is_some(),
+        harness.query_by_label("Voice 1 waveform").is_some(),
         "a digit left the Tape tab"
     );
     let slew = harness.state().model().deck().state().unwrap().voices[0].slew;
     assert_eq!(slew, 500.0);
+
+    // Clear on any lane; Eject only where there is something to eject.
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    harness.get_by_label("Voice 2 clear").click();
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().model().message(),
+        Some(&Message::Tape(M::Done(T::Clear(2))))
+    );
+    // Eject empties voice 2; Voice 1's empties every voice left.
+    harness.get_by_label("Voice 2 eject").click();
+    harness.run_steps(2);
+    assert!(tape(&harness).empty[1]);
+    harness.get_by_label("Voice 1 eject").click();
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().model().message(),
+        Some(&Message::Tape(M::Emptied))
+    );
+    assert!(harness.state().model().deck().loaded().is_none());
 }
 
 #[test]

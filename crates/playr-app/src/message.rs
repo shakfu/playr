@@ -682,8 +682,15 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
         TapeMessage::Done(TapeAction::Play) => "tape playing".into(),
         TapeMessage::Done(TapeAction::Stop) => "tape stopped".into(),
         TapeMessage::Done(TapeAction::Reset) => "tape reset to the loop as loaded".into(),
+        TapeMessage::Done(TapeAction::Clear(n)) => {
+            format!("voice {n}'s loop cleared; :tape reset restores it")
+        }
+        TapeMessage::Done(TapeAction::Eject(n)) => format!("voice {n} ejected"),
+        TapeMessage::Done(TapeAction::Share(n)) => format!("voice {n} reads voice 1's loop"),
         TapeMessage::Done(a) => command::line(&Action::Tape(*a), None),
         TapeMessage::NoTape => "no tape loaded; :tape load first".into(),
+        TapeMessage::Empty(n) => format!("voice {n} is empty"),
+        TapeMessage::Emptied => "every voice is empty; the tape is gone".into(),
         TapeMessage::NoRange => "no range to load; set one, or :tape load N for a loop".into(),
         TapeMessage::EmptySlot(n) => format!("loop {n} is empty"),
         TapeMessage::EmptyWindow => {

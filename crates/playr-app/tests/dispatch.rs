@@ -1602,7 +1602,7 @@ fn a_tape_take_past_the_range_or_without_one_is_refused() {
 
 #[test]
 fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
-    use playr_app::tape::{no_effect, Control, Idle, TapeMessage as M};
+    use playr_app::tape::{no_effect, Control, Idle, TapeAction as T, TapeMessage as M};
     let run = |f: &mut Headless, line: &str| {
         let action = command::parse(line, f.view).unwrap();
         dispatch(action, f);
@@ -1645,8 +1645,22 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
     );
     assert!(matches!(last(&f), Some(Message::LoopSet(_))));
 
-    // Into voice 2 alone, beside the range voice 1 plays.
-    run(&mut f, "load 2");
+    // Voices 2 and 3 start empty beside the range voice 1 plays.
+    let state = *f.tape.state().unwrap();
+    assert_eq!(state.empty, [false, true, true]);
+    assert_eq!(f.tape.voice_name(2), None);
+    let id = |f: &Headless, name: &str| {
+        f.session
+            .find_loops(name)
+            .iter()
+            .find(|l| l.name == name)
+            .unwrap()
+            .id
+    };
+    let pad = id(&f, "pad");
+
+    // A lane loads a loop of the library into its voice alone.
+    run(&mut f, &format!("tape 2 loop {pad}"));
     tape_until(&mut f, |m| {
         matches!(m, Message::Tape(M::LoadedVoice { .. }))
     });
@@ -1665,6 +1679,11 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
         (12_000, 4000, 4000)
     );
     assert_eq!(f.tape.voice_extent(0), f.tape.loaded());
+    assert_eq!(f.tape.voice_name(1), Some("pad"));
+    // Where each loop lies in its file: the whole 0.5 s pad, and the range.
+    assert_eq!(f.tape.voice_span(1), Some("0:00.0-0:00.5"));
+    assert_eq!(f.tape.voice_span(0), Some("0:00.5-0:01.5"));
+    assert_eq!(f.tape.voice_span(2), None, "empty");
     let state = *f.tape.state().unwrap();
     assert!(state.own[1] && state.voices[1].on);
     assert_eq!(state.voices[1].window, own.range);
@@ -1672,16 +1691,73 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
     let state = *f.tape.state().unwrap();
     assert_eq!(no_effect(&state, own, Control::Write), Some(Idle::Held));
 
-    // Enter loads it for every voice, which drops voice 2's own.
+    // A clear keeps voice 2's loop; an empty voice has nothing to clear or eject.
+    run(&mut f, "tape 2 clear");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Clear(2)))));
+    assert!(f.tape.state().unwrap().own[1]);
+    for line in ["tape 3 eject", "tape 3 clear"] {
+        run(&mut f, line);
+        assert_eq!(last(&f), Some(&Message::Tape(M::Empty(3))), "{line}");
+    }
+    // Voice 3 can read voice 1's loop instead.
+    run(&mut f, "tape 3 share");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Share(3)))));
+    assert_eq!(f.tape.voice_extent(2), f.tape.loaded());
+    assert_eq!(f.tape.voice_name(2), f.tape.voice_name(0));
+    let range = f.tape.loaded().unwrap().range;
+    assert_eq!(f.tape.state().unwrap().voices[2].window, range);
+    assert!(command::parse("tape 1 share", f.view).is_err());
+
+    // An eject empties voice 2: it reads nothing, not voice 1's loop.
+    run(&mut f, "tape 2 eject");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Eject(2)))));
+    let state = *f.tape.state().unwrap();
+    assert!(state.empty[1] && !state.own[1]);
+    assert_eq!(f.tape.voice_name(1), None);
+    // Not held; with every send at 0 it writes nothing new.
+    assert_eq!(
+        no_effect(&state, f.tape.loaded().unwrap(), Control::Write),
+        Some(Idle::Unchanging)
+    );
+
+    // Enter in the Loops view loads nothing; :load loads into voice 1, and
+    // voice 3, reading its loop, follows.
     f.set_cursor(View::Loops, Some(0));
     run(&mut f, "play");
-    tape_until(&mut f, |m| matches!(m, Message::Tape(M::Loaded { .. })));
-    let state = *f.tape.state().unwrap();
-    assert!(!state.own.iter().any(|o| *o));
+    assert_eq!(f.tape.loaded().unwrap().range, range);
+    run(&mut f, "load");
+    tape_until(&mut f, |m| {
+        matches!(m, Message::Tape(M::LoadedVoice { .. }))
+    });
     assert_eq!(f.tape.loaded().unwrap().range.len(), 8000);
+    assert_eq!(f.tape.voice_extent(2), f.tape.loaded());
+    assert!(f.tape.state().unwrap().empty[1], "voice 2 stays empty");
 
     run(&mut f, "remove");
     assert_eq!(last(&f), Some(&Message::LoopRemoved("kick 120bpm".into())));
     assert_eq!(names(&f), ["pad"]);
     assert!(a.exists(), "the file stays");
+
+    // Voice 1's eject empties voice 3, which reads its loop; with every
+    // voice empty the tape goes.
+    run(&mut f, "tape 1 eject");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Emptied)));
+    assert!(f.tape.loaded().is_none());
+    run(&mut f, "tape 1 clear");
+    assert_eq!(last(&f), Some(&Message::Tape(M::NoTape)));
+
+    // With no tape, a lane's load starts one with the other voices empty.
+    run(&mut f, &format!("tape 2 loop {pad}"));
+    tape_until(&mut f, |m| {
+        matches!(m, Message::Tape(M::LoadedVoice { .. }))
+    });
+    let state = *f.tape.state().unwrap();
+    assert_eq!(state.empty, [true, false, true]);
+    assert_eq!(f.tape.voice_name(1), Some("pad"));
+    run(&mut f, "tape 1 eject");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Empty(1))));
+    run(&mut f, "tape save");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Empty(1))));
+    run(&mut f, "tape 2 eject");
+    assert_eq!(last(&f), Some(&Message::Tape(M::Emptied)));
 }

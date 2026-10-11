@@ -303,6 +303,10 @@ const ELSEWHERE: &[(&str, &str)] = &[
         "Tempo",
         "the speed slider sets the speed directly; typed in the command bar",
     ),
+    (
+        "LoopLib",
+        ":load, :beats and :key are typed in the command bar; the Tape tab's lanes load loops",
+    ),
 ];
 
 #[test]

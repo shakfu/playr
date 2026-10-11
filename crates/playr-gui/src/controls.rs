@@ -7,7 +7,7 @@
 use playr_core::analysis::TempoFix;
 use std::time::Duration;
 
-use playr_app::action::{Action, LoopAction, Nudge, Slicing, Zoom};
+use playr_app::action::{Action, Nudge, Slicing, Zoom};
 use playr_app::dj::{DjAction, GridEdit, Side};
 use playr_app::sampler::Edge;
 use playr_app::tape::TapeAction;
@@ -179,25 +179,7 @@ pub const PLAYLIST_ROW: &[Control] = &[
 ];
 
 /// A loop's menu in the Loops view.
-pub const LOOP_ROW: &[Control] = &[
-    control(
-        "Load for every voice",
-        Action::LoopLib(LoopAction::Load(None)),
-    ),
-    control(
-        "Load into voice 1",
-        Action::LoopLib(LoopAction::Load(Some(1))),
-    ),
-    control(
-        "Load into voice 2",
-        Action::LoopLib(LoopAction::Load(Some(2))),
-    ),
-    control(
-        "Load into voice 3",
-        Action::LoopLib(LoopAction::Load(Some(3))),
-    ),
-    control("Remove from library", Action::Remove),
-];
+pub const LOOP_ROW: &[Control] = &[control("Remove from library", Action::Remove)];
 
 /// Right of the sampler's header while it previews a track.
 pub const END_PREVIEW: Control = control("End preview", Action::Preview);

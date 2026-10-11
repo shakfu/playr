@@ -1,9 +1,11 @@
-//! The Tape tab: the looper's loop, each voice's window and head, the write
-//! window and head, and a strip of controls each. The terminal has the `:tape`
-//! commands only; see `docs/dev/looper-engine.md`.
+//! The Tape tab: a lane for the write head, then a lane per voice, each with
+//! its loop, its window and head, and its controls. The terminal has the
+//! `:tape` commands only; see `docs/dev/looper-engine.md` and
+//! `docs/dev/tape-lanes.md`.
 
 use eframe::egui;
 use playr_app::action::Action;
+use playr_app::dispatch::Frontend;
 use playr_app::message::idle_text;
 use playr_app::model::Model;
 use playr_app::tape::{
@@ -14,32 +16,31 @@ use playr_looper::{Window, COLUMNS, VOICES};
 use crate::controls;
 use crate::palette::Palette;
 
-/// The write window's strip above the waveform, the waveform's height, and
-/// the lane under it for each voice's window.
-const STRIP: f32 = 12.0;
-const WAVE: f32 = 98.0;
-const LANE: f32 = 12.0;
+/// The header's width beside each lane; the write window's strip, a voice's
+/// waveform, and the band at its foot the crossfade curves take.
+const HEAD: f32 = 150.0;
+const STRIP: f32 = 16.0;
+const WAVE: f32 = 56.0;
+const FADES: f32 = 12.0;
 /// Points along each drawn crossfade curve.
 const CURVE: usize = 16;
-/// The narrowest a slider gets, and what a strip keeps beside it: the
-/// headings and the value field.
-const SLIDER: f32 = 54.0;
-const BESIDE: f32 = 112.0;
 
 /// How near an edge, in points, a press grabs it, and a dragged edge or
 /// window snaps to the range's edges.
 const GRAB: f32 = 6.0;
 
-/// What the tab keeps between frames: the voice whose window the waveform
-/// shows and edits, and a window being dragged.
+/// What the tab keeps between frames: a window being dragged, and the
+/// lane whose loop list is open, with its search and what it found.
 #[derive(Debug, Default)]
 pub struct State {
-    selected: usize,
     drag: Option<Drag>,
+    picking: Option<usize>,
+    query: String,
+    found: Vec<playr_core::db::loops::Loop>,
 }
 
-/// A drag on the waveform: whose window, which part of it, the window as it
-/// was when the drag began, and the frame first pressed.
+/// A drag in a lane: whose window, which part of it, the window as it was
+/// when the drag began, and the frame first pressed.
 #[derive(Debug, Clone, Copy)]
 struct Drag {
     target: Target,
@@ -48,7 +49,7 @@ struct Drag {
     grab: f64,
 }
 
-/// A voice's window, in its lane, or the write window, on the waveform.
+/// A voice's window, on its waveform, or the write window, in its strip.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Target {
     Voice(usize),
@@ -90,19 +91,66 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
                 actions.push(c.action.clone());
             }
         }
-        // Beside the buttons, so the strips fit the smallest window.
+        // Beside the buttons, so the lanes fit the smallest window.
         if frames.is_none() {
             ui.weak(match deck.loading() {
                 true => "Reading the range.",
-                false => "Set a sampler range, then Load range or Take.",
+                false => "Pick a loop in a lane, or set a range and Load range.",
             });
         }
     });
-    waveform(ui, model, &state, extents, tab, &mut actions);
-    ui.add_enabled_ui(frames.is_some(), |ui| {
-        rows(ui, &state, extents, tab, &mut actions);
+    let lanes = Lanes {
+        model,
+        state: &state,
+        extents,
+    };
+    let loaded = frames.is_some();
+    let mut ctx = (&mut actions, tab);
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.add_enabled_ui(loaded, |ui| {
+            lane(
+                ui,
+                &mut ctx,
+                |ui, (a, _)| write_head(ui, &state, extents[0], a),
+                |ui, (a, tab)| {
+                    lanes.write_strip(ui, tab, a);
+                    write_fields(ui, &state, extents[0], a);
+                },
+            );
+        });
+        for (i, &e) in extents.iter().enumerate() {
+            ui.separator();
+            lane(
+                ui,
+                &mut ctx,
+                |ui, (a, tab)| voice_head(ui, model, &state, e, i, tab, a),
+                |ui, (a, tab)| {
+                    ui.add_enabled_ui(loaded, |ui| {
+                        lanes.voice_wave(ui, i, tab, a);
+                        voice_fields(ui, &state, e, i, a);
+                    });
+                },
+            );
+        }
     });
     actions
+}
+
+/// A lane: `head` in a column of [`HEAD`] points, `body` beside it, each
+/// given `ctx`.
+fn lane<T>(
+    ui: &mut egui::Ui,
+    ctx: &mut T,
+    head: impl FnOnce(&mut egui::Ui, &mut T),
+    body: impl FnOnce(&mut egui::Ui, &mut T),
+) {
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(HEAD);
+            head(ui, ctx);
+        });
+        ui.vertical(|ui| body(ui, ctx));
+    });
 }
 
 /// The colour of voice `i`, and of the write head.
@@ -110,298 +158,284 @@ fn colours(p: &Palette) -> ([egui::Color32; VOICES], egui::Color32) {
     ([p.green, p.yellow, p.edge], p.red)
 }
 
-/// The write window in a strip on top; the selected voice's loop's peaks,
-/// with its window shaded and its edges marked, and the pre-roll and
-/// post-roll dimmed; each voice's window in a lane below, on its own loop's
-/// scale; every head as a line.
-fn waveform(
-    ui: &mut egui::Ui,
-    model: &Model,
-    state: &TapeState,
+/// What the lanes draw from.
+struct Lanes<'a> {
+    model: &'a Model,
+    state: &'a TapeState,
     extents: [Extent; VOICES],
-    tab: &mut State,
-    actions: &mut Vec<Action>,
-) {
-    let selected = tab.selected;
-    let extent = extents[selected];
-    let frames = extent.frames;
-    let size = egui::vec2(ui.available_width(), STRIP + WAVE + LANE * VOICES as f32);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Tape waveform"));
-    let visuals = ui.visuals();
-    let palette = Palette::of(visuals);
-    let (voice_colour, write_colour) = colours(palette);
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, visuals.extreme_bg_color);
-    let Some(status) = model.deck().status().filter(|_| frames > 0) else {
-        return;
-    };
-    let strip = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), STRIP));
-    let wave = egui::Rect::from_min_size(strip.left_bottom(), egui::vec2(rect.width(), WAVE));
-    let x = |frame: f64| rect.left() + (frame / frames as f64) as f32 * rect.width();
-    // Each voice's frames on its own loop's scale; the write head's on voice 1's.
-    let at = |t: Target, frame: f64| {
-        let n = match t {
-            Target::Voice(i) => extents[i].frames,
-            Target::Write => extents[0].frames,
+}
+
+impl Lanes<'_> {
+    /// Whether the write head is writing: it is held while any voice reads a
+    /// loop of its own.
+    fn writing(&self) -> bool {
+        self.state.write && !self.state.own.iter().any(|o| *o)
+    }
+
+    /// The write window, on voice 1's loop's scale, with the write head as a
+    /// line, and what it cannot change labelled frozen.
+    fn write_strip(&self, ui: &mut egui::Ui, tab: &mut State, actions: &mut Vec<Action>) {
+        let e = self.extents[0];
+        let size = egui::vec2(ui.available_width(), STRIP);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Write strip")
+        });
+        let visuals = ui.visuals();
+        let (_, write_colour) = colours(Palette::of(visuals));
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 2.0, visuals.extreme_bg_color);
+        let Some(status) = self.model.deck().status().filter(|_| e.frames > 0) else {
+            return;
         };
-        rect.left() + (frame / n.max(1) as f64) as f32 * rect.width()
-    };
-    drag(
-        ui,
-        &response,
-        (strip, wave),
-        state,
-        extents,
-        &at,
-        tab,
-        actions,
-    );
-    let span = |w: Window| x(w.start as f64)..=x(w.end as f64);
-    let span_of = |t: Target, w: Window| at(t, w.start as f64)..=at(t, w.end as f64);
-    // Voice `i` reads the loop shown when it and the selected voice read voice 1's.
-    let shown = |i: usize| i == selected || !(state.own[i] || state.own[selected]);
-    let held = state.own.iter().any(|o| *o);
-
-    // The write window, and the write head, in their strip.
-    let bar = egui::Rect::from_x_y_ranges(
-        span_of(Target::Write, state.write_window),
-        strip.top() + 2.0..=strip.bottom() - 2.0,
-    );
-    let bar_colour = match state.write && !held {
-        true => write_colour,
-        false => visuals.weak_text_color(),
-    };
-    painter.rect_filled(bar, 1.0, bar_colour.gamma_multiply(0.5));
-    painter.text(
-        bar.left_center() + egui::vec2(4.0, 0.0),
-        egui::Align2::LEFT_CENTER,
-        "write",
-        egui::FontId::proportional(STRIP - 3.0),
-        visuals.strong_text_color(),
-    );
-
-    let sw = state.voices[selected].window;
-    let shade = egui::Rect::from_x_y_ranges(span(sw), wave.y_range());
-    painter.rect_filled(shade, 0.0, palette.region);
-    let (mid, half) = (wave.center().y, WAVE / 2.0 - 2.0);
-    let step = rect.width() / COLUMNS as f32;
-    for (i, peak) in status.voice_columns(selected).iter().enumerate() {
-        let cx = rect.left() + (i as f32 + 0.5) * step;
-        let h = peak.min(1.0) * half;
-        painter.line_segment(
-            [egui::pos2(cx, mid - h), egui::pos2(cx, mid + h)],
-            egui::Stroke::new(step.max(1.0), palette.rms),
+        let w = self.state.write_window;
+        drag(ui, &response, rect, Target::Write, w, e, tab, actions);
+        let x = scale(rect, e);
+        let bar = egui::Rect::from_x_y_ranges(
+            x(w.start as f64)..=x(w.end as f64),
+            rect.top() + 2.0..=rect.bottom() - 2.0,
         );
-    }
-    let dim = visuals.extreme_bg_color.gamma_multiply(0.7);
-    for roll in [
-        Window::new(0, extent.range.start),
-        Window::new(extent.range.end, frames),
-    ] {
-        if !roll.is_empty() {
-            painter.rect_filled(
-                egui::Rect::from_x_y_ranges(span(roll), wave.y_range()),
-                0.0,
-                dim,
-            );
-        }
-    }
-    // What the write head cannot change: outside its window, or all of it
-    // while writing is off. While its window is the range it writes the rolls
-    // too, up to a range's length out. A hatch marks it too, for those who
-    // cannot tell the tint.
-    let ww = state.write_window;
-    let reach = match ww == extent.range {
-        true => ww.len(),
-        false => 0,
-    };
-    let frozen = match state.write && !held && shown(0) {
-        true => vec![
-            Window::new(0, ww.start.saturating_sub(reach)),
-            Window::new((ww.end + reach).min(frames), frames),
-        ],
-        false => vec![Window::new(0, frames)],
-    };
-    for part in frozen.into_iter().filter(|w| !w.is_empty()) {
-        let area = egui::Rect::from_x_y_ranges(span(part), wave.y_range());
-        painter.rect_filled(area, 0.0, palette.frozen);
-        let hatch = ui.painter_at(area);
-        let stroke = egui::Stroke::new(1.0, palette.frozen.gamma_multiply(2.5));
-        let mut hx = area.left() - area.height();
-        while hx < area.right() {
-            hatch.line_segment(
-                [
-                    egui::pos2(hx, area.bottom()),
-                    egui::pos2(hx + area.height(), area.top()),
-                ],
-                stroke,
-            );
-            hx += 10.0;
-        }
-        let label = egui::Rect::from_x_y_ranges(span(part), strip.y_range());
-        if label.width() >= 50.0 {
-            painter.text(
-                label.center(),
-                egui::Align2::CENTER_CENTER,
-                "frozen",
-                egui::FontId::proportional(STRIP - 3.0),
-                visuals.weak_text_color(),
-            );
-        }
-    }
-    // The selected window's edges, which a drag on the waveform moves.
-    for edge in [sw.start, sw.end] {
-        let ex = x(edge as f64);
-        painter.line_segment(
-            [egui::pos2(ex, wave.top()), egui::pos2(ex, wave.bottom())],
-            egui::Stroke::new(2.0, voice_colour[selected]),
+        let colour = match self.writing() {
+            true => write_colour,
+            false => visuals.weak_text_color(),
+        };
+        painter.rect_filled(bar, 1.0, colour.gamma_multiply(0.5));
+        let font = egui::FontId::proportional(STRIP - 4.0);
+        painter.text(
+            bar.left_center() + egui::vec2(4.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            "write",
+            font.clone(),
+            visuals.strong_text_color(),
         );
+        for part in frozen(self.state, e, self.writing()) {
+            let label = egui::Rect::from_x_y_ranges(
+                x(part.start as f64)..=x(part.end as f64),
+                rect.y_range(),
+            );
+            if label.width() >= 50.0 {
+                painter.text(
+                    label.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "frozen",
+                    font.clone(),
+                    visuals.weak_text_color(),
+                );
+            }
+        }
+        if self.writing() {
+            let hx = x(status.write_head() as f64);
+            painter.line_segment(
+                [egui::pos2(hx, rect.top()), egui::pos2(hx, rect.bottom())],
+                egui::Stroke::new(1.5, write_colour),
+            );
+        }
     }
-    for (i, v) in state.voices.iter().enumerate() {
-        let top = wave.bottom() + LANE * i as f32;
-        let t = Target::Voice(i);
-        let lane = egui::Rect::from_x_y_ranges(span_of(t, v.window), top + 1.0..=top + LANE - 1.0);
+
+    /// Voice `i`'s loop's peaks, with its window shaded and its edges marked,
+    /// the pre-roll and post-roll dimmed, its crossfade curves at the foot,
+    /// and its head. A loop the write head writes, voice 1's, shows the write
+    /// head and what it cannot change.
+    fn voice_wave(&self, ui: &mut egui::Ui, i: usize, tab: &mut State, actions: &mut Vec<Action>) {
+        let (state, e) = (self.state, self.extents[i]);
+        let size = egui::vec2(ui.available_width(), WAVE);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        let name = format!("Voice {} waveform", i + 1);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, &name));
+        let visuals = ui.visuals();
+        let palette = Palette::of(visuals);
+        let (voice_colour, write_colour) = colours(palette);
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 2.0, visuals.extreme_bg_color);
+        let Some(status) = self.model.deck().status().filter(|_| e.frames > 0) else {
+            return;
+        };
+        let v = &state.voices[i];
+        drag(
+            ui,
+            &response,
+            rect,
+            Target::Voice(i),
+            v.window,
+            e,
+            tab,
+            actions,
+        );
+        let x = scale(rect, e);
+        let span = |w: Window| x(w.start as f64)..=x(w.end as f64);
         let colour = match v.on {
             true => voice_colour[i],
             false => visuals.weak_text_color(),
         };
-        painter.rect_filled(lane, 1.0, colour.gamma_multiply(0.35));
+
+        painter.rect_filled(
+            egui::Rect::from_x_y_ranges(span(v.window), rect.y_range()),
+            0.0,
+            palette.region,
+        );
+        let (mid, half) = (rect.center().y, WAVE / 2.0 - 2.0);
+        let step = rect.width() / COLUMNS as f32;
+        for (k, peak) in status.voice_columns(i).iter().enumerate() {
+            let cx = rect.left() + (k as f32 + 0.5) * step;
+            let h = peak.min(1.0) * half;
+            painter.line_segment(
+                [egui::pos2(cx, mid - h), egui::pos2(cx, mid + h)],
+                egui::Stroke::new(step.max(1.0), palette.rms),
+            );
+        }
+        let dim = visuals.extreme_bg_color.gamma_multiply(0.7);
+        for roll in [
+            Window::new(0, e.range.start),
+            Window::new(e.range.end, e.frames),
+        ] {
+            if !roll.is_empty() {
+                painter.rect_filled(
+                    egui::Rect::from_x_y_ranges(span(roll), rect.y_range()),
+                    0.0,
+                    dim,
+                );
+            }
+        }
+        // Voice 1's loop is the only one the write head writes.
+        let shared = !state.own[i];
+        if shared {
+            for part in frozen(state, e, self.writing()) {
+                hatch(
+                    ui,
+                    egui::Rect::from_x_y_ranges(span(part), rect.y_range()),
+                    palette,
+                );
+            }
+        }
+        for edge in [v.window.start, v.window.end] {
+            let ex = x(edge as f64);
+            painter.line_segment(
+                [egui::pos2(ex, rect.top()), egui::pos2(ex, rect.bottom())],
+                egui::Stroke::new(2.0, colour),
+            );
+        }
         // A head under Ping turns rather than wraps, so it never crossfades.
         if !v.ping {
-            crossfades(&painter, v, extents[i], lane, &|f| at(t, f), colour);
-        }
-        if i == selected {
-            painter.rect_stroke(
-                lane,
-                1.0,
-                egui::Stroke::new(1.0, voice_colour[i]),
-                egui::StrokeKind::Inside,
-            );
+            let foot =
+                egui::Rect::from_x_y_ranges(span(v.window), rect.bottom() - FADES..=rect.bottom());
+            crossfades(&painter, v, e, foot, &x, colour);
         }
         if v.on {
-            // Across the waveform only when it shows the loop the head reads.
-            let hx = at(t, status.voice(i));
-            let from = if shown(i) { wave.top() } else { top };
+            let hx = x(status.voice(i));
             painter.line_segment(
-                [egui::pos2(hx, from), egui::pos2(hx, top + LANE)],
-                egui::Stroke::new(1.5, voice_colour[i]),
+                [egui::pos2(hx, rect.top()), egui::pos2(hx, rect.bottom())],
+                egui::Stroke::new(1.5, colour),
+            );
+        }
+        if shared && self.writing() {
+            let hx = x(status.write_head() as f64);
+            painter.line_segment(
+                [egui::pos2(hx, rect.top()), egui::pos2(hx, rect.bottom())],
+                egui::Stroke::new(1.5, write_colour),
             );
         }
     }
-    if state.write && !held {
-        let hx = at(Target::Write, status.write_head() as f64);
+}
+
+/// A frame's position across `rect`, on loop `e`'s scale.
+fn scale(rect: egui::Rect, e: Extent) -> impl Fn(f64) -> f32 {
+    move |frame| rect.left() + (frame / e.frames.max(1) as f64) as f32 * rect.width()
+}
+
+/// What the write head cannot change of voice 1's loop, `e`: outside its
+/// window, or all of it while it is not writing. While its window is the
+/// range it writes the rolls too, up to a range's length out.
+fn frozen(state: &TapeState, e: Extent, writing: bool) -> Vec<Window> {
+    let ww = state.write_window;
+    let reach = match ww == e.range {
+        true => ww.len(),
+        false => 0,
+    };
+    let parts = match writing {
+        true => vec![
+            Window::new(0, ww.start.saturating_sub(reach)),
+            Window::new((ww.end + reach).min(e.frames), e.frames),
+        ],
+        false => vec![Window::new(0, e.frames)],
+    };
+    parts.into_iter().filter(|w| !w.is_empty()).collect()
+}
+
+/// Tints and hatches `area`, for those who cannot tell the tint.
+fn hatch(ui: &egui::Ui, area: egui::Rect, palette: &Palette) {
+    let painter = ui.painter_at(area);
+    painter.rect_filled(area, 0.0, palette.frozen);
+    let stroke = egui::Stroke::new(1.0, palette.frozen.gamma_multiply(2.5));
+    let mut hx = area.left() - area.height();
+    while hx < area.right() {
         painter.line_segment(
-            [egui::pos2(hx, strip.top()), egui::pos2(hx, wave.bottom())],
-            egui::Stroke::new(1.5, write_colour),
+            [
+                egui::pos2(hx, area.bottom()),
+                egui::pos2(hx + area.height(), area.top()),
+            ],
+            stroke,
         );
+        hx += 10.0;
     }
 }
 
-/// The window `target` names.
-fn window_of(state: &TapeState, target: Target) -> Window {
-    match target {
-        Target::Voice(i) => state.voices[i].window,
-        Target::Write => state.write_window,
-    }
-}
-
-/// Whose window is under `pos`: the write window's in its strip, the
-/// selected voice's on the waveform, or a voice's in its lane.
-fn target(
-    pos: egui::Pos2,
-    (strip, wave): (egui::Rect, egui::Rect),
-    selected: usize,
-) -> Option<Target> {
-    let lane = ((pos.y - wave.bottom()) / LANE).floor();
-    match () {
-        _ if pos.y < strip.bottom() => Some(Target::Write),
-        _ if pos.y < wave.bottom() => Some(Target::Voice(selected)),
-        _ if (0.0..VOICES as f32).contains(&lane) => Some(Target::Voice(lane as usize)),
+/// The part of window `w` under `pos`, drawn across `rect` on loop `e`'s scale.
+fn hit(pos: egui::Pos2, rect: egui::Rect, w: Window, e: Extent) -> Option<Part> {
+    let x = scale(rect, e);
+    let (a, b) = (x(w.start as f64), x(w.end as f64));
+    match ((pos.x - a).abs(), (pos.x - b).abs()) {
+        (da, db) if da <= GRAB && da <= db => Some(Part::Start),
+        (_, db) if db <= GRAB => Some(Part::End),
+        _ if a < pos.x && pos.x < b => Some(Part::Body),
         _ => None,
     }
 }
 
-/// The window and part of it under `pos`.
-fn hit(
-    pos: egui::Pos2,
-    areas: (egui::Rect, egui::Rect),
-    state: &TapeState,
-    selected: usize,
-    at: &dyn Fn(Target, f64) -> f32,
-) -> Option<(Target, Part)> {
-    let target = target(pos, areas, selected)?;
-    let w = window_of(state, target);
-    let (a, b) = (at(target, w.start as f64), at(target, w.end as f64));
-    let part = match ((pos.x - a).abs(), (pos.x - b).abs()) {
-        (da, db) if da <= GRAB && da <= db => Part::Start,
-        (_, db) if db <= GRAB => Part::End,
-        _ if a < pos.x && pos.x < b => Part::Body,
-        _ => return None,
-    };
-    Some((target, part))
-}
-
-/// Drags a window's edges or the whole of it along the waveform, sending the
+/// Drags window `w`'s edges or the whole of it across `rect`, sending the
 /// window as each frame moves it. Edges pull to the range's edges.
 #[allow(clippy::too_many_arguments)]
 fn drag(
     ui: &egui::Ui,
     response: &egui::Response,
-    areas: (egui::Rect, egui::Rect),
-    state: &TapeState,
-    extents: [Extent; VOICES],
-    at: &dyn Fn(Target, f64) -> f32,
+    rect: egui::Rect,
+    target: Target,
+    w: Window,
+    e: Extent,
     tab: &mut State,
     actions: &mut Vec<Action>,
 ) {
-    let wave = areas.1;
-    let extent_of = |t: Target| match t {
-        Target::Voice(i) => extents[i],
-        Target::Write => extents[0],
-    };
-    let frame_at = |t: Target, px: f32| {
-        f64::from((px - wave.left()) / wave.width()).clamp(0.0, 1.0) * extent_of(t).frames as f64
-    };
-    // A click or a drag in a lane selects its voice.
-    let pressed = ui.input(|i| i.pointer.press_origin());
-    if response.clicked() || response.drag_started() {
-        if let Some(Target::Voice(i)) = pressed.and_then(|pos| target(pos, areas, tab.selected)) {
-            tab.selected = i;
-        }
-    }
+    let x = scale(rect, e);
+    let frame_at =
+        |px: f32| f64::from((px - rect.left()) / rect.width()).clamp(0.0, 1.0) * e.frames as f64;
     if response.drag_started() {
         // Where the press was: a drag starts only once the pointer has moved.
-        tab.drag = pressed.and_then(|pos| {
-            let (target, part) = hit(pos, areas, state, tab.selected, at)?;
+        tab.drag = ui.input(|i| i.pointer.press_origin()).and_then(|pos| {
             Some(Drag {
                 target,
-                part,
-                from: window_of(state, target),
-                grab: frame_at(target, pos.x),
+                part: hit(pos, rect, w, e)?,
+                from: w,
+                grab: frame_at(pos.x),
             })
         });
     }
-    if response.drag_stopped() {
+    let mine = tab.drag.filter(|d| d.target == target);
+    if response.drag_stopped() && mine.is_some() {
         tab.drag = None;
     }
-    let cursor = match (tab.drag, response.hover_pos()) {
+    let cursor = match (mine, response.hover_pos()) {
         (Some(d), _) => Some(d.part),
-        (None, Some(pos)) => hit(pos, areas, state, tab.selected, at).map(|(_, part)| part),
+        (None, Some(pos)) => hit(pos, rect, w, e),
         _ => None,
     };
     match cursor {
-        Some(Part::Body) if tab.drag.is_some() => ui.set_cursor_icon(egui::CursorIcon::Grabbing),
+        Some(Part::Body) if mine.is_some() => ui.set_cursor_icon(egui::CursorIcon::Grabbing),
         Some(Part::Body) => ui.set_cursor_icon(egui::CursorIcon::Grab),
         Some(_) => ui.set_cursor_icon(egui::CursorIcon::ResizeHorizontal),
         None => {}
     }
-    let (Some(d), Some(pos)) = (tab.drag, response.interact_pointer_pos()) else {
+    let (Some(d), Some(pos)) = (mine, response.interact_pointer_pos()) else {
         return;
     };
-    let e = extent_of(d.target);
-    let x = |f: f64| at(d.target, f);
     // An edge within reach of the range's edge lands on it.
     let snap = |f: usize| {
         [e.range.start, e.range.end]
@@ -409,39 +443,36 @@ fn drag(
             .find(|&r| (x(r as f64) - x(f as f64)).abs() <= GRAB)
             .unwrap_or(f)
     };
-    let frame_at = |px: f32| frame_at(d.target, px);
     let at = frame_at(pos.x).round() as usize;
-    let w = d.from;
+    let from = d.from;
     let to = match d.part {
-        Part::Start => Window::new(snap(at).min(w.end - 1), w.end),
-        Part::End => Window::new(w.start, snap(at).max(w.start + 1)),
+        Part::Start => Window::new(snap(at).min(from.end - 1), from.end),
+        Part::End => Window::new(from.start, snap(at).max(from.start + 1)),
         Part::Body => {
             let shift = frame_at(pos.x) - d.grab;
-            let start = (w.start as f64 + shift)
-                .round()
-                .clamp(0.0, (e.frames - w.len()) as f64) as usize;
-            let last = e.frames - w.len();
-            let start = match (snap(start), snap(start + w.len())) {
+            let last = e.frames - from.len();
+            let start = (from.start as f64 + shift).round().clamp(0.0, last as f64) as usize;
+            let start = match (snap(start), snap(start + from.len())) {
                 (s, _) if s != start => s.min(last),
-                (_, end) if end != start + w.len() => end.saturating_sub(w.len()).min(last),
+                (_, end) if end != start + from.len() => end.saturating_sub(from.len()).min(last),
                 _ => start,
             };
-            Window::new(start, start + w.len())
+            Window::new(start, start + from.len())
         }
     };
-    if to == window_of(state, d.target) || e.range.is_empty() {
+    if to == w || e.range.is_empty() {
         return;
     }
     let p = |f: usize| {
         Pos::Percent(((f as f64 - e.range.start as f64) * 100.0 / e.range.len() as f64) as f32)
     };
-    actions.push(Action::Tape(match d.target {
+    actions.push(Action::Tape(match target {
         Target::Voice(i) => T::Voice(i as u8 + 1, V::Window(p(to.start), p(to.end))),
         Target::Write => T::WriteWindow(p(to.start), p(to.end)),
     }));
 }
 
-/// Voice `v`'s crossfade curves in its `lane`, where the engine reads them:
+/// Voice `v`'s crossfade curves in `foot`, where the engine reads them:
 /// the leaving head fades out from the edge it leaves, past it into the
 /// post-roll, or before it when the new head fades in from the pre-roll before
 /// the other edge instead. Equal power, as the engine fades.
@@ -449,7 +480,7 @@ fn crossfades(
     painter: &egui::Painter,
     v: &playr_app::tape::VoiceState,
     e: Extent,
-    lane: egui::Rect,
+    foot: egui::Rect,
     x: &dyn Fn(f64) -> f32,
     colour: egui::Color32,
 ) {
@@ -465,13 +496,13 @@ fn crossfades(
     };
     let curve = |anchor: f64, gain: fn(f32) -> f32| {
         let at = |u: f64| x(anchor + dir * u * xf.span);
-        let mut points = vec![egui::pos2(at(0.0), lane.bottom())];
+        let mut points = vec![egui::pos2(at(0.0), foot.bottom())];
         points.extend((0..=CURVE).map(|k| {
             let u = k as f64 / CURVE as f64;
             let g = gain(std::f32::consts::FRAC_PI_2 * u as f32);
-            egui::pos2(at(u), lane.bottom() - g * lane.height())
+            egui::pos2(at(u), foot.bottom() - g * foot.height())
         }));
-        points.push(egui::pos2(at(1.0), lane.bottom()));
+        points.push(egui::pos2(at(1.0), foot.bottom()));
         egui::Shape::convex_polygon(points, colour.gamma_multiply(0.9), egui::Stroke::NONE)
     };
     painter.add(curve(fade_in, f32::sin));
@@ -490,13 +521,14 @@ fn percent(w: Window, e: Extent) -> (f32, f32) {
     }
 }
 
-/// Two drag values for a window's start and end, in percent, side by side;
-/// the action on a change.
+/// Two drag values for a window's start and end, in percent, side by side,
+/// with `tip` on hover; the action on a change.
 fn window(
     ui: &mut egui::Ui,
     w: Window,
     e: Extent,
     name: &str,
+    tip: &str,
     idle: Option<&str>,
 ) -> Option<(Pos, Pos)> {
     let (mut a, mut b) = percent(w, e);
@@ -515,6 +547,10 @@ fn window(
             .fixed_decimals(1)
             .suffix("%");
         let response = dimmed(ui, idle, |ui| ui.add(field));
+        let response = match idle {
+            Some(_) => response,
+            None => response.on_hover_text(tip),
+        };
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, format!("{name} {end}"))
         });
@@ -547,9 +583,9 @@ fn dimmed(
     }
 }
 
-/// A slider over `range` and a field with its value, dimmed when `idle`
-/// says why it has no effect; the new value on a change of either.
-fn slider(
+/// A field over `range`, dimmed when `idle` says why it has no effect; the
+/// new value on a change.
+fn field(
     ui: &mut egui::Ui,
     value: f32,
     range: std::ops::RangeInclusive<f32>,
@@ -557,35 +593,32 @@ fn slider(
     idle: Option<&str>,
 ) -> Option<f32> {
     let mut v = value;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        if idle.is_some() {
-            ui.multiply_opacity(0.4);
-        }
-        let rail = ui
-            .add(egui::Slider::new(&mut v, range.clone()).show_value(false))
-            .on_hover_text(idle.unwrap_or(&name));
-        rail.widget_info(|| egui::WidgetInfo::slider(true, f64::from(v), &name));
-        let field = ui.add(
+    let speed = (range.end() - range.start()) / 200.0;
+    let response = dimmed(ui, idle, |ui| {
+        ui.add(
             egui::DragValue::new(&mut v)
                 .range(range)
-                .speed(0.01)
+                .speed(speed)
                 .fixed_decimals(2),
-        );
-        let label = format!("{name} value");
-        field.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &label));
-        let field = match idle {
-            Some(why) => field.on_hover_text(why),
-            None => field,
-        };
-        rail.changed() || field.changed()
-    })
-    .inner
-    .then_some(v)
+        )
+    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &name));
+    response.changed().then_some(v)
 }
 
-/// A voice strip's rows, with what each does. On, Ping and Solo sit by the
-/// name, to fit the smallest window.
+/// A field in ms from 0 to `max`, dimmed when `idle` says why it has no
+/// effect; the new value on a change.
+fn ms(ui: &mut egui::Ui, value: f32, max: f32, name: String, idle: Option<&str>) -> Option<f32> {
+    let mut v = value;
+    let response = dimmed(ui, idle, |ui| {
+        ui.add(egui::DragValue::new(&mut v).range(0.0..=max))
+    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &name));
+    response.changed().then_some(v)
+}
+
+/// A voice's controls, with what each does. Window, On, Ping and Solo are in
+/// the lane's header.
 const VOICE_ROWS: [(&str, &str); 11] = [
     (
         "Window",
@@ -624,7 +657,7 @@ const VOICE_ROWS: [(&str, &str); 11] = [
     ),
 ];
 
-/// The write strip's rows.
+/// The write head's controls.
 const WRITE_ROWS: [(&str, &str); 4] = [
     (
         "Window",
@@ -651,48 +684,25 @@ const FILTERS: [(Filter, &str, &str); 3] = [
     (Filter::Band, "BP", "band-pass"),
 ];
 
-/// A strip per voice, then the write head's, side by side; a parameter adds
-/// a row, not a column.
-fn rows(
+/// A field's value, its control for `no_effect`, the setting it sends, and
+/// its name.
+type Field<S> = (f32, C, fn(f32) -> S, &'static str);
+
+/// A grid with `headings` in a row, with what each does on hover, and the
+/// controls `add` puts under them.
+fn fields(
     ui: &mut egui::Ui,
-    state: &TapeState,
-    extents: [Extent; VOICES],
-    tab: &mut State,
-    actions: &mut Vec<Action>,
+    id: impl egui::AsIdSalt,
+    headings: &[(&str, &str)],
+    add: impl FnOnce(&mut egui::Ui),
 ) {
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.columns(VOICES + 1, |columns| {
-            let Some((write, voices)) = columns.split_last_mut() else {
-                return;
-            };
-            for (i, ui) in voices.iter_mut().enumerate() {
-                voice(ui, state, extents[i], i, tab, actions);
-            }
-            write_strip(write, state, extents[0], actions);
-        });
+    egui::Grid::new(id).spacing([6.0, 0.0]).show(ui, |ui| {
+        for (heading, tip) in headings {
+            ui.weak(*heading).on_hover_text(*tip);
+        }
+        ui.end_row();
+        add(ui);
     });
-}
-
-/// A grid of heading and control rows, with sliders as wide as the column
-/// leaves them.
-fn strip(ui: &mut egui::Ui, id: impl egui::AsIdSalt, add: impl FnOnce(&mut egui::Ui)) {
-    ui.spacing_mut().slider_width = (ui.available_width() - BESIDE).max(SLIDER);
-    egui::Grid::new(id)
-        .num_columns(2)
-        .spacing([8.0, 2.0])
-        .show(ui, add);
-}
-
-/// A heading, with what it does on hover, and the control `add` puts beside it.
-fn row<R>(
-    ui: &mut egui::Ui,
-    (heading, tip): (&str, &str),
-    add: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
-    ui.weak(heading).on_hover_text(tip);
-    let r = add(ui);
-    ui.end_row();
-    r
 }
 
 /// A toggle named `name` for assistive technology, showing `text`; whether
@@ -703,128 +713,6 @@ fn toggle(ui: &mut egui::Ui, on: bool, text: &str, name: String, tip: &str) -> b
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, &name)
     });
     response.clicked()
-}
-
-/// A field in ms from 0 to `max`, dimmed when `idle` says why it has no
-/// effect; the new value on a change.
-fn ms(ui: &mut egui::Ui, value: f32, max: f32, name: String, idle: Option<&str>) -> Option<f32> {
-    let mut v = value;
-    let response = dimmed(ui, idle, |ui| {
-        ui.add(egui::DragValue::new(&mut v).range(0.0..=max))
-    });
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &name));
-    response.changed().then_some(v)
-}
-
-/// Voice `i`'s strip: its name, which selects it, then its controls.
-fn voice(
-    ui: &mut egui::Ui,
-    state: &TapeState,
-    e: Extent,
-    i: usize,
-    tab: &mut State,
-    actions: &mut Vec<Action>,
-) {
-    let v = &state.voices[i];
-    let n = i as u8 + 1;
-    let name = format!("Voice {n}");
-    let why = |c| no_effect(state, e, c).map(idle_text);
-    let mut set = |s| actions.push(Action::Tape(T::Voice(n, s)));
-    ui.horizontal(|ui| {
-        let mut on = v.on;
-        let tick = ui.checkbox(&mut on, "").on_hover_text("plays the voice");
-        let label = format!("{name} on");
-        tick.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, &label)
-        });
-        if tick.changed() {
-            set(V::On(on));
-        }
-        if ui
-            .selectable_label(tab.selected == i, &name)
-            .on_hover_text("show and edit this voice's window on the waveform")
-            .clicked()
-        {
-            tab.selected = i;
-        }
-        let ping = "turn at the window's edges and play back, instead of wrapping";
-        let ping = why(C::Ping(i)).unwrap_or(ping);
-        let clicked = dimmed_click(ui, why(C::Ping(i)), |ui| {
-            toggle(ui, v.ping, "Ping", format!("{name} ping"), ping)
-        });
-        if clicked {
-            set(V::Ping(!v.ping));
-        }
-        let solo = "hear only the soloed voices; what each sends is unchanged";
-        if toggle(ui, v.solo, "S", format!("{name} solo"), solo) {
-            set(V::Solo(!v.solo));
-        }
-    });
-    let [window_row, rate, slew, level, pan, send, wear, drive, filter, kind, fade] = VOICE_ROWS;
-    strip(ui, ("tape voice", i), |ui| {
-        let w = row(ui, window_row, |ui| {
-            window(ui, v.window, e, &name, why(C::Window(i)))
-        });
-        if let Some((a, b)) = w {
-            set(V::Window(a, b));
-        }
-        let sliders = [
-            (
-                rate,
-                v.rate,
-                -4.0..=4.0,
-                C::Rate(i),
-                V::Rate as fn(f32) -> V,
-            ),
-            (level, v.level, 0.0..=1.0, C::Level(i), V::Level),
-            (pan, v.pan, -1.0..=1.0, C::Pan(i), V::Pan),
-            (send, v.send, 0.0..=1.0, C::Send(i), V::Send),
-            (wear, v.wear, 0.0..=1.0, C::Wear(i), V::Wear),
-            (drive, v.drive, 0.0..=1.0, C::Drive(i), V::Drive),
-            (filter, v.cutoff, 0.0..=1.0, C::Cutoff(i), V::Cutoff),
-        ];
-        for (k, (heading, value, range, control, setting)) in sliders.into_iter().enumerate() {
-            let label = format!("{name} {}", heading.0.to_lowercase());
-            if let Some(x) = row(ui, heading, |ui| {
-                slider(ui, value, range, label, why(control))
-            }) {
-                set(setting(x));
-            }
-            // Slew under Rate, which it changes.
-            if k == 0 {
-                let label = format!("{name} slew");
-                let max = playr_looper::MAX_SLEW_MS;
-                if let Some(x) = row(ui, slew, |ui| ms(ui, v.slew, max, label, why(C::Slew(i)))) {
-                    set(V::Slew(x));
-                }
-            }
-        }
-        let picked = row(ui, kind, |ui| {
-            ui.horizontal(|ui| {
-                let mut picked = None;
-                for (f, text, what) in FILTERS {
-                    let clicked = dimmed_click(ui, why(C::Filter(i)), |ui| {
-                        let tip = why(C::Filter(i)).unwrap_or(what);
-                        toggle(ui, v.filter == f, text, format!("{name} {what}"), tip)
-                    });
-                    if clicked {
-                        picked = Some(f);
-                    }
-                }
-                picked
-            })
-            .inner
-        });
-        if let Some(f) = picked {
-            set(V::Filter(f));
-        }
-        let label = format!("{name} fade");
-        if let Some(x) = row(ui, fade, |ui| {
-            ms(ui, v.fade, 1000.0, label, why(C::Fade(i)))
-        }) {
-            set(V::Fade(x));
-        }
-    });
 }
 
 /// Adds a clickable control with `add`, dimmed when `idle` says it has no
@@ -843,8 +731,243 @@ fn dimmed_click(
     .inner
 }
 
-/// The write head's strip: its own controls, as the voices' do not apply.
-fn write_strip(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Vec<Action>) {
+/// Voice `i`'s header: on, its name, Ping and Solo; the loop it reads; its
+/// window.
+fn voice_head(
+    ui: &mut egui::Ui,
+    model: &Model,
+    state: &TapeState,
+    e: Extent,
+    i: usize,
+    tab: &mut State,
+    actions: &mut Vec<Action>,
+) {
+    let loaded = model.deck().loaded().is_some();
+    picker(ui, model, state, i, tab, actions);
+    ui.add_enabled_ui(loaded, |ui| voice_controls(ui, state, e, i, actions));
+}
+
+/// Voice `i`'s loop, as a list that loads another from the loop library,
+/// searched as typed; for voices 2 and 3, voice 1's loop too.
+fn picker(
+    ui: &mut egui::Ui,
+    model: &Model,
+    state: &TapeState,
+    i: usize,
+    tab: &mut State,
+    actions: &mut Vec<Action>,
+) {
+    let n = i as u8 + 1;
+    let shown = match model.deck().voice_name(i) {
+        None => "empty".to_string(),
+        Some(_) if i > 0 && !state.own[i] => "voice 1's loop".to_string(),
+        Some(name) => name.to_string(),
+    };
+    let combo = egui::ComboBox::from_id_salt(("tape loop", i))
+        .selected_text(&shown)
+        .truncate()
+        .width(HEAD - 8.0)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            // Wide enough for a name and where it lies in its file.
+            ui.set_min_width(320.0);
+            let opened = tab.picking != Some(i);
+            if opened {
+                tab.picking = Some(i);
+                tab.query.clear();
+                tab.found = model.session().find_loops("");
+            }
+            let edit = ui.add(
+                egui::TextEdit::singleline(&mut tab.query)
+                    .hint_text("search: name, bpm:120, key:Am"),
+            );
+            let label = format!("Voice {n} loop search");
+            edit.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, &label)
+            });
+            if opened {
+                edit.request_focus();
+            }
+            if edit.changed() {
+                tab.found = model.session().find_loops(&tab.query);
+            }
+            if i > 0 && ui.selectable_label(false, "voice 1's loop").clicked() {
+                actions.push(Action::Tape(T::Share(n)));
+                ui.close();
+            }
+            egui::ScrollArea::vertical()
+                .max_height(200.0)
+                .show(ui, |ui| {
+                    for l in &tab.found {
+                        let about = playr_app::loops::cells(l)[1..].join("  ");
+                        // The name, and where it lies in its file.
+                        let clicked = ui
+                            .horizontal(|ui| {
+                                let row = ui.selectable_label(false, &l.name).on_hover_text(about);
+                                ui.weak(playr_app::loops::span_of(l));
+                                row.clicked()
+                            })
+                            .inner;
+                        if clicked {
+                            actions.push(Action::Tape(T::Loop(n, l.id)));
+                            ui.close();
+                        }
+                    }
+                });
+            if tab.found.is_empty() {
+                ui.weak(playr_app::loops::empty_text(!tab.query.trim().is_empty()));
+            }
+        });
+    if combo.inner.is_none() && tab.picking == Some(i) {
+        tab.picking = None;
+    }
+    let label = format!("Voice {n} loop");
+    combo
+        .response
+        .on_hover_text(&shown)
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &label));
+    // Where the loop lies in its file, which tells apart loops of one track.
+    let span = model.deck().voice_span(i).unwrap_or_default();
+    ui.weak(span)
+        .on_hover_text("where the loop lies in its source file");
+}
+
+/// Voice `i`'s on, name, Ping and Solo; its window; Clear and Eject.
+fn voice_controls(
+    ui: &mut egui::Ui,
+    state: &TapeState,
+    e: Extent,
+    i: usize,
+    actions: &mut Vec<Action>,
+) {
+    let v = &state.voices[i];
+    let n = i as u8 + 1;
+    let name = format!("Voice {n}");
+    let why = |c| no_effect(state, e, c).map(idle_text);
+    let mut set = |s| actions.push(Action::Tape(T::Voice(n, s)));
+    ui.horizontal(|ui| {
+        let mut on = v.on;
+        let tick = ui.checkbox(&mut on, "").on_hover_text("plays the voice");
+        let label = format!("{name} on");
+        tick.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, &label)
+        });
+        if tick.changed() {
+            set(V::On(on));
+        }
+        ui.strong(&name);
+        let ping = "turn at the window's edges and play back, instead of wrapping";
+        let ping = why(C::Ping(i)).unwrap_or(ping);
+        let clicked = dimmed_click(ui, why(C::Ping(i)), |ui| {
+            toggle(ui, v.ping, "Ping", format!("{name} ping"), ping)
+        });
+        if clicked {
+            set(V::Ping(!v.ping));
+        }
+        let solo = "hear only the soloed voices; what each sends is unchanged";
+        if toggle(ui, v.solo, "S", format!("{name} solo"), solo) {
+            set(V::Solo(!v.solo));
+        }
+    });
+    let tip = VOICE_ROWS[0].1;
+    if let Some((a, b)) = window(ui, v.window, e, &name, tip, why(C::Window(i))) {
+        set(V::Window(a, b));
+    }
+    let has = !state.empty[i];
+    let shared = i > 0 && !state.own[i];
+    ui.horizontal(|ui| {
+        let clear = match (has, shared) {
+            (false, _) => "the voice is empty",
+            (true, false) => "silence this voice's loop, keeping its length; Reset restores it",
+            (true, true) => "silence voice 1's loop, for every voice reading it, keeping its length; Reset restores it",
+        };
+        let eject = match (has, i, shared) {
+            (false, ..) => "the voice is empty",
+            (true, 0, _) => "empty voice 1, and every voice reading its loop",
+            (true, _, true) => "stop reading voice 1's loop; the voice is empty",
+            (true, _, false) => "drop this voice's loop; the voice is empty",
+        };
+        for (text, tip, action) in [("Clear", clear, T::Clear(n)), ("Eject", eject, T::Eject(n))] {
+            let button = ui
+                .add_enabled(has, egui::Button::new(text))
+                .on_hover_text(tip)
+                .on_disabled_hover_text(tip);
+            let label = format!("{name} {}", text.to_lowercase());
+            button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, has, &label));
+            if button.clicked() {
+                actions.push(Action::Tape(action));
+            }
+        }
+    });
+}
+
+/// Voice `i`'s controls, in a row under its waveform.
+fn voice_fields(
+    ui: &mut egui::Ui,
+    state: &TapeState,
+    e: Extent,
+    i: usize,
+    actions: &mut Vec<Action>,
+) {
+    let v = &state.voices[i];
+    let n = i as u8 + 1;
+    let name = format!("Voice {n}");
+    let why = |c| no_effect(state, e, c).map(idle_text);
+    let mut set = |s| actions.push(Action::Tape(T::Voice(n, s)));
+    let label = |heading: &str| format!("{name} {}", heading.to_lowercase());
+    fields(ui, ("tape voice", i), &VOICE_ROWS[1..], |ui| {
+        if let Some(x) = field(ui, v.rate, -4.0..=4.0, label("rate"), why(C::Rate(i))) {
+            set(V::Rate(x));
+        }
+        let max = playr_looper::MAX_SLEW_MS;
+        if let Some(x) = ms(ui, v.slew, max, label("slew"), why(C::Slew(i))) {
+            set(V::Slew(x));
+        }
+        let unit: [Field<V>; 6] = [
+            (v.level, C::Level(i), V::Level, "level"),
+            (v.pan, C::Pan(i), V::Pan, "pan"),
+            (v.send, C::Send(i), V::Send, "send"),
+            (v.wear, C::Wear(i), V::Wear, "wear"),
+            (v.drive, C::Drive(i), V::Drive, "drive"),
+            (v.cutoff, C::Cutoff(i), V::Cutoff, "filter"),
+        ];
+        for (value, control, setting, heading) in unit {
+            let range = match heading {
+                "pan" => -1.0..=1.0,
+                _ => 0.0..=1.0,
+            };
+            if let Some(x) = field(ui, value, range, label(heading), why(control)) {
+                set(setting(x));
+            }
+        }
+        let picked = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let mut picked = None;
+                for (f, text, what) in FILTERS {
+                    let clicked = dimmed_click(ui, why(C::Filter(i)), |ui| {
+                        let tip = why(C::Filter(i)).unwrap_or(what);
+                        toggle(ui, v.filter == f, text, format!("{name} {what}"), tip)
+                    });
+                    if clicked {
+                        picked = Some(f);
+                    }
+                }
+                picked
+            })
+            .inner;
+        if let Some(f) = picked {
+            set(V::Filter(f));
+        }
+        if let Some(x) = ms(ui, v.fade, 1000.0, label("fade"), why(C::Fade(i))) {
+            set(V::Fade(x));
+        }
+        ui.end_row();
+    });
+}
+
+/// The write head's header: Write, and its window.
+fn write_head(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Vec<Action>) {
     let why = |c| no_effect(state, e, c).map(idle_text);
     let mut push = |t| actions.push(Action::Tape(t));
     ui.horizontal(|ui| {
@@ -852,7 +975,7 @@ fn write_strip(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Ve
         let tick = dimmed(ui, why(C::Write), |ui| ui.checkbox(&mut write, ""));
         let tick = match why(C::Write) {
             Some(_) => tick,
-            None => tick.on_hover_text("records the voices' sends into the loop"),
+            None => tick.on_hover_text("records the voices' sends into voice 1's loop"),
         };
         tick.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, write, "Write on")
@@ -860,33 +983,29 @@ fn write_strip(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Ve
         if tick.changed() {
             push(T::Write(write));
         }
-        ui.label("Write");
+        ui.strong("Write");
     });
-    let [window_row, feedback, wear, thin] = WRITE_ROWS;
-    strip(ui, "tape write", |ui| {
-        let w = row(ui, window_row, |ui| {
-            window(ui, state.write_window, e, "Write", why(C::WriteWindow))
-        });
-        if let Some((a, b)) = w {
-            push(T::WriteWindow(a, b));
-        }
-        let sliders = [
-            (
-                feedback,
-                state.feedback,
-                C::Feedback,
-                T::Feedback as fn(f32) -> T,
-            ),
-            (wear, state.wear, C::WriteWear, T::Wear),
-            (thin, state.thin, C::Thin, T::Thin),
+    let tip = WRITE_ROWS[0].1;
+    if let Some((a, b)) = window(ui, state.write_window, e, "Write", tip, why(C::WriteWindow)) {
+        push(T::WriteWindow(a, b));
+    }
+}
+
+/// The write head's controls, in a row under its strip.
+fn write_fields(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut Vec<Action>) {
+    let why = |c| no_effect(state, e, c).map(idle_text);
+    fields(ui, "tape write", &WRITE_ROWS[1..], |ui| {
+        let controls: [Field<T>; 3] = [
+            (state.feedback, C::Feedback, T::Feedback, "feedback"),
+            (state.wear, C::WriteWear, T::Wear, "wear"),
+            (state.thin, C::Thin, T::Thin, "thin"),
         ];
-        for (heading, value, control, action) in sliders {
-            let label = format!("Write {}", heading.0.to_lowercase());
-            if let Some(x) = row(ui, heading, |ui| {
-                slider(ui, value, 0.0..=1.0, label, why(control))
-            }) {
-                push(action(x));
+        for (value, control, action, heading) in controls {
+            let name = format!("Write {heading}");
+            if let Some(x) = field(ui, value, 0.0..=1.0, name, why(control)) {
+                actions.push(Action::Tape(action(x)));
             }
         }
+        ui.end_row();
     });
 }

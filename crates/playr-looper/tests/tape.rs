@@ -924,3 +924,74 @@ fn writing_is_held_while_a_voice_reads_its_own_loop() {
     run(&mut t, 2_000);
     assert!(buffer(&t).iter().all(|s| s.abs() < 1e-3), "erased");
 }
+
+#[test]
+fn a_clear_silences_one_loop_and_keeps_the_heads() {
+    let (a, b) = (noise(400, 0.5), noise(300, 0.7));
+    let mut t = own_loops(&a, &b, &b, 1);
+    run(&mut t, 100);
+    let silent = |n: usize| Box::new(Loop::new(vec![0.0; n], 1).unwrap());
+    let old = t.clear(1, silent(300));
+    assert_eq!(old.samples(), b);
+    assert!(t.source(1).samples().iter().all(|s| *s == 0.0));
+    assert_eq!(t.source(0).samples(), a, "voice 0's loop stays");
+    // The head goes on from where it was, not from its window's start.
+    let before = t.voice(1);
+    run(&mut t, 10);
+    assert!((t.voice(1) - before - 10.0).abs() < 1e-6);
+    // A loop of another shape, or one that is not there, comes back.
+    assert_eq!(t.clear(0, silent(399)).frames(), 399);
+    let mut shared = own_loops(&a, &b, &b, 0);
+    shared.unload(2);
+    assert_eq!(shared.clear(2, silent(300)).samples(), vec![0.0; 300]);
+}
+
+#[test]
+fn an_unload_returns_a_voice_to_voice_0s_loop_and_writing_resumes() {
+    let (a, b) = (noise(400, 0.5), noise(300, 0.7));
+    let mut t = own_loops(&a, &b, &b, 1);
+    t.unload(2);
+    t.set(Setting::Write(true));
+    assert!(t.write_held(), "voice 1 still has its own");
+    assert_eq!(t.unload(1).unwrap().samples(), b);
+    assert!(!t.has_own(1) && !t.write_held());
+    assert_eq!(t.source(1).samples(), a);
+    assert!(t.unload(1).is_none());
+    assert!(t.unload(0).is_none(), "voice 0's loop is not its own");
+}
+
+#[test]
+fn an_empty_voice_is_silent_and_does_not_hold_the_write_head() {
+    let (a, b) = (noise(400, 0.5), noise(300, 0.7));
+    let mut t = own_loops(&a, &b, &b, 1);
+    t.load_voice(1, Box::new(Loop::empty()));
+    t.load_voice(2, Box::new(Loop::empty()));
+    t.set(Setting::Write(true));
+    assert!(!t.write_held(), "empty voices send nothing");
+    assert!(left(&run(&mut t, 200)).iter().all(|s| *s == 0.0));
+    // Voice 0 empty too, with voice 1 back on a loop of its own.
+    t.load_voice(1, Box::new(Loop::new(b.clone(), 1).unwrap()));
+    t.load_voice(0, Box::new(Loop::empty()));
+    assert!(t.write_held());
+    let out = left(&run(&mut t, 250));
+    assert_eq!(out, b[..250], "voice 1 plays on alone");
+}
+
+#[test]
+fn an_empty_voice_takes_any_setting_while_playing() {
+    let (a, b) = (noise(400, 0.5), noise(300, 0.7));
+    let mut t = own_loops(&a, &b, &b, 0);
+    t.load_voice(1, Box::new(Loop::empty()));
+    for s in [
+        Setting::On(1, true),
+        Setting::Rate(1, -0.5),
+        Setting::Ping(1, true),
+        Setting::Fade(1, 50.0),
+    ] {
+        t.set(s);
+        run(&mut t, 100);
+    }
+    t.set(Setting::Rate(1, 2.0));
+    let out = left(&run(&mut t, 200));
+    assert!(out.iter().all(|s| s.is_finite()));
+}

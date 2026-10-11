@@ -76,10 +76,14 @@ fn the_callback_neither_allocates_nor_frees() {
     }
     let mut out = vec![0.0; 512 * 2];
     // Commands queued before each run, applied inside it: a snapshot, a
-    // load and a write window that aborts nothing.
+    // load, a clear of each loop, an unload and a write window that aborts
+    // nothing.
     h.snapshot().unwrap();
     h.load(lp(-0.3)).unwrap();
     h.load_voice(1, lp(0.1)).unwrap();
+    h.clear(1).unwrap();
+    h.clear(0).unwrap();
+    h.unload(1).unwrap();
     h.set(Setting::Cutoff(0, 0.2)).unwrap();
     let n = counted(|| {
         for _ in 0..400 {

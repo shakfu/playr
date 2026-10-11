@@ -40,6 +40,10 @@ pub enum Cmd {
     Load(Box<Loop>),
     /// Gives a voice a loop of its own, as [`Tape::load_voice`] does.
     LoadVoice(usize, Box<Loop>),
+    /// A silent loop in place of loop `k`, as [`Tape::clear`] takes it.
+    Clear(usize, Box<Loop>),
+    /// Takes voice `i`'s own loop back, as [`Tape::unload`] does.
+    Unload(usize),
     /// The output's gain, 0 to 1, after the recording and the meter.
     Volume(f32),
 }
@@ -50,7 +54,8 @@ impl Cmd {
         match self {
             // The loop, the voices' own, and an aborted snapshot.
             Cmd::Load(_) => 1 + (VOICES - 1) + 1,
-            Cmd::LoadVoice(..) => 2,
+            Cmd::LoadVoice(..) | Cmd::Clear(..) => 2,
+            Cmd::Unload(_) => 1,
             Cmd::Snapshot(_) | Cmd::Set(Setting::WriteWindow(_)) => 1,
             _ => 0,
         }
@@ -60,7 +65,8 @@ impl Cmd {
 /// Memory the callback hands back, since it must not free it.
 #[derive(Debug)]
 pub enum Returned {
-    /// A loop a `Load` or `LoadVoice` replaced.
+    /// A loop a `Load`, `LoadVoice`, `Clear` or `Unload` replaced, or a
+    /// `Clear`'s that did not fit.
     Loop(Box<Loop>),
     /// A finished snapshot: the loop's samples as they were when it arrived.
     Snapshot(Box<[f32]>),
@@ -257,7 +263,7 @@ impl Looper {
                 return;
             }
             // Only the voices it changes fade.
-            if let Cmd::LoadVoice(i, _) = *cmd {
+            if let Cmd::LoadVoice(i, _) | Cmd::Clear(i, _) | Cmd::Unload(i) = *cmd {
                 if audible && !self.tape.ducked(i) {
                     self.tape.duck(i, self.fade);
                     return;
@@ -307,6 +313,21 @@ impl Looper {
                         self.abort();
                     }
                     if let Some(old) = self.tape.load_voice(i, lp) {
+                        _ = self.returns.push(Returned::Loop(old));
+                    }
+                    self.publish_columns();
+                    self.tape.unduck(self.fade);
+                }
+                Cmd::Clear(k, lp) => {
+                    if k == 0 {
+                        self.abort();
+                    }
+                    _ = self.returns.push(Returned::Loop(self.tape.clear(k, lp)));
+                    self.publish_columns();
+                    self.tape.unduck(self.fade);
+                }
+                Cmd::Unload(i) => {
+                    if let Some(old) = self.tape.unload(i) {
                         _ = self.returns.push(Returned::Loop(old));
                     }
                     self.publish_columns();
@@ -490,6 +511,40 @@ impl Handle {
             self.send(Cmd::LoadVoice(i, Box::new(lp)))
                 .map_err(|_| Error::Full)?;
         }
+        Ok(())
+    }
+
+    /// Silences the loop voice `i` reads, its own or voice 0's, keeping its
+    /// length, every head and window. [`Handle::reset`] restores it.
+    pub fn clear(&mut self, i: usize) -> Result<(), Error> {
+        let k = match self.has_own(i) {
+            true => i,
+            false => 0,
+        };
+        let shape = match k {
+            0 => self.original.as_ref(),
+            _ => self.own[k].as_ref(),
+        };
+        let shape = shape.filter(|lp| lp.frames() > 0).ok_or(Error::Empty)?;
+        let silent = Loop::new(vec![0.0; shape.samples().len()], shape.channels())?
+            .with_range(shape.range())?;
+        self.send(Cmd::Clear(k, Box::new(silent)))
+            .map_err(|_| Error::Full)
+    }
+
+    /// Empties voice `i`: it reads nothing. Voice 0's is the loop every voice
+    /// without its own reads, so those go silent too.
+    pub fn eject(&mut self, i: usize) -> Result<(), Error> {
+        self.load_voice(i, Loop::empty())
+    }
+
+    /// Takes voice `i`'s own loop back, so it reads voice 0's again.
+    pub fn unload(&mut self, i: usize) -> Result<(), Error> {
+        if i == 0 || !self.has_own(i) {
+            return Err(Error::Voice(i));
+        }
+        self.send(Cmd::Unload(i)).map_err(|_| Error::Full)?;
+        self.own[i] = None;
         Ok(())
     }
 

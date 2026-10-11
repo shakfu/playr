@@ -2162,10 +2162,10 @@ fn the_loops_view_lists_each_loop_under_its_headings() {
         mtime: None,
         size: None,
     };
-    let loops = [
-        lp("beat", 120.0, TempoFrom::Name, Origin::Scan, None),
-        lp("hum", 120.0, TempoFrom::Length, Origin::Slot, Some(3)),
-    ];
+    let mut hum = lp("hum", 120.0, TempoFrom::Length, Origin::Slot, Some(3));
+    // A slot of a track: 1:02.5 to 1:04.5 of it.
+    (hum.start, hum.end) = (2_756_250, 2_844_450);
+    let loops = [lp("beat", 120.0, TempoFrom::Name, Origin::Scan, None), hum];
     let lines = loops_view(&loops, false, 100);
     let text = lines.join("\n");
     assert!(lines[0].contains("Loops 2"), "the tab counts them:\n{text}");
@@ -2180,7 +2180,7 @@ fn the_loops_view_lists_each_loop_under_its_headings() {
             .expect(&text)
             .clone()
     };
-    for cell in ["120.0", "4", "Am", "2.00", "scan", "pack drums"] {
+    for cell in ["120.0", "4", "Am", "0:00.0", "0:02.0", "2.00", "pack drums"] {
         assert!(row("beat").contains(cell), "{cell} missing:\n{text}");
     }
     assert!(
@@ -2191,12 +2191,18 @@ fn the_loops_view_lists_each_loop_under_its_headings() {
     // In characters: the border is one, though three bytes.
     let col = |line: &str, word: &str| line[..line.find(word).unwrap()].chars().count();
     assert_eq!(col(head, "Name"), col(&row("beat"), "beat"), "{text}");
-    assert_eq!(col(head, "From"), col(&row("beat"), "scan"), "{text}");
-    assert!(row("hum").contains("slot 3"), "{text}");
+    assert_eq!(col(head, "Key"), col(&row("beat"), "Am"), "{text}");
+    for cell in ["1:02.5", "1:04.5", "2.00"] {
+        assert!(row("hum").contains(cell), "{cell} missing:\n{text}");
+    }
+    // From and To stand under their headings.
+    assert_eq!(col(head, "From"), col(&row("hum"), "1:02.5"), "{text}");
+    assert_eq!(col(head, "To"), col(&row("hum"), "1:04.5"), "{text}");
+    assert!(!row("hum").contains("slot 3"), "{text}");
     // Narrow, the fixed columns stay and the name and tags give way.
     let narrow = loops_view(&loops, false, 60).join("\n");
     assert!(
-        narrow.contains("120.0") && narrow.contains("slot 3"),
+        narrow.contains("120.0") && narrow.contains("2.00"),
         "{narrow}"
     );
 

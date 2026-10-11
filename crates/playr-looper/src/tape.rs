@@ -197,6 +197,11 @@ impl Window {
         self.end <= self.start
     }
 
+    /// Its last frame; its start when empty, as an empty voice's is.
+    fn last(&self) -> usize {
+        self.end.max(self.start + 1) - 1
+    }
+
     fn contains(&self, pos: f64) -> bool {
         self.start as f64 <= pos && pos < self.end as f64
     }
@@ -264,7 +269,8 @@ impl Loop {
         self.range
     }
 
-    fn empty() -> Self {
+    /// A loop of no frames: a voice reading it is silent.
+    pub fn empty() -> Self {
         Loop {
             samples: Box::new([]),
             channels: 1,
@@ -468,7 +474,7 @@ impl Voice {
     /// Where a head starts in `w`: its first frame, or its last in reverse.
     fn home(&self, w: Window) -> f64 {
         match self.rate.target() < 0.0 {
-            true => (w.end - 1) as f64,
+            true => w.last() as f64,
             false => w.start as f64,
         }
     }
@@ -501,7 +507,7 @@ impl Voice {
     /// else a move.
     fn place(&mut self, at: f64, playing: bool, sample_rate: u32) {
         let w = self.window;
-        let at = at.clamp(w.start as f64, (w.end - 1) as f64);
+        let at = at.clamp(w.start as f64, w.last() as f64);
         if playing {
             self.jump(at, self.rate.value(), sample_rate);
         } else {
@@ -624,7 +630,7 @@ impl Voice {
     /// reversed, with no jump to fade over. A window set meanwhile applies here.
     fn turn(&mut self, sample_rate: u32) {
         let w = self.window;
-        let (first, last) = (w.start as f64, (w.end - 1) as f64);
+        let (first, last) = (w.start as f64, w.last() as f64);
         let back = match () {
             _ if self.pos > last => 2.0 * last - self.pos,
             _ if self.pos < first => 2.0 * first - self.pos,
@@ -635,7 +641,7 @@ impl Voice {
         if let Some(to) = self.next.take() {
             self.window = to;
             if !to.contains(self.pos) {
-                let at = self.pos.clamp(to.start as f64, (to.end - 1) as f64);
+                let at = self.pos.clamp(to.start as f64, to.last() as f64);
                 self.jump(at, self.rate.value(), sample_rate);
             }
         }
@@ -990,6 +996,38 @@ impl Tape {
         old
     }
 
+    /// Puts `lp` in place of loop `k`, voice 0's or voice `k`'s own, keeping
+    /// every head and window: for a silent loop, a clear. Returns the loop
+    /// replaced, or `lp` when its shape differs or there is no loop `k`.
+    pub fn clear(&mut self, k: usize, lp: Box<Loop>) -> Box<Loop> {
+        let slot = match k {
+            0 => &mut self.lp,
+            _ => match self.own.get_mut(k) {
+                Some(Some(own)) => own,
+                _ => return lp,
+            },
+        };
+        let same = slot.samples.len() == lp.samples.len()
+            && slot.channels == lp.channels
+            && slot.range == lp.range;
+        match same {
+            true => std::mem::replace(slot, lp),
+            false => lp,
+        }
+    }
+
+    /// Takes voice `i`'s own loop back, so it reads voice 0's again from its
+    /// window's start. Writing resumes once no voice has its own.
+    pub fn unload(&mut self, i: usize) -> Option<Box<Loop>> {
+        let old = self.own.get_mut(i)?.take()?;
+        let (frames, range) = (self.lp.frames(), self.lp.range);
+        let v = &mut self.voices[i];
+        let w = v.window.fit(frames, range);
+        v.set_window(w, false, self.sample_rate);
+        self.regate();
+        Some(old)
+    }
+
     /// Whether voice `j` reads the loop that a load into voice `i` replaces.
     fn follows(&self, i: usize, j: usize) -> bool {
         match i {
@@ -1040,11 +1078,17 @@ impl Tape {
         }
     }
 
+    /// Whether a voice reads a loop of its own with frames in it, whose sends
+    /// would print one loop into another. An empty one sends nothing.
+    fn others(&self) -> bool {
+        self.own.iter().flatten().any(|lp| lp.frames() > 0)
+    }
+
     /// Opens the write head's gate while writing is on and no voice reads a
-    /// loop of its own, whose sends would print one loop into another.
+    /// loop of its own, as [`Tape::others`] counts them.
     fn regate(&mut self) {
         let ramp = if self.playing { self.smooth } else { 0 };
-        let open = self.writer.on && self.own.iter().all(Option::is_none);
+        let open = self.writer.on && !self.others();
         let g = if open { 1.0 } else { 0.0 };
         if self.writer.gate.target() != g {
             self.writer.gate.set(g, ramp);
@@ -1054,7 +1098,7 @@ impl Tape {
     /// Whether the write head is held off, with writing on, because a voice
     /// reads a loop of its own.
     pub fn write_held(&self) -> bool {
-        self.writer.on && self.own.iter().any(Option::is_some)
+        self.writer.on && self.others()
     }
 
     pub fn set(&mut self, s: Setting) {

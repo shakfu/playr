@@ -176,13 +176,10 @@ D = "deselect"
 u = "undo"
 r = "redo"
 
-# enter loads the loop under the cursor into the tape for every voice; these
-# load it into one voice alone.
+# Browsing and editing only: loops load from the Tape tab's lanes, or with :load N.
 [keys.loops]
-"!" = "load 1"
-"@" = "load 2"
-"#" = "load 3"
 d = "remove"
+backspace = "remove"
 delete = "remove"
 esc = "search-clear"
 
