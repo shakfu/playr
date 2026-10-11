@@ -256,7 +256,7 @@ pub fn analyse(path: &Path) -> Analysis {
 }
 
 /// A BPM tag, as a number; some taggers write `120.5`, some `120`.
-fn bpm_tag(path: &Path) -> Option<f32> {
+pub(crate) fn bpm_tag(path: &Path) -> Option<f32> {
     let tagged = Probe::open(path).ok()?.read().ok()?;
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
     [ItemKey::IntegerBpm, ItemKey::Bpm]

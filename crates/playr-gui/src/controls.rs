@@ -7,7 +7,7 @@
 use playr_core::analysis::TempoFix;
 use std::time::Duration;
 
-use playr_app::action::{Action, Nudge, Slicing, Zoom};
+use playr_app::action::{Action, LoopAction, Nudge, Slicing, Zoom};
 use playr_app::dj::{DjAction, GridEdit, Side};
 use playr_app::sampler::Edge;
 use playr_app::tape::TapeAction;
@@ -47,6 +47,7 @@ pub const VIEW_MENU: &[Control] = &[
     control("Selection", Action::ShowView(View::Selection)),
     control("Playlists", Action::ShowView(View::Playlists)),
     control("Sampler", Action::ShowView(View::Sampler)),
+    control("Loops", Action::ShowView(View::Loops)),
     control("Next view", Action::NextView),
     control("Search", Action::StartSearch),
     control("Clear search", Action::ClearSearch),
@@ -175,6 +176,27 @@ pub const PLAYLIST_ROW: &[Control] = &[
     control("Edit", Action::EditPlaylist),
     control("Rename", Action::StartRename),
     control("Delete", Action::DeletePlaylist),
+];
+
+/// A loop's menu in the Loops view.
+pub const LOOP_ROW: &[Control] = &[
+    control(
+        "Load for every voice",
+        Action::LoopLib(LoopAction::Load(None)),
+    ),
+    control(
+        "Load into voice 1",
+        Action::LoopLib(LoopAction::Load(Some(1))),
+    ),
+    control(
+        "Load into voice 2",
+        Action::LoopLib(LoopAction::Load(Some(2))),
+    ),
+    control(
+        "Load into voice 3",
+        Action::LoopLib(LoopAction::Load(Some(3))),
+    ),
+    control("Remove from library", Action::Remove),
 ];
 
 /// Right of the sampler's header while it previews a track.
@@ -309,6 +331,7 @@ pub const TABLES: &[&[Control]] = &[
     RESULTS_BAR,
     PLAYLIST_ROW,
     SEARCH_ROW,
+    LOOP_ROW,
     SAMPLER_HEADER,
     DISPLAYS,
     SAMPLER_BAR,

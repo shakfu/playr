@@ -389,6 +389,9 @@ struct Voice {
     svf: Svf,
     /// What is heard of the voice under solo, 0 or 1.
     heard: Ramp,
+    /// Brought to 0 before the loop the voice reads is replaced while
+    /// playing, and back after, so the swap does not click.
+    duck: Ramp,
     solo: bool,
     ping: bool,
     /// The direction Ping has turned the head to, as a sign on its rate.
@@ -431,6 +434,7 @@ impl Voice {
             wet: Ramp::new(0.0),
             svf: Svf::new(),
             heard: Ramp::new(1.0),
+            duck: Ramp::new(1.0),
             solo: false,
             ping: false,
             dir: 1.0,
@@ -522,9 +526,10 @@ impl Voice {
             return false;
         }
         let rate = self.rate.next();
-        let level = self.level.next() * gate * self.heard.next();
+        let duck = self.duck.next();
+        let level = self.level.next() * gate * self.heard.next() * duck;
         let pan = self.pan.next();
-        let sends = self.send.next() * gate;
+        let sends = self.send.next() * gate * duck;
         let wear = self.wear.next();
         let drive_d = self.drive.next();
         let cutoff = self.cutoff.next();
@@ -847,7 +852,7 @@ impl Writer {
         let wear = self.wear.next();
         let thin = self.thin.next();
         let thin_mix = self.thin_on.next();
-        if gate == 0.0 && !self.on {
+        if gate == 0.0 && self.gate.target() == 0.0 {
             self.advance();
             return;
         }
@@ -906,7 +911,11 @@ impl Writer {
 #[derive(Debug, Clone)]
 pub struct Tape {
     sample_rate: u32,
+    /// Voice 0's loop, which the write head writes, and the loop of every
+    /// voice without one of its own.
     lp: Box<Loop>,
+    /// Loops of voices 1 and up that read their own; never voice 0's.
+    own: [Option<Box<Loop>>; VOICES],
     voices: [Voice; VOICES],
     writer: Writer,
     playing: bool,
@@ -924,6 +933,7 @@ impl Tape {
         Tape {
             sample_rate,
             lp: Box::new(Loop::empty()),
+            own: [None, None, None],
             voices: [Voice::new(true), Voice::new(false), Voice::new(false)],
             writer: Writer::new(),
             playing: false,
@@ -934,9 +944,11 @@ impl Tape {
         }
     }
 
-    /// Replaces the loop and returns the old one. Windows that no longer fit
-    /// become the whole loop, and every head goes to its window's start.
-    pub fn load(&mut self, lp: Box<Loop>) -> Box<Loop> {
+    /// Replaces the loop every voice reads, and returns the old one and the
+    /// voices' own. Windows that no longer fit become the whole loop, and
+    /// every head goes to its window's start.
+    pub fn load(&mut self, lp: Box<Loop>) -> (Box<Loop>, [Option<Box<Loop>>; VOICES]) {
+        let own = std::mem::take(&mut self.own);
         let old = std::mem::replace(&mut self.lp, lp);
         let (frames, range) = (self.lp.frames(), self.lp.range);
         for v in &mut self.voices {
@@ -945,7 +957,104 @@ impl Tape {
         }
         self.writer.window = self.writer.window.fit(frames, range);
         self.writer.rewind();
+        self.regate();
+        (old, own)
+    }
+
+    /// Gives voice `i` a loop of its own, and returns the one it replaces.
+    /// Voice 0's is the loop every voice without its own reads, so those
+    /// follow it. The voices that change loop go to their windows' starts.
+    pub fn load_voice(&mut self, i: usize, lp: Box<Loop>) -> Option<Box<Loop>> {
+        if i >= VOICES {
+            return Some(lp);
+        }
+        let old = match i {
+            0 => Some(std::mem::replace(&mut self.lp, lp)),
+            _ => self.own[i].replace(lp),
+        };
+        for j in 0..VOICES {
+            if !self.follows(i, j) {
+                continue;
+            }
+            let (frames, range) = (self.source(j).frames(), self.source(j).range);
+            let v = &mut self.voices[j];
+            let w = v.window.fit(frames, range);
+            v.set_window(w, false, self.sample_rate);
+        }
+        if i == 0 {
+            let (frames, range) = (self.lp.frames(), self.lp.range);
+            self.writer.window = self.writer.window.fit(frames, range);
+            self.writer.rewind();
+        }
+        self.regate();
         old
+    }
+
+    /// Whether voice `j` reads the loop that a load into voice `i` replaces.
+    fn follows(&self, i: usize, j: usize) -> bool {
+        match i {
+            0 => self.own[j].is_none(),
+            _ => i == j,
+        }
+    }
+
+    /// The loop voice `i` reads.
+    pub fn source(&self, i: usize) -> &Loop {
+        self.own
+            .get(i)
+            .and_then(|o| o.as_deref())
+            .unwrap_or(&self.lp)
+    }
+
+    /// Whether voice `i` reads a loop of its own.
+    pub fn has_own(&self, i: usize) -> bool {
+        self.own.get(i).is_some_and(Option::is_some)
+    }
+
+    /// Fades out the voices a load into voice `i` changes, over `frames`.
+    pub fn duck(&mut self, i: usize, frames: u32) {
+        for j in 0..VOICES {
+            if self.follows(i, j) && self.voices[j].duck.target() != 0.0 {
+                self.voices[j].duck.set(0.0, frames);
+            }
+        }
+    }
+
+    /// Whether every voice a load into voice `i` changes is silent: faded
+    /// out, off, or with nothing to read.
+    pub fn ducked(&self, i: usize) -> bool {
+        (0..VOICES).filter(|j| self.follows(i, *j)).all(|j| {
+            let v = &self.voices[j];
+            v.duck.value() == 0.0
+                || (!v.on && v.gate.value() == 0.0)
+                || self.source(j).frames() == 0
+        })
+    }
+
+    /// Fades back in the voices [`Tape::duck`] faded out.
+    pub fn unduck(&mut self, frames: u32) {
+        for v in &mut self.voices {
+            if v.duck.target() != 1.0 {
+                v.duck.set(1.0, frames);
+            }
+        }
+    }
+
+    /// Opens the write head's gate while writing is on and no voice reads a
+    /// loop of its own, whose sends would print one loop into another.
+    fn regate(&mut self) {
+        let ramp = if self.playing { self.smooth } else { 0 };
+        let open = self.writer.on && self.own.iter().all(Option::is_none);
+        let g = if open { 1.0 } else { 0.0 };
+        if self.writer.gate.target() != g {
+            self.writer.gate.set(g, ramp);
+        }
+    }
+
+    /// Whether the write head is held off, with writing on, because a voice
+    /// reads a loop of its own.
+    pub fn write_held(&self) -> bool {
+        self.writer.on && self.own.iter().any(Option::is_some)
     }
 
     pub fn set(&mut self, s: Setting) {
@@ -959,7 +1068,7 @@ impl Tape {
             Setting::Stop => self.playing = false,
             Setting::Write(on) => {
                 self.writer.on = on;
-                self.writer.gate.set(on as u8 as f32, ramp);
+                self.regate();
             }
             Setting::WriteWindow(w) => {
                 if w.is_empty() || w.end > frames {
@@ -1044,7 +1153,9 @@ impl Tape {
                     v.heard.set((!any || v.solo) as u8 as f32, ramp);
                 }
             }
-            Setting::Window(i, w) if i < VOICES && !w.is_empty() && w.end <= frames => {
+            Setting::Window(i, w)
+                if i < VOICES && !w.is_empty() && w.end <= self.source(i).frames() =>
+            {
                 self.voices[i].set_window(w, self.playing, sr)
             }
             Setting::Head(i, at) if i < VOICES && at.is_finite() => {
@@ -1057,7 +1168,7 @@ impl Tape {
     /// Fills `out`, interleaved stereo, with the next frames, and writes
     /// the loop as it goes. Silence while stopped or empty.
     pub fn process(&mut self, out: &mut [f32]) {
-        if !self.playing || self.lp.frames() == 0 {
+        if !self.playing || (0..VOICES).all(|i| self.source(i).frames() == 0) {
             out.fill(0.0);
             return;
         }
@@ -1066,11 +1177,16 @@ impl Tape {
             let mut mix = [0.0; 2];
             let mut send = [0.0; 2];
             let mut sending = false;
-            for v in &mut self.voices {
-                sending |= v.render(&self.lp, sr, self.interp, &mut mix, &mut send);
+            for (v, own) in self.voices.iter_mut().zip(&self.own) {
+                let lp = own.as_deref().unwrap_or(&self.lp);
+                if lp.frames() > 0 {
+                    sending |= v.render(lp, sr, self.interp, &mut mix, &mut send);
+                }
             }
-            self.writer
-                .write(&mut self.lp, sr, self.edge, self.dc_r, send, sending);
+            if self.lp.frames() > 0 {
+                self.writer
+                    .write(&mut self.lp, sr, self.edge, self.dc_r, send, sending);
+            }
             frame.copy_from_slice(&mix);
         }
     }

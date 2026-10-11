@@ -226,6 +226,8 @@ pub enum Action {
     Convert(String, Option<PathBuf>),
     /// Drive the tape looper.
     Tape(crate::tape::TapeAction),
+    /// Act on the loop under the Loops view's cursor.
+    LoopLib(LoopAction),
     /// Drive the DJ decks.
     Dj(crate::dj::DjAction),
     /// A `:mix` command.
@@ -249,6 +251,17 @@ pub enum Action {
         view: Option<View>,
         key: Key,
     },
+}
+
+/// What the Loops view does with the loop under its cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoopAction {
+    /// Load it into the tape for every voice, or for voice `n`, from 1.
+    Load(Option<u8>),
+    /// Set its beat count, and its tempo from it.
+    Beats(u32),
+    /// Set its key, or clear it.
+    Key(Option<String>),
 }
 
 /// What a loop slot is asked to do.

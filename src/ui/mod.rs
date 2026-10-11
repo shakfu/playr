@@ -45,6 +45,7 @@ pub struct App {
 #[derive(Debug, Clone, Copy, Default)]
 struct Offsets {
     library: usize,
+    loops: usize,
     selection: usize,
     playlists: usize,
     queue: usize,
@@ -61,6 +62,7 @@ pub struct Scroll {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Lists {
     pub library: Scroll,
+    pub loops: Scroll,
     pub selection: Scroll,
     pub playlists: Scroll,
     pub queue: Scroll,
@@ -110,6 +112,9 @@ pub struct Screen<'a> {
     pub playlists: &'a [Playlist],
     /// Listed after the playlists.
     pub searches: &'a [SavedSearch],
+    /// The loop library, or the loops a search found.
+    pub loops: &'a [playr_core::db::loops::Loop],
+    pub loop_search: bool,
     pub input: &'a Input,
     pub keys: &'a Keymap,
     pub sampler: &'a Sampler,
@@ -154,6 +159,8 @@ impl<'a> Screen<'a> {
             editing: None,
             playlists: &[],
             searches: &[],
+            loops: &[],
+            loop_search: false,
             input: &NO_INPUT,
             bpm: None,
             columns: DEFAULT_COLUMNS,
@@ -249,6 +256,8 @@ impl App {
             editing: m.session().editing().map(|p| p.name.as_str()),
             playlists: m.session().playlists(),
             searches: m.session().searches(),
+            loops: m.session().loop_list(),
+            loop_search: m.session().loop_search().is_some(),
             input: m.input(),
             help_scroll: self.help_scroll,
             colour: self.colour,
@@ -260,6 +269,7 @@ impl App {
             measures: m.measures_map(),
             lists: Lists {
                 library: scroll(c.library, o.library),
+                loops: scroll(c.loops, o.loops),
                 selection: scroll(c.selection, o.selection),
                 playlists: scroll(c.playlists, o.playlists),
                 queue: scroll(c.queue, o.queue),
@@ -273,17 +283,20 @@ impl App {
     pub fn drawn(&mut self, drawn: Drawn) {
         let Lists {
             library,
+            loops,
             selection,
             playlists,
             queue,
         } = drawn.lists;
         self.offsets = Offsets {
             library: library.offset,
+            loops: loops.offset,
             selection: selection.offset,
             playlists: playlists.offset,
             queue: queue.offset,
         };
         self.model.set_cursor(View::Library, library.row);
+        self.model.set_cursor(View::Loops, loops.row);
         self.model.set_cursor(View::Selection, selection.row);
         self.model.set_cursor(View::Playlists, playlists.row);
         self.model.set_cursor(View::Queue, queue.row);

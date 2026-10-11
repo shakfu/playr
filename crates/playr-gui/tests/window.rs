@@ -1169,7 +1169,7 @@ fn the_sampler_menu_holds_every_table_no_button_draws() {
     for (submenu, table) in [
         ("Range", playr_gui::controls::RANGE_MENU),
         ("Edit", playr_gui::controls::EDIT_MENU),
-        ("Loops", playr_gui::controls::LOOP_MENU),
+        ("Loop slots", playr_gui::controls::LOOP_MENU),
     ] {
         let samples = tempfile::tempdir().unwrap();
         let (mut harness, _dir) = sampling(samples.path());
@@ -1524,7 +1524,7 @@ fn the_tape_dj_and_mix_views_have_numbers_tab_order_and_keys_of_their_own() {
     typing(&mut harness, "T");
     assert!(model(&harness).mixer().muted(Strip::Tape));
 
-    // Tab steps through all eight, and round.
+    // Tab steps through all nine, and round.
     harness.key_press(egui::Key::Tab);
     harness.run_steps(2);
     assert_eq!(view(&harness), View::Library);
@@ -1537,6 +1537,8 @@ fn the_tape_dj_and_mix_views_have_numbers_tab_order_and_keys_of_their_own() {
     back(&mut harness);
     back(&mut harness);
     assert_eq!(view(&harness), View::Tape);
+    back(&mut harness);
+    assert_eq!(view(&harness), View::Loops);
     back(&mut harness);
     assert_eq!(view(&harness), View::Sampler);
 }

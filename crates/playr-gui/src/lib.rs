@@ -372,6 +372,11 @@ impl Gui {
                             + self.model.session().searches().len()
                     ),
                     View::Queue => format!("{} {}", view.title(), self.model.queue().len()),
+                    View::Loops => format!(
+                        "{} {}",
+                        view.title(),
+                        self.model.session().loop_list().len()
+                    ),
                     // Marked while a strip is muted, or the master clipped unseen.
                     View::Mix
                         if self.clipped
@@ -399,7 +404,7 @@ impl Gui {
         let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
         let field = egui::TextEdit::singleline(&mut self.search)
             .id(egui::Id::new(SEARCH))
-            .desired_width(240.0);
+            .desired_width(180.0);
         let response = ui.add(field);
         let label = ui.label("Search");
         let response = response.labelled_by(label.id);
@@ -521,6 +526,7 @@ impl Gui {
                 views::tracks(&self.model, ui, view, scroll)
             }
             View::Playlists => views::playlists(&self.model, ui, scroll),
+            View::Loops => views::loops(&self.model, ui, scroll),
             View::Sampler => {
                 for action in sampler::show(&mut self.model, ui, &mut self.sampler) {
                     self.perform(action);

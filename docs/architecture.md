@@ -43,11 +43,11 @@ playr-tauri   Tauri backend      -----------------> playr-core [serde]
 
 The Rust frontends also depend on `playr-core` directly, for `Session` and the types `dispatch` passes; the arrows show only where each frontend gets its interaction from. `playr-gui` is described in `docs/dev/gui.md`, `playr-server` in `docs/dev/server.md`; `playr-tauri` does not exist. `[serde]` is step 8.
 
-- **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `analysis`, `gain`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
+- **playr-core** (`crates/playr-core`): `audio`, `db`, `scan`, `loops` (scanning the loop library), `analysis`, `gain`, `samples`, `wave`, `notice`, `event`, `session` and `settings`. No presentation dependency.
 
-- **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state), `sampler` (the sampler view's state and column geometry), `tape` (the tape looper's actions and its stream), `dj` (the DJ decks' actions, loads and grid edits) and `mix` (the mixer's faders and fader laws; `docs/dev/mixer.md`). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
+- **playr-app** (`crates/playr-app`): what Rust frontends share about interaction. `action` (`Action`, `Key`, `Keymap`), `command` (the `:` parser, completion, history), `config` (the `[keys]` tables), `message` (messages and their words), `dispatch`, `model` (the interface's state), `sampler` (the sampler view's state and column geometry), `loops` (the Loops view's rows), `tape` (the tape looper's actions and its stream), `dj` (the DJ decks' actions, loads and grid edits) and `mix` (the mixer's faders and fader laws; `docs/dev/mixer.md`). It is optional: a Tauri frontend skips it, or uses its parser on the Rust side for a command palette.
 
-- **playr-looper** (`crates/playr-looper`): the tape looper's engine, on interleaved `f32` at the device's rate. It depends on neither `playr-core` nor `playr-app`, decodes nothing and resamples nothing; `playr_app::tape` reads the range through `playr-core` and hands it a ready loop. `docs/dev/looper-engine.md` has the design.
+- **playr-looper** (`crates/playr-looper`): the tape looper's engine, on interleaved `f32` at the device's rate. It depends on neither `playr-core` nor `playr-app`, decodes nothing and resamples nothing; `playr_app::tape` reads the range through `playr-core` and hands it a ready loop, or one per voice. `docs/dev/looper-engine.md` has the design; `docs/dev/loop-library.md` the loop per voice and the loop library.
 
 - **playr-dsp** (`crates/playr-dsp`): the ramps, state-variable filter, soft clip and interpolation `playr-looper` and `playr-dj` share. No dependencies.
 

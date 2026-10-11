@@ -12,6 +12,7 @@ pub mod db;
 pub mod event;
 pub mod gain;
 pub mod labels;
+pub mod loops;
 pub mod m3u;
 pub mod notice;
 pub mod samples;

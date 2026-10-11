@@ -16,6 +16,7 @@ pub mod config;
 pub mod dispatch;
 pub mod dj;
 pub mod instance;
+pub mod loops;
 pub mod media;
 pub mod message;
 pub mod meter;
@@ -39,6 +40,8 @@ pub enum View {
     Playlists,
     /// The playing track's waveform, for marking and slicing it.
     Sampler,
+    /// The loop library, for loading loops into the tape.
+    Loops,
     /// The tape looper. This and the two below are the window's only; the
     /// terminal reaches them with `:tape`, `:dj` and `:mix`.
     Tape,
@@ -49,24 +52,26 @@ pub enum View {
 
 impl View {
     /// The views in tab order.
-    pub const ALL: [View; 8] = [
+    pub const ALL: [View; 9] = [
         View::Library,
         View::Queue,
         View::Selection,
         View::Playlists,
         View::Sampler,
+        View::Loops,
         View::Tape,
         View::Dj,
         View::Mix,
     ];
 
     /// The views the terminal draws.
-    pub const TERMINAL: [View; 5] = [
+    pub const TERMINAL: [View; 6] = [
         View::Library,
         View::Queue,
         View::Selection,
         View::Playlists,
         View::Sampler,
+        View::Loops,
     ];
 
     /// The view's name on its tab.
@@ -76,6 +81,7 @@ impl View {
             View::Selection => "Selection",
             View::Playlists => "Playlists",
             View::Sampler => "Sampler",
+            View::Loops => "Loops",
             View::Queue => "Queue",
             View::Tape => "Tape",
             View::Dj => "DJ",

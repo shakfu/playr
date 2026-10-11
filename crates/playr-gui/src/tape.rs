@@ -76,6 +76,7 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
         .state()
         .copied()
         .unwrap_or(TapeState::new(extent.range));
+    let extents: [Extent; VOICES] = std::array::from_fn(|i| deck.voice_extent(i).unwrap_or(extent));
 
     ui.horizontal(|ui| {
         for c in controls::TAPE_BAR {
@@ -97,9 +98,9 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
             });
         }
     });
-    waveform(ui, model, &state, extent, tab, &mut actions);
+    waveform(ui, model, &state, extents, tab, &mut actions);
     ui.add_enabled_ui(frames.is_some(), |ui| {
-        rows(ui, &state, extent, tab, &mut actions);
+        rows(ui, &state, extents, tab, &mut actions);
     });
     actions
 }
@@ -109,17 +110,20 @@ fn colours(p: &Palette) -> ([egui::Color32; VOICES], egui::Color32) {
     ([p.green, p.yellow, p.edge], p.red)
 }
 
-/// The write window in a strip on top; the loop's peaks, with the selected
-/// voice's window shaded and its edges marked, and the pre-roll and
-/// post-roll dimmed; each voice's window in a lane below; every head as a line.
+/// The write window in a strip on top; the selected voice's loop's peaks,
+/// with its window shaded and its edges marked, and the pre-roll and
+/// post-roll dimmed; each voice's window in a lane below, on its own loop's
+/// scale; every head as a line.
 fn waveform(
     ui: &mut egui::Ui,
     model: &Model,
     state: &TapeState,
-    extent: Extent,
+    extents: [Extent; VOICES],
     tab: &mut State,
     actions: &mut Vec<Action>,
 ) {
+    let selected = tab.selected;
+    let extent = extents[selected];
     let frames = extent.frames;
     let size = egui::vec2(ui.available_width(), STRIP + WAVE + LANE * VOICES as f32);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
@@ -136,25 +140,36 @@ fn waveform(
     let strip = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), STRIP));
     let wave = egui::Rect::from_min_size(strip.left_bottom(), egui::vec2(rect.width(), WAVE));
     let x = |frame: f64| rect.left() + (frame / frames as f64) as f32 * rect.width();
+    // Each voice's frames on its own loop's scale; the write head's on voice 1's.
+    let at = |t: Target, frame: f64| {
+        let n = match t {
+            Target::Voice(i) => extents[i].frames,
+            Target::Write => extents[0].frames,
+        };
+        rect.left() + (frame / n.max(1) as f64) as f32 * rect.width()
+    };
     drag(
         ui,
         &response,
         (strip, wave),
         state,
-        extent,
-        &x,
+        extents,
+        &at,
         tab,
         actions,
     );
     let span = |w: Window| x(w.start as f64)..=x(w.end as f64);
-    let selected = tab.selected;
+    let span_of = |t: Target, w: Window| at(t, w.start as f64)..=at(t, w.end as f64);
+    // Voice `i` reads the loop shown when it and the selected voice read voice 1's.
+    let shown = |i: usize| i == selected || !(state.own[i] || state.own[selected]);
+    let held = state.own.iter().any(|o| *o);
 
     // The write window, and the write head, in their strip.
     let bar = egui::Rect::from_x_y_ranges(
-        span(state.write_window),
+        span_of(Target::Write, state.write_window),
         strip.top() + 2.0..=strip.bottom() - 2.0,
     );
-    let bar_colour = match state.write {
+    let bar_colour = match state.write && !held {
         true => write_colour,
         false => visuals.weak_text_color(),
     };
@@ -172,7 +187,7 @@ fn waveform(
     painter.rect_filled(shade, 0.0, palette.region);
     let (mid, half) = (wave.center().y, WAVE / 2.0 - 2.0);
     let step = rect.width() / COLUMNS as f32;
-    for (i, peak) in status.columns().iter().enumerate() {
+    for (i, peak) in status.voice_columns(selected).iter().enumerate() {
         let cx = rect.left() + (i as f32 + 0.5) * step;
         let h = peak.min(1.0) * half;
         painter.line_segment(
@@ -202,7 +217,7 @@ fn waveform(
         true => ww.len(),
         false => 0,
     };
-    let frozen = match state.write {
+    let frozen = match state.write && !held && shown(0) {
         true => vec![
             Window::new(0, ww.start.saturating_sub(reach)),
             Window::new((ww.end + reach).min(frames), frames),
@@ -246,7 +261,8 @@ fn waveform(
     }
     for (i, v) in state.voices.iter().enumerate() {
         let top = wave.bottom() + LANE * i as f32;
-        let lane = egui::Rect::from_x_y_ranges(span(v.window), top + 1.0..=top + LANE - 1.0);
+        let t = Target::Voice(i);
+        let lane = egui::Rect::from_x_y_ranges(span_of(t, v.window), top + 1.0..=top + LANE - 1.0);
         let colour = match v.on {
             true => voice_colour[i],
             false => visuals.weak_text_color(),
@@ -254,7 +270,7 @@ fn waveform(
         painter.rect_filled(lane, 1.0, colour.gamma_multiply(0.35));
         // A head under Ping turns rather than wraps, so it never crossfades.
         if !v.ping {
-            crossfades(&painter, v, extent, lane, &x, colour);
+            crossfades(&painter, v, extents[i], lane, &|f| at(t, f), colour);
         }
         if i == selected {
             painter.rect_stroke(
@@ -265,15 +281,17 @@ fn waveform(
             );
         }
         if v.on {
-            let hx = x(status.voice(i));
+            // Across the waveform only when it shows the loop the head reads.
+            let hx = at(t, status.voice(i));
+            let from = if shown(i) { wave.top() } else { top };
             painter.line_segment(
-                [egui::pos2(hx, wave.top()), egui::pos2(hx, top + LANE)],
+                [egui::pos2(hx, from), egui::pos2(hx, top + LANE)],
                 egui::Stroke::new(1.5, voice_colour[i]),
             );
         }
     }
-    if state.write {
-        let hx = x(status.write_head() as f64);
+    if state.write && !held {
+        let hx = at(Target::Write, status.write_head() as f64);
         painter.line_segment(
             [egui::pos2(hx, strip.top()), egui::pos2(hx, wave.bottom())],
             egui::Stroke::new(1.5, write_colour),
@@ -311,11 +329,11 @@ fn hit(
     areas: (egui::Rect, egui::Rect),
     state: &TapeState,
     selected: usize,
-    x: &dyn Fn(f64) -> f32,
+    at: &dyn Fn(Target, f64) -> f32,
 ) -> Option<(Target, Part)> {
     let target = target(pos, areas, selected)?;
     let w = window_of(state, target);
-    let (a, b) = (x(w.start as f64), x(w.end as f64));
+    let (a, b) = (at(target, w.start as f64), at(target, w.end as f64));
     let part = match ((pos.x - a).abs(), (pos.x - b).abs()) {
         (da, db) if da <= GRAB && da <= db => Part::Start,
         (_, db) if db <= GRAB => Part::End,
@@ -333,14 +351,19 @@ fn drag(
     response: &egui::Response,
     areas: (egui::Rect, egui::Rect),
     state: &TapeState,
-    e: Extent,
-    x: &dyn Fn(f64) -> f32,
+    extents: [Extent; VOICES],
+    at: &dyn Fn(Target, f64) -> f32,
     tab: &mut State,
     actions: &mut Vec<Action>,
 ) {
     let wave = areas.1;
-    let frame_at =
-        |px: f32| f64::from((px - wave.left()) / wave.width()).clamp(0.0, 1.0) * e.frames as f64;
+    let extent_of = |t: Target| match t {
+        Target::Voice(i) => extents[i],
+        Target::Write => extents[0],
+    };
+    let frame_at = |t: Target, px: f32| {
+        f64::from((px - wave.left()) / wave.width()).clamp(0.0, 1.0) * extent_of(t).frames as f64
+    };
     // A click or a drag in a lane selects its voice.
     let pressed = ui.input(|i| i.pointer.press_origin());
     if response.clicked() || response.drag_started() {
@@ -348,22 +371,15 @@ fn drag(
             tab.selected = i;
         }
     }
-    // An edge within reach of the range's edge lands on it.
-    let snap = |f: usize| {
-        [e.range.start, e.range.end]
-            .into_iter()
-            .find(|&r| (x(r as f64) - x(f as f64)).abs() <= GRAB)
-            .unwrap_or(f)
-    };
     if response.drag_started() {
         // Where the press was: a drag starts only once the pointer has moved.
         tab.drag = pressed.and_then(|pos| {
-            let (target, part) = hit(pos, areas, state, tab.selected, x)?;
+            let (target, part) = hit(pos, areas, state, tab.selected, at)?;
             Some(Drag {
                 target,
                 part,
                 from: window_of(state, target),
-                grab: frame_at(pos.x),
+                grab: frame_at(target, pos.x),
             })
         });
     }
@@ -372,7 +388,7 @@ fn drag(
     }
     let cursor = match (tab.drag, response.hover_pos()) {
         (Some(d), _) => Some(d.part),
-        (None, Some(pos)) => hit(pos, areas, state, tab.selected, x).map(|(_, part)| part),
+        (None, Some(pos)) => hit(pos, areas, state, tab.selected, at).map(|(_, part)| part),
         _ => None,
     };
     match cursor {
@@ -384,6 +400,16 @@ fn drag(
     let (Some(d), Some(pos)) = (tab.drag, response.interact_pointer_pos()) else {
         return;
     };
+    let e = extent_of(d.target);
+    let x = |f: f64| at(d.target, f);
+    // An edge within reach of the range's edge lands on it.
+    let snap = |f: usize| {
+        [e.range.start, e.range.end]
+            .into_iter()
+            .find(|&r| (x(r as f64) - x(f as f64)).abs() <= GRAB)
+            .unwrap_or(f)
+    };
+    let frame_at = |px: f32| frame_at(d.target, px);
     let at = frame_at(pos.x).round() as usize;
     let w = d.from;
     let to = match d.part {
@@ -630,7 +656,7 @@ const FILTERS: [(Filter, &str, &str); 3] = [
 fn rows(
     ui: &mut egui::Ui,
     state: &TapeState,
-    e: Extent,
+    extents: [Extent; VOICES],
     tab: &mut State,
     actions: &mut Vec<Action>,
 ) {
@@ -640,9 +666,9 @@ fn rows(
                 return;
             };
             for (i, ui) in voices.iter_mut().enumerate() {
-                voice(ui, state, e, i, tab, actions);
+                voice(ui, state, extents[i], i, tab, actions);
             }
-            write_strip(write, state, e, actions);
+            write_strip(write, state, extents[0], actions);
         });
     });
 }

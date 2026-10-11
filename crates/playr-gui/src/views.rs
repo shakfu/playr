@@ -274,6 +274,60 @@ pub fn playlists(model: &Model, ui: &mut egui::Ui, scroll: Option<usize>) -> Cli
     result
 }
 
+/// The loop library, or the loops a search found: a row per loop under
+/// [`playr_app::loops::HEADINGS`]. A double click loads it for every voice.
+pub fn loops(model: &Model, ui: &mut egui::Ui, scroll: Option<usize>) -> Clicked {
+    let loops = model.session().loop_list();
+    if loops.is_empty() {
+        ui.weak(playr_app::loops::empty_text(
+            model.session().loop_search().is_some(),
+        ));
+        return None;
+    }
+    let cursor = model.cursor(View::Loops);
+    let mut result: Clicked = None;
+    ui.style_mut().interaction.selectable_labels = false;
+    let mut table = TableBuilder::new(ui)
+        .id_salt("loops")
+        .striped(true)
+        .sense(egui::Sense::click())
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+    if let Some(row) = scroll {
+        table = table.scroll_to_row(row, None);
+    }
+    table
+        .column(Column::remainder().at_least(160.0).clip(true))
+        .column(Column::exact(56.0))
+        .column(Column::exact(44.0))
+        .column(Column::exact(40.0))
+        .column(Column::exact(48.0))
+        .column(Column::exact(56.0))
+        .column(Column::remainder().at_least(80.0).clip(true))
+        .header(ROW, |mut header| {
+            for name in playr_app::loops::HEADINGS {
+                header.col(|ui| {
+                    ui.strong(name);
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(ROW, loops.len(), |mut row| {
+                let i = row.index();
+                row.set_selected(cursor == Some(i));
+                for (c, cell) in playr_app::loops::cells(&loops[i]).into_iter().enumerate() {
+                    row.col(|ui| match c {
+                        0 => _ = ui.label(cell),
+                        _ => _ = ui.weak(cell),
+                    });
+                }
+                if let Some(picked) = respond(&row, controls::LOOP_ROW) {
+                    result = Some(picked);
+                }
+            });
+        });
+    result
+}
+
 /// What a click, double click or the row's menu, from `menu`, asks of a row.
 fn respond(row: &TableRow<'_, '_>, menu: &[Control]) -> Option<(Option<usize>, Option<Action>)> {
     let i = row.index();

@@ -106,6 +106,11 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
+    /// The loop library: directories of precut loops, kept apart from the tracks
+    Loops {
+        #[command(subcommand)]
+        op: LoopsOp,
+    },
     /// Show which formats this build can decode
     Formats,
     /// List output devices, by the ID --device and the device setting take
@@ -141,6 +146,28 @@ enum RootsOp {
     /// Forget a directory, and the tracks and marks under it
     Rm {
         #[arg(required = true, value_name = "DIR")]
+        dirs: Vec<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LoopsOp {
+    /// Add directories of loops, taking their files out of the tracks; with
+    /// none, re-scans those recorded
+    Scan {
+        #[arg(value_name = "DIR")]
+        dirs: Vec<PathBuf>,
+    },
+    /// List the loop directories
+    Roots,
+    /// Forget a loop directory and the loops under it
+    Rm {
+        #[arg(required = true, value_name = "DIR")]
+        dirs: Vec<PathBuf>,
+    },
+    /// Remove loops whose files are gone; with no DIR, under every loop directory
+    Prune {
+        #[arg(value_name = "DIR")]
         dirs: Vec<PathBuf>,
     },
 }
@@ -214,6 +241,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 | Command::Export { .. }
                 | Command::Search { json: true, .. }
                 | Command::Roots { op: None }
+                | Command::Loops { op: LoopsOp::Roots }
                 | Command::Analyze { .. }
         )
     );
@@ -230,6 +258,9 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         cli.command,
         Some(
             Command::Scan { .. }
+                | Command::Loops {
+                    op: LoopsOp::Scan { .. }
+                }
                 | Command::Roots {
                     op: Some(RootsOp::Add { .. })
                 }
@@ -244,6 +275,9 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 | Command::Import { .. }
                 | Command::Roots {
                     op: None | Some(RootsOp::Rm { .. })
+                }
+                | Command::Loops {
+                    op: LoopsOp::Roots | LoopsOp::Rm { .. } | LoopsOp::Prune { .. }
                 }
         )
     ) && !db_path.try_exists()?
@@ -284,6 +318,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Prune { dirs }) => return cmd_prune(&conn, &dirs),
+        Some(Command::Loops { op }) => return cmd_loops(&mut conn, op),
         Some(Command::Analyze {
             paths,
             force,
@@ -597,6 +632,92 @@ fn cmd_prune(
     }
     println!("library now holds {} tracks", db::query::count(conn)?);
     Ok(ExitCode::SUCCESS)
+}
+
+/// `playr loops`: the loop library's directories.
+fn cmd_loops(
+    conn: &mut rusqlite::Connection,
+    op: LoopsOp,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    use db::loops as lib;
+    let recorded = |conn: &rusqlite::Connection, dirs: Vec<PathBuf>| match dirs.is_empty() {
+        true => lib::roots(conn),
+        false => Ok(dirs),
+    };
+    let mut code = ExitCode::SUCCESS;
+    match op {
+        LoopsOp::Roots => {
+            for root in lib::roots(conn)? {
+                println!("{}", root.display());
+            }
+            return Ok(code);
+        }
+        LoopsOp::Scan { dirs } => {
+            let dirs = recorded(conn, dirs)?;
+            if dirs.is_empty() {
+                eprintln!("playr: no loop directories recorded; give one: playr loops scan DIR");
+                return Ok(ExitCode::FAILURE);
+            }
+            for path in &dirs {
+                if !path.is_dir() {
+                    eprintln!("playr: not a directory: {}", path.display());
+                    code = ExitCode::FAILURE;
+                    continue;
+                }
+                println!("scanning loops in {}", path.display());
+                let stats = playr_core::loops::scan_dir(conn, path, |s| {
+                    if s.seen % 25 == 0 {
+                        print!("\r  {} files, {} added", s.seen, s.added);
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                    }
+                });
+                let stats = match stats {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("playr: not scanning {}: {e}", path.display());
+                        code = ExitCode::FAILURE;
+                        continue;
+                    }
+                };
+                let s = stats.scan;
+                println!(
+                    "\r  {} files, {} added, {} unchanged, {} one-shots left out, {} unreadable{:<10}",
+                    s.seen, s.added, s.skipped, stats.one_shots, s.failed, ""
+                );
+                if stats.moved > 0 {
+                    println!("  {} tracks taken out of the audio library", stats.moved);
+                }
+                let missing = lib::missing_under(conn, path)?.len();
+                if missing > 0 {
+                    let path = path.display();
+                    println!("  {missing} loops missing; `playr loops prune {path}` removes them");
+                }
+            }
+        }
+        LoopsOp::Rm { dirs } => {
+            for path in &dirs {
+                match lib::forget_root(conn, path)? {
+                    Some(n) => println!("forgot {}: removed {n} loops", path.display()),
+                    None => {
+                        eprintln!("playr: not a loop directory: {}", path.display());
+                        code = ExitCode::FAILURE;
+                    }
+                }
+            }
+        }
+        LoopsOp::Prune { dirs } => {
+            for path in &recorded(conn, dirs)? {
+                let n = playr_core::loops::prune_missing(conn, path)?;
+                println!(
+                    "pruning {}: removed {n} loops of missing files",
+                    path.display()
+                );
+            }
+        }
+    }
+    println!("loop library now holds {} loops", lib::count(conn)?);
+    Ok(code)
 }
 
 /// Forgets each root named, with the tracks and marks under it. A path that

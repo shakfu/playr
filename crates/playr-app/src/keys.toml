@@ -30,6 +30,7 @@ backtab = "view prev"
 3 = "view selection"
 4 = "view playlists"
 5 = "view sampler"
+9 = "view loops"
 # The window's views; the terminal has none of these three.
 6 = "view tape"
 7 = "view dj"
@@ -174,6 +175,16 @@ backspace = "remove"
 D = "deselect"
 u = "undo"
 r = "redo"
+
+# enter loads the loop under the cursor into the tape for every voice; these
+# load it into one voice alone.
+[keys.loops]
+"!" = "load 1"
+"@" = "load 2"
+"#" = "load 3"
+d = "remove"
+delete = "remove"
+esc = "search-clear"
 
 # The window's views only; the terminal has the commands.
 [keys.tape]

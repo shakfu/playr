@@ -43,7 +43,7 @@ pub fn allowed(action: &Action) -> bool {
         | Open(_)
         | Map { .. }
         | Unmap { .. } => false,
-        ShowView(View::Sampler | View::Tape | View::Dj | View::Mix)
+        ShowView(View::Sampler | View::Tape | View::Dj | View::Mix | View::Loops)
         | Slice(_)
         | FixTempo(_)
         | Audition
@@ -80,6 +80,7 @@ pub fn allowed(action: &Action) -> bool {
         | Convert(..)
         // Not in the first version: they would play on the server's device.
         | Tape(_)
+        | LoopLib(_)
         | Dj(_)
         | Interp(_) => false,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
@@ -314,7 +315,7 @@ pub fn row_key(model: &Model, view: View, row: usize) -> Option<String> {
             }
         }
         View::Queue => model.queue().get(row).map(|t| t.path.clone()),
-        View::Sampler | View::Tape | View::Dj | View::Mix => None,
+        View::Sampler | View::Tape | View::Dj | View::Mix | View::Loops => None,
     }
 }
 

@@ -49,7 +49,6 @@ fn commands_without_arguments() {
 fn view_commands_work_only_in_their_view() {
     for (view, line, action) in [
         (Library, "toggle", Action::Add),
-        (Library, "search-clear", Action::ClearSearch),
         (Playlists, "delete", Action::DeletePlaylist),
         (Playlists, "rename", Action::StartRename),
         (Playlists, "rename  dawn ", Action::RenameTo("dawn".into())),
@@ -65,6 +64,14 @@ fn view_commands_work_only_in_their_view() {
             );
         }
     }
+    // The library and the loop library each clear their search.
+    for view in [Library, View::Loops] {
+        assert_eq!(parse("search-clear", view), Ok(Action::ClearSearch));
+    }
+    assert_eq!(
+        parse("search-clear", Playlists),
+        Err(":search-clear works in the library and loops views".into())
+    );
     // The selection and the queue share their editing commands.
     for (line, selection, queue) in [
         ("remove", Action::Remove, Action::Remove),
@@ -77,6 +84,7 @@ fn view_commands_work_only_in_their_view() {
         // The sampler's `move` and `remove` act on its selection.
         let views = match name {
             "clear" => "selection and queue",
+            "remove" => "selection, queue, loops and sampler",
             _ => "selection, queue and sampler",
         };
         assert_eq!(
@@ -90,7 +98,7 @@ fn view_commands_work_only_in_their_view() {
     // though several views list it.
     assert_eq!(
         parse("rem", Library),
-        Err(":remove works in the selection, queue and sampler views".into())
+        Err(":remove works in the selection, queue, loops and sampler views".into())
     );
     // Typed in full, a command from another view is not taken as a prefix of one here.
     assert_eq!(
@@ -688,7 +696,7 @@ fn mode_and_view_take_a_name_or_its_prefix() {
     assert_eq!(line(&Action::ShowView(View::Dj), None), "view dj");
     assert_eq!(
         lib("view nope"),
-        Err("views: library, queue, selection, playlists, sampler, tape, dj, mix".into())
+        Err("views: library, queue, selection, playlists, sampler, loops, tape, dj, mix".into())
     );
     assert_eq!(
         lib("mode"),
@@ -760,6 +768,7 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
             "view selection",
             "view playlists",
             "view sampler",
+            "view loops",
             "view tape",
             "view dj",
             "view mix",
@@ -1043,7 +1052,7 @@ fn map_and_unmap_parse_a_view_a_key_and_a_command() {
     // Several views take it, so no one view is suggested.
     assert_eq!(
         lib("map d remove"),
-        Err(":remove works in the selection, queue and sampler views".into())
+        Err(":remove works in the selection, queue, loops and sampler views".into())
     );
     assert_eq!(
         lib("map x map y quit"),
@@ -1440,8 +1449,9 @@ fn views_step_forward_and_back_in_tab_order() {
         assert_eq!(view.step(&View::ALL, 1).step(&View::ALL, -1), view);
     }
     assert_eq!(Library.step(&View::ALL, -1), View::Mix);
-    assert_eq!(Library.step(&View::TERMINAL, -1), Sampler);
-    assert_eq!(Sampler.step(&View::TERMINAL, 1), Library);
+    assert_eq!(Library.step(&View::TERMINAL, -1), View::Loops);
+    assert_eq!(Sampler.step(&View::TERMINAL, 1), View::Loops);
+    assert_eq!(View::Loops.step(&View::TERMINAL, 1), Library);
     assert_eq!(View::Queue.step(&View::ALL, -1), Library);
     // From a view not shown, the first that is.
     assert_eq!(View::Dj.step(&View::TERMINAL, 1), Library);
@@ -1700,4 +1710,35 @@ fn mix_commands_parse_in_any_view_and_round_trip() {
         let got = lib(text).unwrap_err();
         assert!(got.starts_with(error), "{text}: {got}");
     }
+}
+
+#[test]
+fn loops_view_commands_parse_there_and_round_trip() {
+    use playr_app::action::LoopAction;
+    let l = |line: &str| parse(line, View::Loops);
+    for (text, action) in [
+        ("load", LoopAction::Load(None)),
+        ("load 3", LoopAction::Load(Some(3))),
+        ("beats 8", LoopAction::Beats(8)),
+        ("key F#m", LoopAction::Key(Some("F#m".into()))),
+        ("key -", LoopAction::Key(None)),
+    ] {
+        let action = Action::LoopLib(action);
+        assert_eq!(l(text), Ok(action.clone()), "{text:?}");
+        assert_eq!(line(&action, Some(View::Loops)), text);
+    }
+    assert_eq!(l("load 4"), Err("voices are 1 to 3".into()));
+    assert_eq!(l("beats 0"), Err("beats are 1 to 1024".into()));
+    assert_eq!(l("key"), Err("usage: :key KEY | -".into()));
+    assert_eq!(l("remove"), Ok(Action::Remove));
+    assert_eq!(l("play"), Ok(Action::Activate));
+    assert!(parse("beats 8", Library).is_err());
+    assert_eq!(
+        default_key("9", Library),
+        Some(Action::ShowView(View::Loops))
+    );
+    assert_eq!(
+        default_key("@", View::Loops),
+        Some(Action::LoopLib(LoopAction::Load(Some(2))))
+    );
 }

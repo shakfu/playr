@@ -218,6 +218,7 @@ impl<'a> Case<'a> {
                 selection: at(self.selection.is_empty(), cursor),
                 playlists: at(self.playlists.is_empty(), cursor),
                 queue: at(self.playing.is_empty(), cursor),
+                loops: Scroll::default(),
             },
             ..Screen::new(self.view, self.snapshot, keys, &self.sampler)
         };
@@ -270,6 +271,7 @@ fn invisible_cells(
             selection: first(!selection.is_empty()),
             playlists: first(!playlists.is_empty()),
             queue: first(false),
+            loops: first(false),
         },
         ..Screen::new(view, &snapshot, &keys, &sampler)
     };
@@ -929,6 +931,7 @@ fn drawing_returns_each_cursor_inside_its_list_and_on_screen() {
                 selection: first,
                 playlists: first,
                 queue: Scroll::default(),
+                loops: Scroll::default(),
             }
         );
     }
@@ -2107,4 +2110,100 @@ fn a_selection_out_of_view_points_the_way_reversed() {
         )
     };
     assert_eq!((cell(40), cell(39)), (('>', false), ('>', true)));
+}
+
+/// The Loops view at `width` columns, as text lines.
+fn loops_view(loops: &[playr_core::db::loops::Loop], searching: bool, width: u16) -> Vec<String> {
+    let snapshot = stopped();
+    let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+    let keys = Keymap::default();
+    let sampler = Sampler::default();
+    let screen = Screen {
+        loops,
+        loop_search: searching,
+        lists: Lists {
+            loops: Scroll {
+                row: (!loops.is_empty()).then_some(0),
+                offset: 0,
+            },
+            ..Lists::default()
+        },
+        ..Screen::new(View::Loops, &snapshot, &keys, &sampler)
+    };
+    terminal
+        .draw(|f| {
+            render::draw(&screen, f);
+        })
+        .unwrap();
+    let buf = terminal.backend().buffer().clone();
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
+        .collect()
+}
+
+#[test]
+fn the_loops_view_lists_each_loop_under_its_headings() {
+    use playr_core::db::loops::{Loop, Origin, TempoFrom};
+    let lp = |name: &str, bpm, from, origin, slot| Loop {
+        id: 1,
+        path: format!("/l/{name}.wav"),
+        start: 0,
+        end: 88_200,
+        rate: 44_100,
+        channels: Some(2),
+        slot,
+        origin,
+        name: name.into(),
+        tags: "pack drums".into(),
+        bpm: Some(bpm),
+        beats: Some(4),
+        bpm_from: Some(from),
+        key: Some("Am".into()),
+        mtime: None,
+        size: None,
+    };
+    let loops = [
+        lp("beat", 120.0, TempoFrom::Name, Origin::Scan, None),
+        lp("hum", 120.0, TempoFrom::Length, Origin::Slot, Some(3)),
+    ];
+    let lines = loops_view(&loops, false, 100);
+    let text = lines.join("\n");
+    assert!(lines[0].contains("Loops 2"), "the tab counts them:\n{text}");
+    let head = lines.iter().find(|l| l.contains("Name")).expect(&text);
+    for h in playr_app::loops::HEADINGS {
+        assert!(head.contains(h), "{h} missing:\n{text}");
+    }
+    let row = |name: &str| {
+        lines
+            .iter()
+            .find(|l| l.contains(name))
+            .expect(&text)
+            .clone()
+    };
+    for cell in ["120.0", "4", "Am", "2.00", "scan", "pack drums"] {
+        assert!(row("beat").contains(cell), "{cell} missing:\n{text}");
+    }
+    assert!(
+        row("hum").contains("~120.0"),
+        "a guessed tempo is marked:\n{text}"
+    );
+    // Headings stand over their columns, inside the list's border.
+    // In characters: the border is one, though three bytes.
+    let col = |line: &str, word: &str| line[..line.find(word).unwrap()].chars().count();
+    assert_eq!(col(head, "Name"), col(&row("beat"), "beat"), "{text}");
+    assert_eq!(col(head, "From"), col(&row("beat"), "scan"), "{text}");
+    assert!(row("hum").contains("slot 3"), "{text}");
+    // Narrow, the fixed columns stay and the name and tags give way.
+    let narrow = loops_view(&loops, false, 60).join("\n");
+    assert!(
+        narrow.contains("120.0") && narrow.contains("slot 3"),
+        "{narrow}"
+    );
+
+    assert!(loops_view(&[], false, 100)
+        .join("\n")
+        .contains("playr loops scan DIR"));
+    assert!(loops_view(&[], true, 100)
+        .join("\n")
+        .contains("No loops match"));
 }

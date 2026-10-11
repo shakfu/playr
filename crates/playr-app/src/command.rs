@@ -5,7 +5,7 @@ use playr_core::analysis::TempoFix;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::action::{Action, Key, Keymap, Nudge, Slicing, Zoom};
+use crate::action::{Action, Key, Keymap, LoopAction, Nudge, Slicing, Zoom};
 use crate::{Display, Theme, View};
 use playr_core::audio::eq::{Band, RANGE_DB};
 use playr_core::audio::{Mode, MAX_CENTS};
@@ -56,7 +56,7 @@ const fn only(view: View, name: &'static str, args: &'static str, help: &'static
     }
 }
 
-use View::{Library, Playlists, Sampler, Selection};
+use View::{Library, Loops, Playlists, Sampler, Selection};
 
 /// Every `:` command, grouped by view. A command may be typed as any prefix
 /// that names only it among those that work in the current view.
@@ -248,6 +248,16 @@ pub const COMMANDS: &[Command] = &[
     only(Playlists, "edit", "", "edit the playlist in the selection"),
     only(Playlists, "rename", "[NAME]", "rename the playlist"),
     only(
+        Loops,
+        "load",
+        "[VOICE]",
+        "load into the tape, or into voice N",
+    ),
+    only(Loops, "beats", "N", "set the loop's beats, and its tempo"),
+    only(Loops, "key", "KEY | -", "set the loop's key; - clears it"),
+    only(Loops, "remove", "", "take the loop out of the library"),
+    only(Loops, "search-clear", "", "list every loop again"),
+    only(
         Sampler,
         "zoom",
         "+ | - | all | N",
@@ -369,6 +379,9 @@ pub const COMMANDS: &[Command] = &[
     ),
 ];
 
+/// The most beats `:beats` sets on a loop.
+const MAX_LOOP_BEATS: u32 = 1024;
+
 const MODES: &[(&str, Mode)] = &Mode::NAMES;
 
 const THEMES: &[(&str, Theme)] = &Theme::NAMES;
@@ -382,6 +395,7 @@ const VIEWS: &[(&str, View)] = &[
     ("selection", Selection),
     ("playlists", Playlists),
     ("sampler", Sampler),
+    ("loops", Loops),
     ("tape", View::Tape),
     ("dj", View::Dj),
     ("mix", View::Mix),
@@ -524,6 +538,11 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Help => "keys".into(),
         CommandHelp => "help".into(),
         ShowView(v) => format!("view {}", view_name(*v)),
+        LoopLib(LoopAction::Load(None)) => "load".into(),
+        LoopLib(LoopAction::Load(Some(n))) => format!("load {n}"),
+        LoopLib(LoopAction::Beats(n)) => format!("beats {n}"),
+        LoopLib(LoopAction::Key(Some(k))) => format!("key {k}"),
+        LoopLib(LoopAction::Key(None)) => "key -".into(),
         NextView => "view next".into(),
         PrevView => "view prev".into(),
         Cursor(1) => "down".into(),
@@ -1701,6 +1720,24 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
         "sql" if rest.is_empty() => Err(usage()),
         "sql" => Ok(Action::Sql(rest.to_string())),
         "save-search" => Ok(Action::SaveSearch(unquote(rest).to_string())),
+        "load" => match rest {
+            "" => Ok(Action::LoopLib(LoopAction::Load(None))),
+            n => match n.parse::<u8>() {
+                Ok(n) if (1..=playr_looper::VOICES as u8).contains(&n) => {
+                    Ok(Action::LoopLib(LoopAction::Load(Some(n))))
+                }
+                _ => Err(format!("voices are 1 to {}", playr_looper::VOICES)),
+            },
+        },
+        "beats" => match rest.parse::<u32>() {
+            Ok(n) if (1..=MAX_LOOP_BEATS).contains(&n) => Ok(Action::LoopLib(LoopAction::Beats(n))),
+            _ => Err(format!("beats are 1 to {MAX_LOOP_BEATS}")),
+        },
+        "key" => match rest {
+            "" => Err(usage()),
+            "-" => Ok(Action::LoopLib(LoopAction::Key(None))),
+            k => Ok(Action::LoopLib(LoopAction::Key(Some(k.to_string())))),
+        },
         "rename" if rest.is_empty() => Ok(Action::StartRename),
         "rename" => Ok(Action::RenameTo(unquote(rest).to_string())),
         _ => unreachable!("command {name} has no parser"),

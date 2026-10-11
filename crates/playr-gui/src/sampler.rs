@@ -1046,7 +1046,7 @@ pub fn menu(model: &Model, ui: &mut egui::Ui) -> Option<Action> {
         }
     });
     ui.add_enabled_ui(here, |ui| {
-        ui.menu_button("Loops", |ui| {
+        ui.menu_button("Loop slots", |ui| {
             let rate = snapshot.status.source.map_or(1, |s| s.rate);
             for (i, saved) in snapshot.loops.iter().enumerate() {
                 let slot = i as u8 + 1;

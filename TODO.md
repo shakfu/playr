@@ -158,6 +158,8 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Formats
 
+- [ ] **Apple Loops metadata.** `playr loops scan` reads tempo, beats and key from a WAV's `acid` chunk, not from Apple Loops' own metadata in AIFF and CAF. Those files are indexed with tempo from the name or the length. Needs a second parser. See `docs/dev/loop-library.md`.
+
 - [ ] **WavPack, WMA, Musepack, APE.** No Rust decoders of any maturity. Each needs either a C binding or an implementation.
 
 - [ ] **DSD (.dsf, .dff).** Three separate pieces: a container reader, a decimation filter to convert 1-bit PDM to PCM, and a decision about DoP. DoP also needs bit-perfect output, which does not exist yet, so this is blocked on that item. SACD rips add DST, a fourth piece.

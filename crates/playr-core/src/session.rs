@@ -104,6 +104,10 @@ pub struct Session {
     labels: Vec<(u64, String)>,
     /// Loops saved in the track `loops_for`, by slot, from 1.
     loops: Loops,
+    /// The loop library as the Loops view lists it: every loop, or those
+    /// `loop_search` matches.
+    loop_list: Vec<db::loops::Loop>,
+    loop_search: Option<String>,
     loops_for: Option<PathBuf>,
     /// Where exported slices are written.
     samples: PathBuf,
@@ -172,6 +176,8 @@ impl Session {
             labels: Vec::new(),
             loops: [None; LOOP_SLOTS as usize],
             loops_for: None,
+            loop_list: Vec::new(),
+            loop_search: None,
             samples: PathBuf::new(),
             exported: None,
             convertwithmoss: None,
@@ -287,6 +293,7 @@ impl Session {
         self.tracks = query::all(&self.conn).unwrap_or_default();
         self.playlists = query::playlists(&self.conn).unwrap_or_default();
         self.searches = query::searches(&self.conn).unwrap_or_default();
+        self.reload_loops();
         self.measure();
         self.send_gains();
     }
@@ -1406,7 +1413,9 @@ impl Session {
             Err(refusal) => return refusal.into(),
         };
         self.loops_for = None;
-        match query::save_loop(&self.conn, &path.to_string_lossy(), slot, span, rate) {
+        let saved = query::save_loop(&self.conn, &path.to_string_lossy(), slot, span, rate);
+        self.reload_loops();
+        match saved {
             Ok(()) => Outcome::LoopSaved {
                 slot,
                 kept: self.has_library_file(),
@@ -1426,13 +1435,90 @@ impl Session {
             Err(refusal) => return refusal.into(),
         };
         self.loops_for = None;
-        match query::clear_loop(&self.conn, &path.to_string_lossy(), slot) {
+        let cleared = query::clear_loop(&self.conn, &path.to_string_lossy(), slot);
+        self.reload_loops();
+        match cleared {
             Ok(_) => Outcome::LoopCleared { slot }.into(),
             Err(e) => Notice::Failed {
                 task: Task::Loop,
                 error: e.to_string(),
             },
         }
+    }
+
+    /// The loop library as the Loops view lists it.
+    pub fn loop_list(&self) -> &[db::loops::Loop] {
+        &self.loop_list
+    }
+
+    /// The search the Loops view lists, if any.
+    pub fn loop_search(&self) -> Option<&str> {
+        self.loop_search.as_deref()
+    }
+
+    /// Lists the loops `query` matches, as `db::loops::search` reads it, or
+    /// every loop for `None`.
+    pub fn search_loops(&mut self, query: Option<&str>) {
+        self.loop_search = query.map(str::to_owned).filter(|q| !q.trim().is_empty());
+        self.reload_loops();
+    }
+
+    fn reload_loops(&mut self) {
+        self.loop_list = match &self.loop_search {
+            Some(q) => db::loops::search(&self.conn, q),
+            None => db::loops::all(&self.conn),
+        }
+        .unwrap_or_default();
+    }
+
+    /// Loop `id` of the library.
+    pub fn library_loop(&self, id: i64) -> Option<db::loops::Loop> {
+        db::loops::get(&self.conn, id).ok().flatten()
+    }
+
+    /// Adds the loop file at `path`, which playr wrote, to the loop library,
+    /// with `beats` when its source loop gave them.
+    pub fn add_loop_file(&mut self, path: &Path, beats: Option<u32>) -> Result<(), String> {
+        let path = path
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let dir = path.parent().unwrap_or(Path::new(""));
+        let Some(crate::loops::Found::Loop(mut l)) = crate::loops::read_loop(&path, dir) else {
+            return Err(format!("{}: not a readable loop", path.display()));
+        };
+        l.origin = db::loops::Origin::Tape;
+        if let Some(b) = beats {
+            l.beats = Some(b);
+            l.bpm = Some(crate::loops::bpm(b, l.frames(), l.rate));
+            l.bpm_from = Some(db::loops::TempoFrom::User);
+        }
+        db::loops::upsert_file(&self.conn, &l).map_err(|e| e.to_string())?;
+        self.reload_loops();
+        Ok(())
+    }
+
+    /// Takes loop `id` out of the library, emptying the slot it was; its file
+    /// stays. Returns its name.
+    pub fn remove_loop(&mut self, id: i64) -> Result<String, String> {
+        let l = self.library_loop(id).ok_or("no such loop")?;
+        db::loops::remove(&self.conn, id).map_err(|e| e.to_string())?;
+        self.loops_for = None;
+        self.reload_loops();
+        Ok(l.name)
+    }
+
+    /// Sets loop `id`'s beats, and its tempo from them. Returns the loop.
+    pub fn set_loop_beats(&mut self, id: i64, beats: u32) -> Result<db::loops::Loop, String> {
+        db::loops::set_beats(&self.conn, id, beats).map_err(|e| e.to_string())?;
+        self.reload_loops();
+        self.library_loop(id).ok_or_else(|| "no such loop".into())
+    }
+
+    /// Sets loop `id`'s key, or clears it. Returns the loop.
+    pub fn set_loop_key(&mut self, id: i64, key: Option<&str>) -> Result<db::loops::Loop, String> {
+        db::loops::set_key(&self.conn, id, key).map_err(|e| e.to_string())?;
+        self.reload_loops();
+        self.library_loop(id).ok_or_else(|| "no such loop".into())
     }
 
     /// The playing track and how many loops it keeps, before asking to clear
@@ -1448,7 +1534,9 @@ impl Session {
     /// Empties every loop slot of the track at `path`, the one asked about.
     pub fn clear_loops(&mut self, path: &Path) -> Notice {
         self.loops_for = None;
-        match query::clear_loops(&self.conn, &path.to_string_lossy()) {
+        let cleared = query::clear_loops(&self.conn, &path.to_string_lossy());
+        self.reload_loops();
+        match cleared {
             Ok(_) => Outcome::LoopsCleared.into(),
             Err(e) => Notice::Failed {
                 task: Task::Loop,

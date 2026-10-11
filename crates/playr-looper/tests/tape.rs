@@ -862,3 +862,65 @@ fn the_interpolation_changes_what_a_fast_head_reads() {
     assert!(rms(&sinc, &hermite) > 0.01, "{}", rms(&sinc, &hermite));
     assert_eq!(heard(Interp::Sinc, 1.0), heard(Interp::Hermite, 1.0));
 }
+
+/// A tape with `a` for every voice and `b`, `c` as voices 1 and 2's own,
+/// all mono, playing voice `on` alone at rate 1.
+fn own_loops(a: &[f32], b: &[f32], c: &[f32], on: usize) -> Tape {
+    let mut t = Tape::new(SR);
+    t.load(Box::new(Loop::new(a.to_vec(), 1).unwrap()));
+    t.load_voice(1, Box::new(Loop::new(b.to_vec(), 1).unwrap()));
+    t.load_voice(2, Box::new(Loop::new(c.to_vec(), 1).unwrap()));
+    for i in 0..3 {
+        t.set(Setting::On(i, i == on));
+    }
+    t.set(Setting::Play);
+    t
+}
+
+#[test]
+fn each_voice_plays_its_own_loop() {
+    let (a, b, c) = (noise(400, 0.5), noise(300, 0.7), noise(500, 0.3));
+    for (on, src) in [(0, &a), (1, &b), (2, &c)] {
+        let mut t = own_loops(&a, &b, &c, on);
+        assert_eq!(t.source(on).frames(), src.len());
+        let out = left(&run(&mut t, 250));
+        assert_eq!(out, src[..250], "voice {on}");
+    }
+}
+
+#[test]
+fn voices_without_their_own_loop_follow_voice_0s() {
+    let (a, b, z) = (noise(400, 0.5), noise(300, 0.7), noise(600, 0.2));
+    let mut t = own_loops(&a, &b, &b, 2);
+    let old = t.load_voice(0, Box::new(Loop::new(z.clone(), 1).unwrap()));
+    assert_eq!(old.unwrap().samples(), a);
+    assert!(!t.has_own(0));
+    assert_eq!(t.source(0).samples(), z);
+    assert_eq!(t.source(1).samples(), b, "a voice's own loop stays");
+    // A shared load takes every voice's own back.
+    let (_, own) = t.load(Box::new(Loop::new(a.clone(), 1).unwrap()));
+    assert_eq!(own.iter().flatten().count(), 2);
+    assert!((0..3).all(|i| t.source(i).samples() == a));
+}
+
+#[test]
+fn writing_is_held_while_a_voice_reads_its_own_loop() {
+    let a = noise(480, 0.5);
+    let mut t = tape(
+        a.clone(),
+        1,
+        &[Setting::Write(true), Setting::Feedback(0.0)],
+    );
+    t.load_voice(1, Box::new(Loop::new(noise(300, 0.4), 1).unwrap()));
+    assert!(t.write_held());
+    // The gate closes over 20 ms, as it does when writing is turned off.
+    run(&mut t, 960);
+    let held = buffer(&t);
+    run(&mut t, 2_000);
+    assert_eq!(buffer(&t), held, "feedback 0 would have erased it");
+    // Back to one loop, the write head writes again.
+    t.load(Box::new(Loop::new(a.clone(), 1).unwrap()));
+    assert!(!t.write_held());
+    run(&mut t, 2_000);
+    assert!(buffer(&t).iter().all(|s| s.abs() < 1e-3), "erased");
+}

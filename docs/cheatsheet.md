@@ -167,6 +167,18 @@ In this view `:slice` plans slices and draws their edges as `+` under the wavefo
 
 The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a click, a range end, selected by `[` `]`, or a planned slice, selected by `,` `.`. A slice is edited by its start, which moves the end of the slice before; `backspace` joins it to that slice. A selected end is shown reversed, and a selection out of view as a reversed `<` or `>` at that edge. `{` `}` play from the mark to the next, and step from the selected mark rather than the playhead. With nothing selected, `backspace` clears the range and the other edit keys refuse. `u` undoes the last change to the marks, the range or the planned slices, up to 100 back, until the track changes; `r` puts back what `u` took, until the next change.
 
+## Loops
+
+| command           | key                  | does                                   |
+|-------------------|----------------------|----------------------------------------|
+| `:load [VOICE]`   | `enter`; `!` `@` `#` | load into the tape, or into voice N    |
+| `:beats N`        |                      | set the loop's beats, and its tempo    |
+| `:key KEY \| -`   |                      | set the loop's key; - clears it        |
+| `:remove`         | `d`, `delete`        | take the loop out of the library       |
+| `:search-clear`   | `esc`                | list every loop again                  |
+
+`/` searches the loops: words match the name, tags and key; `bpm:120` or `bpm:118..124` matches a tempo, `key:Am` a key. A tempo shown as `~120.0` was guessed from the loop's length; `:beats` corrects it. `playr loops scan DIR` adds a directory of loops.
+
 ## Extensions
 
 An extension runs a program that is not part of playr. Each is off, and its command left out of `:help` and of Tab completion, until enabled under `[extensions]` in [`settings.toml`](../README.md#configuration).

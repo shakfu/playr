@@ -154,10 +154,16 @@ where
     let Ok(root) = root.canonicalize() else {
         return Ok(stats);
     };
+    // Files under a loop root are loops, kept out of the audio library.
+    let loop_roots = db::loops::roots(conn)?;
     let mut files = Vec::new();
     for entry in WalkDir::new(root).follow_links(false) {
         match entry {
-            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => files.push(e),
+            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => {
+                if !db::loops::under_root(&loop_roots, e.path()) {
+                    files.push(e)
+                }
+            }
             Ok(_) => {}
             // A directory without read permission, for one; its files are never seen.
             Err(_) => stats.failed += 1,

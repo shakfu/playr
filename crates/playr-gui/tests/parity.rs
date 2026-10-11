@@ -121,6 +121,7 @@ fn every_action() -> Vec<Action> {
         Action::MarkSlices,
         Action::Convert("sf2".into(), None),
         Action::Tape(playr_app::tape::TapeAction::Play),
+        Action::LoopLib(playr_app::action::LoopAction::Load(None)),
         Action::Dj(playr_app::dj::DjAction::Play(playr_app::dj::Side::A)),
         Action::Mix(playr_app::mix::MixAction::Show),
         Action::Theme(Theme::System),
@@ -242,6 +243,7 @@ fn every_action() -> Vec<Action> {
             | Action::MarkSlices
             | Action::Convert(..)
             | Action::Tape(_)
+            | Action::LoopLib(_)
             | Action::Dj(_)
             | Action::Mix(_)
             | Action::Theme(_)

@@ -1,5 +1,6 @@
-//! A tape looper: 3 voices read one loop at their own rates and directions,
-//! and a write head records their sends back into it with feedback.
+//! A tape looper: 3 voices read one loop, or a loop each, at their own rates
+//! and directions, and a write head records their sends back into the first
+//! with feedback.
 //!
 //! - [`Tape`]: the loop and all of the DSP; any thread, no device.
 //! - [`Looper`]: the tape in the audio callback, fed by a command ring.
@@ -33,6 +34,8 @@ pub enum Error {
     Length,
     /// Nothing has been loaded.
     Empty,
+    /// No such voice.
+    Voice(usize),
     /// The command ring is full.
     Full,
     Recording,
@@ -48,6 +51,7 @@ impl std::fmt::Display for Error {
             Error::Channels(n) => write!(f, "a loop has 1 or 2 channels, not {n}"),
             Error::Length => write!(f, "a loop needs at least one whole frame"),
             Error::Empty => write!(f, "no loop is loaded"),
+            Error::Voice(i) => write!(f, "there is no voice {}", i + 1),
             Error::Full => write!(f, "the looper's command ring is full"),
             Error::Recording => write!(f, "already recording"),
             Error::NotRecording => write!(f, "not recording"),

@@ -203,3 +203,54 @@ CREATE TABLE IF NOT EXISTS album_loudness (
   peak      REAL NOT NULL,
   tracks    INTEGER NOT NULL
 );
+
+-- The loop library, apart from `tracks`: a loop is a span of a file. A
+-- scanned or saved loop is a whole file, or the loop its `smpl` chunk names;
+-- a slot is a span of a track, which keeps the track either side for
+-- crossfades. Keyed by path, as marks are. The design is in
+-- `docs/dev/loop-library.md`. Compatible with older libraries: CREATE IF NOT
+-- EXISTS needs no version bump.
+CREATE TABLE IF NOT EXISTS loop_lib (
+  id       INTEGER PRIMARY KEY,
+  path     TEXT NOT NULL,
+  start    INTEGER NOT NULL,  -- source frames, end exclusive, as marks count them
+  end      INTEGER NOT NULL,
+  rate     INTEGER NOT NULL,  -- the rate `start` and `end` count in
+  channels INTEGER,
+  slot     INTEGER,           -- 1 to 8 for a track's loop slot; NULL otherwise
+  origin   TEXT NOT NULL CHECK (origin IN ('scan', 'slot', 'tape')),
+  name     TEXT NOT NULL,
+  tags     TEXT NOT NULL DEFAULT '',  -- words, space separated
+  bpm      REAL,
+  beats    INTEGER,
+  bpm_from TEXT CHECK (bpm_from IN ('tag', 'acid', 'name', 'length', 'user')),
+  key      TEXT,
+  mtime    INTEGER,           -- a scanned file's, as `tracks` keeps them
+  size     INTEGER
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS loop_lib_slot ON loop_lib(path, slot) WHERE slot IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS loop_lib_file ON loop_lib(path) WHERE slot IS NULL;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS loop_fts USING fts5(
+  name, tags, key, tokenize='unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS loop_lib_ai AFTER INSERT ON loop_lib BEGIN
+  INSERT INTO loop_fts(rowid, name, tags, key) VALUES (new.id, new.name, new.tags, new.key);
+END;
+
+CREATE TRIGGER IF NOT EXISTS loop_lib_ad AFTER DELETE ON loop_lib BEGIN
+  DELETE FROM loop_fts WHERE rowid = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS loop_lib_au AFTER UPDATE ON loop_lib BEGIN
+  DELETE FROM loop_fts WHERE rowid = old.id;
+  INSERT INTO loop_fts(rowid, name, tags, key) VALUES (new.id, new.name, new.tags, new.key);
+END;
+
+-- Directories given to `playr loops scan`. Every file under one is a loop,
+-- not a track.
+CREATE TABLE IF NOT EXISTS loop_roots (
+  path TEXT NOT NULL PRIMARY KEY
+);

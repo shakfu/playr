@@ -24,7 +24,7 @@ struct Headless {
     session: Session,
     keys: Keymap,
     view: View,
-    cursors: [Option<usize>; 4],
+    cursors: [Option<usize>; 5],
     results: Option<Vec<Track>>,
     messages: Vec<Message>,
     asked: Option<Confirm>,
@@ -44,6 +44,7 @@ fn slot(view: View) -> Option<usize> {
         Selection => Some(1),
         Playlists => Some(2),
         View::Queue => Some(3),
+        View::Loops => Some(4),
         Sampler | View::Tape | View::Mix => None,
     }
 }
@@ -153,7 +154,7 @@ fn headless_on(player: playr_core::audio::Player) -> (Headless, tempfile::TempDi
         session,
         keys: Keymap::default(),
         view: Library,
-        cursors: [Some(0), None, Some(0), None],
+        cursors: [Some(0), None, Some(0), None, None],
         results: None,
         messages: Vec::new(),
         asked: None,
@@ -463,7 +464,7 @@ fn commands_parse_and_dispatch_in_the_frontend_s_view() {
     );
     // No rows in the sampler: cursor commands change nothing.
     run(&mut f, "down");
-    assert_eq!(f.cursors, [Some(0), None, Some(0), None]);
+    assert_eq!(f.cursors, [Some(0), None, Some(0), None, None]);
     run(&mut f, "slice 4");
     assert_eq!(last(&f), Some(&Refusal::NothingPlaying.into()));
     assert!(!f.planning);
@@ -481,6 +482,8 @@ fn commands_parse_and_dispatch_in_the_frontend_s_view() {
             view: None
         })
     );
+    run(&mut f, "next-view");
+    assert_eq!(f.view, View::Loops);
     run(&mut f, "next-view");
     assert_eq!(f.view, Library);
     run(&mut f, "search");
@@ -739,15 +742,19 @@ fn the_tape_loads_the_range_and_saves_the_loop_and_the_mix_to_the_library() {
     assert_eq!(wav(&lp), (2, 8000, 8000));
     assert_eq!(wav(&mix), (2, 8000, frames as u32));
     assert!(frames >= 4000, "{frames}");
+    let canonical = |p: &std::path::Path| p.canonicalize().unwrap().to_string_lossy().into_owned();
+    let is_track = |p: &str| f.session.tracks().iter().any(|t| t.path == p);
     for p in [&lp, &mix] {
         assert!(p.starts_with(&samples), "{}", p.display());
-        let canonical = p.canonicalize().unwrap();
-        let canonical = canonical.to_string_lossy();
-        assert!(
-            f.session.tracks().iter().any(|t| t.path == canonical),
-            "{canonical} is not in the library"
-        );
     }
+    // The loop goes to the loop library, the mix to the tracks.
+    let (lp_path, mix_path) = (canonical(&lp), canonical(&mix));
+    let saved = f.session.loop_list().iter().find(|l| l.path == lp_path);
+    let saved = saved.unwrap_or_else(|| panic!("{lp_path} is not in the loop library"));
+    assert_eq!(saved.origin, playr_core::db::loops::Origin::Tape);
+    assert_eq!((saved.start, saved.end, saved.rate), (0, 8000, 8000));
+    assert!(!is_track(&lp_path), "the loop is not a track");
+    assert!(is_track(&mix_path), "{mix_path} is not in the library");
     assert_ne!(lp.parent(), mix.parent(), "each save has its own directory");
 }
 
@@ -1591,4 +1598,90 @@ fn a_tape_take_past_the_range_or_without_one_is_refused() {
     f.sampler.range = None;
     dispatch(Action::Tape(T::Take), &mut f);
     assert_eq!(last(&f), Some(&Message::Tape(M::NoRange)));
+}
+
+#[test]
+fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
+    use playr_app::tape::{no_effect, Control, Idle, TapeMessage as M};
+    let run = |f: &mut Headless, line: &str| {
+        let action = command::parse(line, f.view).unwrap();
+        dispatch(action, f);
+    };
+    let (mut f, dir) = loaded_tape();
+    // Two loops cut to loop: 1 s and 0.5 s at 8 kHz.
+    let (a, b) = (
+        dir.path().join("kick 120bpm.wav"),
+        dir.path().join("pad.wav"),
+    );
+    common::tone(&a, 8000, 1.0, -6.0);
+    common::tone(&b, 8000, 0.5, -6.0);
+    f.session.add_loop_file(&a, Some(2)).unwrap();
+    f.session.add_loop_file(&b, None).unwrap();
+    run(&mut f, "view loops");
+    assert_eq!(f.view, View::Loops);
+    let names = |f: &Headless| -> Vec<String> {
+        f.session
+            .loop_list()
+            .iter()
+            .map(|l| l.name.clone())
+            .collect()
+    };
+    assert_eq!(names(&f), ["kick 120bpm", "pad"]);
+    assert_eq!(f.session.loop_list()[0].bpm, Some(120.0), "2 beats in 1 s");
+
+    dispatch(Action::Search("pad".into()), &mut f);
+    assert_eq!(names(&f), ["pad"]);
+    run(&mut f, "search-clear");
+    assert_eq!(names(&f), ["kick 120bpm", "pad"]);
+
+    // Edits act on the loop under the cursor.
+    f.set_cursor(View::Loops, Some(1));
+    run(&mut f, "beats 4");
+    run(&mut f, "key Dm");
+    let pad = f.session.loop_list()[1].clone();
+    assert_eq!(
+        (pad.beats, pad.bpm, pad.key.as_deref()),
+        (Some(4), Some(480.0), Some("Dm"))
+    );
+    assert!(matches!(last(&f), Some(Message::LoopSet(_))));
+
+    // Into voice 2 alone, beside the range voice 1 plays.
+    run(&mut f, "load 2");
+    tape_until(&mut f, |m| {
+        matches!(m, Message::Tape(M::LoadedVoice { .. }))
+    });
+    assert_eq!(
+        last(&f),
+        Some(&Message::Tape(M::LoadedVoice {
+            voice: 2,
+            frames: 4000,
+            rate: 8000
+        }))
+    );
+    let own = f.tape.voice_extent(1).unwrap();
+    // Circular rolls of up to 1 s each side: the whole loop, either side.
+    assert_eq!(
+        (own.frames, own.range.start, own.range.len()),
+        (12_000, 4000, 4000)
+    );
+    assert_eq!(f.tape.voice_extent(0), f.tape.loaded());
+    let state = *f.tape.state().unwrap();
+    assert!(state.own[1] && state.voices[1].on);
+    assert_eq!(state.voices[1].window, own.range);
+    run(&mut f, "tape write on");
+    let state = *f.tape.state().unwrap();
+    assert_eq!(no_effect(&state, own, Control::Write), Some(Idle::Held));
+
+    // Enter loads it for every voice, which drops voice 2's own.
+    f.set_cursor(View::Loops, Some(0));
+    run(&mut f, "play");
+    tape_until(&mut f, |m| matches!(m, Message::Tape(M::Loaded { .. })));
+    let state = *f.tape.state().unwrap();
+    assert!(!state.own.iter().any(|o| *o));
+    assert_eq!(f.tape.loaded().unwrap().range.len(), 8000);
+
+    run(&mut f, "remove");
+    assert_eq!(last(&f), Some(&Message::LoopRemoved("kick 120bpm".into())));
+    assert_eq!(names(&f), ["pad"]);
+    assert!(a.exists(), "the file stays");
 }

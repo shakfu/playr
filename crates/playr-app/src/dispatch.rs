@@ -19,7 +19,7 @@ use playr_core::samples::{Cut, Job, Plan};
 use playr_core::session::Session;
 use playr_core::wave::Peaks;
 
-use crate::action::{Action, Keymap, Slicing, Zoom};
+use crate::action::{Action, Keymap, LoopAction, Slicing, Zoom};
 use crate::command::view_name;
 use crate::message::Message;
 use crate::mix::{MixAction, Strip};
@@ -449,11 +449,24 @@ fn act(action: Action, f: &mut impl Frontend) {
             select(f, last);
         }
         Action::StartSearch => f.prompt(Prompt::Search(String::new())),
+        Action::Search(query) if f.view() == View::Loops => {
+            f.session_mut().search_loops(Some(&query));
+            let found = !f.session().loop_list().is_empty();
+            f.set_cursor(View::Loops, found.then_some(0));
+            if !found {
+                f.notify(Message::NoMatches);
+            }
+        }
         Action::Search(query) => {
             search(f, &query);
             if f.listed().is_empty() {
                 f.notify(Message::NoMatches);
             }
+        }
+        Action::ClearSearch if f.view() == View::Loops => {
+            f.session_mut().search_loops(None);
+            let any = !f.session().loop_list().is_empty();
+            f.set_cursor(View::Loops, any.then_some(0));
         }
         Action::ClearSearch => {
             f.session_mut().set_shown(None);
@@ -463,6 +476,7 @@ fn act(action: Action, f: &mut impl Frontend) {
         }
         Action::StartCommand => f.prompt(Prompt::Command(String::new())),
         Action::Activate => activate(f),
+        Action::LoopLib(a) => loop_lib(f, a),
 
         Action::Add => add(f),
         Action::Enqueue(next) => enqueue(f, next),
@@ -484,6 +498,18 @@ fn act(action: Action, f: &mut impl Frontend) {
             0 => f.notify(Message::QueueEmpty),
             n => f.confirm(Confirm::ClearQueue(n)),
         },
+        Action::Remove if f.view() == View::Loops => {
+            let Some((i, l)) = loop_under_cursor(f) else {
+                return f.notify(Message::NoLoopUnderCursor);
+            };
+            match f.session_mut().remove_loop(l.id) {
+                Ok(name) => {
+                    select(f, i);
+                    f.notify(Message::LoopRemoved(name));
+                }
+                Err(e) => f.notify(Message::LoopFailed(e)),
+            }
+        }
         Action::Remove => {
             // The queue's, or else the selection's.
             let view = match f.view() {
@@ -1178,7 +1204,30 @@ fn len(f: &impl Frontend, view: View) -> usize {
         View::Selection => f.session().selection().len(),
         View::Playlists => f.session().playlists().len() + f.session().searches().len(),
         View::Queue => f.session().played().len() + f.session().queue_rows().len(),
+        View::Loops => f.session().loop_list().len(),
         View::Sampler | View::Tape | View::Mix => 0,
+    }
+}
+
+/// The Loops view's cursor and the loop under it.
+fn loop_under_cursor(f: &impl Frontend) -> Option<(usize, playr_core::db::loops::Loop)> {
+    let i = f.cursor(View::Loops)?;
+    Some((i, f.session().loop_list().get(i)?.clone()))
+}
+
+/// Does `action` to the loop under the Loops view's cursor.
+fn loop_lib(f: &mut impl Frontend, action: LoopAction) {
+    let Some((_, l)) = loop_under_cursor(f) else {
+        return f.notify(Message::NoLoopUnderCursor);
+    };
+    let edited = match action {
+        LoopAction::Load(voice) => return crate::tape::load_loop(f, l.id, voice),
+        LoopAction::Beats(n) => f.session_mut().set_loop_beats(l.id, n),
+        LoopAction::Key(k) => f.session_mut().set_loop_key(l.id, k.as_deref()),
+    };
+    match edited {
+        Ok(l) => f.notify(Message::LoopSet(Box::new(l))),
+        Err(e) => f.notify(Message::LoopFailed(e)),
     }
 }
 
@@ -1322,6 +1371,7 @@ fn activate(f: &mut impl Frontend) {
                 f.session_mut().play_queue_row(row);
             }
         }
+        View::Loops => loop_lib(f, LoopAction::Load(None)),
         View::Sampler | View::Tape | View::Mix => {}
     }
 }
@@ -1351,7 +1401,7 @@ fn enqueue(f: &mut impl Frontend, next: bool) {
             (None, Some(search)) => f.session().run_search(&search),
             (None, None) => Vec::new(),
         },
-        View::Sampler | View::Queue | View::Tape | View::Mix => Vec::new(),
+        View::Sampler | View::Queue | View::Tape | View::Mix | View::Loops => Vec::new(),
     };
     if tracks.is_empty() {
         return;
@@ -1408,7 +1458,7 @@ fn add(f: &mut impl Frontend) {
             };
             f.session_mut().add_to_selection(track)
         }
-        View::Selection | View::Sampler | View::Tape | View::Mix => return,
+        View::Selection | View::Sampler | View::Tape | View::Mix | View::Loops => return,
     };
     // Keep the selection's cursor on a track: on the first once a track is
     // added, and within the list when unselecting shortens it.

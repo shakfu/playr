@@ -36,7 +36,10 @@ pub enum Cmd {
     Record(bool),
     /// A buffer the length of the loop's samples, to copy the loop into.
     Snapshot(Box<[f32]>),
+    /// Replaces the loop every voice reads, and takes back their own.
     Load(Box<Loop>),
+    /// Gives a voice a loop of its own, as [`Tape::load_voice`] does.
+    LoadVoice(usize, Box<Loop>),
     /// The output's gain, 0 to 1, after the recording and the meter.
     Volume(f32),
 }
@@ -45,7 +48,9 @@ impl Cmd {
     /// How many [`Returned`] values applying it can produce.
     fn returns(&self) -> usize {
         match self {
-            Cmd::Load(_) => 2,
+            // The loop, the voices' own, and an aborted snapshot.
+            Cmd::Load(_) => 1 + (VOICES - 1) + 1,
+            Cmd::LoadVoice(..) => 2,
             Cmd::Snapshot(_) | Cmd::Set(Setting::WriteWindow(_)) => 1,
             _ => 0,
         }
@@ -55,7 +60,7 @@ impl Cmd {
 /// Memory the callback hands back, since it must not free it.
 #[derive(Debug)]
 pub enum Returned {
-    /// The loop a `Load` replaced.
+    /// A loop a `Load` or `LoadVoice` replaced.
     Loop(Box<Loop>),
     /// A finished snapshot: the loop's samples as they were when it arrived.
     Snapshot(Box<[f32]>),
@@ -71,7 +76,8 @@ pub struct Status {
     voices: [AtomicU64; VOICES],
     write: AtomicU64,
     peak: AtomicU32,
-    columns: [AtomicU32; COLUMNS],
+    /// Each voice's loop's peak grid.
+    columns: [[AtomicU32; COLUMNS]; VOICES],
     recording: AtomicBool,
     /// `Record` commands applied, so a stopping recorder knows the callback
     /// has stopped writing to the ring.
@@ -86,7 +92,7 @@ impl Status {
             voices: std::array::from_fn(|_| AtomicU64::new(0)),
             write: AtomicU64::new(0),
             peak: AtomicU32::new(0),
-            columns: std::array::from_fn(|_| AtomicU32::new(0)),
+            columns: std::array::from_fn(|_| std::array::from_fn(|_| AtomicU32::new(0))),
             recording: AtomicBool::new(false),
             record_acks: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
@@ -115,7 +121,12 @@ impl Status {
     /// The loop's waveform: the peak of each of [`COLUMNS`] parts, at most
     /// one pass old.
     pub fn columns(&self) -> [f32; COLUMNS] {
-        std::array::from_fn(|i| f32::from_bits(self.columns[i].load(Ordering::Relaxed)))
+        self.voice_columns(0)
+    }
+
+    /// The waveform of the loop voice `v` reads, as [`Status::columns`].
+    pub fn voice_columns(&self, v: usize) -> [f32; COLUMNS] {
+        std::array::from_fn(|i| f32::from_bits(self.columns[v][i].load(Ordering::Relaxed)))
     }
 
     pub fn recording(&self) -> bool {
@@ -187,6 +198,7 @@ pub fn new(sample_rate: u32) -> (Looper, Handle) {
         recorder: None,
         record_sent: 0,
         original: None,
+        own: std::array::from_fn(|_| None),
         sample_rate,
     };
     (looper, handle)
@@ -237,11 +249,19 @@ impl Looper {
                 return;
             }
             // Left in the ring, holding back what follows, until faded out.
-            if matches!(cmd, Cmd::Load(_)) && self.tape.playing() && self.gain.value() > 0.0 {
+            let audible = self.tape.playing() && self.gain.value() > 0.0;
+            if matches!(cmd, Cmd::Load(_)) && audible {
                 if self.gain.target() != 0.0 {
                     self.gain.set(0.0, self.fade);
                 }
                 return;
+            }
+            // Only the voices it changes fade.
+            if let Cmd::LoadVoice(i, _) = *cmd {
+                if audible && !self.tape.ducked(i) {
+                    self.tape.duck(i, self.fade);
+                    return;
+                }
             }
             let Ok(cmd) = self.commands.pop() else { return };
             match cmd {
@@ -274,13 +294,23 @@ impl Looper {
                 }
                 Cmd::Load(lp) => {
                     self.abort();
-                    let old = self.tape.load(lp);
-                    let peaks = self.tape.buffer().peaks();
-                    for (a, p) in self.status.columns.iter().zip(peaks) {
-                        a.store(p.to_bits(), Ordering::Relaxed);
-                    }
+                    let (old, own) = self.tape.load(lp);
+                    self.publish_columns();
                     _ = self.returns.push(Returned::Loop(old));
+                    for lp in own.into_iter().flatten() {
+                        _ = self.returns.push(Returned::Loop(lp));
+                    }
                     self.gain.set(1.0, self.fade);
+                }
+                Cmd::LoadVoice(i, lp) => {
+                    if i == 0 {
+                        self.abort();
+                    }
+                    if let Some(old) = self.tape.load_voice(i, lp) {
+                        _ = self.returns.push(Returned::Loop(old));
+                    }
+                    self.publish_columns();
+                    self.tape.unduck(self.fade);
                 }
                 Cmd::Volume(v) if v.is_finite() => {
                     self.volume.set(v.clamp(0.0, 1.0), self.volume_ramp)
@@ -355,7 +385,13 @@ impl Looper {
         let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         s.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
         if self.tape.playing() {
-            for (a, p) in s.columns.iter().zip(self.tape.buffer().peaks()) {
+            self.publish_columns();
+        }
+    }
+
+    fn publish_columns(&self) {
+        for (v, grid) in self.status.columns.iter().enumerate() {
+            for (a, p) in grid.iter().zip(self.tape.source(v).peaks()) {
                 a.store(p.to_bits(), Ordering::Relaxed);
             }
         }
@@ -391,6 +427,8 @@ pub struct Handle {
     record_sent: u64,
     /// The loop as last loaded, for [`Handle::reset`].
     original: Option<Loop>,
+    /// The voices' own loops as last loaded; never voice 0's.
+    own: [Option<Loop>; VOICES],
     sample_rate: u32,
 }
 
@@ -411,22 +449,56 @@ impl Handle {
         self.send(Cmd::Volume(v)).map_err(|_| Error::Full)
     }
 
-    /// Loads `lp`, keeping a copy for [`Handle::reset`].
+    /// Loads `lp` for every voice, keeping a copy for [`Handle::reset`].
     pub fn load(&mut self, lp: Loop) -> Result<(), Error> {
         let copy = lp.clone();
         self.send(Cmd::Load(Box::new(lp)))
             .map_err(|_| Error::Full)?;
         self.original = Some(copy);
+        self.own = std::array::from_fn(|_| None);
         Ok(())
     }
 
-    /// Restores the loop as last loaded, and every head to its window's start.
-    pub fn reset(&mut self) -> Result<(), Error> {
-        let lp = self.original.clone().ok_or(Error::Empty)?;
-        self.send(Cmd::Load(Box::new(lp))).map_err(|_| Error::Full)
+    /// Gives voice `i` the loop `lp`, keeping a copy for [`Handle::reset`].
+    /// Voice 0's is the loop of every voice without its own.
+    pub fn load_voice(&mut self, i: usize, lp: Loop) -> Result<(), Error> {
+        if i >= VOICES {
+            return Err(Error::Voice(i));
+        }
+        let copy = lp.clone();
+        self.send(Cmd::LoadVoice(i, Box::new(lp)))
+            .map_err(|_| Error::Full)?;
+        match i {
+            0 => self.original = Some(copy),
+            _ => self.own[i] = Some(copy),
+        }
+        Ok(())
     }
 
-    /// Starts copying the loop. The copy arrives through [`Handle::poll`] as
+    /// Restores every loop as last loaded, and every head to its window's start.
+    pub fn reset(&mut self) -> Result<(), Error> {
+        let lp = self.original.clone().ok_or(Error::Empty)?;
+        let own: Vec<(usize, Loop)> = (0..VOICES)
+            .filter_map(|i| Some((i, self.own[i].clone()?)))
+            .collect();
+        if self.commands.slots() < 1 + own.len() {
+            return Err(Error::Full);
+        }
+        self.send(Cmd::Load(Box::new(lp)))
+            .map_err(|_| Error::Full)?;
+        for (i, lp) in own {
+            self.send(Cmd::LoadVoice(i, Box::new(lp)))
+                .map_err(|_| Error::Full)?;
+        }
+        Ok(())
+    }
+
+    /// Whether voice `i` has a loop of its own, as last loaded.
+    pub fn has_own(&self, i: usize) -> bool {
+        self.own.get(i).is_some_and(Option::is_some)
+    }
+
+    /// Starts copying voice 0's loop, the one the write head writes. The copy arrives through [`Handle::poll`] as
     /// [`Returned::Snapshot`].
     pub fn snapshot(&mut self) -> Result<(), Error> {
         let n = self.original.as_ref().ok_or(Error::Empty)?.samples().len();

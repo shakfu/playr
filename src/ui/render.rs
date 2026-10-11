@@ -43,6 +43,7 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
         View::Library => drawn.lists.library = draw_library(app, f, body),
         View::Selection => drawn.lists.selection = draw_selection(app, f, body),
         View::Playlists => drawn.lists.playlists = draw_playlists(app, f, body),
+        View::Loops => drawn.lists.loops = draw_loops(app, f, body),
         View::Queue => drawn.lists.queue = draw_queue(app, f, body),
         View::Sampler => (drawn.zoom, drawn.scale) = draw_sampler(app, f, body),
         // The window's only; dispatch does not show them here.
@@ -494,6 +495,7 @@ fn draw_tabs(app: &Screen<'_>, f: &mut Frame, area: Rect) {
             View::Selection => app.selection.len(),
             View::Playlists => app.playlists.len(),
             View::Queue => app.queue.len(),
+            View::Loops => app.loops.len(),
             _ => return format!(" {} ", view_title(v)),
         };
         format!(" {} {} ", view_title(v), n)
@@ -855,6 +857,75 @@ fn draw_playlists(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
         });
         f.render_widget(
             Paragraph::new("No playlists. Build a selection, then press s to save it.")
+                .style(Style::default().fg(p.dim)),
+            inner,
+        );
+    }
+    Scroll {
+        row: state.selected(),
+        offset: state.offset(),
+    }
+}
+
+/// The loop library: a row per loop under [`loops::HEADINGS`], with the
+/// heading line above.
+fn draw_loops(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
+    use playr_app::loops;
+    let p = app.palette();
+    // Name and Tags take what the fixed columns leave.
+    let widths = [0usize, 7, 5, 4, 6, 7, 0];
+    // Inside the list's border, as the rows are.
+    let fixed: usize = widths.iter().sum::<usize>() + 2 * widths.len() + 2;
+    let spare = usize::from(area.width.saturating_sub(2)).saturating_sub(fixed);
+    let name_w = (spare * 3 / 5).max(8);
+    let tags_w = spare.saturating_sub(name_w);
+    let line = |cells: [String; 7]| -> String {
+        let mut out = String::from("  ");
+        for (i, c) in cells.iter().enumerate() {
+            let w = match i {
+                0 => name_w,
+                6 => tags_w,
+                _ => widths[i],
+            };
+            let text = fit(c, w);
+            match i {
+                1 | 2 | 4 => out.push_str(&format!("{text:>w$}  ")),
+                _ => out.push_str(&format!("{text:<w$}  ")),
+            }
+        }
+        out
+    };
+    let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    let head = head.inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    f.render_widget(
+        Paragraph::new(line(loops::HEADINGS.map(String::from)))
+            .style(Style::default().fg(p.dim).add_modifier(Modifier::BOLD)),
+        head,
+    );
+    let items: Vec<ListItem> = app
+        .loops
+        .iter()
+        .map(|l| ListItem::new(Line::from(line(loops::cells(l)))))
+        .collect();
+    let empty = items.is_empty();
+    let list = List::new(items)
+        .block(list_block(p, ""))
+        .highlight_style(cursor_style(app));
+    let mut state = ListState::default()
+        .with_selected(app.lists.loops.row)
+        .with_offset(app.lists.loops.offset);
+    f.render_stateful_widget(list, body, &mut state);
+    if empty {
+        let inner = body.inner(ratatui::layout::Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
+        f.render_widget(
+            Paragraph::new(loops::empty_text(app.loop_search))
+                .wrap(ratatui::widgets::Wrap { trim: true })
                 .style(Style::default().fg(p.dim)),
             inner,
         );

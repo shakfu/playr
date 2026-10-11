@@ -3950,9 +3950,11 @@ fn the_terminal_refuses_the_window_views_and_steps_over_them() {
     );
     model.perform(Action::ShowView(View::Sampler));
     model.perform(Action::NextView);
+    assert_eq!(model.view(), View::Loops);
+    model.perform(Action::NextView);
     assert_eq!(model.view(), View::Library);
     model.perform(Action::PrevView);
-    assert_eq!(model.view(), View::Sampler);
+    assert_eq!(model.view(), View::Loops);
 }
 
 #[test]

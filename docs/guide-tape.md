@@ -12,7 +12,9 @@ A loop comes from the playing track, so play a track first. Then either:
 
 - **Use a saved loop**: `:tape load N` loads loop slot N, 1 to 8, as F1 to F8 saved it.
 
-The load reads the range, plus up to 1 s of the track before it, the **pre-roll**, and 1 s after it, the **post-roll**. The rolls give the crossfades audio to fade into, so the loop repeats exactly the range's length. A saved loop holds only the range.
+- **Use the loop library**: in the Loops view, `9`, enter loads the loop under the cursor. [The loop library](../README.md#the-loop-library) in the README describes it.
+
+The load reads the range, plus up to 1 s of the track before it, the **pre-roll**, and 1 s after it, the **post-roll**. The rolls give the crossfades audio to fade into, so the loop repeats exactly the range's length. A saved loop holds only the range. A loop cut to loop, such as a scanned or saved one, takes its rolls from its own other end: its tail before it and its head after it.
 
 A new load replaces the tape and starts from the default settings. **Play tape** starts it and pauses the player; **Stop tape** stops it. The player does not resume on its own; Play on the player afterwards plays both.
 
@@ -84,6 +86,16 @@ On a stereo loop, pan keeps the near channel and folds the far one into it, so a
 
 **Solo** on any voice silences the voices without it. What every voice sends to the write head is unchanged, so a soloed voice can be heard while the others go on printing into the loop.
 
+## A loop per voice
+
+In the Loops view, `!` `@` `#`, or `:load N`, load the loop under the cursor into voice N alone. The voice is turned on, and its window becomes the new loop's range. Its window, lane and crossfades count in its own loop. The waveform shows the selected voice's loop. A voice without a loop of its own reads voice 1's; a loop loaded into voice 1 alone is read by those voices too. With no tape loaded, the loop is loaded for every voice.
+
+While any voice reads a loop of its own, the write head is held off: its sends would print one loop into another of a different length. Write stays set, and the Tape tab says why it does nothing. Enter in the Loops view, or Load range, loads one loop for every voice again, and writing resumes.
+
+A loop is resampled to the tape's rate as it loads. Rates and starts are not matched across voices: set each voice's rate by hand to line up loops of different tempo.
+
+**Reset** restores every voice's loop as loaded. **Save loop** saves voice 1's.
+
 ## The write head
 
 With **Write** off, the default, the loop plays as loaded. With it on, the write head moves through its window at the normal rate and rewrites each frame as:
@@ -119,7 +131,7 @@ The voices read before the write head writes, so on the next pass every voice re
 
 - **Record** starts recording what you hear; pressing it again stops and writes `-mix.wav` beside it. If the disk falls behind, dropped blocks are counted and reported.
 
-Both are 32-bit float WAV, in a new directory each time, and both are added to the library, so a saved loop can be loaded, sliced or looped again.
+Both are 32-bit float WAV, in a new directory each time. The loop is added to the loop library, with the beats of the loop it came from; the recording is added to the library. A saved loop can be loaded, sliced or looped again.
 
 ## What it does not do
 

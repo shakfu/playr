@@ -114,6 +114,7 @@ impl DraftAnswer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Cursors {
     pub library: Option<usize>,
+    pub loops: Option<usize>,
     pub selection: Option<usize>,
     pub playlists: Option<usize>,
     pub queue: Option<usize>,
@@ -1412,6 +1413,7 @@ impl Frontend for Model {
             View::Selection => self.cursors.selection,
             View::Playlists => self.cursors.playlists,
             View::Queue => self.cursors.queue,
+            View::Loops => self.cursors.loops,
             View::Sampler | View::Tape | View::Mix => None,
         }
     }
@@ -1422,6 +1424,7 @@ impl Frontend for Model {
             View::Selection => self.cursors.selection = row,
             View::Playlists => self.cursors.playlists = row,
             View::Queue => self.cursors.queue = row,
+            View::Loops => self.cursors.loops = row,
             View::Sampler | View::Tape | View::Mix => {}
         }
     }

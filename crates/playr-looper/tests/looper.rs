@@ -288,3 +288,51 @@ fn the_volume_leaves_the_recording_and_the_meter_alone() {
         );
     }
 }
+
+/// A playing looper: voice 0 on a mono loop of `a`, voice 1 on its own of `b`.
+fn two_loops(a: f32, b: f32) -> (Looper, Handle) {
+    let (mut l, mut h) = playr_looper::new(SR);
+    h.load(Loop::new(vec![a; 4_800], 1).unwrap()).unwrap();
+    h.load_voice(1, Loop::new(vec![b; 2_400], 1).unwrap())
+        .unwrap();
+    for s in [Setting::On(1, true), Setting::Play] {
+        h.set(s).unwrap();
+    }
+    block(&mut l);
+    while h.poll().is_some() {}
+    (l, h)
+}
+
+#[test]
+fn a_voices_load_fades_that_voice_alone() {
+    let (mut l, mut h) = two_loops(0.5, 0.2);
+    assert!((block(&mut l)[0] - 0.7).abs() < 1e-6);
+    h.load_voice(1, Loop::new(vec![0.1; 2_400], 1).unwrap())
+        .unwrap();
+    let mut low = f32::MAX;
+    for _ in 0..10 {
+        low = block(&mut l).iter().fold(low, |m, s| m.min(*s));
+    }
+    assert!(low >= 0.5 - 1e-6, "voice 0 dipped to {low}");
+    assert!((block(&mut l)[0] - 0.6).abs() < 1e-6);
+    match h.poll() {
+        Some(Returned::Loop(lp)) => assert_eq!(lp.samples(), vec![0.2; 2_400]),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn reset_restores_every_voices_loop() {
+    let (mut l, mut h) = two_loops(0.5, 0.2);
+    assert!(h.has_own(1));
+    h.reset().unwrap();
+    for _ in 0..10 {
+        block(&mut l);
+    }
+    assert!((block(&mut l)[0] - 0.7).abs() < 1e-6);
+    let mut back = 0;
+    while let Some(r) = h.poll() {
+        back += usize::from(matches!(r, Returned::Loop(_)));
+    }
+    assert_eq!(back, 2, "the loop and voice 1's own came back");
+}

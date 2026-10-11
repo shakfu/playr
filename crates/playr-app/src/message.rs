@@ -25,6 +25,13 @@ pub enum Message {
     /// A confirmation was answered with anything but `y`.
     Cancelled,
     NoMatches,
+    /// A Loops view action with no loop under the cursor.
+    NoLoopUnderCursor,
+    /// A loop taken out of the loop library, by name.
+    LoopRemoved(String),
+    /// A loop's beats or key as now set.
+    LoopSet(Box<playr_core::db::loops::Loop>),
+    LoopFailed(String),
     NoPlaylistUnderCursor,
     /// `:enqueue all` with no search results or selection to queue.
     NothingToQueue,
@@ -213,6 +220,19 @@ pub fn text(message: &Message) -> String {
         }
         Message::Cancelled => "cancelled".into(),
         Message::NoMatches => "no matches".into(),
+        Message::NoLoopUnderCursor => "no loop under the cursor".into(),
+        Message::LoopRemoved(name) => format!("took {name} out of the loop library"),
+        Message::LoopSet(l) => {
+            let mut parts = vec![l.name.clone()];
+            if let (Some(b), Some(t)) = (l.beats, l.bpm) {
+                parts.push(format!("{b} beats, {t:.1} BPM"));
+            }
+            if let Some(k) = &l.key {
+                parts.push(format!("key {k}"));
+            }
+            parts.join(": ")
+        }
+        Message::LoopFailed(e) => format!("loop library: {e}"),
         Message::NothingToQueue => {
             "nothing to queue; :enqueue all queues search results or the selection".into()
         }
@@ -638,6 +658,7 @@ pub fn idle_text(idle: crate::tape::Idle) -> &'static str {
             "nothing changes: Feedback is 1, Wear and Thin are 0 and every Send is 0"
         }
         Idle::Turns => "no effect: Ping turns the head at the edges, so it never wraps",
+        Idle::Held => "no effect: a voice reads a loop of its own, so writing is held off",
     }
 }
 
@@ -652,6 +673,12 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
                 secs(*frames as f64, *rate)
             )
         }
+        TapeMessage::LoadedVoice {
+            voice,
+            frames,
+            rate,
+        } => format!("voice {voice} loaded: {:.2} s", secs(*frames as f64, *rate)),
+        TapeMessage::NoSuchLoop => "that loop is no longer in the library".into(),
         TapeMessage::Done(TapeAction::Play) => "tape playing".into(),
         TapeMessage::Done(TapeAction::Stop) => "tape stopped".into(),
         TapeMessage::Done(TapeAction::Reset) => "tape reset to the loop as loaded".into(),

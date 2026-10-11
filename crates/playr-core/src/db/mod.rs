@@ -4,6 +4,7 @@
 //! skips files whose `(mtime, size)` are unchanged, avoiding a tag re-read.
 
 pub mod analysis;
+pub mod loops;
 pub mod query;
 pub mod sql;
 
@@ -162,6 +163,7 @@ fn init(conn: &Connection) -> Result<()> {
             tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind};"))?;
         }
     }
+    loops::migrate_slots(&tx)?;
     if old_index || old_triggers {
         // Updating every row in place fires the new trigger, which indexes it.
         tx.execute_batch("UPDATE tracks SET path = path;")?;
@@ -433,7 +435,7 @@ pub fn forget_root(conn: &Connection, root: &Path) -> Result<Option<Pruned>> {
         [&prefix],
     )?;
     tx.execute(
-        "DELETE FROM loops WHERE substr(path, 1, length(?1)) = ?1",
+        "DELETE FROM loop_lib WHERE slot IS NOT NULL AND substr(path, 1, length(?1)) = ?1",
         [&prefix],
     )?;
     tx.execute(
@@ -495,7 +497,10 @@ pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
         .query_map([&prefix], |r| r.get(0))?
         .collect::<Result<_>>()?;
     let looped: Vec<String> = conn
-        .prepare("SELECT DISTINCT path FROM loops WHERE substr(path, 1, length(?1)) = ?1")?
+        .prepare(
+            "SELECT DISTINCT path FROM loop_lib
+             WHERE slot IS NOT NULL AND substr(path, 1, length(?1)) = ?1",
+        )?
         .query_map([&prefix], |r| r.get(0))?
         .collect::<Result<Vec<String>>>()?
         .into_iter()
@@ -521,7 +526,10 @@ pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
     }
     analysis::delete(&tx, &analysed)?;
     for path in &looped {
-        tx.execute("DELETE FROM loops WHERE path = ?1", [path])?;
+        tx.execute(
+            "DELETE FROM loop_lib WHERE slot IS NOT NULL AND path = ?1",
+            [path],
+        )?;
     }
     for path in &cued {
         tx.execute("DELETE FROM hot_cues WHERE path = ?1", [path])?;

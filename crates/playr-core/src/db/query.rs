@@ -125,7 +125,11 @@ fn terms(input: &str) -> Vec<(Option<Field>, String)> {
 /// The inclusive range `text` names: `lo..hi`, `lo..`, `..hi`, or a bare
 /// value for `near` either side of it. `None` when it names no range, which
 /// matches nothing rather than everything.
-fn range(text: &str, value: impl Fn(&str) -> Option<f64>, near: f64) -> Option<(f64, f64)> {
+pub(crate) fn range(
+    text: &str,
+    value: impl Fn(&str) -> Option<f64>,
+    near: f64,
+) -> Option<(f64, f64)> {
     let value = |t: &str| value(t.trim()).filter(|n| n.is_finite());
     match text.split_once("..") {
         Some(("", "")) => None,
@@ -280,7 +284,7 @@ fn filter(conn: &Connection, tracks: Vec<Track>, filters: &[Filter]) -> Result<V
 /// matched as text rather than parsed or raising an error. `artist:evans`
 /// limits a term to one column, and `artist:"bill evans"` a phrase; a prefix
 /// that names no field, as in `op:1`, stays part of the text.
-fn fts_query(terms: Vec<(Option<&str>, String)>) -> Option<String> {
+pub(crate) fn fts_query(terms: Vec<(Option<&str>, String)>) -> Option<String> {
     let terms: Vec<String> = terms
         .into_iter()
         .filter(|(_, text)| !text.trim().is_empty())
@@ -687,8 +691,9 @@ pub fn remove_last_mark(conn: &Connection, path: &str) -> Result<Option<Mark>> {
 
 /// The loops saved in the track at `path`: slot, start and end frame.
 pub fn loops(conn: &Connection, path: &str) -> Result<Vec<(u8, u64, u64)>> {
-    let mut stmt =
-        conn.prepare("SELECT slot, start, end FROM loops WHERE path = ?1 ORDER BY slot")?;
+    let mut stmt = conn.prepare(
+        "SELECT slot, start, end FROM loop_lib WHERE path = ?1 AND slot IS NOT NULL ORDER BY slot",
+    )?;
     let rows = stmt.query_map([path], |r| {
         Ok((
             r.get(0)?,
@@ -708,17 +713,14 @@ pub fn save_loop(
     (start, end): (u64, u64),
     rate: u32,
 ) -> Result<()> {
-    conn.execute(
-        "INSERT OR REPLACE INTO loops (path, slot, start, end, rate) VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![path, slot, start as i64, end as i64, rate],
-    )?;
-    Ok(())
+    let name = super::loops::slot_name(conn, path)?;
+    super::loops::put_slot(conn, path, slot, (start, end), rate, &name)
 }
 
 /// Empties loop `slot` of the track at `path`. Returns whether it held one.
 pub fn clear_loop(conn: &Connection, path: &str, slot: u8) -> Result<bool> {
     Ok(conn.execute(
-        "DELETE FROM loops WHERE path = ?1 AND slot = ?2",
+        "DELETE FROM loop_lib WHERE path = ?1 AND slot = ?2",
         rusqlite::params![path, slot],
     )? > 0)
 }
@@ -747,7 +749,10 @@ pub fn set_hot_cue(conn: &Connection, path: &str, slot: u8, at: Option<f64>) -> 
 
 /// Empties every loop slot of the track at `path`, returning how many held one.
 pub fn clear_loops(conn: &Connection, path: &str) -> Result<usize> {
-    conn.execute("DELETE FROM loops WHERE path = ?1", [path])
+    conn.execute(
+        "DELETE FROM loop_lib WHERE path = ?1 AND slot IS NOT NULL",
+        [path],
+    )
 }
 
 /// Removes every mark in the track at `path`, returning how many there were.
