@@ -636,7 +636,7 @@ In the window, `7` opens the DJ view. It lists the library, with search, and its
 | `:dj a mute on\|off` | silence the deck in the main mix; the cue still hears it |
 | `:dj a delay S`, `:dj a reverb S` | what the deck, as heard in the main mix, sends to the delay and the reverb, 0 to 1 |
 | `:dj delay ...`, `:dj reverb ...` | the effects' fields, as `:tape delay` and `:tape reverb` take them; `:dj delay sync 1/4` is a beat of the deck heard most |
-| `:dj a play`, `:dj a pause` | play the deck, pausing the player, or pause it |
+| `:dj a play`, `:dj a pause` | play the deck, or pause it; the player plays on |
 | `:dj a cue` | playing: back to the cue point, paused; paused: set the cue point here |
 | `:dj a cue down`, `:dj a cue up` | hold CUE: paused, plays from the cue point until released |
 | `:dj b sync`, `:dj b sync off` | deck B follows deck A's tempo, and moves into phase once |
