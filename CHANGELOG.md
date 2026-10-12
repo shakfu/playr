@@ -4,6 +4,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.19.0]
+
 ### Added
 
 - Bounce, beside Record on the Tape tab, and `:tape bounce [long|off]`: the mix as heard, after level, pan, mute and solo and with the delay and reverb, recorded into voice 4's loop. Write records the sends, which come before level and pan, so soloing voice 4 with Write on could not reproduce what was heard. One pass writes the write window at feedback 0, fading in and crossfading into where it began. Until stopped records up to 5 minutes and replaces voice 4's loop with a stereo loop that long, so voices of other lengths are caught whole; it records through Record's writer thread to a temporary WAV and loads that, over holding a 115 MB buffer in the callback, so it cannot run while Record does. Library API: `Setting::Bounce`, `Tape::bouncing`, `Status::bouncing`, `TapeAction::Bounce`, `Bounce`, `LONG_BOUNCE`, `TapeMessage::Bounced`, `NothingBounced`, `RecorderBusy`, `Deck::bouncing`.
@@ -60,7 +62,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - The Mix tab's headphones strip has a meter, as the other strips do: the cued deck's peak after the headphone fader, held for 1.5 s. Library API: `Mixer::take_cue_peak` and `Status::take_cue_peak` in `playr-dj`; `Snapshot::meters` gains a fifth entry, the headphones.
 
-- Each program shows its version while running. The keys help title of all three reads `Keys in the library view (playr 0.18.0)`. `playr-server` prints `playr-server 0.18.0: ADDRESS` on start, and `GET /config` returns it. The window's Help, About playr shows it with the author and links to the repository, its releases and its issues. Before, only `--version` gave it, which says nothing about a process already running. Library API: `playr_app::VERSION`.
+- Each program shows its version while running. The keys help title of all three reads `Keys in the library view (playr 0.19.0)`. `playr-server` prints `playr-server 0.19.0: ADDRESS` on start, and `GET /config` returns it. The window's Help, About playr shows it with the author and links to the repository, its releases and its issues. Before, only `--version` gave it, which says nothing about a process already running. Library API: `playr_app::VERSION`.
 
 ### Fixed
 
