@@ -3,6 +3,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
+use playr_dsp::fx::{Delay, DelayModel, DelayParam, Reverb, ReverbModel, ReverbParam};
 use playr_dsp::{clip, flush, one_pole, soft_clip, Interp};
 
 use crate::{Error, COLUMNS, TAPE, VOICES};
@@ -25,8 +26,15 @@ const WEAR_HZ: f32 = 500.0;
 const WEAR_TOP_HZ: f32 = 20_000.0;
 /// The thin high-pass's cutoff at thin 0 and at 1, on a log scale between.
 const THIN_HZ: (f32, f32) = (20.0, 2000.0);
-/// A voice filter's cutoff at 0 and at 1, on a log scale between.
-const FILTER_HZ: (f32, f32) = (20.0, 20_000.0);
+/// The span of a voice's EQ frequencies; a high-pass at the low end and a
+/// low-pass at the high end are off.
+pub const FILTER_HZ: (f32, f32) = (20.0, 20_000.0);
+/// A bell's gain either way, in dB, and its Q.
+pub const BELL_DB: f32 = 18.0;
+pub const BELL_Q: (f32, f32) = (0.1, 10.0);
+/// Where a bell starts: flat, at 1 kHz, an octave and a half wide.
+pub const DEFAULT_BELL_HZ: f32 = 1000.0;
+pub const DEFAULT_BELL_Q: f32 = 1.0;
 /// The gain a voice's drive reaches at 1, as a ratio: 24 dB.
 const DRIVE_GAIN: f32 = 16.0;
 /// Drive blends in from dry over its first `DRIVE_BLEND`, so leaving 0 does
@@ -36,6 +44,10 @@ const DRIVE_BLEND: f32 = 0.05;
 pub const DEFAULT_KNEE: f32 = 0.5;
 /// The longest rate slew, in ms.
 pub const MAX_SLEW_MS: f32 = 10_000.0;
+/// A bus with no input and its output below -120 dB for this long is
+/// skipped, and its tail cleared: the dry tape is then bit-exact.
+const BUS_QUIET_SECONDS: f32 = 1.0;
+const BUS_FLOOR: f32 = 1e-6;
 
 /// The wear low-pass's one-pole coefficient: off at 0, falling on a log
 /// scale from the top of the band to [`WEAR_HZ`] at 1.
@@ -63,54 +75,78 @@ fn drive(x: f32, d: f32) -> f32 {
     x + (y - x) * (d / DRIVE_BLEND).min(1.0)
 }
 
-/// What a voice's filter passes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Filter {
-    #[default]
-    Low,
-    High,
-    Band,
-}
-
-/// A voice's filter: a Butterworth state-variable filter over a cutoff of
-/// 0 to 1, on a log scale across [`FILTER_HZ`].
+/// A voice's EQ: a high-pass, a low-pass and a peaking bell, each a
+/// state-variable filter, in series. Frequencies ramp on a log scale. A
+/// high-pass at [`FILTER_HZ`]'s low end, a low-pass at its high end and a
+/// bell at 0 dB pass the input unchanged; the high-pass and low-pass fade
+/// out there, and every state runs while dry so a filter resumes without a
+/// step.
 #[derive(Debug, Clone, Copy)]
-struct Svf {
-    svf: playr_dsp::Svf,
-    /// The cutoff, 0 to 1, the coefficients were computed for.
-    at: f32,
+struct Eq {
+    /// log2 of each frequency in Hz: the high-pass, the low-pass, the bell.
+    hz: [Ramp; 3],
+    /// The bell's gain in dB, and its Q.
+    gain: Ramp,
+    q: f32,
+    /// How much of the high-pass and the low-pass is heard.
+    wet: [Ramp; 2],
+    svf: [playr_dsp::Svf; 3],
+    /// The bell's amplitude, 10^(dB/40); the gain less 1 it adds of the
+    /// band; and the dB they are for.
+    a: f32,
+    boost: f32,
+    boost_at: f32,
 }
 
-impl Svf {
+impl Eq {
     fn new() -> Self {
-        Svf {
-            svf: playr_dsp::Svf::butterworth(),
-            at: f32::NAN,
-        }
-    }
-
-    fn tune(&mut self, cutoff: f32, sample_rate: u32) {
-        if cutoff == self.at {
-            return;
-        }
-        self.at = cutoff;
         let (lo, hi) = FILTER_HZ;
-        let hz = (lo * (hi / lo).powf(cutoff)).min(0.45 * sample_rate as f32);
-        self.svf.tune(hz, sample_rate);
+        Eq {
+            hz: [lo.log2(), hi.log2(), DEFAULT_BELL_HZ.log2()].map(Ramp::new),
+            gain: Ramp::new(0.0),
+            q: DEFAULT_BELL_Q,
+            wet: [Ramp::new(0.0); 2],
+            svf: [playr_dsp::Svf::butterworth(); 3],
+            a: 1.0,
+            boost: 0.0,
+            boost_at: 0.0,
+        }
     }
 
-    /// Filters `x` in place: `morph` of the way from `kinds[0]` to
-    /// `kinds[1]`, mixed `wet` with the input. The state runs while dry, so
-    /// the filter does not start from silence.
-    fn process(&mut self, x: &mut [f32; 2], kinds: [Filter; 2], morph: f32, wet: f32) {
-        for (ch, x) in x.iter_mut().enumerate() {
-            let t = self.svf.tick(ch, *x);
-            let [a, b] = kinds.map(|k| match k {
-                Filter::Low => t.low,
-                Filter::High => t.high,
-                Filter::Band => t.band,
-            });
-            *x += wet * (a + morph * (b - a) - *x);
+    /// Sets filter `k`, 0 to 2, to `hz`, kept within [`FILTER_HZ`], fading
+    /// the high-pass or low-pass in or out as it changes the signal or not.
+    fn set_hz(&mut self, k: usize, hz: f32, frames: u32) {
+        let (lo, hi) = FILTER_HZ;
+        let hz = hz.clamp(lo, hi);
+        self.hz[k].set(hz.log2(), frames);
+        if k < 2 {
+            let dry = [hz <= lo, hz >= hi][k];
+            self.wet[k].set(if dry { 0.0 } else { 1.0 }, frames);
+        }
+    }
+
+    /// Filters `x`, `channels` of it, in place.
+    fn process(&mut self, x: &mut [f32; 2], channels: usize, sample_rate: u32) {
+        let hz = self.hz.each_mut().map(|r| r.next().exp2());
+        let gain = self.gain.next();
+        let wet = self.wet.each_mut().map(Ramp::next);
+        if gain != self.boost_at {
+            self.boost_at = gain;
+            self.a = 10f32.powf(gain / 40.0);
+            self.boost = self.a * self.a - 1.0;
+        }
+        // Q scaled by the amplitude keeps a cut the mirror of a boost.
+        self.svf[2].set_q(self.q * self.a);
+        for (svf, hz) in self.svf.iter_mut().zip(hz) {
+            svf.tune(hz.min(0.45 * sample_rate as f32), sample_rate);
+        }
+        for (ch, x) in x.iter_mut().enumerate().take(channels) {
+            let t = self.svf[0].tick(ch, *x);
+            *x += wet[0] * (t.high - *x);
+            let t = self.svf[1].tick(ch, *x);
+            *x += wet[1] * (t.low - *x);
+            let t = self.svf[2].tick(ch, *x);
+            *x += self.boost * t.band;
         }
     }
 }
@@ -333,6 +369,8 @@ pub enum Setting {
     Play,
     /// Silences the output and holds every head.
     Stop,
+    /// Off holds the head and skips the voice's DSP; on puts the head at its
+    /// window's start, or its end in reverse.
     On(usize, bool),
     /// Frames advanced per output frame, -4 to 4.
     Rate(usize, f32),
@@ -353,11 +391,33 @@ pub enum Setting {
     Slew(usize, f32),
     /// Saturation on what the voice reads, 0 to 1.
     Drive(usize, f32),
-    /// The voice filter's cutoff, 0 to 1: 20 Hz to 20 kHz on a log scale.
-    Cutoff(usize, f32),
-    Filter(usize, Filter),
+    /// The voice's high-pass, in Hz across [`FILTER_HZ`]; off at its low end.
+    HighPass(usize, f32),
+    /// The voice's low-pass, in Hz; off at [`FILTER_HZ`]'s high end.
+    LowPass(usize, f32),
+    /// The voice's peaking bell: its centre in Hz, its gain in dB within
+    /// [`BELL_DB`] either way, and its Q within [`BELL_Q`].
+    BellHz(usize, f32),
+    BellGain(usize, f32),
+    BellQ(usize, f32),
     /// Hear only the soloed voices, while any is; sends are unchanged.
     Solo(usize, bool),
+    /// Silences what is heard of the voice; its head and send go on.
+    Mute(usize, bool),
+    /// The voice's sends to the delay and the reverb, 0 to 1. After its
+    /// level, mute and solo: an effect follows what is heard.
+    DelaySend(usize, f32),
+    ReverbSend(usize, f32),
+    /// Selects the delay's model; the new one starts silent.
+    DelayModel(DelayModel),
+    Delay(DelayParam, f32),
+    /// The delay's level into the mix, 0 to 1.
+    DelayReturn(f32),
+    ReverbModel(ReverbModel),
+    Reverb(ReverbParam, f32),
+    ReverbReturn(f32),
+    /// How much of the returns the write head records, 0 to 1.
+    PrintFx(f32),
     Write(bool),
     WriteWindow(Window),
     Feedback(f32),
@@ -384,21 +444,16 @@ struct Voice {
     wear_a: f32,
     wear_lp: [f32; 2],
     drive: Ramp,
-    cutoff: Ramp,
-    filter: Filter,
-    /// The filter faded from, and how far the fade to `filter` is.
-    was: Filter,
-    morph: Ramp,
-    /// How much of the filter is heard: 0 where it would pass the input
-    /// unchanged, low at 1 or high at 0, so the switch is a crossfade.
-    wet: Ramp,
-    svf: Svf,
-    /// What is heard of the voice under solo, 0 or 1.
+    eq: Eq,
+    /// The sends to the delay and the reverb.
+    fx: [Ramp; 2],
+    /// What is heard of the voice under solo and mute, 0 or 1.
     heard: Ramp,
     /// Brought to 0 before the loop the voice reads is replaced while
     /// playing, and back after, so the swap does not click.
     duck: Ramp,
     solo: bool,
+    mute: bool,
     ping: bool,
     /// The direction Ping has turned the head to, as a sign on its rate.
     dir: f64,
@@ -433,15 +488,12 @@ impl Voice {
             wear_a: 1.0,
             wear_lp: [0.0; 2],
             drive: Ramp::new(0.0),
-            cutoff: Ramp::new(1.0),
-            filter: Filter::Low,
-            was: Filter::Low,
-            morph: Ramp::new(1.0),
-            wet: Ramp::new(0.0),
-            svf: Svf::new(),
+            eq: Eq::new(),
+            fx: [Ramp::new(0.0); 2],
             heard: Ramp::new(1.0),
             duck: Ramp::new(1.0),
             solo: false,
+            mute: false,
             ping: false,
             dir: 1.0,
             slew_ms: DEFAULT_SLEW_MS,
@@ -453,21 +505,6 @@ impl Voice {
             old: None,
             faded: 0,
             fade_len: 0,
-        }
-    }
-
-    /// Fades the filter in or out as its kind and cutoff's target make it
-    /// pass the input unchanged or not.
-    fn retarget_wet(&mut self, frames: u32) {
-        let c = self.cutoff.target();
-        let dry = match self.filter {
-            Filter::Low => c >= 1.0,
-            Filter::High => c <= 0.0,
-            Filter::Band => false,
-        };
-        let want = if dry { 0.0 } else { 1.0 };
-        if self.wet.target() != want {
-            self.wet.set(want, frames);
         }
     }
 
@@ -517,8 +554,9 @@ impl Voice {
         }
     }
 
-    /// Reads one frame into `mix` (stereo) and `send` (the loop's channels),
-    /// then advances. Returns whether the voice sent anything.
+    /// Reads one frame into `mix` (stereo), `send` (the loop's channels) and
+    /// `buses` (stereo, delay then reverb), then advances. Returns whether
+    /// the voice sent anything to the write head.
     fn render(
         &mut self,
         lp: &Loop,
@@ -526,6 +564,7 @@ impl Voice {
         interp: Interp,
         mix: &mut [f32; 2],
         send: &mut [f32; 2],
+        buses: &mut [[f32; 2]; 2],
     ) -> bool {
         let gate = self.gate.next();
         if gate == 0.0 && !self.on {
@@ -538,8 +577,6 @@ impl Voice {
         let sends = self.send.next() * gate * duck;
         let wear = self.wear.next();
         let drive_d = self.drive.next();
-        let cutoff = self.cutoff.next();
-        self.svf.tune(cutoff, sample_rate);
         if wear != self.wear_at {
             self.wear_at = wear;
             self.wear_a = wear_coefficient(wear, sample_rate);
@@ -557,17 +594,21 @@ impl Voice {
                 *s = *s * gin + o * gout;
             }
         }
-        // Drive, then the filter, which can take off the edge drive adds.
+        // Drive, then the EQ, which can take off the edge drive adds.
         for s in s.iter_mut().take(lp.channels) {
             *s = drive(*s, drive_d);
         }
-        let (morph, wet) = (self.morph.next(), self.wet.next());
-        self.svf
-            .process(&mut s, [self.was, self.filter], morph, wet);
+        self.eq.process(&mut s, lp.channels, sample_rate);
 
         let [l, r] = pan_frame(s, lp.channels, pan);
-        mix[0] += l * level;
-        mix[1] += r * level;
+        let heard = [l * level, r * level];
+        for (bus, amount) in buses.iter_mut().zip(&mut self.fx) {
+            let amount = amount.next();
+            bus[0] += heard[0] * amount;
+            bus[1] += heard[1] * amount;
+        }
+        mix[0] += heard[0];
+        mix[1] += heard[1];
         // The send's low-pass tracks its input while off, so it resumes without a step.
         for ((o, s), y) in send.iter_mut().zip(s).zip(&mut self.wear_lp) {
             *y = match wear > 0.0 {
@@ -912,9 +953,81 @@ impl Writer {
     }
 }
 
+/// The send effects: a delay and a reverb, each a bus every voice sends to.
+struct Buses {
+    delay: Delay,
+    reverb: Reverb,
+    /// Each bus's level into the mix.
+    ret: [Ramp; 2],
+    /// Frames each bus has had no input and its output below [`BUS_FLOOR`].
+    quiet: [u32; 2],
+    /// Quiet frames after which a bus is skipped.
+    idle: u32,
+    print: Ramp,
+}
+
+impl Buses {
+    fn new(sample_rate: u32) -> Self {
+        let idle = (BUS_QUIET_SECONDS * sample_rate as f32) as u32;
+        Buses {
+            delay: Delay::new(sample_rate),
+            reverb: Reverb::new(sample_rate),
+            ret: [Ramp::new(1.0); 2],
+            quiet: [idle; 2],
+            idle,
+            print: Ramp::new(0.0),
+        }
+    }
+
+    /// Each bus's return for one frame in, at its level; silence from a
+    /// skipped bus.
+    fn frame(&mut self, input: [[f32; 2]; 2]) -> [[f32; 2]; 2] {
+        let mut out = [[0.0; 2]; 2];
+        for (b, x) in input.into_iter().enumerate() {
+            let level = self.ret[b].next();
+            let loud = x != [0.0; 2];
+            let idle = self.quiet[b] >= self.idle;
+            if !loud && idle {
+                continue;
+            }
+            if idle && b == 0 {
+                self.delay.settle();
+            }
+            let wet = match b {
+                0 => self.delay.frame(x),
+                _ => self.reverb.frame(x),
+            };
+            match loud || wet.iter().any(|w| w.abs() > BUS_FLOOR) {
+                true => self.quiet[b] = 0,
+                false => {
+                    self.quiet[b] += 1;
+                    if self.quiet[b] == self.idle {
+                        match b {
+                            0 => self.delay.clear(),
+                            _ => self.reverb.clear(),
+                        }
+                    }
+                }
+            }
+            out[b] = [wet[0] * level, wet[1] * level];
+        }
+        out
+    }
+}
+
+impl std::fmt::Debug for Buses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Buses")
+            .field("delay", &self.delay.model())
+            .field("reverb", &self.reverb.model())
+            .field("quiet", &self.quiet)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The loop, its voices and its write head. [`Tape::process`] is the whole
 /// signal path and is deterministic, so tests drive it directly.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Tape {
     sample_rate: u32,
     /// The write loop: what the write head writes, and what a voice without
@@ -930,10 +1043,12 @@ pub struct Tape {
     dc_r: f32,
     /// How the voices' heads read between frames.
     interp: Interp,
+    buses: Buses,
 }
 
 impl Tape {
     /// An empty, stopped tape at `sample_rate`. Voice 0 is on; writing is off.
+    /// Allocates its effects, megabytes: build it off the audio thread.
     pub fn new(sample_rate: u32) -> Self {
         let sr = sample_rate as f32;
         Tape {
@@ -947,6 +1062,7 @@ impl Tape {
             edge: (EDGE_MS * sr / 1000.0) as usize,
             dc_r: (-std::f32::consts::TAU * DC_HZ / sr).exp(),
             interp: Interp::default(),
+            buses: Buses::new(sample_rate),
         }
     }
 
@@ -1089,6 +1205,15 @@ impl Tape {
         }
     }
 
+    /// Sets what is heard of each voice from solo and mute.
+    fn rehear(&mut self, ramp: u32) {
+        let any = self.voices.iter().any(|v| v.solo);
+        for v in &mut self.voices {
+            v.heard
+                .set(((!any || v.solo) && !v.mute) as u8 as f32, ramp);
+        }
+    }
+
     pub fn set(&mut self, s: Setting) {
         let ramp = if self.playing { self.smooth } else { 0 };
         let frames = self.lp.frames();
@@ -1123,6 +1248,18 @@ impl Tape {
             Setting::Knee(v) if finite(v) => self.writer.knee = v.clamp(0.0, 0.99),
             Setting::On(i, on) if i < VOICES => {
                 let v = &mut self.voices[i];
+                if on && !v.on {
+                    let w = v.next.take().unwrap_or(v.window);
+                    // Still fading out: a jump crossfades instead of stepping.
+                    match self.playing && v.gate.value() > 0.0 {
+                        true => {
+                            v.window = w;
+                            v.jump(v.home(w), v.rate.value(), sr);
+                            v.dir = 1.0;
+                        }
+                        false => v.set_window(w, false, sr),
+                    }
+                }
                 v.on = on;
                 v.gate.set(on as u8 as f32, ramp);
             }
@@ -1163,28 +1300,43 @@ impl Tape {
             Setting::Drive(i, v) if i < VOICES && finite(v) => {
                 self.voices[i].drive.set(v.clamp(0.0, 1.0), ramp)
             }
-            Setting::Cutoff(i, c) if i < VOICES && finite(c) => {
-                let v = &mut self.voices[i];
-                v.cutoff.set(c.clamp(0.0, 1.0), ramp);
-                v.retarget_wet(ramp);
+            Setting::HighPass(i, hz) if i < VOICES && finite(hz) => {
+                self.voices[i].eq.set_hz(0, hz, ramp)
             }
-            Setting::Filter(i, kind) if i < VOICES => {
-                let v = &mut self.voices[i];
-                if kind != v.filter {
-                    v.was = v.filter;
-                    v.filter = kind;
-                    v.morph = Ramp::new(0.0);
-                    v.morph.set(1.0, ramp);
-                }
-                v.retarget_wet(ramp);
+            Setting::LowPass(i, hz) if i < VOICES && finite(hz) => {
+                self.voices[i].eq.set_hz(1, hz, ramp)
+            }
+            Setting::BellHz(i, hz) if i < VOICES && finite(hz) => {
+                self.voices[i].eq.set_hz(2, hz, ramp)
+            }
+            Setting::BellGain(i, db) if i < VOICES && finite(db) => self.voices[i]
+                .eq
+                .gain
+                .set(db.clamp(-BELL_DB, BELL_DB), ramp),
+            Setting::BellQ(i, q) if i < VOICES && finite(q) => {
+                self.voices[i].eq.q = q.clamp(BELL_Q.0, BELL_Q.1)
             }
             Setting::Solo(i, on) if i < VOICES => {
                 self.voices[i].solo = on;
-                let any = self.voices.iter().any(|v| v.solo);
-                for v in &mut self.voices {
-                    v.heard.set((!any || v.solo) as u8 as f32, ramp);
-                }
+                self.rehear(ramp);
             }
+            Setting::Mute(i, on) if i < VOICES => {
+                self.voices[i].mute = on;
+                self.rehear(ramp);
+            }
+            Setting::DelaySend(i, v) if i < VOICES && finite(v) => {
+                self.voices[i].fx[0].set(v.clamp(0.0, 1.0), ramp)
+            }
+            Setting::ReverbSend(i, v) if i < VOICES && finite(v) => {
+                self.voices[i].fx[1].set(v.clamp(0.0, 1.0), ramp)
+            }
+            Setting::DelayModel(m) => self.buses.delay.set_model(m),
+            Setting::Delay(p, v) => self.buses.delay.set(p, v),
+            Setting::DelayReturn(v) if finite(v) => self.buses.ret[0].set(v.clamp(0.0, 1.0), ramp),
+            Setting::ReverbModel(m) => self.buses.reverb.set_model(m),
+            Setting::Reverb(p, v) => self.buses.reverb.set(p, v),
+            Setting::ReverbReturn(v) if finite(v) => self.buses.ret[1].set(v.clamp(0.0, 1.0), ramp),
+            Setting::PrintFx(v) if finite(v) => self.buses.print.set(v.clamp(0.0, 1.0), ramp),
             Setting::Window(i, w)
                 if i < VOICES && !w.is_empty() && w.end <= self.source(i).frames() =>
             {
@@ -1208,12 +1360,28 @@ impl Tape {
         for frame in out.as_chunks_mut::<2>().0 {
             let mut mix = [0.0; 2];
             let mut send = [0.0; 2];
+            let mut buses = [[0.0; 2]; 2];
             let mut sending = false;
             for (v, own) in self.voices.iter_mut().zip(&self.own) {
                 let lp = own.as_deref().unwrap_or(&self.lp);
                 if lp.frames() > 0 {
-                    sending |= v.render(lp, sr, self.interp, &mut mix, &mut send);
+                    sending |= v.render(lp, sr, self.interp, &mut mix, &mut send, &mut buses);
                 }
+            }
+            let [d, r] = self.buses.frame(buses);
+            let wet = [d[0] + r[0], d[1] + r[1]];
+            mix[0] += wet[0];
+            mix[1] += wet[1];
+            let print = self.buses.print.next();
+            if print > 0.0 && wet != [0.0; 2] {
+                match self.lp.channels {
+                    1 => send[0] += print * 0.5 * (wet[0] + wet[1]),
+                    _ => {
+                        send[0] += print * wet[0];
+                        send[1] += print * wet[1];
+                    }
+                }
+                sending = true;
             }
             if self.lp.frames() > 0 {
                 self.writer

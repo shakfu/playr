@@ -1,7 +1,10 @@
-//! The Tape tab: a lane for the write loop and its head, then a lane per
-//! voice, each with its loop, its window and head, and its controls. The terminal has the
-//! `:tape` commands only; see `docs/dev/looper-engine.md` and
-//! `docs/dev/tape-lanes.md`.
+//! The Tape tab: a lane per voice, voice 4's on top with the write head, each
+//! with its loop, its window and head, and its controls; a lane folds to its
+//! header and a strip, and opens a drawer of less-used fields. Above them,
+//! the FX lane: the delay and the reverb every voice sends to. The terminal
+//! has the `:tape` commands only; see `docs/dev/looper-engine.md`,
+//! `docs/dev/tape-lanes.md`, `docs/dev/tape-machine-v2-design.md` and
+//! `docs/dev/fx-buses.md`.
 
 use eframe::egui;
 use playr_app::action::Action;
@@ -9,7 +12,8 @@ use playr_app::dispatch::Frontend;
 use playr_app::message::idle_text;
 use playr_app::model::Model;
 use playr_app::tape::{
-    no_effect, Control as C, Extent, Filter, Pos, TapeAction as T, TapeState, VoiceSetting as V,
+    model_name, no_effect, Control as C, Division, Extent, FxSetting as F, Layout, Pos,
+    TapeAction as T, TapeState, VoiceSetting as V, DELAY_MODELS, REVERB_MODELS,
 };
 use playr_looper::{Window, VOICES, WRITER};
 
@@ -30,6 +34,10 @@ const SEPARATOR: f32 = 12.0;
 const SLACK: f32 = 4.0;
 const BAND: f32 = 10.0;
 const FADES: f32 = 12.0;
+/// A folded lane's height: its header's two rows, and the strip beside them;
+/// voice 4's header keeps a third, with Write.
+const FOLDED: f32 = 46.0;
+const BUTTONS: f32 = 24.0;
 /// Points along each drawn crossfade curve.
 const CURVE: usize = 16;
 
@@ -45,6 +53,15 @@ pub struct State {
     picking: Option<usize>,
     query: String,
     found: Vec<playr_core::db::loops::Loop>,
+    /// A lane folded or a drawer opened this frame, for the deck to keep.
+    layout: Option<Layout>,
+}
+
+impl State {
+    /// The lane layout changed this frame, once.
+    pub fn take_layout(&mut self) -> Option<Layout> {
+        self.layout.take()
+    }
 }
 
 /// A drag in a lane: whose window, which part of it, the window as it was
@@ -108,34 +125,56 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
         }
     });
     // Numbered from the bottom: voice 4, which plays the write loop, on top.
-    // Its lane has a second row, the write head's.
-    let rows = VOICES as f32 + 1.0;
-    let spare = ui.available_height() - rows * ROW - (VOICES - 1) as f32 * SEPARATOR - SLACK;
-    let wave = (spare / VOICES as f32).clamp(WAVE_MIN, WAVE_MAX);
+    // An open lane has its main row of fields, and with its drawer open, a
+    // second; voice 4's drawer has a third, the write head's.
+    let layout = *deck.layout();
+    let folded: [bool; VOICES] =
+        std::array::from_fn(|i| layout.is_folded(i, deck.voice_name(i).is_none()));
+    let open = folded.iter().filter(|f| !**f).count();
+    let rows: usize = (0..VOICES)
+        .filter(|&i| !folded[i])
+        .map(|i| 1 + usize::from(layout.drawer[i]) * (1 + usize::from(i == WRITER)))
+        .sum();
+    // The FX lane: its header, and open, a row each for the delay and reverb.
+    let fx = BUTTONS + if layout.fx { 2.0 * ROW } else { 0.0 };
+    let spare = ui.available_height()
+        - rows as f32 * ROW
+        - (VOICES - open) as f32 * FOLDED
+        - if folded[WRITER] { BUTTONS } else { 0.0 }
+        - fx
+        - VOICES as f32 * SEPARATOR
+        - SLACK;
+    let wave = (spare / open.max(1) as f32).clamp(WAVE_MIN, WAVE_MAX);
     let lanes = Lanes {
         model,
         state: &state,
         extents,
-        wave,
     };
     let loaded = frames.is_some();
     let mut ctx = (&mut actions, tab);
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for (k, i) in (0..VOICES).rev().enumerate() {
-            if k > 0 {
-                ui.separator();
-            }
+        let (a, tab) = &mut ctx;
+        ui.add_enabled_ui(loaded, |ui| fx_lane(ui, &state, extent, layout, tab, a));
+        for i in (0..VOICES).rev() {
+            ui.separator();
             let e = extents[i];
+            let (fold, drawer) = (folded[i], layout.drawer[i]);
             lane(
                 ui,
                 &mut ctx,
-                |ui, (a, tab)| voice_head(ui, model, &state, e, i, tab, a),
+                |ui, (a, tab)| voice_head(ui, model, &state, e, i, fold, layout, tab, a),
                 |ui, (a, tab)| {
                     ui.add_enabled_ui(loaded, |ui| {
-                        lanes.voice_wave(ui, i, tab, a);
-                        voice_fields(ui, &state, e, i, a);
-                        if i == WRITER {
-                            write_fields(ui, &state, e, a);
+                        if fold {
+                            return lanes.voice_wave(ui, i, FOLDED, tab, a);
+                        }
+                        lanes.voice_wave(ui, i, wave, tab, a);
+                        main_fields(ui, &state, e, i, layout, tab, a);
+                        if drawer {
+                            drawer_fields(ui, &state, e, i, a);
+                            if i == WRITER {
+                                write_fields(ui, &state, e, a);
+                            }
                         }
                     });
                 },
@@ -173,8 +212,6 @@ struct Lanes<'a> {
     model: &'a Model,
     state: &'a TapeState,
     extents: [Extent; VOICES],
-    /// A waveform's height.
-    wave: f32,
 }
 
 impl Lanes<'_> {
@@ -187,9 +224,16 @@ impl Lanes<'_> {
     /// the pre-roll and post-roll dimmed, its crossfade curves at the foot,
     /// and its head. A lane reading the write loop shows the write head and
     /// what it cannot change.
-    fn voice_wave(&self, ui: &mut egui::Ui, i: usize, tab: &mut State, actions: &mut Vec<Action>) {
+    fn voice_wave(
+        &self,
+        ui: &mut egui::Ui,
+        i: usize,
+        height: f32,
+        tab: &mut State,
+        actions: &mut Vec<Action>,
+    ) {
         let (state, e) = (self.state, self.extents[i]);
-        let size = egui::vec2(ui.available_width(), self.wave);
+        let size = egui::vec2(ui.available_width(), height);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         let name = format!("Voice {} waveform", i + 1);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, &name));
@@ -224,7 +268,12 @@ impl Lanes<'_> {
             0.0,
             palette.region,
         );
-        peaks(&painter, rect, &status.voice_columns(i), palette.rms);
+        // A muted lane's peaks dim; its head and edges keep their colour.
+        let rms = match v.mute {
+            true => palette.rms.gamma_multiply(0.35),
+            false => palette.rms,
+        };
+        peaks(&painter, rect, &status.voice_columns(i), rms);
         dim_rolls(&painter, rect, e, &x, visuals);
         // The write loop is the only one the write head writes.
         let shared = !state.own[i];
@@ -244,8 +293,9 @@ impl Lanes<'_> {
                 egui::Stroke::new(2.0, colour),
             );
         }
-        // A head under Ping turns rather than wraps, so it never crossfades.
-        if !v.ping {
+        // A head under Ping turns rather than wraps, so it never crossfades;
+        // a folded strip has no room for the curves.
+        if !v.ping && height > FOLDED {
             let foot =
                 egui::Rect::from_x_y_ranges(span(v.window), rect.bottom() - FADES..=rect.bottom());
             crossfades(&painter, v, e, foot, &x, colour);
@@ -619,18 +669,14 @@ fn ms(ui: &mut egui::Ui, value: f32, max: f32, name: String, idle: Option<&str>)
     response.changed().then_some(v)
 }
 
-/// A voice's controls, with what each does. Window, On, Ping and Solo are in
-/// the lane's header.
-const VOICE_ROWS: [(&str, &str); 11] = [
+/// A voice's main controls, with what each does. On, Ping, Mute and Solo
+/// are in the lane's header.
+const MAIN_ROWS: [(&str, &str); 5] = [
     (
         "Window",
         "where the voice's window starts and ends, in % of the loop",
     ),
     ("Rate", "frames a frame; negative plays in reverse"),
-    (
-        "Slew",
-        "how long a rate change takes, in ms; long slews bend the pitch as a tape speeding up or slowing down",
-    ),
     ("Level", "what is heard of the voice"),
     (
         "Pan",
@@ -639,6 +685,14 @@ const VOICE_ROWS: [(&str, &str); 11] = [
     (
         "Send",
         "what the write head records of the voice into the loop, with Write on; apart from Level",
+    ),
+];
+
+/// A voice's controls in its drawer.
+const DRAWER_ROWS: [(&str, &str); 11] = [
+    (
+        "Slew",
+        "how long a rate change takes, in ms; long slews bend the pitch as a tape speeding up or slowing down",
     ),
     (
         "Wear",
@@ -649,18 +703,38 @@ const VOICE_ROWS: [(&str, &str); 11] = [
         "saturation on what the voice reads, heard and sent: quiet material up to 12 dB louder, loud material held down",
     ),
     (
-        "Filter",
-        "the filter's cutoff, 20 Hz to 20 kHz; a low-pass at 1 or a high-pass at 0 passes everything",
+        "HP",
+        "a high-pass, in Hz: cuts below it; off at 20 Hz",
     ),
-    ("Type", "what the filter passes: lows, highs, or a band"),
+    (
+        "LP",
+        "a low-pass, in Hz: cuts above it; off at 20 kHz",
+    ),
+    ("Bell", "the bell's centre, in Hz"),
+    (
+        "dB",
+        "the bell's gain, -18 to 18 dB: a boost or a cut around its centre; 0 is flat",
+    ),
+    (
+        "Q",
+        "the bell's width: 0.1 is many octaves wide, 10 a narrow notch; 1 is about an octave and a half",
+    ),
     (
         "Xfade",
         "the crossfade at each wrap, in ms: the head leaving fades out into the audio past the window as the one starting fades in; the loop keeps its length",
     ),
+    (
+        "Delay",
+        "what the voice sends to the delay, after its level: muting the voice silences its echo",
+    ),
+    (
+        "Reverb",
+        "what the voice sends to the reverb, after its level: muting the voice silences its reverb",
+    ),
 ];
 
 /// The write head's controls.
-const WRITE_ROWS: [(&str, &str); 4] = [
+const WRITE_ROWS: [(&str, &str); 5] = [
     (
         "Write window",
         "where the part of the loop that is rewritten starts and ends",
@@ -677,14 +751,45 @@ const WRITE_ROWS: [(&str, &str); 4] = [
         "Print thin",
         "a high-pass on everything the write head records, 20 Hz to 2 kHz; it thins the loop each pass",
     ),
+    (
+        "Print FX",
+        "how much of the delay and reverb returns the write head records with the sends",
+    ),
 ];
 
-/// The filter types, as the Type row names them, with what each passes.
-const FILTERS: [(Filter, &str, &str); 3] = [
-    (Filter::Low, "LP", "low-pass"),
-    (Filter::High, "HP", "high-pass"),
-    (Filter::Band, "BP", "band-pass"),
-];
+/// A field over `range` on a log scale, as a frequency or a Q is, shown to
+/// `decimals`; the new value on a change.
+fn log_field(
+    ui: &mut egui::Ui,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    decimals: usize,
+    name: String,
+    idle: Option<&str>,
+) -> Option<f32> {
+    // Dragged as its log2, so each point moves it by the same ratio.
+    let (lo, hi) = (range.start().log2(), range.end().log2());
+    let mut l = value.log2();
+    let response = dimmed(ui, idle, |ui| {
+        ui.add(
+            egui::DragValue::new(&mut l)
+                .range(lo..=hi)
+                .speed((hi - lo) / 200.0)
+                .custom_formatter(|l, _| format!("{:.*}", decimals, l.exp2()))
+                .custom_parser(|text| {
+                    text.trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|v| *v > 0.0)
+                        .map(f64::log2)
+                }),
+        )
+    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &name));
+    response
+        .changed()
+        .then(|| l.exp2().clamp(*range.start(), *range.end()))
+}
 
 /// A field's value, its control for `no_effect`, the setting it sends, and
 /// its name.
@@ -733,20 +838,61 @@ fn dimmed_click(
     .inner
 }
 
-/// Voice `i`'s header: on, its name, Ping and Solo; the loop it reads; its
-/// window.
+/// Voice `i`'s header: the loop it reads; where it lies in its file; fold,
+/// on, its name, Ping, Mute and Solo; and unless folded, its buttons.
+#[allow(clippy::too_many_arguments)]
 fn voice_head(
     ui: &mut egui::Ui,
     model: &Model,
     state: &TapeState,
     e: Extent,
     i: usize,
+    folded: bool,
+    layout: Layout,
     tab: &mut State,
     actions: &mut Vec<Action>,
 ) {
     let loaded = model.deck().loaded().is_some();
-    picker(ui, model, state, i, tab, actions);
-    ui.add_enabled_ui(loaded, |ui| voice_controls(ui, state, e, i, actions));
+    picker(ui, model, state, i, folded, tab, actions);
+    let fold = ui
+        .add_enabled_ui(loaded, |ui| {
+            voice_controls(ui, state, e, i, folded, actions)
+        })
+        .inner;
+    if fold {
+        let mut layout = layout;
+        layout.folded[i] = Some(!folded);
+        tab.layout = Some(layout);
+    }
+}
+
+/// The chevron that folds a lane named `label`, `>` folded and `v` open;
+/// whether it was clicked. Two strokes, over egui's filled triangle, which
+/// read as too sharp.
+fn fold_toggle(ui: &mut egui::Ui, folded: bool, label: &str, tip: &str) -> bool {
+    let size = egui::vec2(10.0, ui.spacing().interact_size.y);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let response = response.on_hover_text(tip);
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, !folded, label));
+    let c = rect.center();
+    let (a, b) = (2.0, 4.0);
+    let points = match folded {
+        true => [
+            c + egui::vec2(-a, -b),
+            c + egui::vec2(a, 0.0),
+            c + egui::vec2(-a, b),
+        ],
+        false => [
+            c + egui::vec2(-b, -a),
+            c + egui::vec2(0.0, a),
+            c + egui::vec2(b, -a),
+        ],
+    };
+    let mut stroke = ui.style().interact(&response).fg_stroke;
+    stroke.width = 1.5;
+    ui.painter().add(egui::Shape::line(points.to_vec(), stroke));
+    response.clicked()
 }
 
 /// Voice `i`'s loop, as a list that loads another from the loop library,
@@ -756,6 +902,7 @@ fn picker(
     model: &Model,
     state: &TapeState,
     i: usize,
+    folded: bool,
     tab: &mut State,
     actions: &mut Vec<Action>,
 ) {
@@ -829,25 +976,37 @@ fn picker(
         .on_hover_text(&shown)
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &label));
     // Where the loop lies in its file, which tells apart loops of one track.
+    if folded {
+        return;
+    }
     let span = model.deck().voice_span(i).unwrap_or_default();
     ui.weak(span)
         .on_hover_text("where the loop lies in its source file");
 }
 
-/// Voice `i`'s on, name, Ping and Solo; Clear and Eject; for voice 4, Write.
+/// Voice `i`'s on, name, Ping, Mute and Solo; Clear, on the write loop, and
+/// Eject; for voice 4, Write.
 fn voice_controls(
     ui: &mut egui::Ui,
     state: &TapeState,
     e: Extent,
     i: usize,
+    folded: bool,
     actions: &mut Vec<Action>,
-) {
+) -> bool {
     let v = &state.voices[i];
     let n = i as u8 + 1;
     let name = format!("Voice {n}");
     let why = |c| no_effect(state, e, c).map(idle_text);
     let mut set = |s| actions.push(Action::Tape(T::Voice(n, s)));
+    let mut fold = false;
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let tip = match folded {
+            true => "show the lane's waveform and fields",
+            false => "fold the lane to its header and a strip",
+        };
+        fold = fold_toggle(ui, folded, &format!("{name} lane"), tip);
         let mut on = v.on;
         let tick = ui.checkbox(&mut on, "").on_hover_text("plays the voice");
         let label = format!("{name} on");
@@ -866,21 +1025,32 @@ fn voice_controls(
         if clicked {
             set(V::Ping(!v.ping));
         }
+        let mute = "silence the voice; its head and send go on";
+        let mute = why(C::Mute(i)).unwrap_or(mute);
+        let clicked = dimmed_click(ui, why(C::Mute(i)), |ui| {
+            toggle(ui, v.mute, "M", format!("{name} mute"), mute)
+        });
+        if clicked {
+            set(V::Mute(!v.mute));
+        }
         let solo = "hear only the soloed voices; what each sends is unchanged";
         if toggle(ui, v.solo, "S", format!("{name} solo"), solo) {
             set(V::Solo(!v.solo));
         }
     });
+    // Voice 4 keeps Write, which makes the write loop of an empty lane.
+    if folded && i != WRITER {
+        return fold;
+    }
     let has = !state.empty[i];
     let shared = !state.own[i];
     ui.horizontal(|ui| {
-        let clear = match (has, i == WRITER, shared) {
-            (false, ..) => "the voice is empty",
-            (true, true, _) => "silence the write loop, keeping its length; Reset restores it",
-            (true, false, false) => {
-                "silence this voice's loop, keeping its length; Reset restores it"
-            }
-            (true, false, true) => {
+        // Only the write loop is cleared; a loop of the voice's own would only be lost.
+        let clears = i == WRITER || shared;
+        let clear = match (has, i == WRITER) {
+            (false, _) => "the voice is empty",
+            (true, true) => "silence the write loop, keeping its length; Reset restores it",
+            (true, false) => {
                 "silence voice 4's loop, the write loop, keeping its length; Reset restores it"
             }
         };
@@ -890,7 +1060,8 @@ fn voice_controls(
             (true, false, false) => "drop this voice's loop; the voice is empty",
             (true, false, true) => "stop reading voice 4's loop; the voice is empty",
         };
-        for (text, tip, action) in [("Clear", clear, T::Clear(n)), ("Eject", eject, T::Eject(n))] {
+        let buttons = [("Clear", clear, T::Clear(n)), ("Eject", eject, T::Eject(n))];
+        for (text, tip, action) in buttons.into_iter().skip(usize::from(!clears)) {
             let button = ui
                 .add_enabled(has, egui::Button::new(text))
                 .on_hover_text(tip)
@@ -905,10 +1076,73 @@ fn voice_controls(
             write_toggle(ui, state, e, actions);
         }
     });
+    fold
 }
 
-/// Voice `i`'s controls, in a row under its waveform.
-fn voice_fields(
+/// Voice `i`'s main controls, in a row under its waveform, and the toggle
+/// that opens its drawer.
+fn main_fields(
+    ui: &mut egui::Ui,
+    state: &TapeState,
+    e: Extent,
+    i: usize,
+    layout: Layout,
+    tab: &mut State,
+    actions: &mut Vec<Action>,
+) {
+    let v = &state.voices[i];
+    let n = i as u8 + 1;
+    let name = format!("Voice {n}");
+    let why = |c| no_effect(state, e, c).map(idle_text);
+    let mut set = |s| actions.push(Action::Tape(T::Voice(n, s)));
+    let label = |heading: &str| format!("{name} {}", heading.to_lowercase());
+    ui.horizontal_top(|ui| {
+        fields(ui, ("tape voice", i), &MAIN_ROWS, |ui| {
+            let tip = MAIN_ROWS[0].1;
+            if let Some((a, b)) = window(ui, v.window, e, &name, tip, why(C::Window(i))) {
+                set(V::Window(a, b));
+            }
+            if let Some(x) = field(ui, v.rate, -4.0..=4.0, label("rate"), why(C::Rate(i))) {
+                set(V::Rate(x));
+            }
+            let unit: [Field<V>; 3] = [
+                (v.level, C::Level(i), V::Level, "level"),
+                (v.pan, C::Pan(i), V::Pan, "pan"),
+                (v.send, C::Send(i), V::Send, "send"),
+            ];
+            for (value, control, setting, heading) in unit {
+                let range = match heading {
+                    "pan" => -1.0..=1.0,
+                    _ => 0.0..=1.0,
+                };
+                if let Some(x) = field(ui, value, range, label(heading), why(control)) {
+                    set(setting(x));
+                }
+            }
+            ui.end_row();
+        });
+        // Level with the fields, under the headings.
+        ui.vertical(|ui| {
+            ui.weak("");
+            let open = layout.drawer[i];
+            let tip = match (open, i == WRITER) {
+                (true, _) => "hide the less-used fields",
+                (false, true) => {
+                    "show slew, wear, drive, filter and crossfade, and the write head's fields"
+                }
+                (false, false) => "show slew, wear, drive, filter and crossfade",
+            };
+            if toggle(ui, open, "More", label("drawer"), tip) {
+                let mut layout = layout;
+                layout.drawer[i] = !open;
+                tab.layout = Some(layout);
+            }
+        });
+    });
+}
+
+/// Voice `i`'s less-used controls, in its drawer.
+fn drawer_fields(
     ui: &mut egui::Ui,
     state: &TapeState,
     e: Extent,
@@ -921,56 +1155,57 @@ fn voice_fields(
     let why = |c| no_effect(state, e, c).map(idle_text);
     let mut set = |s| actions.push(Action::Tape(T::Voice(n, s)));
     let label = |heading: &str| format!("{name} {}", heading.to_lowercase());
-    fields(ui, ("tape voice", i), &VOICE_ROWS, |ui| {
-        let tip = VOICE_ROWS[0].1;
-        if let Some((a, b)) = window(ui, v.window, e, &name, tip, why(C::Window(i))) {
-            set(V::Window(a, b));
-        }
-        if let Some(x) = field(ui, v.rate, -4.0..=4.0, label("rate"), why(C::Rate(i))) {
-            set(V::Rate(x));
-        }
+    fields(ui, ("tape drawer", i), &DRAWER_ROWS, |ui| {
         let max = playr_looper::MAX_SLEW_MS;
         if let Some(x) = ms(ui, v.slew, max, label("slew"), why(C::Slew(i))) {
             set(V::Slew(x));
         }
-        let unit: [Field<V>; 6] = [
-            (v.level, C::Level(i), V::Level, "level"),
-            (v.pan, C::Pan(i), V::Pan, "pan"),
-            (v.send, C::Send(i), V::Send, "send"),
+        let unit: [Field<V>; 2] = [
             (v.wear, C::Wear(i), V::Wear, "wear"),
             (v.drive, C::Drive(i), V::Drive, "drive"),
-            (v.cutoff, C::Cutoff(i), V::Cutoff, "filter"),
         ];
         for (value, control, setting, heading) in unit {
-            let range = match heading {
-                "pan" => -1.0..=1.0,
-                _ => 0.0..=1.0,
-            };
-            if let Some(x) = field(ui, value, range, label(heading), why(control)) {
+            if let Some(x) = field(ui, value, 0.0..=1.0, label(heading), why(control)) {
                 set(setting(x));
             }
         }
-        let picked = ui
-            .horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                let mut picked = None;
-                for (f, text, what) in FILTERS {
-                    let clicked = dimmed_click(ui, why(C::Filter(i)), |ui| {
-                        let tip = why(C::Filter(i)).unwrap_or(what);
-                        toggle(ui, v.filter == f, text, format!("{name} {what}"), tip)
-                    });
-                    if clicked {
-                        picked = Some(f);
-                    }
-                }
-                picked
-            })
-            .inner;
-        if let Some(f) = picked {
-            set(V::Filter(f));
+        let (lo, hi) = playr_looper::FILTER_HZ;
+        let hz: [Field<V>; 3] = [
+            (v.high_pass, C::HighPass(i), V::HighPass, "high-pass"),
+            (v.low_pass, C::LowPass(i), V::LowPass, "low-pass"),
+            (v.bell_hz, C::BellHz(i), V::BellHz, "bell"),
+        ];
+        for (value, control, setting, heading) in hz {
+            if let Some(x) = log_field(ui, value, lo..=hi, 0, label(heading), why(control)) {
+                set(setting(x));
+            }
+        }
+        let db = playr_looper::BELL_DB;
+        let gain = field(
+            ui,
+            v.bell_gain,
+            -db..=db,
+            label("bell gain"),
+            why(C::BellGain(i)),
+        );
+        if let Some(x) = gain {
+            set(V::BellGain(x));
+        }
+        let (q0, q1) = playr_looper::BELL_Q;
+        if let Some(x) = log_field(ui, v.bell_q, q0..=q1, 2, label("bell q"), why(C::BellQ(i))) {
+            set(V::BellQ(x));
         }
         if let Some(x) = ms(ui, v.fade, 1000.0, label("fade"), why(C::Fade(i))) {
             set(V::Fade(x));
+        }
+        let sends: [Field<V>; 2] = [
+            (v.delay, C::DelaySend(i), V::Delay, "delay send"),
+            (v.reverb, C::ReverbSend(i), V::Reverb, "reverb send"),
+        ];
+        for (value, control, setting, heading) in sends {
+            if let Some(x) = field(ui, value, 0.0..=1.0, label(heading), why(control)) {
+                set(setting(x));
+            }
         }
         ui.end_row();
     });
@@ -1003,10 +1238,16 @@ fn write_fields(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut V
         if let Some((a, b)) = window(ui, state.write_window, e, "Write", tip, why(C::WriteWindow)) {
             actions.push(Action::Tape(T::WriteWindow(a, b)));
         }
-        let controls: [Field<T>; 3] = [
+        let controls: [Field<T>; 4] = [
             (state.feedback, C::Feedback, T::Feedback, "feedback"),
             (state.wear, C::WriteWear, T::Wear, "wear"),
             (state.thin, C::Thin, T::Thin, "thin"),
+            (
+                state.fx.print,
+                C::PrintFx,
+                |v| T::Fx(F::Print(v)),
+                "print fx",
+            ),
         ];
         for (value, control, action, heading) in controls {
             let name = format!("Write {heading}");
@@ -1016,4 +1257,214 @@ fn write_fields(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut V
         }
         ui.end_row();
     });
+}
+
+/// The delay's controls.
+const DELAY_ROWS: [(&str, &str); 7] = [
+    (
+        "Delay",
+        "the delay's model: clean repeats; ping-pong, each repeat crossing sides; or tape, with wow, flutter and saturation",
+    ),
+    ("Time", "the delay, in ms; setting it turns Sync off"),
+    (
+        "Sync",
+        "sets Time to a part of voice 1's window, and follows it",
+    ),
+    ("Feedback", "how much of each echo repeats"),
+    (
+        "Tone",
+        "a low-pass on the repeats, in Hz: each repeat darker; the first echo is not filtered",
+    ),
+    ("Wow", "the tape model's wow and flutter: the repeats drift in pitch"),
+    ("Return", "the delay's level in the mix"),
+];
+
+/// The reverb's controls.
+const REVERB_ROWS: [(&str, &str); 5] = [
+    (
+        "Reverb",
+        "the reverb's model: Freeverb; Zita, an 8-line FDN; JP, a modulated hall; or Plate, Dattorro's",
+    ),
+    ("Size", "the room's size; Freeverb and JP"),
+    ("Decay", "seconds for the tail to fall 60 dB; not Freeverb"),
+    ("Damp", "how much faster the highs decay"),
+    ("Return", "the reverb's level in the mix"),
+];
+
+/// A list of `table`'s models named `name`, showing `current`; the one
+/// picked.
+fn model_pick<M: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    table: &[(&'static str, M)],
+    current: M,
+    name: &str,
+    idle: Option<&str>,
+) -> Option<M> {
+    let mut picked = None;
+    let response = dimmed(ui, idle, |ui| {
+        egui::ComboBox::from_id_salt(name)
+            .selected_text(model_name(table, current))
+            .show_ui(ui, |ui| {
+                for (label, m) in table {
+                    if ui.selectable_label(*m == current, *label).clicked() {
+                        picked = Some(*m);
+                    }
+                }
+            })
+            .response
+    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, name));
+    picked
+}
+
+/// The FX lane: its header, and unfolded, the delay's and the reverb's rows.
+fn fx_lane(
+    ui: &mut egui::Ui,
+    state: &TapeState,
+    e: Extent,
+    layout: Layout,
+    tab: &mut State,
+    actions: &mut Vec<Action>,
+) {
+    let fx = &state.fx;
+    let why = |c| no_effect(state, e, c).map(idle_text);
+    let mut set = |f| actions.push(Action::Tape(T::Fx(f)));
+    let folded = !layout.fx;
+    lane(
+        ui,
+        &mut (),
+        |ui, _| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let tip = match folded {
+                    true => "show the delay and reverb every voice sends to",
+                    false => "fold the FX lane to its header",
+                };
+                if fold_toggle(ui, folded, "FX lane", tip) {
+                    let mut layout = layout;
+                    layout.fx = folded;
+                    tab.layout = Some(layout);
+                }
+                ui.strong("FX");
+            });
+        },
+        |ui, _| {
+            if folded {
+                let delay = model_name(&DELAY_MODELS, fx.delay_model);
+                let reverb = model_name(&REVERB_MODELS, fx.reverb_model);
+                ui.weak(format!(
+                    "delay {delay}, reverb {reverb}; sends in each voice's drawer"
+                ));
+                return;
+            }
+            fields(ui, "tape delay", &DELAY_ROWS, |ui| {
+                let idle = why(C::DelayModel);
+                if let Some(m) = model_pick(ui, &DELAY_MODELS, fx.delay_model, "Delay model", idle)
+                {
+                    set(F::DelayModel(m));
+                }
+                let max = playr_looper::DELAY_SECONDS * 1000.0;
+                if let Some(x) = ms(ui, fx.time, max, "Delay time".into(), why(C::Time)) {
+                    set(F::Time(x.max(playr_looper::DELAY_MIN * 1000.0)));
+                }
+                if let Some(d) = sync_pick(ui, fx.sync, why(C::Sync)) {
+                    set(F::Sync(d));
+                }
+                let fb = playr_looper::FEEDBACK_MAX;
+                let feedback = field(
+                    ui,
+                    fx.feedback,
+                    0.0..=fb,
+                    "Delay feedback".into(),
+                    why(C::DelayFeedback),
+                );
+                if let Some(x) = feedback {
+                    set(F::Feedback(x));
+                }
+                let (lo, hi) = playr_looper::TONE_HZ;
+                if let Some(x) =
+                    log_field(ui, fx.tone, lo..=hi, 0, "Delay tone".into(), why(C::Tone))
+                {
+                    set(F::Tone(x));
+                }
+                if let Some(x) = field(ui, fx.wow, 0.0..=1.0, "Delay wow".into(), why(C::Wow)) {
+                    set(F::Wow(x));
+                }
+                let ret = field(
+                    ui,
+                    fx.delay_return,
+                    0.0..=1.0,
+                    "Delay return".into(),
+                    why(C::DelayReturn),
+                );
+                if let Some(x) = ret {
+                    set(F::DelayReturn(x));
+                }
+                ui.end_row();
+            });
+            fields(ui, "tape reverb", &REVERB_ROWS, |ui| {
+                let idle = why(C::ReverbModel);
+                if let Some(m) =
+                    model_pick(ui, &REVERB_MODELS, fx.reverb_model, "Reverb model", idle)
+                {
+                    set(F::ReverbModel(m));
+                }
+                if let Some(x) = field(ui, fx.size, 0.0..=1.0, "Reverb size".into(), why(C::Size)) {
+                    set(F::Size(x));
+                }
+                let (lo, hi) = playr_looper::DECAY_SECONDS;
+                if let Some(x) = log_field(
+                    ui,
+                    fx.decay,
+                    lo..=hi,
+                    1,
+                    "Reverb decay".into(),
+                    why(C::Decay),
+                ) {
+                    set(F::Decay(x));
+                }
+                if let Some(x) = field(ui, fx.damp, 0.0..=1.0, "Reverb damp".into(), why(C::Damp)) {
+                    set(F::Damp(x));
+                }
+                let ret = field(
+                    ui,
+                    fx.reverb_return,
+                    0.0..=1.0,
+                    "Reverb return".into(),
+                    why(C::ReverbReturn),
+                );
+                if let Some(x) = ret {
+                    set(F::ReverbReturn(x));
+                }
+                ui.end_row();
+            });
+        },
+    );
+}
+
+/// Sync's list: off, or a part of voice 1's window; the one picked.
+fn sync_pick(
+    ui: &mut egui::Ui,
+    current: Option<Division>,
+    idle: Option<&str>,
+) -> Option<Option<Division>> {
+    let mut picked = None;
+    let response = dimmed(ui, idle, |ui| {
+        egui::ComboBox::from_id_salt("Delay sync")
+            .selected_text(current.map_or("off", Division::name))
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), "off").clicked() {
+                    picked = Some(None);
+                }
+                for d in Division::ALL {
+                    if ui.selectable_label(current == Some(d), d.name()).clicked() {
+                        picked = Some(Some(d));
+                    }
+                }
+            })
+            .response
+    });
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Delay sync"));
+    picked
 }

@@ -7,8 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Ramps, filters and interpolation shared by playr's looper and DJ decks"
-keywords = ["audio", "dsp", "filter"]
+description = "Ramps, filters, interpolation and send effects shared by playr's looper and DJ decks"
+keywords = ["audio", "dsp", "filter", "reverb", "delay"]
 categories = ["multimedia::audio"]
 
 [dependencies]

@@ -27,6 +27,8 @@ pub struct Values {
     pub sort: Vec<SortKey>,
     /// `:` command lines, oldest first.
     pub history: Vec<String>,
+    /// The tape to offer at the next start.
+    pub tape: Option<crate::tape::SavedTape>,
 }
 
 /// The key `p` is stored under. Columns and sort are kept for each program,
@@ -58,6 +60,7 @@ pub fn encode(p: Persist, values: &Values) -> String {
         Persist::Sort => names(values.sort.iter().map(|k| k.text()).collect()),
         // A command line is one line, so a newline cannot occur in one.
         Persist::History => values.history.join("\n"),
+        Persist::Tape => values.tape.as_ref().map_or(String::new(), |t| t.encode()),
     }
 }
 
@@ -126,6 +129,7 @@ pub fn decode(p: Persist, text: &str, values: &mut Values) {
                 values.sort = sort;
             }
         }
+        Persist::Tape => values.tape = crate::tape::SavedTape::decode(text),
         Persist::History => {
             values.history = text
                 .lines()

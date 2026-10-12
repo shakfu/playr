@@ -1638,33 +1638,86 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
     let mut harness = smallest(dir.path(), "1", false);
     harness.get_by_label("Tape").click();
     harness.run_steps(2);
+    // With no tape, every lane is empty, so folded to its header and a strip;
+    // voice 4 keeps Write, which makes the write loop.
     for label in [
         "Voice 1 waveform",
-        "Voice 3 waveform",
         "Voice 4 waveform",
-        "Voice 4 clear",
-        "Voice 4 rate",
-        "Voice 1 rate",
-        "Voice 3 end",
-        "Voice 3 wear",
-        "Write wear",
-        "Write end",
+        "Voice 2 lane",
         "Voice 2 on",
-        "Voice 3 fade",
-        "Write on",
-        "Voice 2 ping",
+        "Voice 3 mute",
         "Voice 3 solo",
-        "Voice 1 slew",
-        "Voice 3 drive",
-        "Voice 3 filter",
-        "Voice 3 band-pass",
-        "Write thin",
-        "Voice 1 clear",
-        "Voice 3 eject",
+        "Voice 1 loop",
+        "Write on",
+        "Voice 4 eject",
     ] {
         harness.get_by_label(label);
     }
-    assert_fits(&harness, window, "the Tape tab");
+    for label in ["Voice 1 rate", "Voice 2 eject", "Voice 4 drawer"] {
+        assert!(harness.query_by_label(label).is_none(), "{label} folded");
+    }
+    assert_fits(&harness, window, "the Tape tab, folded");
+    // A folded header's two rows fit beside its strip, which the layout
+    // counts as a constant.
+    let rect = |label: &str| harness.get_by_label(label).rect();
+    for n in 1..=3 {
+        let (head, on, strip) = (
+            rect(&format!("Voice {n} loop")),
+            rect(&format!("Voice {n} on")),
+            rect(&format!("Voice {n} waveform")),
+        );
+        assert!(
+            head.top() >= strip.top() - 1.0 && on.bottom() <= strip.bottom() + 1.0,
+            "voice {n}: {head:?} {on:?} {strip:?}"
+        );
+    }
+
+    // Every lane open, drawers shut: the main row of each fits.
+    let mut layout = playr_app::tape::Layout {
+        folded: [Some(false); 4],
+        ..Default::default()
+    };
+    harness.state_mut().model_mut().set_tape_layout(layout);
+    harness.run_steps(2);
+    for label in [
+        "Voice 4 rate",
+        "Voice 1 rate",
+        "Voice 3 end",
+        "Voice 2 pan",
+        "Voice 1 send",
+        "Voice 3 drawer",
+        "Voice 1 clear",
+        "Voice 3 eject",
+        "Voice 2 ping",
+    ] {
+        harness.get_by_label(label);
+    }
+    assert!(
+        harness.query_by_label("Voice 3 wear").is_none(),
+        "in the drawer"
+    );
+    assert_fits(&harness, window, "the Tape tab, open");
+
+    // Each drawer holds the rest; voice 4's, the write head's too.
+    layout.drawer = [true; 4];
+    harness.state_mut().model_mut().set_tape_layout(layout);
+    harness.run_steps(2);
+    for label in [
+        "Voice 3 wear",
+        "Voice 3 fade",
+        "Voice 1 slew",
+        "Voice 3 drive",
+        "Voice 3 high-pass",
+        "Voice 3 low-pass",
+        "Voice 3 bell",
+        "Voice 3 bell gain",
+        "Voice 3 bell q",
+        "Write wear",
+        "Write end",
+        "Write thin",
+    ] {
+        harness.get_by_label(label);
+    }
 
     // With no range set, Load range is refused as :tape load is.
     harness.get_by_label("Load range").click();
@@ -1715,12 +1768,9 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
     let rect = |h: &Harness<'_, Gui>, label: &str| h.get_by_label(label).rect();
     // Each lane draws its own loop across the same width.
     let wave = rect(&harness, "Voice 1 waveform");
-    let lane = |i: usize| {
-        rect(&harness, &format!("Voice {} waveform", i + 1))
-            .center()
-            .y
-    };
-    let (lane, wave_y) = ([lane(0), lane(1)], wave.center().y);
+    let lane =
+        |h: &Harness<'_, Gui>, i: usize| rect(h, &format!("Voice {} waveform", i + 1)).center().y;
+    let wave_y = wave.center().y;
     let top = rect(&harness, "Voice 4 waveform");
     assert_eq!((wave.left(), wave.width()), (top.left(), top.width()));
     // Numbered from the bottom, voice 4 on top.
@@ -1777,14 +1827,21 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
         harness.query_by_label("Voice 2 loop search").is_none(),
         "closed"
     );
+    // Lanes that are no longer empty open; voice 3 stays folded.
+    for (n, open) in [(4, true), (3, false), (2, true), (1, true)] {
+        let found = harness.query_by_label(&format!("Voice {n} rate")).is_some();
+        assert_eq!(found, open, "voice {n}");
+    }
+    let lanes = [lane(&harness, 0), lane(&harness, 1)];
+    let top = rect(&harness, "Voice 4 waveform");
 
     // Voice 2's waveform edits voice 2's window alone.
-    drag(&mut harness, lane[1], at(8000), at(20_000));
+    drag(&mut harness, lanes[1], at(8000), at(20_000));
     assert!(window(&harness, 1).start.abs_diff(20_000) <= 100);
-    drag(&mut harness, lane[1], at(40_000), at(36_000));
+    drag(&mut harness, lanes[1], at(40_000), at(36_000));
     assert!(window(&harness, 1).end.abs_diff(36_000) <= 100);
     assert_eq!(window(&harness, 0).end, 40_000, "voice 1 stays");
-    assert_eq!(lane[0], wave_y);
+    assert_eq!(lanes[0], lane(&harness, 0));
 
     // The write window's start, on the write loop; the voices' windows stay.
     // The band along voice 4's waveform, once Write has made its loop.
@@ -1798,31 +1855,49 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
     );
     assert!(window(&harness, 1).start.abs_diff(20_000) <= 100);
 
-    // The toggles by each name, and the filter's type.
-    for label in ["Voice 2 ping", "Voice 3 solo", "Voice 1 high-pass"] {
+    // The toggles by each name, and voice 1's drawer.
+    for label in [
+        "Voice 2 ping",
+        "Voice 3 solo",
+        "Voice 1 mute",
+        "Voice 1 drawer",
+    ] {
         harness.get_by_label(label).click();
         harness.run_steps(2);
     }
     let s = *harness.state().model().deck().state().unwrap();
-    assert!(s.voices[1].ping && s.voices[2].solo);
-    assert_eq!(s.voices[0].filter, playr_app::tape::Filter::High);
+    assert!(s.voices[1].ping && s.voices[2].solo && s.voices[0].mute);
+    // The header's toggles stay clear of the waveform beside them.
+    for i in 1..=4 {
+        let solo = rect(&harness, &format!("Voice {i} solo"));
+        let wave = rect(&harness, &format!("Voice {i} waveform"));
+        assert!(solo.right() <= wave.left(), "voice {i}: {solo:?} {wave:?}");
+    }
+    // The drawer's last field stays inside the window.
+    let fade = rect(&harness, "Voice 1 fade");
+    assert!(fade.right() <= 800.0, "{fade:?}");
 
     // Digits typed into a number field go to it, not to the keys that show
-    // a view by its number.
-    harness.get_by_label("Voice 1 slew").click();
-    harness.run_steps(2);
-    for c in "500".chars() {
-        harness.event(egui::Event::Text(c.to_string()));
-        harness.run_steps(1);
-    }
-    harness.key_press(egui::Key::Enter);
-    harness.run_steps(2);
-    assert!(
-        harness.query_by_label("Voice 1 waveform").is_some(),
-        "a digit left the Tape tab"
-    );
-    let slew = harness.state().model().deck().state().unwrap().voices[0].slew;
-    assert_eq!(slew, 500.0);
+    // a view by its number; a frequency is typed in Hz.
+    let mut typed = |label: &str, text: &str| {
+        harness.get_by_label(label).click();
+        harness.run_steps(2);
+        for c in text.chars() {
+            harness.event(egui::Event::Text(c.to_string()));
+            harness.run_steps(1);
+        }
+        harness.key_press(egui::Key::Enter);
+        harness.run_steps(2);
+        assert!(
+            harness.query_by_label("Voice 1 waveform").is_some(),
+            "a digit left the Tape tab"
+        );
+    };
+    typed("Voice 1 slew", "500");
+    typed("Voice 1 high-pass", "250");
+    let v = harness.state().model().deck().state().unwrap().voices[0];
+    assert_eq!(v.slew, 500.0);
+    assert!((v.high_pass - 250.0).abs() < 0.01, "{}", v.high_pass);
 
     // Clear on any lane; Eject only where there is something to eject.
     use playr_app::tape::{TapeAction as T, TapeMessage as M};

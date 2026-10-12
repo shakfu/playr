@@ -1,6 +1,6 @@
 # Tape machine v2: mute, bounce, sound design, effects, compact lanes, resume
 
-Status: decided 2026-10-12, not built. Follows `tape-lanes.md` ("Four lanes"). Decisions are listed at the end.
+Status: decided 2026-10-12. Steps 1 (Mute, Off, Clear), 2 (persist and resume), 3 (fold and drawer), 4 (per-lane EQ) and 5 on the tape (delay and reverb buses) built 2026-10-12, unreleased; 5 on the DJ decks and 6 not built. Follows `tape-lanes.md` ("Four lanes"). Decisions are listed at the end.
 
 ## Feedback
 
@@ -105,6 +105,8 @@ Off stops the head and DSP, as now. New: switching a voice back on puts its head
 
 Each lane gets a high-pass, a low-pass and one peaking bell (frequency, gain, Q), in series after Drive. They replace the single SVF and its LP/HP/BP toggle. Carving overlapping loops usually needs both cutoffs at once, and a bell to cut one resonance.
 
+Built on `playr_dsp::Svf`, which the voice filter and the DJ isolator already use: two instances for HP and LP, and a bell from its band output. Not Faust: `Voice::render` works one frame at a time, and a `compute(1, ...)` call per frame per voice adds call and loop overhead to three `Svf` ticks (not measured).
+
 That makes 5 fields per lane, against 2 now (Filter, Type). The field row has ~120 pt free (`tape-lanes.md`), so this needs section 6.
 
 Rejected:
@@ -143,11 +145,32 @@ Two shared send buses, one delay and one reverb, in `playr-dsp`, used by the tap
 
 - **Delay time:** the library has no BPM tags. On the tape, time can be a division of a voice's window length (window / n). The DJ engine uses ms, or the analysed BPM where one exists.
 
-- **Reverb:** a Dattorro plate or Freeverb in plain Rust. No new dependency; CLAP hosting stays deferred.
+- **Reverb:** the Faust library's Dattorro plate, `re.dattorro_rev_default`. See "Faust" below. CLAP hosting stays deferred.
 
 - **Per voice:** two send fields (Delay, Reverb), in the drawer (section 6).
 
 Write and Bounce record the returns. A Bounce takes them as part of the mix. Write adds them to the voices' sends, at a level set by one field, Print FX, in voice 4's write row. A voice reading the write loop and sending to an effect closes a loop: write loop, voice, effect, write head. Feedback below 1 and the write head's soft clip bound it.
+
+#### Faust
+
+The delay and reverb are written in Faust and compiled to Rust with `faust -lang rust`. The Faust libraries supply tested reverbs, fractional delay lines and parameter smoothing (`si.smoo`). A hand-written Dattorro plate is about 150 lines of delicate tuning.
+
+Checked with Faust 2.88 (`brew install faust`) on `re.dattorro_rev_default`:
+
+- **Output:** 365 lines, one struct with `init(sample_rate)`, `set_param` and `compute(count, inputs, outputs)`. No runtime dependency.
+- **No imports.** The file expects `F32`, `FaustFloat`, `ParamIndex`, `UI`, `Meta` and the `FaustDsp` trait from the module that includes it. A shim module in `playr-dsp` provides them, rather than the `faust-types` crate.
+- **Fixed buffers.** Delay lines are arrays in the struct, 128 to 8192 floats each. The struct is boxed and built off the audio thread, as loops are.
+- **Licence per function.** The Dattorro reverb is `LicenseRef-STK-4.3`, which is permissive; `re.vital_rev` is `GPL-3.0-only`. Each `.dsp` is checked against the licences its functions declare in the generated `metadata`.
+
+Layout:
+
+- `crates/playr-dsp/faust/*.dsp`: the sources, reviewed as code.
+- `crates/playr-dsp/src/faust/*.rs`: the generated Rust, committed, never edited by hand.
+- `make faust`: regenerates the `.rs` files. Normal builds and CI do not need Faust.
+
+Committed output over a `build.rs` that runs Faust: a `build.rs` makes every build and contributor depend on the Faust compiler.
+
+Faust's `compute` works on blocks. The buses fit this: voices sum their sends per frame into a block buffer, and each bus processes it once per callback. The per-lane EQ does not (section 4a).
 
 ### 6. Compact lanes
 
@@ -218,6 +241,20 @@ Rejected: one combined prompt. The two are independent; a user may want the tape
 
 A `tape` name for the `persist` setting (`crates/playr-core/src/settings.toml`). Without it, nothing is saved or asked.
 
+## Where the build departs
+
+- **Mute is an M toggle beside S**, not a button in Clear's slot. In Clear's slot, voice 4 and lanes sharing the write loop, which keep Clear, would have had no Mute.
+- **Clear on a voice's own loop is refused** from the command line too, with `TapeMessage::OwnLoop`.
+- **On while still fading out** (within the 20 ms gate ramp) crossfades the head to its start, over Xfade, instead of stepping.
+- **The tape is saved as a `persist` value**, `tape`, so it is saved 0.5 s after any change, on quit and on a window close, not only on quit and source changes. The text is a row per line; paths are kept, not loop ids, so a loop removed from the loop library still resumes from its file.
+- **A tape not yet answered for is saved as it was** until the question is answered, so a close before an answer keeps it.
+- **A resumed tape that was playing does not pause the player**, where Play does. With both questions answered yes, both play.
+- **Windows kept at another rate are scaled** to the device's rate and cut to their loops.
+- **A folded voice 4 keeps its button row.** Write makes the write loop of an empty voice 4, so it cannot fold away.
+- **Lanes fold by a triangle** at the start of the header's toggle row; **More** at the end of the main row opens the drawer.
+- **The EQ is in Hz and dB**, not 0 to 1, with frequencies and Q dragged on a log scale. The bell's Q is scaled by its amplitude, so a cut mirrors a boost. Commands: `hp`, `lp`, `bell`, `bell-gain`, `bell-q`; `filter` is refused with a pointer to them.
+- **The layout is in `Deck`**, not GUI state, so the saved tape carries it. An empty lane folds by default only while not folded or unfolded by hand.
+
 ## Order
 
 1. Mute, Off returning to start, Clear on the write loop only. Mute reuses the solo gain.
@@ -228,7 +265,7 @@ A `tape` name for the `persist` setting (`crates/playr-core/src/settings.toml`).
 
 4. Per-lane HP, LP and bell.
 
-5. Delay and reverb buses in `playr-dsp`, tape first, then DJ. Gets its own design note.
+5. Delay and reverb buses in `playr-dsp`, from Faust, tape first, then DJ. Design in `fx-buses.md`.
 
 6. Bounce (a), then (b).
 
@@ -251,3 +288,5 @@ A `tape` name for the `persist` setting (`crates/playr-core/src/settings.toml`).
 8. Persist: playback tracks' settings and sources, not the write loop's audio. Voice 4 after a print resumes as a silent write loop.
 
 9. The tape gets its own prompt whenever it was saved, playing or stopped; it follows the player's.
+
+10. Faust output is committed and includes a shim module in `playr-dsp` for the types it expects, not the `faust-types` crate.

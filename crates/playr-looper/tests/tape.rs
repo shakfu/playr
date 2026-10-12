@@ -1,6 +1,6 @@
 //! The DSP, driven offline: the tests listed in `docs/dev/looper-engine.md`.
 
-use playr_looper::{Filter, Loop, Setting, Tape, Window, TAPE};
+use playr_looper::{DelayModel, DelayParam, Loop, ReverbModel, Setting, Tape, Window, TAPE};
 
 const SR: u32 = 48_000;
 
@@ -650,27 +650,65 @@ fn drive_lifts_quiet_material_and_holds_loud_material_down() {
     assert!(peak(0.9) <= 0.25);
 }
 
+/// What voice 1 passes of a sine at `hz`, set as `settings`, as a ratio.
+fn gain_at(hz: f32, settings: &[Setting]) -> f32 {
+    let src = sine(48_000, hz, 0.25);
+    let mut t = tape(src.clone(), 1, settings);
+    let out = left(&run(&mut t, 48_000));
+    rms(&out[4800..]) / rms(&src[4800..])
+}
+
 #[test]
-fn the_filter_passes_its_band_and_cuts_the_rest() {
-    // Cutoff 0.5 is 632 Hz; 100 Hz is 2.7 octaves below, 5 kHz 3 above.
-    let gain = |kind: Filter, hz: f32| {
-        let src = sine(48_000, hz, 0.5);
-        let mut t = tape(
-            src.clone(),
-            1,
-            &[Setting::Cutoff(0, 0.5), Setting::Filter(0, kind)],
-        );
-        let out = left(&run(&mut t, 48_000));
-        rms(&out[4800..]) / rms(&src[4800..])
+fn the_high_pass_and_low_pass_cut_either_side_of_their_cutoffs() {
+    let hp = [Setting::HighPass(0, 632.0)];
+    let lp = [Setting::LowPass(0, 632.0)];
+    // 100 Hz is 2.7 octaves below 632 Hz, 5 kHz 3 above: about 0.025 and 0.016.
+    assert!(gain_at(100.0, &hp) < 0.03);
+    assert!(gain_at(5000.0, &hp) > 0.95);
+    assert!(gain_at(100.0, &lp) > 0.95);
+    assert!(gain_at(5000.0, &lp) < 0.03);
+    // Together they pass the band between: 200 Hz to 2 kHz.
+    let band = [Setting::HighPass(0, 200.0), Setting::LowPass(0, 2000.0)];
+    assert!(gain_at(632.0, &band) > 0.9);
+    assert!(gain_at(50.0, &band) < 0.1);
+    assert!(gain_at(10_000.0, &band) < 0.1);
+}
+
+#[test]
+fn the_bell_boosts_and_cuts_its_band_and_leaves_the_rest() {
+    let bell = |db: f32, q: f32| {
+        [
+            Setting::BellHz(0, 1000.0),
+            Setting::BellGain(0, db),
+            Setting::BellQ(0, q),
+        ]
     };
-    assert!(gain(Filter::Low, 100.0) > 0.95);
-    assert!(gain(Filter::Low, 5000.0) < 0.03);
-    assert!(gain(Filter::High, 100.0) < 0.03);
-    assert!(gain(Filter::High, 5000.0) > 0.95);
-    assert!(gain(Filter::Band, 632.0) > 0.95);
-    // Butterworth damping makes the band wide: about 0.22 and 0.18 here.
-    assert!(gain(Filter::Band, 100.0) < 0.25);
-    assert!(gain(Filter::Band, 5000.0) < 0.25);
+    let db = |g: f32| 20.0 * g.log10();
+    for want in [-12.0, 6.0, 12.0] {
+        let got = db(gain_at(1000.0, &bell(want, 2.0)));
+        assert!((got - want).abs() < 0.3, "{want} dB: {got}");
+        // Three octaves off, at Q 2, it is within half a dB of flat.
+        assert!(db(gain_at(125.0, &bell(want, 2.0))).abs() < 0.5);
+        assert!(db(gain_at(8000.0, &bell(want, 2.0))).abs() < 0.5);
+    }
+    // A narrower Q leaves more of an octave away alone.
+    let wide = db(gain_at(500.0, &bell(12.0, 0.5)));
+    let narrow = db(gain_at(500.0, &bell(12.0, 4.0)));
+    assert!(wide > narrow + 3.0, "{wide} {narrow}");
+}
+
+#[test]
+fn an_eq_at_its_defaults_passes_the_input_exactly() {
+    let src = noise(4800, 0.5);
+    let set = [
+        Setting::HighPass(0, 20.0),
+        Setting::LowPass(0, 20_000.0),
+        Setting::BellHz(0, 300.0),
+        Setting::BellQ(0, 5.0),
+        Setting::BellGain(0, 0.0),
+    ];
+    let mut t = tape(src.clone(), 1, &set);
+    assert_eq!(left(&run(&mut t, 4800)), src);
 }
 
 #[test]
@@ -690,6 +728,76 @@ fn solo_changes_what_is_heard_not_what_is_sent() {
     muted.set(Setting::Level(0, 0.0));
     assert_eq!(run(&mut soloed, 4800 * 3), run(&mut muted, 4800 * 3));
     assert_eq!(buffer(&soloed), buffer(&muted));
+}
+
+#[test]
+fn mute_changes_what_is_heard_not_what_is_sent() {
+    let src = noise(4800, 0.5);
+    let settings = [
+        Setting::Write(true),
+        Setting::Feedback(0.5),
+        Setting::Send(0, 0.5),
+        Setting::On(1, true),
+        Setting::Rate(1, -1.0),
+        Setting::Send(1, 0.3),
+    ];
+    let mut muted = tape(src.clone(), 1, &settings);
+    muted.set(Setting::Mute(0, true));
+    let mut silent = tape(src, 1, &settings);
+    silent.set(Setting::Level(0, 0.0));
+    assert_eq!(run(&mut muted, 4800 * 3), run(&mut silent, 4800 * 3));
+    assert_eq!(buffer(&muted), buffer(&silent));
+    // The head goes on while muted.
+    assert_eq!(muted.voice(0), silent.voice(0));
+}
+
+#[test]
+fn a_muted_voice_stays_silent_under_solo_and_unmutes() {
+    let src = noise(1000, 0.5);
+    let mut t = tape(
+        src.clone(),
+        1,
+        &[Setting::Mute(0, true), Setting::Solo(0, true)],
+    );
+    assert!(run(&mut t, 1000).iter().all(|&s| s == 0.0));
+    t.set(Setting::Mute(0, false));
+    // Past the 20 ms ramp, the voice is heard again.
+    run(&mut t, 1000);
+    assert_eq!(left(&run(&mut t, 1000)), src);
+}
+
+#[test]
+fn off_holds_the_head_and_on_returns_it_to_the_window_s_start() {
+    let w = Window::new(100, 600);
+    let mut t = tape(noise(1000, 0.5), 1, &[Setting::Window(0, w)]);
+    run(&mut t, 50);
+    t.set(Setting::On(0, false));
+    run(&mut t, 1000);
+    let held = t.voice(0);
+    run(&mut t, 1000);
+    assert_eq!(t.voice(0), held);
+    t.set(Setting::On(0, true));
+    assert_eq!(t.voice(0), 100.0);
+
+    // In reverse, at the window's last frame.
+    t.set(Setting::Rate(0, -1.0));
+    t.set(Setting::On(0, false));
+    run(&mut t, 1000);
+    t.set(Setting::On(0, true));
+    assert_eq!(t.voice(0), 599.0);
+}
+
+#[test]
+fn on_while_still_fading_out_crossfades_to_the_start() {
+    let src = sine(4800, 440.0, 0.5);
+    let mut t = tape(src, 1, &[Setting::Fade(0, 10.0)]);
+    run(&mut t, 1000);
+    t.set(Setting::On(0, false));
+    run(&mut t, 100);
+    t.set(Setting::On(0, true));
+    let out = left(&run(&mut t, 1000));
+    // A 440 Hz sine at 0.5 steps by at most ~0.029 a frame at 48 kHz.
+    assert!(max_step(&out) < 0.05, "{}", max_step(&out));
 }
 
 #[test]
@@ -733,23 +841,25 @@ fn thin_leaving_and_reaching_0_writes_no_step() {
 }
 
 #[test]
-fn the_voice_filter_leaving_its_ends_or_changing_kind_does_not_step() {
+fn the_voice_eq_leaving_its_ends_or_jumping_does_not_step() {
     for (from, to) in [
-        // High at 0 and low at 1 pass the input unchanged.
+        // A high-pass at 20 Hz and a low-pass at 20 kHz pass the input unchanged.
         (
-            [Setting::Filter(0, Filter::High), Setting::Cutoff(0, 0.0)],
-            [Setting::Cutoff(0, 0.001), Setting::Cutoff(0, 0.001)],
+            [Setting::HighPass(0, 20.0), Setting::HighPass(0, 20.0)],
+            [Setting::HighPass(0, 21.0), Setting::HighPass(0, 21.0)],
         ),
         (
-            [Setting::Filter(0, Filter::Low), Setting::Cutoff(0, 1.0)],
-            [Setting::Cutoff(0, 0.999), Setting::Cutoff(0, 0.999)],
+            [Setting::LowPass(0, 20_000.0), Setting::LowPass(0, 20_000.0)],
+            [Setting::LowPass(0, 19_000.0), Setting::LowPass(0, 19_000.0)],
+        ),
+        // Jumps across the range, which ramp on a log scale.
+        (
+            [Setting::LowPass(0, 20_000.0), Setting::HighPass(0, 20.0)],
+            [Setting::LowPass(0, 200.0), Setting::HighPass(0, 150.0)],
         ),
         (
-            [Setting::Filter(0, Filter::Low), Setting::Cutoff(0, 0.3)],
-            [
-                Setting::Filter(0, Filter::High),
-                Setting::Filter(0, Filter::Band),
-            ],
+            [Setting::BellHz(0, 100.0), Setting::BellGain(0, 0.0)],
+            [Setting::BellGain(0, -18.0), Setting::BellHz(0, 5000.0)],
         ),
     ] {
         let mut t = tape(low_sine(), 1, &from);
@@ -989,4 +1099,136 @@ fn an_empty_voice_takes_any_setting_while_playing() {
     t.set(Setting::Rate(1, 2.0));
     let out = left(&run(&mut t, 200));
     assert!(out.iter().all(|s| s.is_finite()));
+}
+
+/// A click at frame 0 of a silent mono loop, played once.
+fn click(frames: usize) -> Vec<f32> {
+    let mut x = vec![0.0; frames];
+    x[0] = 0.5;
+    x
+}
+
+/// The delay at 10 ms, one echo, no tone, and voice 0 sending all to it.
+fn echoing(settings: &[Setting]) -> Tape {
+    let mut all = vec![
+        Setting::Fade(0, 0.0),
+        Setting::Delay(DelayParam::Time, 0.01),
+        Setting::Delay(DelayParam::Feedback, 0.0),
+        Setting::Delay(DelayParam::Tone, 20_000.0),
+        Setting::DelaySend(0, 1.0),
+    ];
+    all.extend_from_slice(settings);
+    tape(click(SR as usize), 1, &all)
+}
+
+#[test]
+fn a_voice_s_delay_send_returns_its_echo_into_the_mix() {
+    let mut t = echoing(&[]);
+    let out = left(&run(&mut t, 1000));
+    assert_eq!(out[0], 0.5, "the dry click");
+    // The click, panned centre, is heard at 0.5 on the left; the echo
+    // 480 frames later, at the same level with return 1.
+    assert!((out[480] - 0.5).abs() < 1e-3, "echo {}", out[480]);
+    assert!(out[1..479].iter().all(|x| x.abs() < 1e-6));
+
+    let mut half = echoing(&[Setting::DelayReturn(0.5)]);
+    let out = left(&run(&mut half, 1000));
+    assert!(
+        (out[480] - 0.25).abs() < 1e-3,
+        "echo at return 0.5: {}",
+        out[480]
+    );
+}
+
+#[test]
+fn a_muted_voice_reaches_no_effect() {
+    let mut t = echoing(&[Setting::Mute(0, true), Setting::ReverbSend(0, 1.0)]);
+    assert!(run(&mut t, SR as usize / 2).iter().all(|x| *x == 0.0));
+}
+
+#[test]
+fn level_scales_the_echo_with_the_voice() {
+    let mut t = echoing(&[Setting::Level(0, 0.5)]);
+    let out = left(&run(&mut t, 1000));
+    assert!((out[480] - 0.25).abs() < 1e-3, "echo {}", out[480]);
+}
+
+#[test]
+fn every_model_returns_through_the_tape() {
+    for model in DelayModel::ALL {
+        let mut t = echoing(&[
+            Setting::DelayModel(model),
+            Setting::Delay(DelayParam::Wow, 0.0),
+        ]);
+        let out = left(&run(&mut t, 1000));
+        assert!(out[478..483].iter().any(|x| x.abs() > 0.1), "{model:?}");
+    }
+    for model in ReverbModel::ALL {
+        let mut t = tape(
+            click(SR as usize),
+            1,
+            &[Setting::ReverbModel(model), Setting::ReverbSend(0, 1.0)],
+        );
+        let out = left(&run(&mut t, SR as usize / 2));
+        let tail: f32 = out[2400..].iter().map(|x| x * x).sum();
+        assert!(tail > 1e-6, "{model:?} tail {tail}");
+    }
+}
+
+#[test]
+fn print_fx_0_writes_the_loop_as_without_effects() {
+    let src = noise(9600, 0.5);
+    let write = [
+        Setting::Write(true),
+        Setting::Send(0, 0.7),
+        Setting::Feedback(0.5),
+    ];
+    let mut dry = tape(src.clone(), 1, &write);
+    let mut wet = tape(src, 1, &write);
+    wet.set(Setting::DelaySend(0, 1.0));
+    wet.set(Setting::ReverbSend(0, 1.0));
+    run(&mut dry, 20_000);
+    run(&mut wet, 20_000);
+    assert_eq!(buffer(&dry), buffer(&wet));
+}
+
+#[test]
+fn print_fx_writes_the_returns_into_the_loop() {
+    // A click, written over with no feedback and no voice send: only the
+    // printed echo reaches the loop, 10 ms after the click.
+    let mut t = echoing(&[
+        Setting::Write(true),
+        Setting::Feedback(0.0),
+        Setting::PrintFx(1.0),
+        Setting::Knee(0.9),
+    ]);
+    run(&mut t, 1000);
+    let b = buffer(&t);
+    assert!(b[0].abs() < 1e-3, "the click was written over: {}", b[0]);
+    // The echo, centre-panned left and right summed to mono, passes the DC
+    // blocker at nearly 0.5.
+    assert!(b[480] > 0.4, "printed echo {}", b[480]);
+}
+
+#[test]
+fn a_bus_with_no_input_goes_idle_and_the_tape_is_exact_again() {
+    let src = noise(SR as usize, 0.5);
+    let mut dry = tape(src.clone(), 1, &[]);
+    let mut wet = tape(
+        src,
+        1,
+        &[
+            Setting::ReverbSend(0, 1.0),
+            Setting::DelaySend(0, 1.0),
+            Setting::Delay(DelayParam::Feedback, 0.0),
+        ],
+    );
+    run(&mut dry, 4800);
+    run(&mut wet, 4800);
+    wet.set(Setting::ReverbSend(0, 0.0));
+    wet.set(Setting::DelaySend(0, 0.0));
+    // The reverb's 2 s tail falls below -120 dB, then 1 s of quiet.
+    run(&mut dry, 6 * SR as usize);
+    run(&mut wet, 6 * SR as usize);
+    assert_eq!(run(&mut dry, 4800), run(&mut wet, 4800));
 }

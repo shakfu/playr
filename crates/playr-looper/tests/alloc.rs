@@ -4,7 +4,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use playr_looper::{Filter, Loop, Returned, Setting, Window};
+use playr_looper::{DelayModel, DelayParam, Loop, Returned, ReverbModel, Setting, Window};
 
 struct Counting;
 
@@ -67,10 +67,14 @@ fn the_callback_neither_allocates_nor_frees() {
         Setting::Wear(0.3),
         Setting::Send(0, 0.8),
         Setting::Drive(0, 0.5),
-        Setting::Filter(0, Filter::Band),
+        Setting::HighPass(0, 200.0),
+        Setting::BellGain(0, 6.0),
         Setting::On(1, true),
         Setting::Rate(1, -1.3),
         Setting::Ping(1, true),
+        Setting::DelaySend(0, 0.5),
+        Setting::ReverbSend(1, 0.5),
+        Setting::PrintFx(0.5),
     ] {
         h.set(s).unwrap();
     }
@@ -84,7 +88,11 @@ fn the_callback_neither_allocates_nor_frees() {
     h.clear(1).unwrap();
     h.clear(playr_looper::TAPE).unwrap();
     h.unload(1).unwrap();
-    h.set(Setting::Cutoff(0, 0.2)).unwrap();
+    h.set(Setting::LowPass(0, 800.0)).unwrap();
+    h.set(Setting::BellQ(0, 4.0)).unwrap();
+    h.set(Setting::DelayModel(DelayModel::Tape)).unwrap();
+    h.set(Setting::Delay(DelayParam::Time, 0.05)).unwrap();
+    h.set(Setting::ReverbModel(ReverbModel::Jp)).unwrap();
     let n = counted(|| {
         for _ in 0..400 {
             l.process(&mut out);

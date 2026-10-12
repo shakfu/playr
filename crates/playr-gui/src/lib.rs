@@ -537,6 +537,9 @@ impl Gui {
                 for action in tape::show(&self.model, ui, &mut self.tape_tab) {
                     self.perform(action);
                 }
+                if let Some(layout) = self.tape_tab.take_layout() {
+                    self.model.set_tape_layout(layout);
+                }
                 None
             }
             View::Dj => {

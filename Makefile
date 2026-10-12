@@ -5,7 +5,7 @@ UNAME := $(shell uname -s)
 EXE := $(if $(filter Windows_NT,$(OS)),.exe)
 DIAGRAMS := $(patsubst %.d2,%.svg,$(wildcard docs/media/*.d2))
 
-.PHONY: all build release debug test test-devices fmt clippy run gui app clean install install-dev diagrams icons touchosc touchosc-test page-test install-service
+.PHONY: all build release debug test test-devices fmt clippy run gui app clean install install-dev diagrams icons touchosc touchosc-test page-test install-service faust
 
 all: build
 
@@ -58,6 +58,15 @@ page-test:
 # The desktop window; see docs/dev/gui.md.
 gui:
 	@cargo run --release -p playr-gui
+
+# The effects' Rust, from crates/playr-dsp/faust; needs faust. The generated
+# files are committed, so builds do not. One-sample code (-os -ec): the tape
+# renders a frame at a time.
+faust:
+	@for f in crates/playr-dsp/faust/*.dsp; do \
+		faust -lang rust -os -ec -it -rnt -ftz 1 -cn Dsp $$f \
+			-o crates/playr-dsp/src/faust/gen/$$(basename $$f .dsp).rs || exit 1; \
+	done
 
 # The desktop window as target/dist/playr.app; macOS only.
 app: release

@@ -129,10 +129,13 @@ pub enum Persist {
     History,
     /// The mixer's faders and mutes, but the master's level, which is `Volume`.
     Mix,
+    /// The tape's voices: their settings and the loops they read, offered at
+    /// the next start.
+    Tape,
 }
 
 impl Persist {
-    pub const NAMES: [(&'static str, Persist); 9] = [
+    pub const NAMES: [(&'static str, Persist); 10] = [
         ("eq", Persist::Eq),
         ("volume", Persist::Volume),
         ("mode", Persist::Mode),
@@ -142,6 +145,7 @@ impl Persist {
         ("sort", Persist::Sort),
         ("history", Persist::History),
         ("mix", Persist::Mix),
+        ("tape", Persist::Tape),
     ];
 
     pub fn name(self) -> &'static str {

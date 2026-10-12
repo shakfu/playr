@@ -28,7 +28,7 @@ From top to bottom:
 
 1. **Buttons.** Load range, Play tape, Stop tape, Reset, Record, Save loop.
 
-2. **A lane per voice**, numbered from the bottom: voice 1 at the bottom, voice 4 on top. On the left: the loop it reads, with where it lies in its file; on, the voice's name, **Ping**, **S** for solo; **Clear** and **Eject**, and in voice 4's lane, **Write**. On the right, its loop. The waveforms take the height the controls leave: about 40 points in the smallest window, more in a taller one.
+2. **A lane per voice**, numbered from the bottom: voice 1 at the bottom, voice 4 on top. On the left: the loop it reads, with where it lies in its file; a chevron that folds the lane, on, the voice's name, **Ping**, **M** for mute, **S** for solo; **Eject**, **Clear** on lanes that play the write loop, and in voice 4's lane, **Write**. On the right, its loop. The waveforms take the height the controls leave: about 40 points in the smallest window, more in a taller one.
 
    - The voice's window shaded, its edges marked, and its head as a line. The pre-roll and post-roll are dimmed.
 
@@ -38,7 +38,9 @@ From top to bottom:
 
    - On a lane reading the write loop, the write head as a line, and what the write head cannot change tinted and hatched: everything outside the write window, or all of it while writing is off. Such a lane is redrawn as the write head changes the loop.
 
-   Under the loop, the voice's controls in one row, its window first. Voice 4's lane has a second row for the write head: its window, Feedback, Print wear and Print thin.
+   Under the loop, the voice's main controls in one row: Window, Rate, Level, Pan and Send. **More** opens the lane's drawer, a second row with Slew, Wear, Drive, the EQ (HP, LP, Bell, dB, Q) and Xfade. Voice 4's drawer has a third row for the write head: its window, Feedback, Print wear and Print thin.
+
+   **A folded lane** shows its loop, its header's first row and a strip of its waveform; voice 4 keeps Clear, Eject and Write. The chevron, `>` folded and `v` open, folds and unfolds a lane. An empty lane is folded until a loop is loaded into it, unless you unfold it. With `persist = ["tape"]`, folded lanes and open drawers are kept with the tape.
 
 ### Editing windows with the mouse
 
@@ -52,7 +54,7 @@ A control that does nothing as the tape is set, such as a voice's Wear while its
 
 ## Voices
 
-Voice 1 is on when a loop loads; the others are off until a loop is loaded into them, and voice 4 also when Write makes its loop. A voice's lane has its on tick box, its name, **Ping** and **S** for solo, and these controls:
+Voice 1 is on when a loop loads; the others are off until a loop is loaded into them, and voice 4 also when Write makes its loop. A voice's lane has its on tick box, its name, **Ping**, **M** for mute and **S** for solo, and these controls:
 
 | row | range | default | does |
 |-|-|-|-|
@@ -64,11 +66,20 @@ Voice 1 is on when a loop loads; the others are off until a loop is loaded into 
 | Send | 0 to 1 | 0 | how much of the voice the write head records; apart from Level, so a voice can be recorded without being heard |
 | Wear | 0 to 1 | 0 | a low-pass on what the voice sends, so it darkens what it prints a little more each pass |
 | Drive | 0 to 1 | 0 | saturation on what the voice reads: quiet material up to 12 dB louder, loud material held down |
-| Filter | 0 to 1 | 1 | the filter's cutoff, 20 Hz to 20 kHz on a log scale |
-| Type | LP, HP, BP | LP | low-pass, high-pass or band-pass. A low-pass at 1 or a high-pass at 0 changes nothing |
+| HP | 20 Hz to 20 kHz | 20 Hz | a high-pass, cutting below it; off at 20 Hz |
+| LP | 20 Hz to 20 kHz | 20 kHz | a low-pass, cutting above it; off at 20 kHz |
+| Bell | 20 Hz to 20 kHz | 1 kHz | the centre of a peaking bell |
+| dB | -18 to 18 | 0 | the bell's boost or cut; flat at 0 |
+| Q | 0.1 to 10 | 1 | the bell's width: low is wide, high a narrow notch |
 | Xfade | 0 to 1000 ms | 10 | the crossfade at each wrap |
+| Delay | 0 to 1 | 0 | how much of the voice, as heard, goes to the delay |
+| Reverb | 0 to 1 | 0 | how much of the voice, as heard, goes to the reverb |
 
-Drive and the filter shape both what is heard and what is sent. Changes to the rows move over 20 ms, so a drag does not click; Rate moves over Slew.
+Turning a voice off stops its head and skips its processing; it sends nothing. Turning it on again starts the head at its window's start, or its end in reverse.
+
+The EQ runs high-pass, low-pass, then bell, after Drive, so it can take off the edge drive adds. HP and LP together pass the band between them. Frequencies and Q drag on a log scale, and a frequency can be typed in Hz. In the terminal: `:tape 2 hp 120`, `:tape 2 lp off`, `:tape 2 bell 800`, `:tape 2 bell-gain -6`, `:tape 2 bell-q 4`.
+
+Drive and the EQ shape both what is heard and what is sent. Changes to the rows move over 20 ms, so a drag does not click; Rate moves over Slew.
 
 In the terminal, a window takes a time from the range's start, `1.5`, or a part of the range, `25%`: `:tape 3 window 25% 75%`. Below 0% or past 100% reaches into the pre-roll or post-roll.
 
@@ -78,11 +89,13 @@ At the end of its window a voice wraps to the start, crossfading over Xfade. The
 
 **Ping** makes the voice turn at its window's edges and play back the other way instead, so nothing jumps and nothing crossfades.
 
-### Pan and solo
+### Pan, mute and solo
 
 On a stereo loop, pan keeps the near channel and folds the far one into it, so a hard pan keeps both channels' content. A mono loop pans with equal power.
 
-**Solo** on any voice silences the voices without it. What every voice sends to the write head is unchanged, so a soloed voice can be heard while the others go on printing into the loop.
+**Mute**, `:tape N mute on`, silences what is heard of the voice and dims its lane. Its head goes on, and what it sends to the write head is unchanged.
+
+**Solo** on any voice silences the voices without it. What every voice sends to the write head is unchanged, so a soloed voice can be heard while the others go on printing into the loop. A muted voice stays silent when soloed.
 
 ## A loop per voice
 
@@ -98,9 +111,7 @@ A loop is resampled to the tape's rate as it loads. Rates and starts are not mat
 
 ### Clear and Eject
 
-Each lane has two buttons:
-
-- **Clear**, `:tape N clear`, silences the loop the voice reads. Its length, the windows and the heads stay. A voice reading voice 4's loop clears it. **Reset** brings back the loop as loaded.
+- **Clear**, `:tape N clear`, silences the write loop. Its length, the windows and the heads stay. It is on voice 4's lane and on lanes that play voice 4's loop; a voice playing a loop of its own has none, since clearing a library loop or a range would only lose it. **Reset** brings back the loop as loaded.
 
 - **Eject**, `:tape N eject`, empties the voice: it reads nothing, and its lane says empty. Voice 4's Eject empties the voices reading its loop too, and turns Write off. Once every voice is empty, the tape is gone.
 
@@ -120,10 +131,48 @@ Every voice sends, whatever loop it reads.
 | Feedback | 0 to 1 | 1 | how much of the old content survives each pass; 0 replaces it with the sends |
 | Wear | 0 to 1 | 0 | a low-pass on everything recorded, so the loop darkens each pass |
 | Thin | 0 to 1 | 0 | a high-pass on everything recorded, 20 Hz to 2 kHz, so the loop thins each pass |
+| Print FX | 0 to 1 | 0 | how much of the delay and reverb the write head records with the sends |
 
 With Feedback at 1, Wear and Thin at 0, and every Send at 0, writing changes nothing. A soft clip keeps the loop within full scale when the sends and feedback add up past it. It leaves levels under `tape_knee` in `settings.toml`, -6 dBFS by default, untouched.
 
 The voices read before the write head writes, so on the next pass every voice reading the write loop reads what was printed: a reversed or half-speed print is played back at that voice's own rate.
+
+## Delay and reverb
+
+One delay and one reverb serve all four voices. Each voice's drawer has a **Delay** and a **Reverb** send. The sends take the voice after Level, Pan, Mute and Solo: a muted voice has no echo, and fading a voice fades its tail. The Send to the write head is different: it is taken before Level and goes on under Mute.
+
+The **FX** lane, above voice 4, holds the effects' controls. It is folded until opened with its chevron.
+
+| row | range | default | does |
+|-|-|-|-|
+| Delay | clean, ping-pong, tape | clean | the delay's model |
+| Time | 1 to 2000 ms | 375 | the delay; setting it turns Sync off |
+| Sync | off, 1/1 to 1/16 | off | sets Time to that part of voice 1's window, as voice 1 plays it, and follows it |
+| Feedback | 0 to 0.95 | 0.4 | how much of each echo repeats |
+| Tone | 500 Hz to 20 kHz | 6 kHz | a low-pass on the repeats; the first echo is not filtered |
+| Wow | 0 to 1 | 0.3 | the tape model's wow and flutter |
+| Return | 0 to 1 | 1 | the delay's level in the mix |
+| Reverb | freeverb, zita, jp, plate | zita | the reverb's model |
+| Size | 0 to 1 | 0.5 | the room's size; Freeverb and JP |
+| Decay | 0.1 to 20 s | 2 | the time for the tail to fall 60 dB; not Freeverb |
+| Damp | 0 to 1 | 0.3 | how much faster the highs decay |
+| Return | 0 to 1 | 1 | the reverb's level in the mix |
+
+The models:
+
+- **Clean**: plain repeats.
+- **Ping-pong**: each repeat crosses to the other side.
+- **Tape**: the repeats drift in pitch and saturate as they build.
+- **Freeverb**: a bright, dense room.
+- **Zita**: a smooth room; Decay is close to exact.
+- **JP**: a modulated hall; its decay runs about twice the setting at 48 kHz.
+- **Plate**: a plate; it sounds smaller at 96 kHz than at 48 kHz.
+
+Switching a model starts it silent. The models are here to be compared; those that sound worse will be removed.
+
+**Print FX** on voice 4's write row records the returns into the write loop. With it up, an echo is printed into the loop and then played back by the voices reading it, which can send it to the delay again.
+
+In the terminal: `:tape 1 delay 0.5`, `:tape delay model tape`, `:tape delay sync 3/16`, `:tape reverb decay 4`, `:tape print-fx 0.5`.
 
 ## Some starting points
 
@@ -137,6 +186,10 @@ Voices 2 to 4 start empty.
 
 - **Layers in time.** Voice 4 on a loop, Write on. Voices 2 and 3 pick voice 4's loop, on short windows inside it at rates 2 and 1.5, sends low. Ping on voice 3 keeps its short window from clicking.
 
+- **A dub echo.** Voice 1 Delay 0.5. Delay model tape, Sync 3/16, Feedback 0.7, Tone 2000. Each repeat is darker and drifts; Feedback 0.9 makes it build up and saturate.
+
+- **Printed space.** Voice 1 Reverb 0.6, Send 0.5; Write on, Print FX 0.5, Feedback 0.8. Each pass prints the room into the loop, so it washes out over several passes.
+
 - **Back to the start.** **Reset** restores every voice's loop as loaded, silences the write loop, and puts every head at its window's start, keeping the settings.
 
 ## Saving
@@ -147,11 +200,22 @@ Voices 2 to 4 start empty.
 
 Both are 32-bit float WAV, in a new directory each time. The loop is added to the loop library, with the beats of the loop it came from; the recording is added to the library. A saved loop can be loaded, sliced or looped again.
 
+## Keeping the tape between runs
+
+With `persist = ["tape"]` in `settings.toml`, playr keeps the tape in the library: every voice's settings, the effects' and the file each loop was read from. At the next start it asks `take up the tape again, with its 3 loops?`, after the player's question if there is one. On yes, each loop is read again from its file and the settings are put back.
+
+- **The write loop's audio is not kept.** A write loop that was written into or cleared comes back silent, its length. The voices that printed it can print it again; **Save loop** keeps a print. A loop loaded into voice 4 and not written into comes back from its file.
+- **Write comes back off**, so nothing is printed over before you hear it. The tape plays if it was playing.
+- **Heads start at their windows' starts.**
+- **A file that is gone** leaves its voice empty, and the message names it.
+
+The tape is kept half a second after a change, and when playr closes.
+
 ## What it does not do
 
 - **Recording an input.** The tape records only its own voices.
 
-- **Remembering a tape.** The settings last until the next load; only saved files are kept.
+- **Keeping the write loop's audio.** See above; Save loop keeps it as a file.
 
 - **Surviving a lost device.** If the device goes away, the tape closes, a recording under way is finished, and the loop as written is lost. Load it again.
 

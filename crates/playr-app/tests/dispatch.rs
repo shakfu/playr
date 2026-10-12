@@ -952,13 +952,30 @@ fn tape_controls_say_when_they_have_no_effect() {
         C::Ping(1),
         C::Slew(1),
         C::Drive(1),
-        C::Cutoff(1),
-        C::Filter(1),
+        C::HighPass(1),
+        C::LowPass(1),
+        C::BellHz(1),
+        C::BellGain(1),
+        C::BellQ(1),
     ] {
         assert_eq!(idle(&s, c), Some(Idle::VoiceOff), "{c:?}");
     }
     // Soloing a voice that is off still silences the others.
     assert_eq!(idle(&s, C::Solo(1)), None);
+    assert_eq!(idle(&s, C::Mute(1)), Some(Idle::VoiceOff));
+    // A flat bell's centre and width change nothing.
+    assert_eq!(idle(&s, C::BellHz(0)), Some(Idle::Flat));
+    assert_eq!(idle(&s, C::BellQ(0)), Some(Idle::Flat));
+    assert_eq!(idle(&s, C::BellGain(0)), None);
+    s.voices[0].bell_gain = -3.0;
+    assert_eq!(idle(&s, C::BellQ(0)), None);
+    s.voices[0].bell_gain = 0.0;
+    // A muted voice's Level and Pan change nothing heard.
+    s.voices[0].mute = true;
+    assert_eq!(idle(&s, C::Level(0)), Some(Idle::Muted));
+    assert_eq!(idle(&s, C::Pan(0)), Some(Idle::Muted));
+    assert_eq!(idle(&s, C::Send(0)), Some(Idle::WriteOff));
+    s.voices[0].mute = false;
     s.voices[0].level = 0.0;
     assert_eq!(idle(&s, C::Pan(0)), Some(Idle::Silent));
     s.voices[0].rate = 0.0;
@@ -972,6 +989,73 @@ fn tape_controls_say_when_they_have_no_effect() {
     assert_eq!(idle(&s, C::Fade(0)), None);
     s.voices[0].ping = true;
     assert_eq!(idle(&s, C::Fade(0)), Some(Idle::Turns));
+}
+
+#[test]
+fn effect_controls_say_when_they_have_no_effect() {
+    use playr_app::tape::{no_effect, Control as C, Extent, Idle, TapeState};
+    use playr_looper::{DelayModel, ReverbModel, Window};
+    let e = Extent {
+        frames: 10_000,
+        range: Window::new(1000, 9000),
+        rate: 8000,
+    };
+    let idle = |s: &TapeState, c| no_effect(s, e, c);
+    let mut s = TapeState::new(e.range);
+    let delay = [
+        C::DelayModel,
+        C::Time,
+        C::Sync,
+        C::DelayFeedback,
+        C::Tone,
+        C::DelayReturn,
+    ];
+    let reverb = [C::ReverbModel, C::Damp, C::ReverbReturn, C::Decay];
+
+    // No voice sends: neither effect hears anything.
+    for c in delay.into_iter().chain(reverb) {
+        assert_eq!(idle(&s, c), Some(Idle::NoFxSend), "{c:?}");
+    }
+    s.write = true;
+    assert_eq!(idle(&s, C::PrintFx), Some(Idle::NoFxSend));
+    s.voices[0].delay = 0.5;
+    for c in delay {
+        assert_eq!(idle(&s, c), None, "{c:?}");
+    }
+    assert_eq!(
+        idle(&s, C::Decay),
+        Some(Idle::NoFxSend),
+        "the reverb hears nothing"
+    );
+    assert_eq!(idle(&s, C::PrintFx), None);
+    s.write = false;
+    assert_eq!(idle(&s, C::PrintFx), Some(Idle::WriteOff));
+
+    // Wow is the tape model's alone.
+    assert_eq!(idle(&s, C::Wow), Some(Idle::Model));
+    s.fx.delay_model = DelayModel::Tape;
+    assert_eq!(idle(&s, C::Wow), None);
+
+    // Size is Freeverb's and JP's; Decay all but Freeverb's.
+    s.voices[0].reverb = 0.5;
+    assert_eq!(idle(&s, C::Size), Some(Idle::Model), "Zita");
+    assert_eq!(idle(&s, C::Decay), None);
+    s.fx.reverb_model = ReverbModel::Freeverb;
+    assert_eq!(idle(&s, C::Size), None);
+    assert_eq!(idle(&s, C::Decay), Some(Idle::Model));
+
+    // Sends follow the level: a muted or silent voice reaches no effect,
+    // and the effects then hear nothing.
+    s.voices[0].mute = true;
+    assert_eq!(idle(&s, C::DelaySend(0)), Some(Idle::Muted));
+    assert_eq!(idle(&s, C::Time), Some(Idle::NoFxSend));
+    s.voices[0].mute = false;
+    s.voices[0].level = 0.0;
+    assert_eq!(idle(&s, C::ReverbSend(0)), Some(Idle::Silent));
+    assert_eq!(idle(&s, C::Damp), Some(Idle::NoFxSend));
+    s.voices[0].level = 1.0;
+    s.voices[1].on = false;
+    assert_eq!(idle(&s, C::DelaySend(1)), Some(Idle::VoiceOff));
 }
 
 /// Runs `f`'s manual decks for `blocks` blocks of 512 frames, then takes
@@ -1721,11 +1805,14 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
     assert_eq!(state.voices[2].window, range.range);
     assert!(command::parse("tape 4 share", f.view).is_err());
 
-    // A lane's clear silences its own loop, or the write loop it reads.
-    for n in [2, 3, 4] {
+    // Clear silences only the write loop: through voice 4, or a lane
+    // reading it. A lane's own loop is refused.
+    for n in [3, 4] {
         run(&mut f, &format!("tape {n} clear"));
         assert_eq!(last(&f), Some(&Message::Tape(M::Done(T::Clear(n)))));
     }
+    run(&mut f, "tape 2 clear");
+    assert_eq!(last(&f), Some(&Message::Tape(M::OwnLoop(2))));
     assert!(f.tape.state().unwrap().own[1]);
 
     // Ejects empty lanes; voice 4's loop stays until its own Eject.
@@ -1788,4 +1875,137 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
     assert_eq!(last(&f), Some(&Message::Tape(M::Empty(1))));
     run(&mut f, "tape 2 eject");
     assert_eq!(last(&f), Some(&Message::Tape(M::Emptied)));
+}
+
+#[test]
+fn the_tape_kept_resumes_its_loops_and_settings_on_a_new_deck() {
+    use playr_app::tape::{self, Deck, SavedTape, TapeMessage as M};
+    let run = |f: &mut Headless, line: &str| {
+        let action = command::parse(line, f.view).unwrap();
+        dispatch(action, f);
+    };
+    let resumed = |m: &Message| matches!(m, Message::Tape(M::Resumed { .. }));
+    // Voice 1 holds 0.5 s to 1.5 s of the song.
+    let (mut f, dir) = loaded_tape();
+    assert!(f.tape.saved().is_some_and(|s| s.files() == 1));
+    let pad = dir.path().join("pad.wav");
+    common::tone(&pad, 8000, 0.5, -6.0);
+    f.session.add_loop_file(&pad, None).unwrap();
+    let id = f.session.find_loops("pad")[0].id;
+    run(&mut f, &format!("tape 2 loop {id}"));
+    tape_until(&mut f, |m| {
+        matches!(m, Message::Tape(M::LoadedVoice { .. }))
+    });
+    // Write makes a silent write loop, which voice 3 reads.
+    run(&mut f, "tape write on");
+    run(&mut f, "tape 3 share");
+    for line in [
+        "tape 1 rate -0.5",
+        "tape 1 hp 180",
+        "tape 1 bell-gain 4.5",
+        "tape 2 window 25% 75%",
+        "tape 2 mute on",
+        "tape 2 pan -0.25",
+        "tape 3 solo on",
+        "tape 4 send 0.5",
+        "tape feedback 0.7",
+        "tape window 10% 90%",
+        "tape 1 delay 0.6",
+        "tape 2 reverb 0.4",
+        "tape delay model ping-pong",
+        "tape delay sync 3/16",
+        "tape delay feedback 0.55",
+        "tape reverb model plate",
+        "tape reverb decay 3.5",
+        "tape print-fx 0.25",
+        "tape play",
+    ] {
+        run(&mut f, line);
+    }
+    // Sync set the time from voice 1's window: 1 s at rate -0.5 is 2 s, and
+    // 3/16 of it 375 ms.
+    let fx = f.tape.state().unwrap().fx;
+    assert_eq!(
+        (fx.time, fx.sync),
+        (375.0, Some(tape::Division::DottedEighth))
+    );
+    // How the Tape tab shows the lanes is kept with them.
+    let layout = tape::Layout {
+        folded: [None, Some(true), Some(false), None],
+        drawer: [true, false, false, true],
+        fx: true,
+    };
+    f.tape.set_layout(layout);
+    let saved = f.tape.saved().unwrap();
+    assert_eq!(SavedTape::decode(&saved.encode()), Some(saved.clone()));
+    assert!(saved.playing());
+    let mut before = *f.tape.state().unwrap();
+    let extents: Vec<_> = (0..4).map(|i| f.tape.voice_extent(i)).collect();
+
+    // A new deck, as at the next start: every voice as it was, but Write,
+    // which a resume keeps off.
+    f.tape = Deck::manual();
+    tape::resume(&mut f, saved.clone());
+    tape_until(&mut f, resumed);
+    assert_eq!(last(&f), Some(&Message::Tape(M::Resumed { lost: vec![] })));
+    before.write = false;
+    assert_eq!(*f.tape.state().unwrap(), before);
+    let after: Vec<_> = (0..4).map(|i| f.tape.voice_extent(i)).collect();
+    assert_eq!(after, extents);
+    assert_eq!(f.tape.voice_name(1), Some("pad"));
+    assert_eq!(f.tape.layout(), &layout);
+    assert_eq!(f.tape.saved(), Some(saved.clone()));
+
+    // A loop whose file is gone leaves its voice empty, and is named.
+    let pad = pad.canonicalize().unwrap();
+    std::fs::remove_file(&pad).unwrap();
+    f.tape = Deck::manual();
+    tape::resume(&mut f, saved);
+    tape_until(&mut f, resumed);
+    assert_eq!(
+        last(&f),
+        Some(&Message::Tape(M::Resumed { lost: vec![pad] }))
+    );
+    let state = *f.tape.state().unwrap();
+    assert_eq!(state.empty, [false, true, false, false]);
+    assert!(state.voices[2].solo && state.playing);
+}
+
+#[test]
+fn a_loaded_write_loop_is_kept_by_its_file_until_written_into() {
+    use playr_app::tape::{self, Deck, Reads, TapeMessage as M};
+    let run = |f: &mut Headless, line: &str| {
+        let action = command::parse(line, f.view).unwrap();
+        dispatch(action, f);
+    };
+    let by_file = |f: &Headless| matches!(f.tape.saved().unwrap().reads()[3], Reads::File(_));
+    let (mut f, dir) = loaded_tape();
+    let pad = dir.path().join("pad.wav");
+    common::tone(&pad, 8000, 0.5, -6.0);
+    f.session.add_loop_file(&pad, None).unwrap();
+    let id = f.session.find_loops("pad")[0].id;
+    run(&mut f, &format!("tape 4 loop {id}"));
+    tape_until(&mut f, |m| {
+        matches!(m, Message::Tape(M::LoadedVoice { .. }))
+    });
+    assert!(by_file(&f));
+    // Written into, it differs from its file, so it is kept as its shape.
+    run(&mut f, "tape write on");
+    run(&mut f, "tape write off");
+    assert_eq!(f.tape.saved().unwrap().reads()[3], Reads::Write);
+    // Reset puts back the loop as loaded.
+    run(&mut f, "tape reset");
+    assert!(by_file(&f));
+    // Cleared, it is silent.
+    run(&mut f, "tape 4 clear");
+    let saved = f.tape.saved().unwrap();
+    assert_eq!(saved.reads()[3], Reads::Write);
+
+    // It resumes silent, its shape.
+    let shape = f.tape.loaded();
+    f.tape = Deck::manual();
+    tape::resume(&mut f, saved);
+    tape_until(&mut f, |m| matches!(m, Message::Tape(M::Resumed { .. })));
+    assert_eq!(f.tape.loaded(), shape);
+    assert!(!f.tape.state().unwrap().empty[3]);
 }

@@ -210,6 +210,8 @@ pub struct Model {
     /// with when it was first seen.
     saved: persist::Values,
     unsaved: Option<(persist::Values, Instant)>,
+    /// The tape kept at the last close, to offer once no other question is open.
+    resume_tape: Option<crate::tape::SavedTape>,
     transport_text_buttons: bool,
     /// The message showing, its words, and when it was shown.
     message: Option<(Message, String, Instant)>,
@@ -270,6 +272,7 @@ impl Model {
             columns: config.settings.columns.clone(),
             sort: config.settings.sort.clone(),
             history: Vec::new(),
+            tape: None,
         };
         values.mix.set_interp(config.interp);
         for &p in &config.settings.persist {
@@ -319,6 +322,7 @@ impl Model {
             program: config.program,
             saved: values.clone(),
             unsaved: None,
+            resume_tape: values.tape.clone(),
             transport_text_buttons: config.transport_text_buttons,
             message: None,
             quit: false,
@@ -371,6 +375,12 @@ impl Model {
         if self.input == Input::None {
             if let Some(tracks) = self.session.take_draft_question() {
                 self.input = Input::Draft(tracks);
+            }
+        }
+        // After the player's, which the first frame opens with.
+        if self.input == Input::None {
+            if let Some(saved) = self.resume_tape.take() {
+                self.input = Input::Confirm(Confirm::ResumeTape(Box::new(saved)));
             }
         }
         self.follow_player();
@@ -582,6 +592,14 @@ impl Model {
             columns: self.columns.clone(),
             sort: self.session.sort().to_vec(),
             history: self.history.lines().to_vec(),
+            // A tape not yet answered for is kept until it is.
+            tape: match self.persist.contains(&Persist::Tape) {
+                true => self.tape.saved().or_else(|| match &self.input {
+                    Input::Confirm(Confirm::ResumeTape(t)) => Some((**t).clone()),
+                    _ => self.resume_tape.clone(),
+                }),
+                false => None,
+            },
         }
     }
 
@@ -760,6 +778,11 @@ impl Model {
     /// [`crate::tape::Deck::manual`].
     pub fn set_deck(&mut self, deck: crate::tape::Deck) {
         self.tape = deck;
+    }
+
+    /// Keeps how the Tape tab shows its lanes, as the frontend changed it.
+    pub fn set_tape_layout(&mut self, layout: crate::tape::Layout) {
+        self.tape.set_layout(layout);
     }
 
     /// The DJ decks, to draw.

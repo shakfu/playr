@@ -1500,7 +1500,8 @@ fn bpm_corrects_the_tempo_by_octaves() {
 
 #[test]
 fn tape_commands_parse_in_any_view_and_round_trip() {
-    use playr_app::tape::{Filter, Pos, TapeAction as T, VoiceSetting as V};
+    use playr_app::tape::{Division, FxSetting as F, Pos, TapeAction as T, VoiceSetting as V};
+    use playr_looper::{DelayModel, ReverbModel};
     let pct = Pos::Percent;
     for (text, action) in [
         ("tape load", T::Load(None)),
@@ -1545,17 +1546,56 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape 2 ping on", T::Voice(2, V::Ping(true))),
         ("tape 1 slew 500", T::Voice(1, V::Slew(500.0))),
         ("tape 3 drive 0.25", T::Voice(3, V::Drive(0.25))),
-        ("tape 1 filter 0.4", T::Voice(1, V::Cutoff(0.4))),
-        ("tape 1 filter hp", T::Voice(1, V::Filter(Filter::High))),
-        ("tape 2 filter bp", T::Voice(2, V::Filter(Filter::Band))),
-        ("tape 2 filter lp", T::Voice(2, V::Filter(Filter::Low))),
+        ("tape 1 hp 120", T::Voice(1, V::HighPass(120.0))),
+        ("tape 2 lp 4500.5", T::Voice(2, V::LowPass(4500.5))),
+        ("tape 3 bell 800", T::Voice(3, V::BellHz(800.0))),
+        ("tape 3 bell-gain -6.5", T::Voice(3, V::BellGain(-6.5))),
+        ("tape 3 bell-q 2", T::Voice(3, V::BellQ(2.0))),
         ("tape 3 solo on", T::Voice(3, V::Solo(true))),
+        ("tape 2 mute on", T::Voice(2, V::Mute(true))),
+        ("tape 2 mute off", T::Voice(2, V::Mute(false))),
+        ("tape 1 delay 0.5", T::Voice(1, V::Delay(0.5))),
+        ("tape 4 reverb 0.25", T::Voice(4, V::Reverb(0.25))),
+        (
+            "tape delay model tape",
+            T::Fx(F::DelayModel(DelayModel::Tape)),
+        ),
+        (
+            "tape delay model ping-pong",
+            T::Fx(F::DelayModel(DelayModel::PingPong)),
+        ),
+        ("tape delay time 250", T::Fx(F::Time(250.0))),
+        ("tape delay sync off", T::Fx(F::Sync(None))),
+        (
+            "tape delay sync 3/16",
+            T::Fx(F::Sync(Some(Division::DottedEighth))),
+        ),
+        ("tape delay feedback 0.6", T::Fx(F::Feedback(0.6))),
+        ("tape delay tone 3000", T::Fx(F::Tone(3000.0))),
+        ("tape delay wow 0.7", T::Fx(F::Wow(0.7))),
+        ("tape delay return 0.8", T::Fx(F::DelayReturn(0.8))),
+        (
+            "tape reverb model jp",
+            T::Fx(F::ReverbModel(ReverbModel::Jp)),
+        ),
+        ("tape reverb size 0.4", T::Fx(F::Size(0.4))),
+        ("tape reverb decay 4.5", T::Fx(F::Decay(4.5))),
+        ("tape reverb damp 0.2", T::Fx(F::Damp(0.2))),
+        ("tape reverb return 0.5", T::Fx(F::ReverbReturn(0.5))),
+        ("tape print-fx 0.3", T::Fx(F::Print(0.3))),
     ] {
         let action = Action::Tape(action);
         for view in [Library, Sampler] {
             assert_eq!(parse(text, view), Ok(action.clone()), "{text}");
         }
         assert_eq!(line(&action, None), text);
+    }
+    // Off is either end of the range, which reads back as its frequency.
+    for (text, action) in [
+        ("tape 1 hp off", T::Voice(1, V::HighPass(20.0))),
+        ("tape 1 lp off", T::Voice(1, V::LowPass(20_000.0))),
+    ] {
+        assert_eq!(parse(text, Library), Ok(Action::Tape(action)), "{text}");
     }
     for (text, error) in [
         ("tape", "usage: :tape"),
@@ -1567,7 +1607,10 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape 1 pan 2", "pan is -1 to 1"),
         ("tape 1 fade 2000", "fade is 0 to 1000"),
         ("tape 1 slew 20000", "slew is 0 to 10000"),
-        ("tape 1 filter notch", "filter is 0 to 1"),
+        ("tape 1 hp 10", "hp is 20 to 20000"),
+        ("tape 1 bell-gain 30", "bell-gain is -18 to 18"),
+        ("tape 1 bell-q 0", "bell-q is 0.1 to 10"),
+        ("tape 1 filter 0.4", "the filter is now hp HZ and lp HZ"),
         ("tape thin 2", "thin is 0 to 1"),
         ("tape 1 ping maybe", "usage: :tape"),
         ("tape 3 wear -1", "wear is 0 to 1"),
@@ -1575,6 +1618,21 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape load 9", "not a loop slot: 9"),
         ("tape 1 rate", "usage: :tape"),
         ("tape write maybe", "usage: :tape"),
+        ("tape 1 delay 2", "delay is 0 to 1"),
+        ("tape delay time 0", "time is 1 to 2000"),
+        ("tape delay feedback 1", "feedback is 0 to 0.95"),
+        ("tape delay tone 100", "tone is 500 to 20000"),
+        ("tape delay sync 1/3", "sync is off, 1/1"),
+        (
+            "tape delay model spring",
+            "delay models: clean, ping-pong, tape",
+        ),
+        (
+            "tape reverb model hall",
+            "reverb models: freeverb, zita, jp, plate",
+        ),
+        ("tape reverb decay 30", "decay is 0.1 to 20"),
+        ("tape print-fx 2", "print-fx is 0 to 1"),
     ] {
         let got = parse(text, Library).unwrap_err();
         assert!(got.contains(error), "{text}: {got}");

@@ -1,10 +1,13 @@
 //! The DSP `playr-looper` and `playr-dj` share: linear ramps, a
-//! state-variable filter, a one-pole coefficient, a soft clip and the
-//! interpolation of their read heads ([`interp`]). No threads, and no
-//! allocation once [`interp::warm`] has built the sinc's table.
+//! state-variable filter, a one-pole coefficient, a soft clip, the
+//! interpolation of their read heads ([`interp`]) and the send effects
+//! ([`fx`]). No threads, and no allocation once [`interp::warm`] has built
+//! the sinc's table and the effects are built.
 
 use std::ops::{Add, Div, Mul, Sub};
 
+pub mod faust;
+pub mod fx;
 pub mod interp;
 pub use interp::{Interp, Kernel};
 
@@ -152,6 +155,15 @@ impl Svf {
         let g = (std::f32::consts::PI * hz / sample_rate as f32).tan();
         let a1 = 1.0 / (1.0 + g * (g + self.k));
         self.a = [a1, g * a1, g * g * a1];
+    }
+
+    /// Sets the damping to `1/q`, keeping the cutoff.
+    pub fn set_q(&mut self, q: f32) {
+        let k = 1.0 / q;
+        if k != self.k && k.is_finite() {
+            self.k = k;
+            self.at = f32::NAN;
+        }
     }
 
     /// Clears the state, as of silence.

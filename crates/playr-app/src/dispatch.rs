@@ -60,6 +60,8 @@ pub enum Confirm {
         at: Duration,
         queue: SavedQueue,
     },
+    /// Put back the tape kept at the last close.
+    ResumeTape(Box<crate::tape::SavedTape>),
     /// Remove `count` marks from the track at `path`, which was playing when asked.
     ClearMarks {
         path: PathBuf,
@@ -123,6 +125,14 @@ impl Confirm {
                 };
                 let at = crate::message::fmt_time(*at);
                 format!("take up {name} again at {at}{queued}?")
+            }
+            Confirm::ResumeTape(saved) => {
+                let loops = match saved.files() {
+                    1 => "1 loop".into(),
+                    n => format!("{n} loops"),
+                };
+                let playing = if saved.playing() { ", playing" } else { "" };
+                format!("take up the tape again, with its {loops}{playing}?")
             }
             Confirm::ClearMarks { path, count } => {
                 let name = path
@@ -1072,6 +1082,7 @@ fn confirmed_now(question: Confirm, f: &mut impl Frontend) {
             Err(refusal) => f.notify(refusal.into()),
         },
         Confirm::Resume { path, at, queue } => f.session_mut().resume(path, at, queue),
+        Confirm::ResumeTape(saved) => crate::tape::resume(f, *saved),
         Confirm::ClearQueue(_) => {
             let outcome = f.session_mut().clear_queue();
             f.notify(outcome.into());

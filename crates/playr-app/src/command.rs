@@ -745,14 +745,20 @@ pub const MIN_BEATS: f32 = 0.125;
 pub const MAX_BEATS: f32 = 64.0;
 
 const TAPE_USAGE: &str = "usage: :tape load [N] | take | play | stop | reset | save | rec | \
-     write on|off | feedback F | wear W | thin T | window A B | \
+     write on|off | feedback F | wear W | thin T | window A B | print-fx P | \
+     delay model clean|ping-pong|tape|time MS|sync off|1/1|1/2|1/4|1/8|3/16|1/16|\
+     feedback F|tone HZ|wow W|return R | \
+     reverb model freeverb|zita|jp|plate|size S|decay SEC|damp D|return R | \
      V on|off | V clear|eject|share | V loop ID | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
-     ping on|off|slew MS|drive D|filter F|lp|hp|bp|solo on|off";
+     ping on|off|slew MS|drive D|hp HZ|off|lp HZ|off|bell HZ|bell-gain DB|bell-q Q|\
+     solo on|off|mute on|off|delay S|reverb S";
 
 /// Parses what follows `:tape`. Voices count from 1; windows take a time or
 /// a percentage of the loop at each end.
 fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
-    use crate::tape::{Filter, TapeAction as T, VoiceSetting as V};
+    use crate::tape::{FxSetting as F, TapeAction as T, VoiceSetting as V};
+    use playr_looper::{BELL_DB, BELL_Q, DECAY_SECONDS, DELAY_SECONDS, FEEDBACK_MAX, FILTER_HZ};
+    use playr_looper::{DELAY_MIN, TONE_HZ};
     let usage = || TAPE_USAGE.to_string();
     let value = |w: &str, what: &str, lo: f32, hi: f32| {
         w.parse::<f32>()
@@ -783,6 +789,34 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
         ["wear", v] => value(v, "wear", 0.0, 1.0).map(T::Wear),
         ["thin", v] => value(v, "thin", 0.0, 1.0).map(T::Thin),
         ["window", a, b] => Ok(T::WriteWindow(tape_pos(a)?, tape_pos(b)?)),
+        ["print-fx", v] => value(v, "print-fx", 0.0, 1.0).map(|v| T::Fx(F::Print(v))),
+        ["delay", "model", m] => {
+            choose(m, &crate::tape::DELAY_MODELS, "delay model").map(|m| T::Fx(F::DelayModel(m)))
+        }
+        ["delay", "time", ms] => {
+            value(ms, "time", DELAY_MIN * 1000.0, DELAY_SECONDS * 1000.0).map(|v| T::Fx(F::Time(v)))
+        }
+        ["delay", "sync", "off"] => Ok(T::Fx(F::Sync(None))),
+        ["delay", "sync", d] => crate::tape::Division::ALL
+            .into_iter()
+            .find(|x| x.name() == *d)
+            .map(|d| T::Fx(F::Sync(Some(d))))
+            .ok_or_else(|| "sync is off, 1/1, 1/2, 1/4, 1/8, 3/16 or 1/16".to_string()),
+        ["delay", "feedback", v] => {
+            value(v, "feedback", 0.0, FEEDBACK_MAX).map(|v| T::Fx(F::Feedback(v)))
+        }
+        ["delay", "tone", v] => value(v, "tone", TONE_HZ.0, TONE_HZ.1).map(|v| T::Fx(F::Tone(v))),
+        ["delay", "wow", v] => value(v, "wow", 0.0, 1.0).map(|v| T::Fx(F::Wow(v))),
+        ["delay", "return", v] => value(v, "return", 0.0, 1.0).map(|v| T::Fx(F::DelayReturn(v))),
+        ["reverb", "model", m] => {
+            choose(m, &crate::tape::REVERB_MODELS, "reverb model").map(|m| T::Fx(F::ReverbModel(m)))
+        }
+        ["reverb", "size", v] => value(v, "size", 0.0, 1.0).map(|v| T::Fx(F::Size(v))),
+        ["reverb", "decay", v] => {
+            value(v, "decay", DECAY_SECONDS.0, DECAY_SECONDS.1).map(|v| T::Fx(F::Decay(v)))
+        }
+        ["reverb", "damp", v] => value(v, "damp", 0.0, 1.0).map(|v| T::Fx(F::Damp(v))),
+        ["reverb", "return", v] => value(v, "return", 0.0, 1.0).map(|v| T::Fx(F::ReverbReturn(v))),
         [n, setting @ ..] if n.parse::<u8>().is_ok() => {
             let n: u8 = n.parse().expect("checked");
             if !(1..=playr_looper::VOICES as u8).contains(&n) {
@@ -810,11 +844,23 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
                 ["ping", w] => V::Ping(on(w)?),
                 ["slew", ms] => V::Slew(value(ms, "slew", 0.0, playr_looper::MAX_SLEW_MS)?),
                 ["drive", v] => V::Drive(value(v, "drive", 0.0, 1.0)?),
-                ["filter", "lp"] => V::Filter(Filter::Low),
-                ["filter", "hp"] => V::Filter(Filter::High),
-                ["filter", "bp"] => V::Filter(Filter::Band),
-                ["filter", v] => V::Cutoff(value(v, "filter", 0.0, 1.0)?),
+                ["hp", "off"] => V::HighPass(FILTER_HZ.0),
+                ["lp", "off"] => V::LowPass(FILTER_HZ.1),
+                ["hp", v] => V::HighPass(value(v, "hp", FILTER_HZ.0, FILTER_HZ.1)?),
+                ["lp", v] => V::LowPass(value(v, "lp", FILTER_HZ.0, FILTER_HZ.1)?),
+                ["bell", v] => V::BellHz(value(v, "bell", FILTER_HZ.0, FILTER_HZ.1)?),
+                ["bell-gain", v] => V::BellGain(value(v, "bell-gain", -BELL_DB, BELL_DB)?),
+                ["bell-q", v] => V::BellQ(value(v, "bell-q", BELL_Q.0, BELL_Q.1)?),
+                // The single filter of 0.18 became the high-pass and low-pass.
+                ["filter", ..] => {
+                    return Err("the filter is now hp HZ and lp HZ, with a bell: bell HZ, \
+                         bell-gain DB, bell-q Q"
+                        .into())
+                }
                 ["solo", w] => V::Solo(on(w)?),
+                ["mute", w] => V::Mute(on(w)?),
+                ["delay", v] => V::Delay(value(v, "delay", 0.0, 1.0)?),
+                ["reverb", v] => V::Reverb(value(v, "reverb", 0.0, 1.0)?),
                 _ => return Err(usage()),
             };
             Ok(T::Voice(n, s))
@@ -1100,7 +1146,8 @@ fn mix_line(m: &crate::mix::MixAction) -> String {
 
 /// What follows `tape ` in the command line for `t`.
 fn tape_line(t: &crate::tape::TapeAction) -> String {
-    use crate::tape::{Filter, Pos, TapeAction as T, VoiceSetting as V};
+    use crate::tape::{model_name, FxSetting as F, Pos, TapeAction as T, VoiceSetting as V};
+    use crate::tape::{DELAY_MODELS, REVERB_MODELS};
     let n = |v: &f32| number(f64::from(*v));
     let pos = |p: &Pos| match p {
         Pos::Percent(p) => format!("{}%", n(p)),
@@ -1137,16 +1184,31 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
             V::Ping(b) => format!("{i} ping {}", on(b)),
             V::Slew(v) => format!("{i} slew {}", n(v)),
             V::Drive(v) => format!("{i} drive {}", n(v)),
-            V::Cutoff(v) => format!("{i} filter {}", n(v)),
-            V::Filter(f) => format!(
-                "{i} filter {}",
-                match f {
-                    Filter::Low => "lp",
-                    Filter::High => "hp",
-                    Filter::Band => "bp",
-                }
-            ),
+            V::HighPass(v) => format!("{i} hp {}", n(v)),
+            V::LowPass(v) => format!("{i} lp {}", n(v)),
+            V::BellHz(v) => format!("{i} bell {}", n(v)),
+            V::BellGain(v) => format!("{i} bell-gain {}", n(v)),
+            V::BellQ(v) => format!("{i} bell-q {}", n(v)),
             V::Solo(b) => format!("{i} solo {}", on(b)),
+            V::Mute(b) => format!("{i} mute {}", on(b)),
+            V::Delay(v) => format!("{i} delay {}", n(v)),
+            V::Reverb(v) => format!("{i} reverb {}", n(v)),
+        },
+        T::Fx(f) => match f {
+            F::DelayModel(m) => format!("delay model {}", model_name(&DELAY_MODELS, *m)),
+            F::Time(v) => format!("delay time {}", n(v)),
+            F::Sync(None) => "delay sync off".into(),
+            F::Sync(Some(d)) => format!("delay sync {}", d.name()),
+            F::Feedback(v) => format!("delay feedback {}", n(v)),
+            F::Tone(v) => format!("delay tone {}", n(v)),
+            F::Wow(v) => format!("delay wow {}", n(v)),
+            F::DelayReturn(v) => format!("delay return {}", n(v)),
+            F::ReverbModel(m) => format!("reverb model {}", model_name(&REVERB_MODELS, *m)),
+            F::Size(v) => format!("reverb size {}", n(v)),
+            F::Decay(v) => format!("reverb decay {}", n(v)),
+            F::Damp(v) => format!("reverb damp {}", n(v)),
+            F::ReverbReturn(v) => format!("reverb return {}", n(v)),
+            F::Print(v) => format!("print-fx {}", n(v)),
         },
     }
 }

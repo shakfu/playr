@@ -3966,3 +3966,76 @@ fn a_search_in_the_dj_view_lists_its_results_there() {
     assert_eq!(model.view(), View::Dj);
     assert!(model.listed().is_empty());
 }
+
+#[test]
+fn a_kept_tape_is_offered_after_the_player_and_kept_again_at_quit() {
+    use playr_app::tape::{Deck, SavedTape, TapeMessage};
+    use playr_core::settings::Persist;
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let a = songs.join("a.wav");
+    let library = dir.path().join("library.db");
+    // Voice 1 reads all of a.wav, muted; the player was on a.wav too.
+    let text = format!(
+        "rate 8000\nplaying 0\nvoice 0 1 1 0 400 1 0 0 0 10 0 20 0 20 20000 1000 0 1 0 1\n\
+         reads 0 file 1 8000 0 400 - {}\n",
+        a.display()
+    );
+    let saved = SavedTape::decode(&text).unwrap();
+    db::set_state(&db::open(&library).unwrap(), "tape", &text).unwrap();
+    model_in(dir.path(), false)
+        .session()
+        .remember(&a, Duration::from_secs(1));
+    let open = |persist: Vec<Persist>| {
+        let mut config = Config::default();
+        config.settings.persist = persist;
+        let conn = db::open(&library).unwrap();
+        let mut model = Model::new(conn, common::fake_player().0, Vec::new(), config);
+        model.session_mut().set_library_path(library.clone());
+        model.set_deck(Deck::manual());
+        model
+    };
+
+    // Unless persist names the tape, only the player's is asked.
+    let mut model = open(Vec::new());
+    assert!(matches!(
+        model.input(),
+        Input::Confirm(Confirm::Resume { .. })
+    ));
+    model.answer(false);
+    model.refresh();
+    assert_eq!(model.input(), &Input::None);
+    drop(model);
+
+    // With it, the tape's follows the player's.
+    let mut model = open(vec![Persist::Tape]);
+    assert!(matches!(
+        model.input(),
+        Input::Confirm(Confirm::Resume { .. })
+    ));
+    model.answer(false);
+    model.refresh();
+    let asked = Confirm::ResumeTape(Box::new(saved.clone()));
+    assert_eq!(model.input(), &Input::Confirm(asked.clone()));
+    // Kept while the question waits, so a close before an answer loses nothing.
+    std::thread::sleep(playr_app::model::SAVE_AFTER);
+    model.refresh();
+    model.refresh();
+    let kept = model.session().state("tape").unwrap();
+    assert_eq!(SavedTape::decode(&kept), Some(saved.clone()));
+    assert_eq!(asked.question(), "take up the tape again, with its 1 loop?");
+    model.answer(true);
+    refresh_until(&mut model, |m| {
+        matches!(m, Message::Tape(TapeMessage::Resumed { .. }))
+    });
+    assert!(model.deck().state().unwrap().voices[0].mute);
+
+    // Quitting keeps it again.
+    model.quit();
+    drop(model);
+    let kept = db::state(&db::open(&library).unwrap(), "tape")
+        .unwrap()
+        .unwrap();
+    assert_eq!(SavedTape::decode(&kept), Some(saved));
+}

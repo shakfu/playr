@@ -11,6 +11,7 @@ use playr_app::dispatch::Frontend;
 use playr_app::mix::{Law, Mix, MixAction, Strip};
 use playr_app::model::{Model, SAVE_AFTER};
 use playr_app::persist::{self, Values};
+use playr_app::tape::SavedTape;
 use playr_app::Theme;
 use playr_core::audio::eq::Band;
 use playr_core::audio::Mode;
@@ -18,6 +19,13 @@ use playr_core::columns::{Column, SortKey};
 use playr_core::db;
 use playr_core::gain::ReplayGain;
 use playr_core::settings::Persist;
+
+/// Voice 1 on a.wav, muted, and voice 2 on the write loop, which resumes
+/// silent; a path with a space.
+const TAPE: &str = "rate 8000\nplaying 1\nwrite 0.7 0 0 10 390\nshape 400 0 400 2\n\
+    voice 0 1 -0.5 0 400 1 0 0 0 10 0 20 0 120 8000 900 -3 2 0 1\n\
+    lanes - 1 0 - 1 0 0 1\n\
+    reads 0 file 1 8000 0 400 4 /m/a b.wav\nreads 1 write\nreads 3 write\n";
 
 fn values() -> Values {
     let mut mix = Mix::new(Law::Db, 0.6);
@@ -31,6 +39,7 @@ fn values() -> Values {
         replaygain: ReplayGain::Album,
         theme: Theme::Light,
         history: vec!["view queue".into(), "view library".into()],
+        tape: SavedTape::decode(TAPE),
         columns: vec![Column::Title, Column::Tempo],
         sort: vec![
             SortKey {
@@ -57,7 +66,12 @@ fn every_value_reads_back_as_stored() {
         columns: vec![Column::Artist],
         sort: Vec::new(),
         history: Vec::new(),
+        tape: None,
     };
+    // Its voice row reads, EQ and all.
+    let v = stored.tape.as_ref().unwrap().state().voices[0];
+    assert_eq!((v.high_pass, v.low_pass, v.bell_hz), (120.0, 8000.0, 900.0));
+    assert_eq!((v.bell_gain, v.bell_q, v.mute), (-3.0, 2.0, true));
     for (_, p) in Persist::NAMES {
         persist::decode(p, &persist::encode(p, &stored), &mut read);
     }
@@ -79,6 +93,33 @@ fn every_value_reads_back_as_stored() {
     ] {
         persist::decode(p, text, &mut read);
         assert_eq!(read, before, "{p:?} {text:?}");
+    }
+    // A tape that does not read is nothing to offer.
+    for text in [
+        "",
+        "playing 1",
+        "rate 0\nreads 0 file 0 8000 0 400 - /a.wav",
+        "rate 8000\nreads 0 file 0 8000 400 0 - /a.wav",
+        "rate 8000\nreads 3 write",
+        "rate 8000\nshape 99999999999 0 10 2\nreads 3 write",
+    ] {
+        assert_eq!(SavedTape::decode(text), None, "{text:?}");
+    }
+    // A row that does not read is left at its default.
+    let tape = SavedTape::decode(&format!("{TAPE}voice 1 1 bogus")).unwrap();
+    assert_eq!(Some(tape), stored.tape);
+    // Rows from before the effects read with no sends, and so do short or
+    // damaged lanes and fx rows.
+    assert_eq!((v.delay, v.reverb), (0.0, 0.0));
+    for row in [
+        "lanes 1",
+        "lanes",
+        "fx clean 1",
+        "fx spring 375 - 0.4 6000 0.3 1 zita 0.5 2 0.3 1 0",
+        "fx clean 375 1/3 0.4 6000 0.3 1 zita 0.5 2 0.3 1 0",
+    ] {
+        let tape = SavedTape::decode(&format!("{TAPE}{row}")).unwrap();
+        assert_eq!(Some(tape), stored.tape, "{row:?}");
     }
     assert_eq!(persist::key(Persist::Eq, Program::Gui), "eq");
     // A position; the old key held a gain.

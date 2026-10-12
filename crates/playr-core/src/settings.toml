@@ -70,9 +70,10 @@ keep_queue = true
 draft = "ask"
 # Session values to remember in the library between runs: eq, volume (the
 # master), mode, replaygain, theme, columns, sort, history (the : command
-# lines) and mix (the other faders and every mute). While a name is listed,
-# its remembered value wins over the setting above; columns and sort are
-# remembered for each program. Nothing is remembered without a library.
+# lines), mix (the other faders and every mute) and tape (each tape voice's
+# settings and the loop it reads, offered at the next start). While a name is
+# listed, its remembered value wins over the setting above; columns and sort
+# are remembered for each program. Nothing is remembered without a library.
 persist = []
 
 # An extension runs a program that is not part of playr, so each is off until

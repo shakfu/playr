@@ -488,7 +488,7 @@ fn persist_names_the_values_to_remember() {
     assert_eq!(
         parse("persist = ['eq', 'speed', 3]").unwrap_err(),
         [
-            "line 1: unknown persist speed; choices: eq, volume, mode, replaygain, theme, columns, sort, history, mix",
+            "line 1: unknown persist speed; choices: eq, volume, mode, replaygain, theme, columns, sort, history, mix, tape",
             "line 1: a name, not an integer",
         ]
     );

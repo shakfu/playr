@@ -652,12 +652,16 @@ pub fn idle_text(idle: crate::tape::Idle) -> &'static str {
         Idle::WriteOff => "no effect: Write is off",
         Idle::NoSend => "no effect: Send is 0",
         Idle::Silent => "no effect: Level is 0",
+        Idle::Muted => "no effect: the voice is muted",
+        Idle::Flat => "no effect: the bell's gain is 0 dB",
         Idle::Still => "no effect: Rate is 0, so the head never wraps",
         Idle::NoRoom => "no effect: no audio either side of the window to crossfade into",
         Idle::Unchanging => {
             "nothing changes: Feedback is 1, Wear and Thin are 0 and every Send is 0"
         }
         Idle::Turns => "no effect: Ping turns the head at the edges, so it never wraps",
+        Idle::NoFxSend => "no effect: no voice sends to this effect",
+        Idle::Model => "no effect: the selected model has no such control",
     }
 }
 
@@ -681,8 +685,8 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
         TapeMessage::Done(TapeAction::Play) => "tape playing".into(),
         TapeMessage::Done(TapeAction::Stop) => "tape stopped".into(),
         TapeMessage::Done(TapeAction::Reset) => "tape reset to the loop as loaded".into(),
-        TapeMessage::Done(TapeAction::Clear(n)) => {
-            format!("voice {n}'s loop cleared; :tape reset restores it")
+        TapeMessage::Done(TapeAction::Clear(_)) => {
+            "the write loop cleared; :tape reset restores it".into()
         }
         TapeMessage::Done(TapeAction::Eject(n)) => format!("voice {n} ejected"),
         TapeMessage::Done(TapeAction::Share(n)) => {
@@ -691,7 +695,26 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
         TapeMessage::Done(a) => command::line(&Action::Tape(*a), None),
         TapeMessage::NoTape => "no tape loaded; :tape load first".into(),
         TapeMessage::Empty(n) => format!("voice {n} is empty"),
+        TapeMessage::OwnLoop(n) => {
+            format!("voice {n} plays a loop of its own; clear empties only the write loop")
+        }
         TapeMessage::Emptied => "every voice is empty; the tape is gone".into(),
+        TapeMessage::Resumed { lost } if lost.is_empty() => "tape resumed".into(),
+        TapeMessage::Resumed { lost } => {
+            let names: Vec<String> = lost
+                .iter()
+                .map(|p| {
+                    p.file_name()
+                        .unwrap_or(p.as_os_str())
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            format!(
+                "tape resumed; these could not be read, so their voices are empty: {}",
+                names.join(", ")
+            )
+        }
         TapeMessage::NoRange => "no range to load; set one, or :tape load N for a loop".into(),
         TapeMessage::EmptySlot(n) => format!("loop {n} is empty"),
         TapeMessage::EmptyWindow => {
