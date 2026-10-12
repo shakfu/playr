@@ -66,8 +66,11 @@ CREATE TABLE IF NOT EXISTS loop_roots (path TEXT PRIMARY KEY);
 - **The walk is `scan_dir`'s.** Files whose `(mtime, size)` match are skipped. Missing and unavailable roots are counted the same way.
 
 - **Kept apart from tracks.**
+
   - The loop scan removes `tracks` rows under its root, with their places in playlists, and reports how many.
+
   - `playr scan` skips files under a loop root.
+
   - A loop root that holds a track root is refused, so one command cannot empty the audio library.
 
 - **Tags** are the directories between the root and the file: `Pack/Drums/Kicks/x.wav` is tagged `pack drums kicks`.
@@ -79,8 +82,11 @@ CREATE TABLE IF NOT EXISTS loop_roots (path TEXT PRIMARY KEY);
 `bpm = 60 * beats * rate / (end - start)`. The first source that holds a value wins:
 
 1. A BPM tag, as `analysis::bpm_tag` reads it.
+
 2. A WAV `acid` chunk: beats, tempo, root note and the one-shot flag.
+
 3. The file name: a token `120bpm`, or `120` followed by `bpm`, or a bare 2- or 3-digit number from 60 to 200. Key from a token such as `Am`, `C#m`, `Fmaj` or `Bb`. A single letter, such as `A`, is not a key: it names takes too often.
+
 4. Length alone: the power-of-2 beat count whose tempo is nearest 120 BPM on a log scale. Stored with `bpm_from='length'`.
 
 Beat detection is not used: it does not settle on a 2-bar file.
@@ -110,11 +116,17 @@ A list like Playlists. Columns: name, BPM, beats, key, length, channels, origin,
 `Tape` keeps `lp`, voice 1's loop, and gains `own: [Option<Box<Loop>>; VOICES]`. A voice reads its own loop when it has one, else `lp`. Voice 1's own loop is `lp`. A single-loop tape is `own` all `None`, as today.
 
 - **`Cmd::LoadVoice(i, Box<Loop>)`** puts a loop in voice `i`'s place and fits that voice's window to it. Voice 0's replaces `lp`, so voices without their own follow it.
+
 - **`Cmd::Load`** replaces `lp` and returns every `own` loop. A load can return up to 4 values (3 loops and a snapshot), within the return ring's 16.
+
 - **Fades.** A `LoadVoice` while playing fades that voice alone over 5 ms, out and in. The others play on.
+
 - **The write head** is held off while any `own` is `Some`. `Setting::Write(true)` is kept and applies once none is.
+
 - **The peak grid** is one per voice, from the loop it reads.
+
 - **Reset** restores every loop as last loaded. The handle keeps a copy per voice.
+
 - **Snapshot** copies `lp`, as now. An `own` loop is never written, so its copy on the handle is already exact.
 
 A loop for a voice is resampled to the looper's rate on load. A voice load with no tape loaded starts a looper at that loop's rate.
@@ -122,26 +134,39 @@ A loop for a voice is resampled to the looper's rate on load. A voice load with 
 ## In the app
 
 - `tape::load_loop(f, id, voice)`, called from the Loops view.
+
 - `Extent` becomes one per voice, so windows, `:tape N window 25% 75%` and the lanes count in that voice's loop.
+
 - The Tape tab draws the selected voice's loop. At 800 x 592 there is no room for three waveforms. Superseded: `tape-lanes.md` draws every voice's.
+
 - Saves go to `samples/<name>-tape/`, named after voice 1's loop, as now.
 
 ## Tests
 
 - Schema: an old library with `loops` rows opens with them in `loop_lib`; a second open moves nothing twice; a cleared slot stays cleared.
+
 - Scan: tags from directories; a one-shot is skipped; tempo and key from each source, in order; a track under a new loop root leaves `tracks`; `playr scan` skips loop roots; a loop root holding a track root is refused.
+
 - `acid` and `smpl` read from WAVs written by the test.
+
 - Tempo from length: 2 s at 44.1 kHz is 4 beats at 120.
+
 - Engine: voices on their own loops each equal their loop at rate 1; a `LoadVoice` returns the old loop; writing is held while any voice has its own loop; reset restores each.
+
 - Parity: the Loops view's keys and commands in both frontends.
 
 ## Steps
 
 1. Schema, slot migration, `loop_lib` queries, and the slots moved onto them.
+
 2. The loop scan, its tempo and key sources, and `playr loops`.
+
 3. The engine's loop per voice.
+
 4. `playr-app`: actions, commands, Save loop to the library, the Loops view's model.
+
 5. The terminal's and the window's Loops view.
+
 6. README, guides, CHANGELOG, `docs/architecture.md`.
 
 `make test` after each.
@@ -149,8 +174,11 @@ A loop for a voice is resampled to the looper's rate on load. A voice load with 
 ## Open
 
 - **Writing with a loop per voice.** Option (b): the write head prints every send into voice 1's loop.
+
 - **Apple Loops.** In `TODO.md`.
+
 - **Scanning from inside playr.** `:scan` covers tracks only; loops are scanned from the command line.
+
 - **A slot loop's tempo.** Stored empty. The track's analysed tempo could fill it at save time.
 
 ## Where the build departs
