@@ -77,6 +77,7 @@ fn the_callback_neither_allocates_nor_frees() {
         Setting::DelaySend(0, 0.5),
         Setting::ReverbSend(1, 0.5),
         Setting::PrintFx(0.5),
+        Setting::Bounce(true),
     ] {
         h.set(s).unwrap();
     }

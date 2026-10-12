@@ -454,6 +454,11 @@ pub enum Setting {
     Fx(BusSetting),
     /// How much of the returns the write head records, 0 to 1.
     PrintFx(f32),
+    /// On: the write head records the mix as heard, returns included, over
+    /// one pass of the write window from where it is, at feedback 0, and
+    /// stops. It fades in, and at the end crossfades into where it began.
+    /// Sends are not recorded meanwhile. Off: stops it early.
+    Bounce(bool),
     Write(bool),
     WriteWindow(Window),
     Feedback(f32),
@@ -871,6 +876,10 @@ struct Writer {
     /// The post-roll and pre-roll, written while the window is the range.
     post: Lane,
     pre: Lane,
+    /// A bounce's gain, faded in and out; and the frames of its pass still
+    /// to write, 0 once it is fading out or done.
+    bounce: Ramp,
+    bounce_left: usize,
 }
 
 impl Writer {
@@ -892,6 +901,49 @@ impl Writer {
             main: Lane::new(),
             post: Lane::new(),
             pre: Lane::new(),
+            bounce: Ramp::new(0.0),
+            bounce_left: 0,
+        }
+    }
+
+    /// Starts a bounce of one pass, or ends one, fading over `ramp` frames.
+    fn set_bounce(&mut self, on: bool, ramp: u32) {
+        self.bounce_left = if on { self.window.len() } else { 0 };
+        self.bounce.set(on as u8 as f32, ramp);
+    }
+
+    /// Whether a bounce is writing, fading out included.
+    fn bouncing(&self) -> bool {
+        self.bounce_left > 0 || self.bounce.value() > 0.0 || self.bounce.target() > 0.0
+    }
+
+    /// Writes `mix` over the frame under the head at `g`, and over the rolls
+    /// while the window is the range, which a bounce's feedback of 0 makes
+    /// copies of it.
+    fn bounce_frame(&mut self, lp: &mut Loop, mix: [f32; 2], g: f32) {
+        let c = lp.channels;
+        let x = match c {
+            1 => [0.5 * (mix[0] + mix[1]), 0.0],
+            _ => mix,
+        };
+        let put = |lp: &mut Loop, at: usize| {
+            for (ch, s) in lp.samples[at * c..at * c + c].iter_mut().enumerate() {
+                *s = flush(*s + g * (x[ch] - *s));
+            }
+        };
+        let (i, r) = (self.pos, lp.range);
+        put(lp, i);
+        self.main.peak(lp, i, self.window.end);
+        if self.window == r {
+            let n = r.len();
+            if i + n < lp.frames() {
+                put(lp, i + n);
+                self.post.peak(lp, i + n, lp.frames().min(r.end + n));
+            }
+            if i >= n {
+                put(lp, i - n);
+                self.pre.peak(lp, i - n, r.start);
+            }
         }
     }
 
@@ -921,6 +973,7 @@ impl Writer {
     /// the send written one range-length away. Each roll then keeps the
     /// range's level and carries its sends, so a crossfade into it does not
     /// meet the loop as loaded.
+    #[allow(clippy::too_many_arguments)]
     fn write(
         &mut self,
         lp: &mut Loop,
@@ -929,12 +982,27 @@ impl Writer {
         dc_r: f32,
         send: [f32; 2],
         sending: bool,
+        mix: [f32; 2],
+        ramp: u32,
     ) {
         let gate = self.gate.next();
         let feedback = self.feedback.next();
         let wear = self.wear.next();
         let thin = self.thin.next();
         let thin_mix = self.thin_on.next();
+        if self.bouncing() {
+            let g = self.bounce.next() * self.edge(lp, edge);
+            self.bounce_frame(lp, mix, g);
+            if self.bounce_left > 0 {
+                self.bounce_left -= 1;
+                // The pass is done: fade out over where it began.
+                if self.bounce_left == 0 {
+                    self.bounce.set(0.0, ramp);
+                }
+            }
+            self.advance();
+            return;
+        }
         if gate == 0.0 && self.gate.target() == 0.0 {
             self.advance();
             return;
@@ -1299,6 +1367,9 @@ impl Tape {
             }
             Setting::Fx(s) => self.buses.set(s, ramp),
             Setting::PrintFx(v) if finite(v) => self.print.set(v.clamp(0.0, 1.0), ramp),
+            Setting::Bounce(on) if !on || (frames > 0 && !self.writer.window.is_empty()) => {
+                self.writer.set_bounce(on, self.smooth)
+            }
             Setting::Window(i, w)
                 if i < VOICES && !w.is_empty() && w.end <= self.source(i).frames() =>
             {
@@ -1346,8 +1417,9 @@ impl Tape {
                 sending = true;
             }
             if self.lp.frames() > 0 {
+                let (edge, dc_r, smooth) = (self.edge, self.dc_r, self.smooth);
                 self.writer
-                    .write(&mut self.lp, sr, self.edge, self.dc_r, send, sending);
+                    .write(&mut self.lp, sr, edge, dc_r, send, sending, mix, smooth);
             }
             frame.copy_from_slice(&mix);
         }
@@ -1376,5 +1448,10 @@ impl Tape {
 
     pub fn write_window(&self) -> Window {
         self.writer.window
+    }
+
+    /// Whether a bounce is writing.
+    pub fn bouncing(&self) -> bool {
+        self.writer.bouncing()
     }
 }

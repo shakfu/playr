@@ -1,6 +1,6 @@
 # Tape machine v2: mute, bounce, sound design, effects, compact lanes, resume
 
-Status: decided 2026-10-12. Steps 1 (Mute, Off, Clear), 2 (persist and resume), 3 (fold and drawer), 4 (per-lane EQ) and 5 (delay and reverb buses, tape and DJ decks) built 2026-10-12, unreleased; 6 not built. Follows `tape-lanes.md` ("Four lanes"). Decisions are listed at the end.
+Status: decided 2026-10-12. Steps 1 (Mute, Off, Clear), 2 (persist and resume), 3 (fold and drawer), 4 (per-lane EQ), 5 (delay and reverb buses, tape and DJ decks) and 6 (Bounce, both lengths) built 2026-10-12, unreleased: the plan is built. Follows `tape-lanes.md` ("Four lanes"). Decisions are listed at the end.
 
 ## Feedback
 
@@ -254,6 +254,8 @@ A `tape` name for the `persist` setting (`crates/playr-core/src/settings.toml`).
 - **Lanes fold by a triangle** at the start of the header's toggle row; **More** at the end of the main row opens the drawer.
 - **The EQ is in Hz and dB**, not 0 to 1, with frequencies and Q dragged on a log scale. The bell's Q is scaled by its amplitude, so a cut mirrors a boost. Commands: `hp`, `lp`, `bell`, `bell-gain`, `bell-q`; `filter` is refused with a pointer to them.
 - **The layout is in `Deck`**, not GUI state, so the saved tape carries it. An empty lane folds by default only while not folded or unfolded by hand.
+- **Bounce (a)** starts where the write head is, not at the window's start, so it begins at once. It fades in over 20 ms and runs 20 ms past its start point fading out, so the join is a crossfade; about a quarter of what the loop held there leaks into the middle of that crossfade. It writes the rolls too while the window is the range, as Write does. A mono write loop gets the mix summed to mono; (b) makes a stereo one. Bounce is beside Record in the tab's bar: beside Write it overflowed the header's column, and on a row of its own it made the open lanes taller than the smallest window.
+- **Bounce (b)** records through Record's writer thread to a temporary WAV, and on stop loads it into voice 4 as a loop cut to loop, by the normal load path, over a 115 MB buffer allocated ahead and filled in the callback. It needs no new engine code, and the load swaps the loop off the audio thread. It cannot run while Record does, as they share one recorder. It stops itself 5 minutes after it starts, by the clock, so time paused counts. The WAV is deleted once read, so a resumed tape has a silent write loop of its length, as after a print.
 
 ## Order
 

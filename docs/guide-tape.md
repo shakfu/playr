@@ -192,6 +192,24 @@ Voices 2 to 4 start empty.
 
 - **Back to the start.** **Reset** restores every voice's loop as loaded, silences the write loop, and puts every head at its window's start, keeping the settings.
 
+## Bounce
+
+**Bounce**, beside Record, records the mix as you hear it into voice 4's loop: after each voice's level, pan, mute and solo, with the delay and reverb. The list beside it sets how long:
+
+- **1 pass** writes one pass of the write window, starting where the write head is, and stops. What the loop held there is replaced.
+- **until stopped** records until you press Bounce again, up to 5 minutes, and then replaces voice 4's loop with a stereo loop of what it recorded. Voices that loop at other lengths are caught whole. Record cannot run meanwhile: they share one recorder.
+
+For 1 pass:
+
+- **It is not Write.** Write records the sends, before level and pan, and mixes them into what the loop held. Bounce records what is heard, at feedback 0. A muted voice is not bounced; a voice off is not either.
+- **Voice 4 empty:** Bounce makes its loop first, as Write does.
+- **No click where it joins.** It fades in over 20 ms, and at the end of the pass crossfades into where it began.
+- **While it runs,** the write head ignores the sends; Write takes over again after.
+- **A mono write loop** gets the mix summed to mono.
+- **Voices with other lengths** are cut where the pass ends.
+
+Press Bounce again to stop early. `:tape bounce`, `:tape bounce long` and `:tape bounce off` do the same. The status line says when it is done; **Save loop** keeps the result.
+
 ## Saving
 
 - **Save loop** writes the write loop as it now is, only the range, without the rolls: `samples/<track>-tape/<track>-tape-loop.wav`, named after voice 4's loop, or voice 1's when Write made it.

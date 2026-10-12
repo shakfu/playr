@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use playr_core::audio::bus::Handover;
 use playr_core::audio::output::DeviceEvent;
@@ -119,7 +119,24 @@ pub enum TapeAction {
     /// A high-pass on everything the write head records, 0 to 1.
     Thin(f32),
     Fx(FxSetting),
+    /// Record the mix as heard into voice 4's loop, for one pass of the
+    /// write window or until stopped; `None` stops either.
+    Bounce(Option<Bounce>),
 }
+
+/// How long a bounce records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bounce {
+    /// One pass of the write window, into the write loop, making it as
+    /// Write does when voice 4 is empty.
+    Pass,
+    /// Until stopped, up to [`LONG_BOUNCE`]: a new stereo loop of that
+    /// length, which replaces voice 4's.
+    Long,
+}
+
+/// The longest a bounce until stopped records.
+pub const LONG_BOUNCE: Duration = Duration::from_secs(300);
 
 /// What the tape reports.
 #[derive(Debug, Clone, PartialEq)]
@@ -173,6 +190,13 @@ pub enum TapeMessage {
     /// A take's player left the track, or stopped, before the tape took over.
     TakeDropped,
     Saving,
+    /// A bounce finished its pass, or was stopped; a bounce until stopped
+    /// is then in voice 4.
+    Bounced,
+    /// A bounce until stopped that recorded nothing: the tape was stopped.
+    NothingBounced,
+    /// Record and a bounce until stopped share one recorder.
+    RecorderBusy,
     Saved(PathBuf),
     Recording(PathBuf),
     Recorded {
@@ -275,6 +299,12 @@ struct Live {
     /// The write loop has been written or cleared since it was loaded or
     /// reset, so it differs from its source.
     printed: bool,
+    /// A bounce sent, and whether the looper has reported it running.
+    bounce: Option<bool>,
+    /// A bounce until stopped: the WAV it records to, and when it began.
+    long: Option<(PathBuf, Instant)>,
+    /// A bounce until stopped's WAV, loading into voice 4.
+    bounced: Option<PathBuf>,
     state: TapeState,
     /// The volume last sent to the looper.
     volume: f32,
@@ -421,8 +451,9 @@ impl TapeState {
             Setting::ReverbSend(i, x) => self.voices[i].reverb = x,
             Setting::Fx(b) => self.fx.apply(b),
             Setting::PrintFx(x) => self.fx.print = x,
-            // From the settings file, a take and the mixer: not the tape's controls.
-            Setting::Knee(_) | Setting::Head(..) | Setting::Interp(_) => {}
+            // From the settings file, a take and the mixer, and a bounce, which
+            // the looper's status reports: not the tape's settings.
+            Setting::Knee(_) | Setting::Head(..) | Setting::Interp(_) | Setting::Bounce(_) => {}
         }
     }
 }
@@ -681,6 +712,14 @@ impl Deck {
         self.live.as_ref().is_some_and(|l| l.handle.recording())
     }
 
+    /// Whether a bounce runs: one pass, as the looper last reported, or one
+    /// until stopped.
+    pub fn bouncing(&self) -> bool {
+        self.live
+            .as_ref()
+            .is_some_and(|l| l.long.is_some() || l.handle.status().bouncing())
+    }
+
     pub fn saving(&self) -> bool {
         self.live.as_ref().is_some_and(|l| l.save_to.is_some())
     }
@@ -775,6 +814,16 @@ impl Deck {
             }
         }
         if let Some(live) = &mut self.live {
+            // Reported once seen running, so a bounce not yet started is
+            // not taken for one finished.
+            match (live.bounce, live.handle.status().bouncing()) {
+                (Some(_), true) => live.bounce = Some(true),
+                (Some(true), false) => {
+                    live.bounce = None;
+                    found.push(Found::Note(TapeMessage::Bounced));
+                }
+                _ => {}
+            }
             while let Some(r) = live.handle.poll() {
                 match (r, live.save_to.take()) {
                     (Returned::Snapshot(s), Some(dir)) => {
@@ -882,6 +931,9 @@ impl Deck {
             save_to: None,
             sources: Default::default(),
             printed: false,
+            bounce: None,
+            long: None,
+            bounced: None,
             state: TapeState::new(Window::new(0, 0)),
             volume: self.volume,
             interp: None,
@@ -1146,6 +1198,7 @@ impl Deck {
             rate: loaded.rate,
         };
         let failed = |e: playr_looper::Error| e.to_string();
+        let mut bounced = false;
         // Voice 4's loop is the write loop, which every voice without its own
         // reads, and Save loop saves.
         let changed = match i {
@@ -1154,9 +1207,22 @@ impl Deck {
                     .load_voice(playr_looper::TAPE, loaded.lp)
                     .map_err(failed)?;
                 live.extent = extent;
-                (live.name, live.span, live.beats) = (loading.name, loading.span, loading.beats);
-                live.sources[i] = Some(loading.source);
-                live.printed = false;
+                // A bounce keeps the tape's name for saves; its file is read,
+                // and goes, so the write loop resumes silent, as printed.
+                match live.bounced.take_if(|p| *p == loading.source.path) {
+                    Some(path) => {
+                        _ = std::fs::remove_file(path);
+                        live.sources[i] = None;
+                        live.printed = true;
+                        bounced = true;
+                    }
+                    None => {
+                        (live.name, live.span, live.beats) =
+                            (loading.name, loading.span, loading.beats);
+                        live.sources[i] = Some(loading.source);
+                        live.printed = false;
+                    }
+                }
                 live.state.write_window = extent.range;
                 live.handle
                     .set(Setting::WriteWindow(extent.range))
@@ -1184,6 +1250,9 @@ impl Deck {
             live.state.apply(s);
         }
         live.refresh();
+        if bounced {
+            return Ok(TapeMessage::Bounced);
+        }
         Ok(TapeMessage::LoadedVoice {
             voice: i as u8 + 1,
             frames: extent.range.len(),
@@ -1272,6 +1341,12 @@ fn stop_recording(live: &mut Live) -> Option<Found> {
     if !live.handle.recording() {
         return None;
     }
+    // A bounce until stopped goes with the tape it would replace a loop of.
+    if let Some((path, _)) = live.long.take() {
+        _ = live.handle.stop_recording();
+        _ = std::fs::remove_file(path);
+        return None;
+    }
     Some(match live.handle.stop_recording() {
         Ok(r) => Found::Wrote(
             TapeMessage::Recorded {
@@ -1291,6 +1366,10 @@ fn stop_recording(live: &mut Live) -> Option<Found> {
 pub fn poll(f: &mut impl Frontend) {
     for found in f.tape().poll() {
         report(f, found);
+    }
+    let long = f.tape().live.as_ref().and_then(|l| l.long.as_ref());
+    if long.is_some_and(|(_, at)| at.elapsed() >= LONG_BOUNCE) {
+        end_long(f);
     }
     take_over(f);
     let volume = f.mix().gain(crate::mix::Strip::Tape);
@@ -1319,6 +1398,10 @@ pub fn act(f: &mut impl Frontend, action: TapeAction) {
         TapeAction::Load(slot) => return load(f, slot),
         TapeAction::Take => return take(f),
         TapeAction::Record => return record(f),
+        TapeAction::Bounce(Some(Bounce::Long)) => return bounce_long(f),
+        TapeAction::Bounce(None) if f.tape().live.as_ref().is_some_and(|l| l.long.is_some()) => {
+            return end_long(f);
+        }
         TapeAction::Loop(n, id) => return load_loop(f, id, Some(n)),
         _ => {}
     }
@@ -1398,6 +1481,16 @@ fn send_to(live: &mut Live, action: TapeAction, samples: PathBuf) -> Result<(), 
         }
         TapeAction::Eject(n) => live.eject(usize::from(n) - 1).map_err(failed),
         TapeAction::Share(n) => live.share(usize::from(n) - 1).map_err(failed),
+        TapeAction::Bounce(Some(Bounce::Pass)) => {
+            if live.extent.frames == 0 {
+                live.blank_tape()?;
+            }
+            live.handle.set(Setting::Bounce(true)).map_err(failed)?;
+            live.bounce = Some(false);
+            live.printed = true;
+            Ok(())
+        }
+        TapeAction::Bounce(_) => live.handle.set(Setting::Bounce(false)).map_err(failed),
         // The first Write makes the write loop.
         TapeAction::Write(true) if live.extent.frames == 0 => {
             live.blank_tape()?;
@@ -1672,11 +1765,69 @@ fn took(f: &mut impl Frontend) {
     f.notify(TapeMessage::Took.into());
 }
 
+/// Starts a bounce until stopped: the mix, recorded to a WAV, which
+/// [`end_long`] loads into voice 4.
+fn bounce_long(f: &mut impl Frontend) {
+    let Some(live) = f.tape().live.as_mut() else {
+        return f.notify(TapeMessage::NoTape.into());
+    };
+    if live.long.is_some() {
+        return;
+    }
+    if live.handle.recording() {
+        return f.notify(TapeMessage::RecorderBusy.into());
+    }
+    let path = std::env::temp_dir().join(format!("playr-bounce-{}.wav", std::process::id()));
+    match live.handle.record(&path) {
+        Ok(()) => {
+            live.long = Some((path, Instant::now()));
+            f.notify(TapeMessage::Done(TapeAction::Bounce(Some(Bounce::Long))).into());
+        }
+        Err(e) => f.notify(TapeMessage::Failed(e.to_string()).into()),
+    }
+}
+
+/// Ends a bounce until stopped, and loads what it recorded into voice 4,
+/// as a loop of its length whose rolls are its own other end.
+fn end_long(f: &mut impl Frontend) {
+    let Some(live) = f.tape().live.as_mut() else {
+        return;
+    };
+    let Some((path, _)) = live.long.take() else {
+        return;
+    };
+    let rate = live.handle.sample_rate();
+    let src = match live.handle.stop_recording() {
+        Ok(r) if r.frames > 0 => Source {
+            name: live.name.clone(),
+            path: path.clone(),
+            rate,
+            span: (0, r.frames),
+            circular: true,
+            voice: Some(playr_looper::WRITER),
+            beats: None,
+        },
+        Ok(_) => {
+            _ = std::fs::remove_file(&path);
+            return f.notify(TapeMessage::NothingBounced.into());
+        }
+        Err(e) => {
+            _ = std::fs::remove_file(&path);
+            return f.notify(TapeMessage::Failed(e.to_string()).into());
+        }
+    };
+    live.bounced = Some(path);
+    start_load(f, src);
+}
+
 fn record(f: &mut impl Frontend) {
     let samples = f.session().samples_dir().to_path_buf();
     let Some(live) = f.tape().live.as_mut() else {
         return f.notify(TapeMessage::NoTape.into());
     };
+    if live.long.is_some() {
+        return f.notify(TapeMessage::RecorderBusy.into());
+    }
     if let Some(found) = stop_recording(live) {
         return report(f, found);
     }
@@ -1876,6 +2027,7 @@ pub fn settings(action: TapeAction, e: Extent) -> Result<Vec<Setting>, TapeMessa
         | TapeAction::Share(_)
         | TapeAction::Loop(..)
         | TapeAction::Save
-        | TapeAction::Record => return Ok(Vec::new()),
+        | TapeAction::Record
+        | TapeAction::Bounce(_) => return Ok(Vec::new()),
     }])
 }

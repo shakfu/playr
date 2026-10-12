@@ -12,8 +12,8 @@ use playr_app::dispatch::Frontend;
 use playr_app::message::idle_text;
 use playr_app::model::Model;
 use playr_app::tape::{
-    model_name, no_effect, Control as C, Extent, FxSetting as F, Layout, Pos, TapeAction as T,
-    TapeState, VoiceSetting as V, DELAY_MODELS, REVERB_MODELS,
+    model_name, no_effect, Bounce, Control as C, Extent, FxSetting as F, Layout, Pos,
+    TapeAction as T, TapeState, VoiceSetting as V, DELAY_MODELS, REVERB_MODELS,
 };
 use playr_looper::{Window, VOICES, WRITER};
 
@@ -55,6 +55,8 @@ pub struct State {
     found: Vec<playr_core::db::loops::Loop>,
     /// A lane folded or a drawer opened this frame, for the deck to keep.
     layout: Option<Layout>,
+    /// Bounce records until stopped, not one pass.
+    long: bool,
 }
 
 impl State {
@@ -115,12 +117,17 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
             if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                 actions.push(c.action.clone());
             }
+            // Beside Record, which records the mix to a file; with no tape,
+            // the hint takes its room.
+            if c.action == Action::Tape(T::Record) && frames.is_some() {
+                bounce_toggle(ui, deck.bouncing(), &mut tab.long, &mut actions);
+            }
         }
         // Beside the buttons, so the lanes fit the smallest window.
         if frames.is_none() {
             ui.weak(match deck.loading() {
                 true => "Reading the range.",
-                false => "Pick a loop in a lane, or set a range and Load range.",
+                false => "Pick a loop in a lane, or Load range.",
             });
         }
     });
@@ -1270,6 +1277,41 @@ fn drawer_fields(
             }
         }
         ui.end_row();
+    });
+}
+
+/// Bounce, lit while one runs, and how long it records: the mix as heard,
+/// effects included, into voice 4's loop. With one running, its end.
+fn bounce_toggle(ui: &mut egui::Ui, bouncing: bool, long: &mut bool, actions: &mut Vec<Action>) {
+    let tip = match (bouncing, *long) {
+        (true, _) => "stop the bounce here",
+        (false, false) => "record one pass of the write window of the mix as heard, effects included, into voice 4's loop, over what it held",
+        (false, true) => "record the mix as heard, effects included, until pressed again or for 5 minutes; it then replaces voice 4's loop",
+    };
+    let r = ui
+        .add(egui::Button::selectable(bouncing, "Bounce"))
+        .on_hover_text(tip);
+    r.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, bouncing, "Bounce")
+    });
+    if r.clicked() {
+        let length = if *long { Bounce::Long } else { Bounce::Pass };
+        actions.push(Action::Tape(T::Bounce((!bouncing).then_some(length))));
+    }
+    let shown = if *long { "until stopped" } else { "1 pass" };
+    ui.add_enabled_ui(!bouncing, |ui| {
+        let combo = egui::ComboBox::from_id_salt("bounce length")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(long, false, "1 pass");
+                ui.selectable_value(long, true, "until stopped");
+            });
+        combo
+            .response
+            .on_hover_text("how long Bounce records")
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, !bouncing, "Bounce length")
+            });
     });
 }
 

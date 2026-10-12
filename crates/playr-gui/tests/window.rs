@@ -1909,6 +1909,14 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
         let wave = rect(&harness, &format!("Voice {i} waveform"));
         assert!(solo.right() <= wave.left(), "voice {i}: {solo:?} {wave:?}");
     }
+    // Bounce is in the bar, beside Record.
+    let (bounce, record) = (rect(&harness, "Bounce"), rect(&harness, "Record"));
+    let length = rect(&harness, "Bounce length");
+    assert!(
+        length.left() >= bounce.right() && length.right() <= 800.0,
+        "{length:?}"
+    );
+    assert!(bounce.left() > record.right() && (bounce.top() - record.top()).abs() < 1.0);
     // The drawer's last field stays inside the window.
     let last = rect(&harness, "Voice 1 reverb send");
     assert!(last.right() <= 800.0, "{last:?}");

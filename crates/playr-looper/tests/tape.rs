@@ -1294,3 +1294,60 @@ fn the_eq_curve_matches_what_the_voice_passes() {
         }
     }
 }
+
+/// Frames a bounce fades over: 20 ms.
+const FADE: usize = 960;
+
+#[test]
+fn a_bounce_writes_one_pass_of_the_mix_as_heard_and_stops() {
+    let src = noise(9600, 0.5);
+    let mut t = tape(src.clone(), 1, &[Setting::Level(0, 0.5)]);
+    t.set(Setting::Bounce(true));
+    assert!(t.bouncing());
+    // The voice reads each frame as the head writes it: the loop becomes
+    // the voice as heard, at half level, but where the pass began and
+    // ended in a crossfade.
+    run(&mut t, 9600 + FADE);
+    assert!(!t.bouncing(), "stopped after one pass and its fade");
+    let b = buffer(&t);
+    for i in FADE..9600 {
+        assert!(
+            (b[i] - 0.5 * src[i]).abs() < 1e-6,
+            "frame {i}: {} {}",
+            b[i],
+            src[i]
+        );
+    }
+    // Stopped, it writes no more.
+    run(&mut t, 9600);
+    assert_eq!(buffer(&t), b);
+}
+
+#[test]
+fn a_muted_voice_is_not_bounced_and_the_effects_are() {
+    let mut t = tape(noise(9600, 0.5), 1, &[Setting::Mute(0, true)]);
+    t.set(Setting::Bounce(true));
+    run(&mut t, 9600 + FADE);
+    assert!(buffer(&t)[FADE..].iter().all(|x| x.abs() < 1e-6), "silence");
+
+    // A click and its echo 10 ms later, written where they are heard.
+    let mut t = echoing(&[]);
+    t.set(Setting::Bounce(true));
+    run(&mut t, SR as usize + FADE);
+    let b = buffer(&t);
+    assert!((b[480] - 0.5).abs() < 1e-3, "the echo {}", b[480]);
+}
+
+#[test]
+fn bounce_off_ends_it_early_with_a_fade() {
+    let src = noise(9600, 0.5);
+    let mut t = tape(src.clone(), 1, &[Setting::Level(0, 0.5)]);
+    t.set(Setting::Bounce(true));
+    run(&mut t, 4000);
+    t.set(Setting::Bounce(false));
+    run(&mut t, FADE);
+    assert!(!t.bouncing());
+    let b = buffer(&t);
+    // Past the fade, the loop is as it was.
+    assert_eq!(b[4000 + FADE..], src[4000 + FADE..]);
+}

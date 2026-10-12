@@ -79,6 +79,7 @@ pub enum Returned {
 #[derive(Debug)]
 pub struct Status {
     playing: AtomicBool,
+    bouncing: AtomicBool,
     voices: [AtomicU64; VOICES],
     write: AtomicU64,
     peak: AtomicU32,
@@ -95,6 +96,7 @@ impl Status {
     fn new() -> Self {
         Status {
             playing: AtomicBool::new(false),
+            bouncing: AtomicBool::new(false),
             voices: std::array::from_fn(|_| AtomicU64::new(0)),
             write: AtomicU64::new(0),
             peak: AtomicU32::new(0),
@@ -107,6 +109,11 @@ impl Status {
 
     pub fn playing(&self) -> bool {
         self.playing.load(Ordering::Relaxed)
+    }
+
+    /// Whether a bounce is writing.
+    pub fn bouncing(&self) -> bool {
+        self.bouncing.load(Ordering::Relaxed)
     }
 
     /// Voice `i`'s head, in frames.
@@ -397,6 +404,7 @@ impl Looper {
     fn publish(&self, out: &[f32]) {
         let s = &self.status;
         s.playing.store(self.tape.playing(), Ordering::Relaxed);
+        s.bouncing.store(self.tape.bouncing(), Ordering::Relaxed);
         for (i, a) in s.voices.iter().enumerate() {
             a.store(self.tape.voice(i).to_bits(), Ordering::Relaxed);
         }

@@ -1514,6 +1514,15 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape 1 eject", T::Eject(1)),
         ("tape save", T::Save),
         ("tape rec", T::Record),
+        (
+            "tape bounce",
+            T::Bounce(Some(playr_app::tape::Bounce::Pass)),
+        ),
+        (
+            "tape bounce long",
+            T::Bounce(Some(playr_app::tape::Bounce::Long)),
+        ),
+        ("tape bounce off", T::Bounce(None)),
         ("tape write off", T::Write(false)),
         ("tape feedback 0.85", T::Feedback(0.85)),
         ("tape wear 0.3", T::Wear(0.3)),

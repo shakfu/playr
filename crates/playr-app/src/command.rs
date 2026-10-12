@@ -744,7 +744,7 @@ pub const MIN_BEATS: f32 = 0.125;
 /// Most beats in one slice of `:slice beats`: 16 bars of 4/4.
 pub const MAX_BEATS: f32 = 64.0;
 
-const TAPE_USAGE: &str = "usage: :tape load [N] | take | play | stop | reset | save | rec | \
+const TAPE_USAGE: &str = "usage: :tape load [N] | take | play | stop | reset | save | rec | bounce [long|off] | \
      write on|off | feedback F | wear W | thin T | window A B | print-fx P | \
      delay model clean|ping-pong|tape|time MS|sync off|1/1|1/2|1/4|1/8|3/16|1/16|\
      feedback F|tone HZ|wow W|return R | \
@@ -850,6 +850,9 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
         ["reset"] => Ok(T::Reset),
         ["save"] => Ok(T::Save),
         ["rec"] => Ok(T::Record),
+        ["bounce"] => Ok(T::Bounce(Some(crate::tape::Bounce::Pass))),
+        ["bounce", "long"] => Ok(T::Bounce(Some(crate::tape::Bounce::Long))),
+        ["bounce", "off"] => Ok(T::Bounce(None)),
         ["write", w] => on(w).map(T::Write),
         ["feedback", v] => value(v, "feedback", 0.0, 1.0).map(T::Feedback),
         ["wear", v] => value(v, "wear", 0.0, 1.0).map(T::Wear),
@@ -1214,6 +1217,9 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
         T::Loop(n, id) => format!("{n} loop {id}"),
         T::Save => "save".into(),
         T::Record => "rec".into(),
+        T::Bounce(Some(crate::tape::Bounce::Pass)) => "bounce".into(),
+        T::Bounce(Some(crate::tape::Bounce::Long)) => "bounce long".into(),
+        T::Bounce(None) => "bounce off".into(),
         T::Write(b) => format!("write {}", on(b)),
         T::WriteWindow(a, b) => format!("window {} {}", pos(a), pos(b)),
         T::Feedback(v) => format!("feedback {}", n(v)),

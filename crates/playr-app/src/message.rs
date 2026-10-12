@@ -666,7 +666,7 @@ pub fn idle_text(idle: crate::tape::Idle) -> &'static str {
 }
 
 fn tape_text(m: &crate::tape::TapeMessage) -> String {
-    use crate::tape::{TapeAction, TapeMessage};
+    use crate::tape::{Bounce, TapeAction, TapeMessage};
     let secs = |frames: f64, rate: u32| frames / f64::from(rate.max(1));
     match m {
         TapeMessage::Loading => "reading the tape".into(),
@@ -685,6 +685,13 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
         TapeMessage::Done(TapeAction::Play) => "tape playing".into(),
         TapeMessage::Done(TapeAction::Stop) => "tape stopped".into(),
         TapeMessage::Done(TapeAction::Reset) => "tape reset to the loop as loaded".into(),
+        TapeMessage::Done(TapeAction::Bounce(Some(Bounce::Pass))) => {
+            "bouncing one pass of the mix into voice 4's loop".into()
+        }
+        TapeMessage::Done(TapeAction::Bounce(Some(Bounce::Long))) => {
+            "bouncing the mix until stopped, up to 5 minutes; it then replaces voice 4's loop"
+                .into()
+        }
         TapeMessage::Done(TapeAction::Clear(_)) => {
             "the write loop cleared; :tape reset restores it".into()
         }
@@ -728,6 +735,11 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
         TapeMessage::PastRange => "the player is past the range; the tape is loaded".into(),
         TapeMessage::TakeDropped => "the player left the track; the tape is loaded".into(),
         TapeMessage::Saving => "saving the tape".into(),
+        TapeMessage::Bounced => "bounced the mix into voice 4's loop; Save loop keeps it".into(),
+        TapeMessage::NothingBounced => "nothing bounced: the tape was stopped".into(),
+        TapeMessage::RecorderBusy => {
+            "one recording at a time: stop Record or the bounce until stopped first".into()
+        }
         TapeMessage::Saved(path) => format!("saved the tape to {}", home_as_tilde(path)),
         TapeMessage::Recording(path) => format!("recording the tape to {}", home_as_tilde(path)),
         TapeMessage::Recorded {

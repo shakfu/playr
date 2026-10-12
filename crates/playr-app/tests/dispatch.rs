@@ -2057,3 +2057,62 @@ fn the_decks_delay_syncs_to_the_deck_heard_most() {
     run_decks(&mut f, 1);
     assert_eq!(time(&f), 250.0);
 }
+
+#[test]
+fn a_bounce_makes_the_write_loop_records_one_pass_and_says_so() {
+    use playr_app::tape::{TapeAction as T, TapeMessage as M};
+    let tape = |f: &mut Headless, t| dispatch(Action::Tape(t), f);
+    let (mut f, _dir) = loaded_tape();
+    assert_eq!(f.tape.loaded().unwrap().frames, 0, "no write loop yet");
+    tape(&mut f, T::Play);
+    tape(&mut f, T::Bounce(Some(playr_app::tape::Bounce::Pass)));
+    assert_eq!(
+        last(&f),
+        Some(&Message::Tape(M::Done(T::Bounce(Some(
+            playr_app::tape::Bounce::Pass
+        )))))
+    );
+    // Voice 4's loop is made, voice 1's shape, and the bounce runs a pass.
+    assert_eq!(f.tape.loaded(), f.tape.voice_extent(0));
+    tape_until(&mut f, |m| m == &Message::Tape(M::Bounced));
+    assert!(!f.tape.bouncing());
+    // Voice 1's tone, as heard, is in the write loop.
+    let columns = f.tape.status().unwrap().voice_columns(playr_looper::TAPE);
+    assert!(columns.iter().any(|&c| c > 0.1), "a silent bounce");
+    // Bounce off with none running does nothing, and says nothing more.
+    tape(&mut f, T::Bounce(None));
+    run_tape(&mut f, 512);
+    assert_ne!(last(&f), Some(&Message::Tape(M::Bounced)));
+}
+
+#[test]
+fn a_bounce_until_stopped_replaces_voice_4_s_loop_with_what_it_recorded() {
+    use playr_app::tape::{Bounce, TapeAction as T, TapeMessage as M};
+    let tape = |f: &mut Headless, t| dispatch(Action::Tape(t), f);
+    let (mut f, _dir) = loaded_tape();
+    tape(&mut f, T::Play);
+    tape(&mut f, T::Bounce(Some(Bounce::Long)));
+    assert_eq!(
+        last(&f),
+        Some(&Message::Tape(M::Done(T::Bounce(Some(Bounce::Long)))))
+    );
+    assert!(f.tape.bouncing());
+    // One recorder: Record waits for the bounce.
+    tape(&mut f, T::Record);
+    assert_eq!(last(&f), Some(&Message::Tape(M::RecorderBusy)));
+    // 1 s at the tape's 8 kHz.
+    run_tape(&mut f, 8192);
+    let file = std::env::temp_dir().join(format!("playr-bounce-{}.wav", std::process::id()));
+    assert!(file.exists());
+    tape(&mut f, T::Bounce(None));
+    tape_until(&mut f, |m| m == &Message::Tape(M::Bounced));
+    assert!(!f.tape.bouncing());
+    // Voice 4's loop is the 8192 frames recorded, its rolls its own ends.
+    let e = f.tape.loaded().unwrap();
+    assert_eq!(e.range.len(), 8192, "{e:?}");
+    assert!(f.tape.state().unwrap().voices[3].on);
+    assert!(!file.exists(), "the WAV is read and goes");
+    // Kept as printed: its shape, not its file.
+    let saved = f.tape.saved().unwrap();
+    assert_eq!(saved.reads()[3], playr_app::tape::Reads::Write);
+}
