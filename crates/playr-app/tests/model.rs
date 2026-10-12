@@ -103,7 +103,7 @@ fn the_theme_starts_from_the_settings_and_changes_by_command() {
 #[test]
 fn the_sampler_snaps_ranges_marks_and_nudges_and_slices_the_range() {
     use playr_app::action::{Nudge, Slicing};
-    use playr_app::sampler::{frame_of, Scale, Wave};
+    use playr_app::sampler::{frame_of, Scale};
 
     // Four seconds at 8 kHz changing sign every half second: crossings at
     // frames 4,000, 8,000 ... 28,000. A snap reaches 80 frames either side.
@@ -120,12 +120,7 @@ fn the_sampler_snaps_ranges_marks_and_nudges_and_slices_the_range() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let ms = Duration::from_millis;
     let current = Some(file.clone());
 
@@ -202,7 +197,7 @@ fn the_sampler_snaps_ranges_marks_and_nudges_and_slices_the_range() {
 
 #[test]
 fn snap_on_snaps_the_range_and_fit_zooms_to_it() {
-    use playr_app::sampler::{Scale, Wave};
+    use playr_app::sampler::Scale;
 
     // Crossings at frames 4,000, 8,000 ... 28,000, as above.
     let dir = tempfile::tempdir().unwrap();
@@ -218,12 +213,7 @@ fn snap_on_snaps_the_range_and_fit_zooms_to_it() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let ms = Duration::from_millis;
     let current = Some(file.clone());
 
@@ -297,7 +287,6 @@ fn snap_on_snaps_the_range_and_fit_zooms_to_it() {
 #[test]
 fn a_looped_range_sliced_whole_is_planned_to_loop_and_takes_the_edge_setting() {
     use playr_app::action::Slicing;
-    use playr_app::sampler::Wave;
     use playr_core::samples::Edges;
 
     let dir = tempfile::tempdir().unwrap();
@@ -318,12 +307,7 @@ fn a_looped_range_sliced_whole_is_planned_to_loop_and_takes_the_edge_setting() {
     model.perform(Action::SetSliceEdges(Edges::Zero));
     assert_eq!(model.session().slice_edges(), Edges::Zero);
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let ms = Duration::from_millis;
     model.perform(Action::SetRange(Some((ms(2_000), ms(3_000)))));
 
@@ -357,7 +341,6 @@ fn a_looped_range_sliced_whole_is_planned_to_loop_and_takes_the_edge_setting() {
 
 #[test]
 fn restart_plays_from_the_range_start_or_the_track_start() {
-    use playr_app::sampler::Wave;
     use playr_core::audio::State;
 
     let dir = tempfile::tempdir().unwrap();
@@ -370,12 +353,7 @@ fn restart_plays_from_the_range_start_or_the_track_start() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let playing_near = |model: &Model, from: Duration| {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -416,7 +394,6 @@ fn restart_plays_from_the_range_start_or_the_track_start() {
 
 #[test]
 fn the_range_loops_follows_its_changes_and_escape_clears_it() {
-    use playr_app::sampler::Wave;
     use playr_core::audio::State;
 
     let dir = tempfile::tempdir().unwrap();
@@ -429,12 +406,7 @@ fn the_range_loops_follows_its_changes_and_escape_clears_it() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let status = |model: &Model| model.session().player().status();
     let settle = |model: &Model, done: &dyn Fn(&playr_core::audio::Status) -> bool| {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -518,7 +490,7 @@ fn the_range_loops_follows_its_changes_and_escape_clears_it() {
 
 #[test]
 fn a_close_view_reads_its_frames_and_again_once_it_leaves_them() {
-    use playr_app::sampler::{DetailRead, Scale, Wave};
+    use playr_app::sampler::{DetailRead, Scale};
 
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("steps.wav");
@@ -541,9 +513,7 @@ fn a_close_view_reads_its_frames_and_again_once_it_leaves_them() {
             std::thread::sleep(Duration::from_millis(10));
         }
     };
-    until(&mut model, &|m| {
-        matches!(m.sampler().wave, Wave::Ready { .. })
-    });
+    sampler_ready(&mut model);
     let current = Some(file.clone());
 
     // Columns of 64 frames draw from the peaks: nothing is read.
@@ -775,7 +745,7 @@ fn wait_past(count: &std::sync::atomic::AtomicUsize, seen: usize) -> usize {
 #[test]
 fn only_the_latest_slicing_is_shown() {
     use playr_app::action::Slicing;
-    use playr_app::sampler::{plan_text, Wave};
+    use playr_app::sampler::plan_text;
     use playr_core::samples::Cut;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -795,12 +765,7 @@ fn only_the_latest_slicing_is_shown() {
         },
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
 
     // The engine keeps its open file. Planning opens the path again, and
     // finds a pipe that blocks until the test writes the track into it.
@@ -1052,7 +1017,6 @@ fn a_remembered_track_is_offered_at_the_next_start_and_plays_on_a_yes() {
 
 #[test]
 fn audition_takes_the_range_then_the_slice_then_the_region_under_the_playhead() {
-    use playr_app::sampler::Wave;
     use playr_core::audio::State;
 
     let dir = tempfile::tempdir().unwrap();
@@ -1065,12 +1029,7 @@ fn audition_takes_the_range_then_the_slice_then_the_region_under_the_playhead() 
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     model.perform(Action::TogglePause);
     let settle = |model: &Model, done: &dyn Fn(&playr_core::audio::Status) -> bool| {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1116,7 +1075,6 @@ fn held_sampler_model(dir: &Path, file: &Path) -> (Model, std::sync::Arc<common:
 }
 
 fn sampler_model_on(dir: &Path, file: &Path, player: playr_core::audio::Player) -> Model {
-    use playr_app::sampler::Wave;
     let mut model = Model::new(
         db::open(&dir.join("library.db")).unwrap(),
         player,
@@ -1124,19 +1082,13 @@ fn sampler_model_on(dir: &Path, file: &Path, player: playr_core::audio::Player) 
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     model
 }
 
 /// A model in the sampler, playing `file`, which is in the library file at
 /// `dir/library.db` as it is on disk, so an analysis of it is current.
 fn analysable(dir: &Path, file: &Path, tagged: Option<f32>) -> Model {
-    use playr_app::sampler::Wave;
     let library = dir.join("library.db");
     let conn = db::open(&library).unwrap();
     let mut t = track(file.to_str().unwrap());
@@ -1159,12 +1111,7 @@ fn analysable(dir: &Path, file: &Path, tagged: Option<f32>) -> Model {
     let mut model = Model::new(conn, common::fake_player().0, vec![t], Config::default());
     model.session_mut().set_library_path(library);
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     model
 }
 
@@ -1757,6 +1704,20 @@ fn a_planned_slice_is_selected_moved_and_joined_to_the_one_before() {
     assert!(model.sampler().pending.is_none());
 }
 
+/// Refreshes `model` until the sampler shows the waveform and the engine has
+/// opened the track. The queue names it first, and a cut until then is refused.
+fn sampler_ready(model: &mut Model) {
+    use playr_app::sampler::Wave;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(model.sampler().wave, Wave::Ready { .. })
+        || model.session().playing_track().is_err()
+    {
+        assert!(Instant::now() < deadline, "no waveform, or nothing playing");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Refreshes `model` until no plan is being made.
 fn wait_for_plan(model: &mut Model) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1918,6 +1879,7 @@ fn an_edited_plan_and_its_undo_wait_for_their_track() {
         let deadline = Instant::now() + Duration::from_secs(5);
         while model.snapshot().status.current().map(|p| p.as_path()) != Some(file)
             || !matches!(model.sampler().wave, Wave::Ready { .. })
+            || model.session().playing_track().is_err()
         {
             assert!(Instant::now() < deadline, "not on {}", file.display());
             model.refresh();
@@ -2382,7 +2344,7 @@ fn info_refuses_when_there_is_no_track_to_describe() {
 
 #[test]
 fn scrub_plays_a_moment_from_the_time_then_pauses() {
-    use playr_app::sampler::{Wave, SCRUB};
+    use playr_app::sampler::SCRUB;
     use playr_core::audio::State;
 
     let dir = tempfile::tempdir().unwrap();
@@ -2395,17 +2357,13 @@ fn scrub_plays_a_moment_from_the_time_then_pauses() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let state = |model: &Model| model.session().player().status().state;
     let at = Duration::from_secs(4);
     model.perform(Action::Scrub(at));
     // Paused at the moment's end, having played it: from a stop, a pause
     // could only come from the scrub.
+    let deadline = Instant::now() + Duration::from_secs(5);
     while state(&model) != State::Paused || model.session().player().position() < at {
         assert!(Instant::now() < deadline, "never paused after it");
         std::thread::sleep(Duration::from_millis(5));
@@ -2419,7 +2377,6 @@ fn scrub_plays_a_moment_from_the_time_then_pauses() {
 /// pause what that command started.
 #[test]
 fn loop_right_after_audition_plays_the_loop() {
-    use playr_app::sampler::Wave;
     use playr_core::audio::State;
 
     let dir = tempfile::tempdir().unwrap();
@@ -2432,14 +2389,10 @@ fn loop_right_after_audition_plays_the_loop() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let status = |model: &Model| model.session().player().status();
     model.perform(Action::TogglePause);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while status(&model).state != State::Paused {
         assert!(Instant::now() < deadline, "never paused");
         std::thread::sleep(Duration::from_millis(5));
@@ -2463,7 +2416,6 @@ fn loop_right_after_audition_plays_the_loop() {
 
 #[test]
 fn audition_hears_the_same_span_each_time_it_is_pressed() {
-    use playr_app::sampler::Wave;
     use playr_core::audio::State;
 
     let dir = tempfile::tempdir().unwrap();
@@ -2476,12 +2428,7 @@ fn audition_hears_the_same_span_each_time_it_is_pressed() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let ms = Duration::from_millis;
     let state = |model: &Model| model.session().player().status().state;
     // Each press waits to see playing, then the pause at the span's end.
@@ -2802,7 +2749,6 @@ fn an_earlier_export_is_converted_by_name_or_path() {
 #[test]
 fn slice_edges_chosen_after_planning_replan_what_is_written() {
     use playr_app::action::Slicing;
-    use playr_app::sampler::Wave;
     use playr_core::samples::Edges;
 
     // Crossings at frames 4,000, 8,000 ... 28,000.
@@ -2821,12 +2767,7 @@ fn slice_edges_chosen_after_planning_replan_what_is_written() {
         config,
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let ms = Duration::from_millis;
     let planned = |model: &mut Model| {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -2897,7 +2838,7 @@ fn slice_edges_chosen_after_planning_replan_what_is_written() {
 #[test]
 fn n_and_p_step_through_planned_slices_inside_the_range() {
     use playr_app::action::Slicing;
-    use playr_app::sampler::{frame_of, Wave};
+    use playr_app::sampler::frame_of;
     use playr_core::audio::State;
 
     let dir = tempfile::tempdir().unwrap();
@@ -2910,12 +2851,7 @@ fn n_and_p_step_through_planned_slices_inside_the_range() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     let ms = Duration::from_millis;
     let state = |model: &Model| model.session().player().status().state;
     let settle = |model: &Model, want: State| {
@@ -2967,7 +2903,6 @@ fn n_and_p_step_through_planned_slices_inside_the_range() {
 #[test]
 fn sensitivities_asked_for_while_planning_plan_only_the_last() {
     use playr_app::action::Slicing;
-    use playr_app::sampler::Wave;
     use playr_core::samples::Cut;
 
     let dir = tempfile::tempdir().unwrap();
@@ -2980,18 +2915,7 @@ fn sensitivities_asked_for_while_planning_plan_only_the_last() {
         Config::default(),
     );
     model.perform(Action::ShowView(View::Sampler));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(model.sampler().wave, Wave::Ready { .. }) {
-        assert!(Instant::now() < deadline, "no waveform");
-        model.refresh();
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    // The queue shows the track before the engine opens it; until then a cut
-    // is refused as nothing playing.
-    while model.session().playing_track().is_err() {
-        assert!(Instant::now() < deadline, "never opened");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    sampler_ready(&mut model);
     model.perform(Action::SetRange(Some((
         Duration::from_secs(1),
         Duration::from_secs(3),
