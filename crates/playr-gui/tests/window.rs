@@ -2377,6 +2377,7 @@ fn titled(titles: &[&str]) -> (Harness<'static, Gui>, tempfile::TempDir) {
     (harness, dir)
 }
 
+#[cfg(target_os = "macos")]
 fn drawable(harness: &Harness<'_, Gui>, c: char) -> bool {
     harness
         .ctx

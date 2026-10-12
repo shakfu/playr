@@ -2986,6 +2986,12 @@ fn sensitivities_asked_for_while_planning_plan_only_the_last() {
         model.refresh();
         std::thread::sleep(Duration::from_millis(10));
     }
+    // The queue shows the track before the engine opens it; until then a cut
+    // is refused as nothing playing.
+    while model.session().playing_track().is_err() {
+        assert!(Instant::now() < deadline, "never opened");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     model.perform(Action::SetRange(Some((
         Duration::from_secs(1),
         Duration::from_secs(3),
