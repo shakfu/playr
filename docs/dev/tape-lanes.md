@@ -108,7 +108,7 @@ From the 2026-10-11 discussion: lanes; delay and reverb get their own design; no
 
 The write head writes a loop of its own, the write loop, apart from the three lanes. Before, it wrote voice 1's loop, and was held off while any voice read a loop of its own; with independent lanes that was the usual case, so Write looked dead.
 
-- **Made by the first Write**: silent, voice 1's loop's length, channels and rolls. Voice 1 must hold a loop. Eject on the write lane drops it and turns Write off.
+- **Made by the first Write**: silent, voice 1's loop's length, channels and rolls. Voice 1 must hold a loop. Changed 2026-10-12: the first of voices 1 to 3 holding a loop, since a refusal with voice 1 empty showed as a Write that would not tick. Eject on the write lane drops it and turns Write off.
 
 - **Heard through a lane** that picks it, as a play head on a tape. No dedicated playback head: one can come later as a monitor level.
 

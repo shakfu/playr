@@ -15,6 +15,7 @@ pub mod command;
 pub mod config;
 pub mod dispatch;
 pub mod dj;
+pub mod fx;
 pub mod instance;
 pub mod loops;
 pub mod media;

@@ -6,7 +6,7 @@
 //! author, under MIT. The rest are Faust ([`crate::faust`]).
 
 use crate::faust::{self, Faust, ParamIndex};
-use crate::{flush, one_pole};
+use crate::{flush, one_pole, Ramp};
 
 /// The longest delay, in seconds.
 pub const DELAY_SECONDS: f32 = 2.0;
@@ -471,5 +471,113 @@ impl Reverb {
             ReverbModel::Jp => self.jp.frame(x),
             ReverbModel::Plate => self.plate.frame(x),
         }
+    }
+}
+
+/// A bus with no input and its output below -120 dB for this long is
+/// skipped, and its tail cleared: the dry signal is then bit-exact.
+const BUS_QUIET_SECONDS: f32 = 1.0;
+const BUS_FLOOR: f32 = 1e-6;
+
+/// A setting of [`Buses`]. Values out of range are clamped; values not
+/// finite are ignored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BusSetting {
+    /// Selects the delay's model; the new one starts silent.
+    DelayModel(DelayModel),
+    Delay(DelayParam, f32),
+    /// The delay's level into the mix, 0 to 1.
+    DelayReturn(f32),
+    ReverbModel(ReverbModel),
+    Reverb(ReverbParam, f32),
+    ReverbReturn(f32),
+}
+
+/// A delay and a reverb, each a send bus with a return level, as the tape
+/// and the DJ mixer share them. A bus that hears nothing is skipped.
+pub struct Buses {
+    delay: Delay,
+    reverb: Reverb,
+    /// Each bus's level into the mix.
+    ret: [Ramp<f32>; 2],
+    /// Frames each bus has had no input and its output below [`BUS_FLOOR`].
+    quiet: [u32; 2],
+    /// Quiet frames after which a bus is skipped.
+    idle: u32,
+}
+
+impl Buses {
+    /// Allocates megabytes; build them off the audio thread.
+    pub fn new(sample_rate: u32) -> Self {
+        let idle = (BUS_QUIET_SECONDS * sample_rate as f32) as u32;
+        Buses {
+            delay: Delay::new(sample_rate),
+            reverb: Reverb::new(sample_rate),
+            ret: [Ramp::new(1.0); 2],
+            quiet: [idle; 2],
+            idle,
+        }
+    }
+
+    /// Applies `s`; a return moves over `ramp` frames.
+    pub fn set(&mut self, s: BusSetting, ramp: u32) {
+        let unit = |v: f32| v.is_finite().then(|| v.clamp(0.0, 1.0));
+        match s {
+            BusSetting::DelayModel(m) => self.delay.set_model(m),
+            BusSetting::Delay(p, v) => self.delay.set(p, v),
+            BusSetting::ReverbModel(m) => self.reverb.set_model(m),
+            BusSetting::Reverb(p, v) => self.reverb.set(p, v),
+            BusSetting::DelayReturn(v) | BusSetting::ReverbReturn(v) => {
+                let b = matches!(s, BusSetting::ReverbReturn(_)) as usize;
+                if let Some(v) = unit(v) {
+                    self.ret[b].set(v, ramp);
+                }
+            }
+        }
+    }
+
+    /// Each bus's return for one frame in, delay then reverb, at its level;
+    /// silence from a skipped bus.
+    pub fn frame(&mut self, input: [[f32; 2]; 2]) -> [[f32; 2]; 2] {
+        let mut out = [[0.0; 2]; 2];
+        for (b, x) in input.into_iter().enumerate() {
+            let level = self.ret[b].next();
+            let loud = x != [0.0; 2];
+            let idle = self.quiet[b] >= self.idle;
+            if !loud && idle {
+                continue;
+            }
+            if idle && b == 0 {
+                self.delay.settle();
+            }
+            let wet = match b {
+                0 => self.delay.frame(x),
+                _ => self.reverb.frame(x),
+            };
+            match loud || wet.iter().any(|w| w.abs() > BUS_FLOOR) {
+                true => self.quiet[b] = 0,
+                false => {
+                    self.quiet[b] += 1;
+                    if self.quiet[b] == self.idle {
+                        match b {
+                            0 => self.delay.clear(),
+                            _ => self.reverb.clear(),
+                        }
+                    }
+                }
+            }
+            out[b] = [wet[0] * level, wet[1] * level];
+        }
+        out
+    }
+}
+
+impl std::fmt::Debug for Buses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Buses")
+            .field("delay", &self.delay.model())
+            .field("reverb", &self.reverb.model())
+            .field("quiet", &self.quiet)
+            .finish_non_exhaustive()
     }
 }

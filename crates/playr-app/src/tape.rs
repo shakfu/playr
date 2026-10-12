@@ -11,15 +11,15 @@ use playr_core::audio::output::DeviceEvent;
 use playr_core::audio::resample::Resample;
 use playr_core::audio::{Attachment, Sources, State};
 use playr_core::samples;
-use playr_looper::{
-    DelayModel, DelayParam, Handle, Loop, Looper, Returned, ReverbModel, ReverbParam, Setting,
-    Window,
-};
+use playr_looper::{BusSetting, DelayParam, Handle, Loop, Looper, Returned, Setting, Window};
 
 use crate::dispatch::Frontend;
 use crate::message::Message;
 
 mod saved;
+pub use crate::fx::{
+    model_name, Division, FxField, FxSetting, FxState, DELAY_MODELS, REVERB_MODELS,
+};
 pub use saved::{Reads, SavedTape};
 
 /// How the Tape tab shows each lane: folded to its header and a strip, and
@@ -81,95 +81,6 @@ pub enum VoiceSetting {
     /// The sends to the delay and the reverb, 0 to 1, after the level.
     Delay(f32),
     Reverb(f32),
-}
-
-/// A part of voice 1's window, which a synced delay's time follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Division {
-    Whole,
-    Half,
-    Quarter,
-    Eighth,
-    /// A dotted eighth.
-    DottedEighth,
-    Sixteenth,
-}
-
-impl Division {
-    pub const ALL: [Division; 6] = [
-        Division::Whole,
-        Division::Half,
-        Division::Quarter,
-        Division::Eighth,
-        Division::DottedEighth,
-        Division::Sixteenth,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Division::Whole => "1/1",
-            Division::Half => "1/2",
-            Division::Quarter => "1/4",
-            Division::Eighth => "1/8",
-            Division::DottedEighth => "3/16",
-            Division::Sixteenth => "1/16",
-        }
-    }
-
-    pub fn fraction(self) -> f64 {
-        match self {
-            Division::Whole => 1.0,
-            Division::Half => 0.5,
-            Division::Quarter => 0.25,
-            Division::Eighth => 0.125,
-            Division::DottedEighth => 0.1875,
-            Division::Sixteenth => 0.0625,
-        }
-    }
-}
-
-/// The delay's models by name, as commands and the saved tape write them.
-pub const DELAY_MODELS: [(&str, DelayModel); 3] = [
-    ("clean", DelayModel::Clean),
-    ("ping-pong", DelayModel::PingPong),
-    ("tape", DelayModel::Tape),
-];
-
-/// The reverb's models by name.
-pub const REVERB_MODELS: [(&str, ReverbModel); 4] = [
-    ("freeverb", ReverbModel::Freeverb),
-    ("zita", ReverbModel::Zita),
-    ("jp", ReverbModel::Jp),
-    ("plate", ReverbModel::Plate),
-];
-
-/// The name `DELAY_MODELS` or `REVERB_MODELS` gives `model`.
-pub fn model_name<M: PartialEq>(table: &[(&'static str, M)], model: M) -> &'static str {
-    table.iter().find(|m| m.1 == model).expect("every model").0
-}
-
-/// A setting of the send effects. Ranges are checked where it is parsed.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FxSetting {
-    DelayModel(DelayModel),
-    /// The delay's time in ms; sets Sync off.
-    Time(f32),
-    /// The delay's time as a part of voice 1's window, or off.
-    Sync(Option<Division>),
-    Feedback(f32),
-    /// The low-pass in the delay's loop, in Hz.
-    Tone(f32),
-    /// The tape model's wow and flutter, 0 to 1.
-    Wow(f32),
-    DelayReturn(f32),
-    ReverbModel(ReverbModel),
-    Size(f32),
-    /// Seconds to -60 dB.
-    Decay(f32),
-    Damp(f32),
-    ReverbReturn(f32),
-    /// How much of the returns the write head records, 0 to 1.
-    Print(f32),
 }
 
 /// What `:tape` does.
@@ -410,91 +321,6 @@ pub struct VoiceState {
     pub reverb: f32,
 }
 
-/// The send effects' settings as last sent.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FxState {
-    pub delay_model: DelayModel,
-    /// In ms.
-    pub time: f32,
-    pub sync: Option<Division>,
-    pub feedback: f32,
-    pub tone: f32,
-    pub wow: f32,
-    pub delay_return: f32,
-    pub reverb_model: ReverbModel,
-    pub size: f32,
-    pub decay: f32,
-    pub damp: f32,
-    pub reverb_return: f32,
-    pub print: f32,
-}
-
-impl Default for FxState {
-    /// As `playr_looper::Tape::new` starts.
-    fn default() -> Self {
-        let mut fx = FxState {
-            delay_model: DelayModel::DEFAULT,
-            time: 0.0,
-            sync: None,
-            feedback: 0.0,
-            tone: 0.0,
-            wow: 0.0,
-            delay_return: 1.0,
-            reverb_model: ReverbModel::DEFAULT,
-            size: 0.0,
-            decay: 0.0,
-            damp: 0.0,
-            reverb_return: 1.0,
-            print: 0.0,
-        };
-        for (p, v) in playr_looper::DELAY_DEFAULTS {
-            fx.apply(Setting::Delay(p, v));
-        }
-        for (p, v) in playr_looper::REVERB_DEFAULTS {
-            fx.apply(Setting::Reverb(p, v));
-        }
-        fx
-    }
-}
-
-impl FxState {
-    fn apply(&mut self, s: Setting) {
-        match s {
-            Setting::DelayModel(m) => self.delay_model = m,
-            Setting::Delay(DelayParam::Time, x) => self.time = x * 1000.0,
-            Setting::Delay(DelayParam::Feedback, x) => self.feedback = x,
-            Setting::Delay(DelayParam::Tone, x) => self.tone = x,
-            Setting::Delay(DelayParam::Wow, x) => self.wow = x,
-            Setting::DelayReturn(x) => self.delay_return = x,
-            Setting::ReverbModel(m) => self.reverb_model = m,
-            Setting::Reverb(ReverbParam::Size, x) => self.size = x,
-            Setting::Reverb(ReverbParam::Decay, x) => self.decay = x,
-            Setting::Reverb(ReverbParam::Damp, x) => self.damp = x,
-            Setting::ReverbReturn(x) => self.reverb_return = x,
-            Setting::PrintFx(x) => self.print = x,
-            _ => {}
-        }
-    }
-
-    /// The looper settings that make a new tape's effects these.
-    pub fn settings(&self) -> [Setting; 12] {
-        [
-            Setting::DelayModel(self.delay_model),
-            Setting::Delay(DelayParam::Time, self.time / 1000.0),
-            Setting::Delay(DelayParam::Feedback, self.feedback),
-            Setting::Delay(DelayParam::Tone, self.tone),
-            Setting::Delay(DelayParam::Wow, self.wow),
-            Setting::DelayReturn(self.delay_return),
-            Setting::ReverbModel(self.reverb_model),
-            Setting::Reverb(ReverbParam::Size, self.size),
-            Setting::Reverb(ReverbParam::Decay, self.decay),
-            Setting::Reverb(ReverbParam::Damp, self.damp),
-            Setting::ReverbReturn(self.reverb_return),
-            Setting::PrintFx(self.print),
-        ]
-    }
-}
-
 /// The delay time, in ms, that `division` of voice 1's window makes, as
 /// voice 1 plays it over a loop of shape `e`: `None` while it reads
 /// nothing or stands still.
@@ -593,13 +419,8 @@ impl TapeState {
             Setting::Thin(x) => self.thin = x,
             Setting::DelaySend(i, x) => self.voices[i].delay = x,
             Setting::ReverbSend(i, x) => self.voices[i].reverb = x,
-            Setting::DelayModel(_)
-            | Setting::Delay(..)
-            | Setting::DelayReturn(_)
-            | Setting::ReverbModel(_)
-            | Setting::Reverb(..)
-            | Setting::ReverbReturn(_)
-            | Setting::PrintFx(_) => self.fx.apply(s),
+            Setting::Fx(b) => self.fx.apply(b),
+            Setting::PrintFx(x) => self.fx.print = x,
             // From the settings file, a take and the mixer: not the tape's controls.
             Setting::Knee(_) | Setting::Head(..) | Setting::Interp(_) => {}
         }
@@ -1106,7 +927,7 @@ impl Live {
         else {
             return;
         };
-        let s = Setting::Delay(DelayParam::Time, ms / 1000.0);
+        let s = Setting::Fx(BusSetting::Delay(DelayParam::Time, ms / 1000.0));
         // A full ring drops it; the next change sends it again.
         if ms != fx.time && self.handle.set(s).is_ok() {
             self.state.apply(s);
@@ -1148,18 +969,24 @@ impl Live {
         Ok(())
     }
 
-    /// Makes the write loop, silent and the shape of voice 0's loop, named
-    /// after it for saves; the voices reading it take its range.
+    /// The first of voices 1 to 3, from 0, holding a loop: the shape the
+    /// first Write gives the write loop.
+    fn first_loop(&self) -> Option<usize> {
+        (0..playr_looper::WRITER).find(|&i| self.own[i].is_some_and(|e| e.frames > 0))
+    }
+
+    /// Makes the write loop, silent and the shape of the first lane's loop,
+    /// named after it for saves; the voices reading it take its range.
     fn blank_tape(&mut self) -> Result<(), TapeMessage> {
-        let shape = self.own[0]
-            .filter(|e| e.frames > 0)
-            .ok_or(TapeMessage::Empty(1))?;
+        // A tape with voice 4 empty holds a loop in another lane.
+        let i = self.first_loop().ok_or(TapeMessage::NoTape)?;
+        let shape = self.own[i].expect("found");
         let failed = |e: playr_looper::Error| TapeMessage::Failed(e.to_string());
-        self.handle.blank_tape(0).map_err(failed)?;
+        self.handle.blank_tape(i).map_err(failed)?;
         self.extent = shape;
         self.sources[playr_looper::WRITER] = None;
         self.printed = false;
-        if let Some((name, span)) = self.own_names[0].clone() {
+        if let Some((name, span)) = self.own_names[i].clone() {
             (self.name, self.span) = (name, span);
         }
         let mut settings = vec![
@@ -1225,8 +1052,8 @@ impl Live {
                 range,
                 rate,
             };
-            // Named after voice 1's loop for saves, as Write names it.
-            if let Some((name, span)) = self.own_names[0].clone() {
+            // Named after the first lane's loop for saves, as Write names it.
+            if let Some((name, span)) = self.first_loop().and_then(|i| self.own_names[i].clone()) {
                 (self.name, self.span) = (name, span);
             }
             self.printed = true;
@@ -1278,7 +1105,8 @@ impl Live {
             Setting::Wear(s.wear),
             Setting::Thin(s.thin),
         ]);
-        settings.extend(s.fx.settings());
+        settings.extend(s.fx.settings().map(Setting::Fx));
+        settings.push(Setting::PrintFx(s.fx.print));
         self.state.fx.sync = s.fx.sync;
         if s.playing {
             settings.push(Setting::Play);
@@ -1894,18 +1722,8 @@ pub enum Control {
     WriteWear,
     Thin,
     PrintFx,
-    DelayModel,
-    Time,
-    Sync,
-    DelayFeedback,
-    Tone,
-    Wow,
-    DelayReturn,
-    ReverbModel,
-    Size,
-    Decay,
-    Damp,
-    ReverbReturn,
+    /// A field of the delay or the reverb.
+    Fx(crate::fx::FxField),
 }
 
 /// Why a control does nothing as the tape is set.
@@ -1985,31 +1803,12 @@ pub fn no_effect(s: &TapeState, e: Extent, control: Control) -> Option<Idle> {
             let sent = |b| fed(s, b);
             (!sent(0) && !sent(1)).then_some(Idle::NoFxSend)
         }),
-        Control::DelayModel
-        | Control::Time
-        | Control::Sync
-        | Control::DelayFeedback
-        | Control::Tone
-        | Control::DelayReturn => (!fed(s, 0)).then_some(Idle::NoFxSend),
-        Control::Wow => (!fed(s, 0))
-            .then_some(Idle::NoFxSend)
-            .or((s.fx.delay_model != DelayModel::Tape).then_some(Idle::Model)),
-        Control::ReverbModel | Control::Damp | Control::ReverbReturn => {
-            (!fed(s, 1)).then_some(Idle::NoFxSend)
-        }
-        Control::Size => (!fed(s, 1)).then_some(Idle::NoFxSend).or(matches!(
-            s.fx.reverb_model,
-            ReverbModel::Zita | ReverbModel::Plate
-        )
-        .then_some(Idle::Model)),
-        Control::Decay => (!fed(s, 1))
-            .then_some(Idle::NoFxSend)
-            .or((s.fx.reverb_model == ReverbModel::Freeverb).then_some(Idle::Model)),
+        Control::Fx(field) => crate::fx::idle(&s.fx, [fed(s, 0), fed(s, 1)], field),
     }
 }
 
 /// Whether a voice that is heard sends to bus `b`: 0 the delay, 1 the reverb.
-fn fed(s: &TapeState, b: usize) -> bool {
+pub fn fed(s: &TapeState, b: usize) -> bool {
     s.voices.iter().zip(s.empty).any(|(v, empty)| {
         let amount = [v.delay, v.reverb][b];
         !empty && v.on && !v.mute && v.level > 0.0 && amount > 0.0
@@ -2065,22 +1864,10 @@ pub fn settings(action: TapeAction, e: Extent) -> Result<Vec<Setting>, TapeMessa
                 VoiceSetting::Reverb(v) => Setting::ReverbSend(i, v),
             }
         }
-        TapeAction::Fx(fx) => match fx {
-            FxSetting::DelayModel(m) => Setting::DelayModel(m),
-            FxSetting::Time(ms) => Setting::Delay(DelayParam::Time, ms / 1000.0),
-            // Sync sets the time from voice 1's window where the tape is known.
-            FxSetting::Sync(_) => return Ok(Vec::new()),
-            FxSetting::Feedback(v) => Setting::Delay(DelayParam::Feedback, v),
-            FxSetting::Tone(hz) => Setting::Delay(DelayParam::Tone, hz),
-            FxSetting::Wow(v) => Setting::Delay(DelayParam::Wow, v),
-            FxSetting::DelayReturn(v) => Setting::DelayReturn(v),
-            FxSetting::ReverbModel(m) => Setting::ReverbModel(m),
-            FxSetting::Size(v) => Setting::Reverb(ReverbParam::Size, v),
-            FxSetting::Decay(v) => Setting::Reverb(ReverbParam::Decay, v),
-            FxSetting::Damp(v) => Setting::Reverb(ReverbParam::Damp, v),
-            FxSetting::ReverbReturn(v) => Setting::ReverbReturn(v),
-            FxSetting::Print(v) => Setting::PrintFx(v),
-        },
+        // Sync sets the time from voice 1's window where the tape is known.
+        TapeAction::Fx(FxSetting::Sync(_)) => return Ok(Vec::new()),
+        TapeAction::Fx(FxSetting::Print(v)) => Setting::PrintFx(v),
+        TapeAction::Fx(fx) => Setting::Fx(fx.bus().expect("a bus setting")),
         TapeAction::Load(_)
         | TapeAction::Take
         | TapeAction::Reset

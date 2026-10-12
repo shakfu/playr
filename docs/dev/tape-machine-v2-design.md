@@ -1,6 +1,6 @@
 # Tape machine v2: mute, bounce, sound design, effects, compact lanes, resume
 
-Status: decided 2026-10-12. Steps 1 (Mute, Off, Clear), 2 (persist and resume), 3 (fold and drawer), 4 (per-lane EQ) and 5 on the tape (delay and reverb buses) built 2026-10-12, unreleased; 5 on the DJ decks and 6 not built. Follows `tape-lanes.md` ("Four lanes"). Decisions are listed at the end.
+Status: decided 2026-10-12. Steps 1 (Mute, Off, Clear), 2 (persist and resume), 3 (fold and drawer), 4 (per-lane EQ) and 5 (delay and reverb buses, tape and DJ decks) built 2026-10-12, unreleased; 6 not built. Follows `tape-lanes.md` ("Four lanes"). Decisions are listed at the end.
 
 ## Feedback
 

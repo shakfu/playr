@@ -4039,3 +4039,21 @@ fn a_kept_tape_is_offered_after_the_player_and_kept_again_at_quit() {
         .unwrap();
     assert_eq!(SavedTape::decode(&kept), Some(saved));
 }
+
+#[test]
+fn the_message_log_keeps_every_message_up_to_its_length() {
+    use playr_app::model::LOG_LEN;
+    let (mut model, _dir) = model();
+    assert!(model.log().is_empty());
+    for _ in 0..LOG_LEN + 5 {
+        model.perform(Action::Search("nothing matches this".into()));
+    }
+    model.notify(Message::Cancelled);
+    let log = model.log();
+    assert_eq!(log.len(), LOG_LEN, "the oldest dropped");
+    assert_eq!(log.back().map(|(_, t)| t.as_str()), model.message_text());
+    assert!(
+        log.iter().zip(log.iter().skip(1)).all(|(a, b)| a.0 <= b.0),
+        "in order"
+    );
+}

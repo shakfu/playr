@@ -753,12 +753,78 @@ const TAPE_USAGE: &str = "usage: :tape load [N] | take | play | stop | reset | s
      ping on|off|slew MS|drive D|hp HZ|off|lp HZ|off|bell HZ|bell-gain DB|bell-q Q|\
      solo on|off|mute on|off|delay S|reverb S";
 
+/// Parses the words of `:tape` or `:dj` that set the delay or the reverb:
+/// `delay model|time|sync|feedback|tone|wow|return` and
+/// `reverb model|size|decay|damp|return`.
+fn fx(words: &[&str]) -> Result<crate::fx::FxSetting, String> {
+    use crate::fx::FxSetting as F;
+    use playr_looper::{DECAY_SECONDS, DELAY_MIN, DELAY_SECONDS, FEEDBACK_MAX, TONE_HZ};
+    let value = |w: &str, what: &str, lo: f32, hi: f32| {
+        w.parse::<f32>()
+            .ok()
+            .filter(|v| (lo..=hi).contains(v))
+            .ok_or_else(|| format!("{what} is {} to {}", number(lo.into()), number(hi.into())))
+    };
+    match words {
+        ["delay", "model", m] => {
+            choose(m, &crate::fx::DELAY_MODELS, "delay model").map(F::DelayModel)
+        }
+        ["delay", "time", ms] => {
+            value(ms, "time", DELAY_MIN * 1000.0, DELAY_SECONDS * 1000.0).map(F::Time)
+        }
+        ["delay", "sync", "off"] => Ok(F::Sync(None)),
+        ["delay", "sync", d] => crate::fx::Division::ALL
+            .into_iter()
+            .find(|x| x.name() == *d)
+            .map(|d| F::Sync(Some(d)))
+            .ok_or_else(|| "sync is off, 1/1, 1/2, 1/4, 1/8, 3/16 or 1/16".to_string()),
+        ["delay", "feedback", v] => value(v, "feedback", 0.0, FEEDBACK_MAX).map(F::Feedback),
+        ["delay", "tone", v] => value(v, "tone", TONE_HZ.0, TONE_HZ.1).map(F::Tone),
+        ["delay", "wow", v] => value(v, "wow", 0.0, 1.0).map(F::Wow),
+        ["delay", "return", v] => value(v, "return", 0.0, 1.0).map(F::DelayReturn),
+        ["reverb", "model", m] => {
+            choose(m, &crate::fx::REVERB_MODELS, "reverb model").map(F::ReverbModel)
+        }
+        ["reverb", "size", v] => value(v, "size", 0.0, 1.0).map(F::Size),
+        ["reverb", "decay", v] => value(v, "decay", DECAY_SECONDS.0, DECAY_SECONDS.1).map(F::Decay),
+        ["reverb", "damp", v] => value(v, "damp", 0.0, 1.0).map(F::Damp),
+        ["reverb", "return", v] => value(v, "return", 0.0, 1.0).map(F::ReverbReturn),
+        _ => Err(FX_USAGE.into()),
+    }
+}
+
+/// What the delay and the reverb take, in `:tape` and `:dj`.
+const FX_USAGE: &str = "usage: delay model clean|ping-pong|tape|time MS|\
+     sync off|1/1|1/2|1/4|1/8|3/16|1/16|feedback F|tone HZ|wow W|return R | \
+     reverb model freeverb|zita|jp|plate|size S|decay SEC|damp D|return R";
+
+/// What follows `delay ` or `reverb ` in a command line for `f`.
+fn fx_line(f: &crate::fx::FxSetting) -> String {
+    use crate::fx::{model_name, FxSetting as F, DELAY_MODELS, REVERB_MODELS};
+    let n = |v: &f32| number(f64::from(*v));
+    match f {
+        F::DelayModel(m) => format!("delay model {}", model_name(&DELAY_MODELS, *m)),
+        F::Time(v) => format!("delay time {}", n(v)),
+        F::Sync(None) => "delay sync off".into(),
+        F::Sync(Some(d)) => format!("delay sync {}", d.name()),
+        F::Feedback(v) => format!("delay feedback {}", n(v)),
+        F::Tone(v) => format!("delay tone {}", n(v)),
+        F::Wow(v) => format!("delay wow {}", n(v)),
+        F::DelayReturn(v) => format!("delay return {}", n(v)),
+        F::ReverbModel(m) => format!("reverb model {}", model_name(&REVERB_MODELS, *m)),
+        F::Size(v) => format!("reverb size {}", n(v)),
+        F::Decay(v) => format!("reverb decay {}", n(v)),
+        F::Damp(v) => format!("reverb damp {}", n(v)),
+        F::ReverbReturn(v) => format!("reverb return {}", n(v)),
+        F::Print(v) => format!("print-fx {}", n(v)),
+    }
+}
+
 /// Parses what follows `:tape`. Voices count from 1; windows take a time or
 /// a percentage of the loop at each end.
 fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
     use crate::tape::{FxSetting as F, TapeAction as T, VoiceSetting as V};
-    use playr_looper::{BELL_DB, BELL_Q, DECAY_SECONDS, DELAY_SECONDS, FEEDBACK_MAX, FILTER_HZ};
-    use playr_looper::{DELAY_MIN, TONE_HZ};
+    use playr_looper::{BELL_DB, BELL_Q, FILTER_HZ};
     let usage = || TAPE_USAGE.to_string();
     let value = |w: &str, what: &str, lo: f32, hi: f32| {
         w.parse::<f32>()
@@ -790,33 +856,7 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
         ["thin", v] => value(v, "thin", 0.0, 1.0).map(T::Thin),
         ["window", a, b] => Ok(T::WriteWindow(tape_pos(a)?, tape_pos(b)?)),
         ["print-fx", v] => value(v, "print-fx", 0.0, 1.0).map(|v| T::Fx(F::Print(v))),
-        ["delay", "model", m] => {
-            choose(m, &crate::tape::DELAY_MODELS, "delay model").map(|m| T::Fx(F::DelayModel(m)))
-        }
-        ["delay", "time", ms] => {
-            value(ms, "time", DELAY_MIN * 1000.0, DELAY_SECONDS * 1000.0).map(|v| T::Fx(F::Time(v)))
-        }
-        ["delay", "sync", "off"] => Ok(T::Fx(F::Sync(None))),
-        ["delay", "sync", d] => crate::tape::Division::ALL
-            .into_iter()
-            .find(|x| x.name() == *d)
-            .map(|d| T::Fx(F::Sync(Some(d))))
-            .ok_or_else(|| "sync is off, 1/1, 1/2, 1/4, 1/8, 3/16 or 1/16".to_string()),
-        ["delay", "feedback", v] => {
-            value(v, "feedback", 0.0, FEEDBACK_MAX).map(|v| T::Fx(F::Feedback(v)))
-        }
-        ["delay", "tone", v] => value(v, "tone", TONE_HZ.0, TONE_HZ.1).map(|v| T::Fx(F::Tone(v))),
-        ["delay", "wow", v] => value(v, "wow", 0.0, 1.0).map(|v| T::Fx(F::Wow(v))),
-        ["delay", "return", v] => value(v, "return", 0.0, 1.0).map(|v| T::Fx(F::DelayReturn(v))),
-        ["reverb", "model", m] => {
-            choose(m, &crate::tape::REVERB_MODELS, "reverb model").map(|m| T::Fx(F::ReverbModel(m)))
-        }
-        ["reverb", "size", v] => value(v, "size", 0.0, 1.0).map(|v| T::Fx(F::Size(v))),
-        ["reverb", "decay", v] => {
-            value(v, "decay", DECAY_SECONDS.0, DECAY_SECONDS.1).map(|v| T::Fx(F::Decay(v)))
-        }
-        ["reverb", "damp", v] => value(v, "damp", 0.0, 1.0).map(|v| T::Fx(F::Damp(v))),
-        ["reverb", "return", v] => value(v, "return", 0.0, 1.0).map(|v| T::Fx(F::ReverbReturn(v))),
+        ["delay" | "reverb", ..] => fx(&words).map(T::Fx),
         [n, setting @ ..] if n.parse::<u8>().is_ok() => {
             let n: u8 = n.parse().expect("checked");
             if !(1..=playr_looper::VOICES as u8).contains(&n) {
@@ -873,8 +913,10 @@ const DJ_USAGE: &str = "usage: :dj a|b load | take | play | pause | cue [down|up
      sync [on|off] | rate PCT | range 8|16|50 | nudge +|-|off | gain DB | level L | \
      eq low|mid|high DB | kill low|mid|high on|off | filter K | hot N [clear] | \
      jump BEATS | loop BEATS|off | seek TIME|PCT% | mute on|off | unqueue | mark prev|next | \
-     grid x2|/2|<|>|reset | grid offset MS | tap; \
-     :dj quantize on|off | strict on|off | cue a|b|off | cue-out split|3-4 | curve smooth|sharp | xfade X|a|b|centre";
+     grid x2|/2|<|>|reset | grid offset MS | tap | delay S | reverb S; \
+     :dj quantize on|off | strict on|off | cue a|b|off | cue-out split|3-4 | curve smooth|sharp | xfade X|a|b|centre | \
+     delay model clean|ping-pong|tape|time MS|sync off|1/1|1/2|1/4|1/8|3/16|1/16|feedback F|tone HZ|wow W|return R | \
+     reverb model freeverb|zita|jp|plate|size S|decay SEC|damp D|return R";
 
 /// A deck's letter.
 pub fn side_name(side: crate::dj::Side) -> &'static str {
@@ -928,6 +970,7 @@ fn dj(rest: &str) -> Result<crate::dj::DjAction, String> {
         ["cue-out", "3-4"] => Ok(D::CueOut(CueOut::Channels)),
         ["curve", "smooth"] => Ok(D::Curve(Curve::Smooth)),
         ["curve", "sharp"] => Ok(D::Curve(Curve::Sharp)),
+        ["delay" | "reverb", ..] => fx(&words).map(D::Fx),
         [s, setting @ ..] if side(s).is_some() => {
             let s = side(s).expect("checked");
             Ok(match setting {
@@ -969,6 +1012,8 @@ fn dj(rest: &str) -> Result<crate::dj::DjAction, String> {
                 ["jump", b] => D::Jump(s, value(b, "jump", -64.0, 64.0)?),
                 ["seek", at] => D::Seek(s, tape_pos(at)?),
                 ["mute", w] => D::Mute(s, on(w)?),
+                ["delay", v] => D::DelaySend(s, value(v, "delay", 0.0, 1.0)?),
+                ["reverb", v] => D::ReverbSend(s, value(v, "reverb", 0.0, 1.0)?),
                 ["unqueue"] => D::Unqueue(s),
                 ["mark", "next"] => D::Mark(s, true),
                 ["mark", "prev"] => D::Mark(s, false),
@@ -1050,6 +1095,9 @@ fn dj_line(d: &crate::dj::DjAction) -> String {
         D::Mark(s, true) => format!("{} mark next", deck(*s)),
         D::Mark(s, false) => format!("{} mark prev", deck(*s)),
         D::Strict(b) => format!("strict {}", on(b)),
+        D::DelaySend(s, v) => format!("{} delay {}", deck(*s), n(v)),
+        D::ReverbSend(s, v) => format!("{} reverb {}", deck(*s), n(v)),
+        D::Fx(f) => fx_line(f),
         D::CueOut(CueOut::Split) => "cue-out split".into(),
         D::CueOut(CueOut::Channels) => "cue-out 3-4".into(),
         D::Curve(Curve::Smooth) => "curve smooth".into(),
@@ -1146,8 +1194,7 @@ fn mix_line(m: &crate::mix::MixAction) -> String {
 
 /// What follows `tape ` in the command line for `t`.
 fn tape_line(t: &crate::tape::TapeAction) -> String {
-    use crate::tape::{model_name, FxSetting as F, Pos, TapeAction as T, VoiceSetting as V};
-    use crate::tape::{DELAY_MODELS, REVERB_MODELS};
+    use crate::tape::{Pos, TapeAction as T, VoiceSetting as V};
     let n = |v: &f32| number(f64::from(*v));
     let pos = |p: &Pos| match p {
         Pos::Percent(p) => format!("{}%", n(p)),
@@ -1194,22 +1241,7 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
             V::Delay(v) => format!("{i} delay {}", n(v)),
             V::Reverb(v) => format!("{i} reverb {}", n(v)),
         },
-        T::Fx(f) => match f {
-            F::DelayModel(m) => format!("delay model {}", model_name(&DELAY_MODELS, *m)),
-            F::Time(v) => format!("delay time {}", n(v)),
-            F::Sync(None) => "delay sync off".into(),
-            F::Sync(Some(d)) => format!("delay sync {}", d.name()),
-            F::Feedback(v) => format!("delay feedback {}", n(v)),
-            F::Tone(v) => format!("delay tone {}", n(v)),
-            F::Wow(v) => format!("delay wow {}", n(v)),
-            F::DelayReturn(v) => format!("delay return {}", n(v)),
-            F::ReverbModel(m) => format!("reverb model {}", model_name(&REVERB_MODELS, *m)),
-            F::Size(v) => format!("reverb size {}", n(v)),
-            F::Decay(v) => format!("reverb decay {}", n(v)),
-            F::Damp(v) => format!("reverb damp {}", n(v)),
-            F::ReverbReturn(v) => format!("reverb return {}", n(v)),
-            F::Print(v) => format!("print-fx {}", n(v)),
-        },
+        T::Fx(f) => fx_line(f),
     }
 }
 

@@ -8,6 +8,7 @@
 pub mod controls;
 mod dj;
 mod fonts;
+mod fx;
 pub mod keys;
 mod mixer;
 pub mod palette;
@@ -61,6 +62,10 @@ pub struct Gui {
     dj_tab: dj::State,
     /// The About window is open.
     about: bool,
+    /// The logo the About window shows, made the first time it opens.
+    logo: Option<egui::TextureHandle>,
+    /// The Messages window is open.
+    messages: bool,
     fonts: fonts::Fallbacks,
 }
 
@@ -80,6 +85,8 @@ impl Gui {
             tape_tab: tape::State::default(),
             dj_tab: dj::State::default(),
             about: false,
+            logo: None,
+            messages: false,
             fonts: fonts::Fallbacks::default(),
         }
     }
@@ -110,6 +117,7 @@ impl Gui {
         egui::CentralPanel::default().show(ui, |ui| self.view(ui));
         self.dialogs(ui.ctx());
         self.about_dialog(ui.ctx());
+        self.messages_window(ui.ctx());
 
         if self.model.quitting() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -291,6 +299,10 @@ impl Gui {
             ui.menu_button("View", |ui| {
                 items(ui, controls::VIEW_MENU, &mut chosen);
                 ui.separator();
+                if ui.button("Messages...").clicked() {
+                    self.messages = true;
+                    ui.close();
+                }
                 ui.menu_button("Theme", |ui| {
                     for control in controls::THEME_MENU {
                         if ui.radio(control.action == theme, control.label).clicked() {
@@ -426,8 +438,7 @@ impl Gui {
         if matches!(self.model.input(), Input::Command(_)) {
             self.command_bar(ui);
         } else {
-            let text = self.model.message_text().unwrap_or_default().to_string();
-            ui.colored_label(palette::Palette::of(ui.visuals()).yellow, text);
+            self.status_line(ui);
         }
         ui.add_space(4.0);
     }
@@ -684,18 +695,94 @@ impl Gui {
     }
 
     /// The version, the author and links to the project.
+    /// The status line: the message showing, on a row kept for it even when
+    /// empty. A click opens the Messages window.
+    fn status_line(&mut self, ui: &mut egui::Ui) {
+        let text = self.model.message_text().unwrap_or_default().to_string();
+        let colour = palette::Palette::of(ui.visuals()).yellow;
+        let height = ui.text_style_height(&egui::TextStyle::Body);
+        let size = egui::vec2(ui.available_width(), height);
+        let response = ui
+            .allocate_ui_with_layout(
+                size,
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_size(size);
+                    ui.add(egui::Label::new(egui::RichText::new(text).color(colour)).truncate())
+                },
+            )
+            .response
+            .interact(egui::Sense::click())
+            .on_hover_text("the last message; click for every message since playr started");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Status line")
+        });
+        if response.clicked() {
+            self.messages = true;
+        }
+    }
+
+    /// Every message since start, newest last, with how long ago each was.
+    fn messages_window(&mut self, ctx: &egui::Context) {
+        if self.messages {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+        let log = self.model.log();
+        egui::Window::new("Messages")
+            .open(&mut self.messages)
+            .default_size([520.0, 300.0])
+            .show(ctx, |ui| {
+                if log.is_empty() {
+                    ui.weak("No messages yet.");
+                    return;
+                }
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        egui::Grid::new("messages")
+                            .num_columns(2)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (at, text) in log {
+                                    let ago = playr_app::message::fmt_time(at.elapsed());
+                                    ui.weak(format!("{ago} ago"));
+                                    ui.label(text);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
+    }
+
     fn about_dialog(&mut self, ctx: &egui::Context) {
+        /// Wide enough for the repository's address.
+        const ABOUT_WIDTH: f32 = 280.0;
         const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+        if self.about && self.logo.is_none() {
+            self.logo = logo(ctx);
+        }
+        let logo = self.logo.as_ref().map(|t| t.id());
         egui::Window::new("About playr")
             .collapsible(false)
             .resizable(false)
+            // A fixed width: centred in an auto-sized window, the logo sat
+            // where the window first measured its middle, off to the right.
+            .min_width(ABOUT_WIDTH)
+            .max_width(ABOUT_WIDTH)
             .open(&mut self.about)
             .show(ctx, |ui| {
-                ui.heading(format!("playr {}", playr_app::VERSION));
-                ui.label(env!("CARGO_PKG_AUTHORS").replace(':', ", "));
-                ui.hyperlink(REPOSITORY);
-                ui.hyperlink_to("Releases", format!("{REPOSITORY}/releases"));
-                ui.hyperlink_to("Issues", format!("{REPOSITORY}/issues"));
+                ui.vertical_centered(|ui| {
+                    if let Some(id) = logo {
+                        let image = egui::Image::new((id, egui::vec2(96.0, 96.0)));
+                        ui.add(image.alt_text("playr logo"));
+                    }
+                    ui.heading(format!("playr {}", playr_app::VERSION));
+                    ui.label(env!("CARGO_PKG_AUTHORS").replace(':', ", "));
+                    ui.hyperlink(REPOSITORY);
+                    ui.hyperlink_to("Releases", format!("{REPOSITORY}/releases"));
+                    ui.hyperlink_to("Issues", format!("{REPOSITORY}/issues"));
+                });
             });
     }
 
@@ -809,4 +896,12 @@ fn prompting(input: &Input) -> bool {
             | Input::SavePlaylist(_)
             | Input::RenamePlaylist { .. }
     )
+}
+
+/// The app's icon as a texture, from the PNG the window's icon is made of.
+fn logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/playr.png")).ok()?;
+    let size = [icon.width as usize, icon.height as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, &icon.rgba);
+    Some(ctx.load_texture("playr logo", image, egui::TextureOptions::LINEAR))
 }

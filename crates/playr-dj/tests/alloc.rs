@@ -4,7 +4,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use playr_dj::{Band, Grid, Returned, Setting, Side, Track};
+use playr_dj::{Band, BusSetting, DelayModel, Grid, Returned, ReverbModel, Setting, Side, Track};
 
 struct Counting;
 
@@ -67,6 +67,10 @@ fn the_callback_neither_allocates_nor_frees() {
         Setting::Filter(Side::B, -0.6),
         Setting::CueBus(Some(Side::B)),
         Setting::Quantize(true),
+        Setting::DelaySend(Side::A, 0.5),
+        Setting::ReverbSend(Side::B, 0.5),
+        Setting::Fx(BusSetting::DelayModel(DelayModel::Tape)),
+        Setting::Fx(BusSetting::ReverbModel(ReverbModel::Plate)),
     ] {
         h.set(s).unwrap();
     }

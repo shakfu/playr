@@ -1,7 +1,7 @@
 //! The decks and the mix with no device: the test calls `Mixer::process`
 //! in place of the engine.
 
-use playr_dj::{Grid, Mixer, Nudge, Range, Setting, Side, Track};
+use playr_dj::{BusSetting, DelayParam, Grid, Mixer, Nudge, Range, Setting, Side, Track};
 
 const SR: u32 = 48_000;
 const BLOCK: usize = 512;
@@ -613,4 +613,109 @@ fn the_master_and_the_headphones_scale_their_own_side() {
     m.take_cue_peak();
     block(&mut m);
     assert_eq!(m.take_cue_peak(), 0.0);
+}
+
+/// Where [`echoing`]'s click is: past the fade a deck starts with.
+const CLICK: usize = 2000;
+/// A 10 ms echo, in frames.
+const ECHO: usize = 480;
+
+/// Deck A on a click at [`CLICK`] of a silent second, on the crossfader's A
+/// end, sending all of it to a 10 ms delay with one echo and an open tone.
+/// Paused, with every ramp settled.
+fn echoing(settings: &[Setting]) -> Mixer {
+    let mut x = vec![0.0; SR as usize];
+    x[CLICK] = 0.5;
+    let mut m = Mixer::new(SR);
+    m.load(Side::A, Box::new(Track::new(x, 1, None).unwrap()))
+        .unwrap();
+    for s in [
+        Setting::Xfade(0.0),
+        Setting::Fx(BusSetting::Delay(DelayParam::Time, 0.01)),
+        Setting::Fx(BusSetting::Delay(DelayParam::Feedback, 0.0)),
+        Setting::Fx(BusSetting::Delay(DelayParam::Tone, 20_000.0)),
+        Setting::DelaySend(Side::A, 1.0),
+    ]
+    .iter()
+    .chain(settings)
+    {
+        m.set(*s);
+    }
+    run(&mut m, SETTLE);
+    m
+}
+
+fn left(out: &[f32]) -> Vec<f32> {
+    out.iter().step_by(2).copied().collect()
+}
+
+/// The left channel of the main mix's next `blocks` blocks.
+fn played(m: &mut Mixer, blocks: usize) -> Vec<f32> {
+    (0..blocks).flat_map(|_| left(&block(m))).collect()
+}
+
+#[test]
+fn a_deck_s_delay_send_returns_its_echo_into_the_main_mix() {
+    let mut m = echoing(&[]);
+    m.set(Setting::Play(Side::A));
+    let out = played(&mut m, 6);
+    assert!((out[CLICK] - 0.5).abs() < 1e-6, "the click {}", out[CLICK]);
+    let echo = out[CLICK + ECHO];
+    assert!((echo - 0.5).abs() < 1e-3, "the echo {echo}");
+    assert!(out[CLICK + 1..CLICK + ECHO].iter().all(|x| x.abs() < 1e-6));
+
+    let mut m = echoing(&[Setting::Fx(BusSetting::DelayReturn(0.5))]);
+    m.set(Setting::Play(Side::A));
+    let echo = played(&mut m, 6)[CLICK + ECHO];
+    assert!((echo - 0.25).abs() < 1e-3, "at return 0.5: {echo}");
+}
+
+#[test]
+fn a_deck_crossfaded_out_reaches_no_effect() {
+    let mut m = echoing(&[Setting::Xfade(1.0), Setting::ReverbSend(Side::A, 1.0)]);
+    m.set(Setting::Play(Side::A));
+    for _ in 0..20 {
+        assert!(block(&mut m).iter().all(|s| s.abs() < 1e-7));
+    }
+}
+
+#[test]
+fn the_cue_hears_the_deck_dry() {
+    let mut m = echoing(&[Setting::CueBus(Some(Side::A))]);
+    m.set(Setting::Play(Side::A));
+    let n = 6 * BLOCK;
+    let (mut main, mut cue) = (vec![0.0; n * 2], vec![0.0; n * 2]);
+    m.process_buses(&mut main, &mut cue);
+    let (main, cue) = (left(&main), left(&cue));
+    assert!(main[CLICK + ECHO] > 0.4, "the echo in the main mix");
+    assert!((cue[CLICK] - 0.5).abs() < 1e-6);
+    assert!(
+        cue[CLICK + 1..].iter().all(|x| x.abs() < 1e-6),
+        "no echo in the cue"
+    );
+}
+
+#[test]
+fn a_fader_cut_leaves_the_echo_ringing() {
+    // Noise into a 100 ms delay with feedback: cut the fader, and the
+    // repeats go on.
+    let mut m = Mixer::new(SR);
+    let x = noise(SR as usize * 4, 0.3, 7);
+    m.load(Side::A, Box::new(Track::new(x, 1, None).unwrap()))
+        .unwrap();
+    for s in [
+        Setting::Xfade(0.0),
+        Setting::Fx(BusSetting::Delay(DelayParam::Time, 0.1)),
+        Setting::Fx(BusSetting::Delay(DelayParam::Feedback, 0.6)),
+        Setting::DelaySend(Side::A, 1.0),
+        Setting::Play(Side::A),
+    ] {
+        m.set(s);
+    }
+    run(&mut m, 40);
+    m.set(Setting::Level(Side::A, 0.0));
+    run(&mut m, SETTLE);
+    // 150 ms after the cut: dry gone, the echoes not.
+    run(&mut m, 10);
+    assert!(rms(&block(&mut m)) > 0.01);
 }

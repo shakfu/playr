@@ -77,7 +77,7 @@ Voice 1 is on when a loop loads; the others are off until a loop is loaded into 
 
 Turning a voice off stops its head and skips its processing; it sends nothing. Turning it on again starts the head at its window's start, or its end in reverse.
 
-The EQ runs high-pass, low-pass, then bell, after Drive, so it can take off the edge drive adds. HP and LP together pass the band between them. Frequencies and Q drag on a log scale, and a frequency can be typed in Hz. In the terminal: `:tape 2 hp 120`, `:tape 2 lp off`, `:tape 2 bell 800`, `:tape 2 bell-gain -6`, `:tape 2 bell-q 4`.
+The EQ runs high-pass, low-pass, then bell, after Drive, so it can take off the edge drive adds. HP and LP together pass the band between them. With the drawer open, the lane's header draws the EQ's response: gain from -18 to 18 dB across 20 Hz to 20 kHz, with a line at 0 dB and ticks at 100 Hz, 1 kHz and 10 kHz. Frequencies and Q drag on a log scale, and a frequency can be typed in Hz. In the terminal: `:tape 2 hp 120`, `:tape 2 lp off`, `:tape 2 bell 800`, `:tape 2 bell-gain -6`, `:tape 2 bell-q 4`.
 
 Drive and the EQ shape both what is heard and what is sent. Changes to the rows move over 20 ms, so a drag does not click; Rate moves over Slew.
 
@@ -119,7 +119,7 @@ Both do nothing on an empty voice.
 
 ## The write head
 
-With voice 4 empty, the first **Write** makes its loop: silent, the length of voice 1's loop, with the same rolls. Voice 1 must then hold a loop. With Write on, the write head moves through its window at the normal rate and rewrites each frame of the write loop as:
+With voice 4 empty, the first **Write** makes its loop: silent, the length of the first loop in voices 1 to 3, counting from voice 1, with the same rolls. With Write on, the write head moves through its window at the normal rate and rewrites each frame of the write loop as:
 
 the write loop's old content times **Feedback**, plus every voice's Send.
 

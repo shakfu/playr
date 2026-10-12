@@ -3,7 +3,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use playr_dsp::fx::{Delay, DelayModel, DelayParam, Reverb, ReverbModel, ReverbParam};
+use playr_dsp::fx::{BusSetting, Buses};
 use playr_dsp::{clip, flush, one_pole, soft_clip, Interp};
 
 use crate::{Error, COLUMNS, TAPE, VOICES};
@@ -44,10 +44,6 @@ const DRIVE_BLEND: f32 = 0.05;
 pub const DEFAULT_KNEE: f32 = 0.5;
 /// The longest rate slew, in ms.
 pub const MAX_SLEW_MS: f32 = 10_000.0;
-/// A bus with no input and its output below -120 dB for this long is
-/// skipped, and its tail cleared: the dry tape is then bit-exact.
-const BUS_QUIET_SECONDS: f32 = 1.0;
-const BUS_FLOOR: f32 = 1e-6;
 
 /// The wear low-pass's one-pole coefficient: off at 0, falling on a log
 /// scale from the top of the band to [`WEAR_HZ`] at 1.
@@ -149,6 +145,52 @@ impl Eq {
             *x += self.boost * t.band;
         }
     }
+}
+
+/// A voice EQ's settings, for [`eq_db`]: as [`Setting::HighPass`],
+/// [`Setting::LowPass`], [`Setting::BellHz`], [`Setting::BellGain`] and
+/// [`Setting::BellQ`] take them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EqShape {
+    pub high_pass: f32,
+    pub low_pass: f32,
+    pub bell_hz: f32,
+    pub bell_gain: f32,
+    pub bell_q: f32,
+}
+
+/// The gain in dB a voice EQ set as `eq` gives a sine at `hz`, once its
+/// settings have landed. Exact: each state-variable filter's response is
+/// its analog prototype's under the bilinear transform, as [`Eq`] runs it.
+pub fn eq_db(eq: EqShape, hz: f32, sample_rate: u32) -> f32 {
+    let (lo, hi) = FILTER_HZ;
+    let sr = sample_rate as f32;
+    let warp = |f: f32| (std::f32::consts::PI * f.clamp(lo, hi).min(0.45 * sr) / sr).tan();
+    let t = warp(hz);
+    // Each filter's denominator at s = jt, with g its warped cutoff.
+    let den = |g: f32, k: f32| (g * g - t * t, k * g * t);
+    let abs = |(re, im): (f32, f32)| re.hypot(im);
+    let k = std::f32::consts::SQRT_2;
+    let mut gain = 1.0;
+    if eq.high_pass.clamp(lo, hi) > lo {
+        gain *= t * t / abs(den(warp(eq.high_pass), k));
+    }
+    if eq.low_pass.clamp(lo, hi) < hi {
+        let g = warp(eq.low_pass);
+        gain *= g * g / abs(den(g, k));
+    }
+    // 1 + boost * band, the band-pass k g s / den at unity at its centre.
+    let a = 10f32.powf(eq.bell_gain.clamp(-BELL_DB, BELL_DB) / 40.0);
+    let boost = a * a - 1.0;
+    let g = warp(eq.bell_hz);
+    let k = 1.0 / (eq.bell_q.clamp(BELL_Q.0, BELL_Q.1) * a);
+    let (re, im) = den(g, k);
+    let n = k * g * t;
+    // n j / (re + j im) = n (im + j re) / |den|^2
+    let d2 = re * re + im * im;
+    let bell = (1.0 + boost * n * im / d2, boost * n * re / d2);
+    gain *= abs(bell);
+    20.0 * gain.max(1e-6).log10()
 }
 
 /// Output frames a crossfade at a wrap takes: `fade_ms`, cut to half the time
@@ -408,14 +450,8 @@ pub enum Setting {
     /// level, mute and solo: an effect follows what is heard.
     DelaySend(usize, f32),
     ReverbSend(usize, f32),
-    /// Selects the delay's model; the new one starts silent.
-    DelayModel(DelayModel),
-    Delay(DelayParam, f32),
-    /// The delay's level into the mix, 0 to 1.
-    DelayReturn(f32),
-    ReverbModel(ReverbModel),
-    Reverb(ReverbParam, f32),
-    ReverbReturn(f32),
+    /// The delay's and the reverb's settings.
+    Fx(BusSetting),
     /// How much of the returns the write head records, 0 to 1.
     PrintFx(f32),
     Write(bool),
@@ -953,78 +989,6 @@ impl Writer {
     }
 }
 
-/// The send effects: a delay and a reverb, each a bus every voice sends to.
-struct Buses {
-    delay: Delay,
-    reverb: Reverb,
-    /// Each bus's level into the mix.
-    ret: [Ramp; 2],
-    /// Frames each bus has had no input and its output below [`BUS_FLOOR`].
-    quiet: [u32; 2],
-    /// Quiet frames after which a bus is skipped.
-    idle: u32,
-    print: Ramp,
-}
-
-impl Buses {
-    fn new(sample_rate: u32) -> Self {
-        let idle = (BUS_QUIET_SECONDS * sample_rate as f32) as u32;
-        Buses {
-            delay: Delay::new(sample_rate),
-            reverb: Reverb::new(sample_rate),
-            ret: [Ramp::new(1.0); 2],
-            quiet: [idle; 2],
-            idle,
-            print: Ramp::new(0.0),
-        }
-    }
-
-    /// Each bus's return for one frame in, at its level; silence from a
-    /// skipped bus.
-    fn frame(&mut self, input: [[f32; 2]; 2]) -> [[f32; 2]; 2] {
-        let mut out = [[0.0; 2]; 2];
-        for (b, x) in input.into_iter().enumerate() {
-            let level = self.ret[b].next();
-            let loud = x != [0.0; 2];
-            let idle = self.quiet[b] >= self.idle;
-            if !loud && idle {
-                continue;
-            }
-            if idle && b == 0 {
-                self.delay.settle();
-            }
-            let wet = match b {
-                0 => self.delay.frame(x),
-                _ => self.reverb.frame(x),
-            };
-            match loud || wet.iter().any(|w| w.abs() > BUS_FLOOR) {
-                true => self.quiet[b] = 0,
-                false => {
-                    self.quiet[b] += 1;
-                    if self.quiet[b] == self.idle {
-                        match b {
-                            0 => self.delay.clear(),
-                            _ => self.reverb.clear(),
-                        }
-                    }
-                }
-            }
-            out[b] = [wet[0] * level, wet[1] * level];
-        }
-        out
-    }
-}
-
-impl std::fmt::Debug for Buses {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Buses")
-            .field("delay", &self.delay.model())
-            .field("reverb", &self.reverb.model())
-            .field("quiet", &self.quiet)
-            .finish_non_exhaustive()
-    }
-}
-
 /// The loop, its voices and its write head. [`Tape::process`] is the whole
 /// signal path and is deterministic, so tests drive it directly.
 #[derive(Debug)]
@@ -1044,6 +1008,8 @@ pub struct Tape {
     /// How the voices' heads read between frames.
     interp: Interp,
     buses: Buses,
+    /// How much of the returns the write head records.
+    print: Ramp,
 }
 
 impl Tape {
@@ -1063,6 +1029,7 @@ impl Tape {
             dc_r: (-std::f32::consts::TAU * DC_HZ / sr).exp(),
             interp: Interp::default(),
             buses: Buses::new(sample_rate),
+            print: Ramp::new(0.0),
         }
     }
 
@@ -1330,13 +1297,8 @@ impl Tape {
             Setting::ReverbSend(i, v) if i < VOICES && finite(v) => {
                 self.voices[i].fx[1].set(v.clamp(0.0, 1.0), ramp)
             }
-            Setting::DelayModel(m) => self.buses.delay.set_model(m),
-            Setting::Delay(p, v) => self.buses.delay.set(p, v),
-            Setting::DelayReturn(v) if finite(v) => self.buses.ret[0].set(v.clamp(0.0, 1.0), ramp),
-            Setting::ReverbModel(m) => self.buses.reverb.set_model(m),
-            Setting::Reverb(p, v) => self.buses.reverb.set(p, v),
-            Setting::ReverbReturn(v) if finite(v) => self.buses.ret[1].set(v.clamp(0.0, 1.0), ramp),
-            Setting::PrintFx(v) if finite(v) => self.buses.print.set(v.clamp(0.0, 1.0), ramp),
+            Setting::Fx(s) => self.buses.set(s, ramp),
+            Setting::PrintFx(v) if finite(v) => self.print.set(v.clamp(0.0, 1.0), ramp),
             Setting::Window(i, w)
                 if i < VOICES && !w.is_empty() && w.end <= self.source(i).frames() =>
             {
@@ -1372,7 +1334,7 @@ impl Tape {
             let wet = [d[0] + r[0], d[1] + r[1]];
             mix[0] += wet[0];
             mix[1] += wet[1];
-            let print = self.buses.print.next();
+            let print = self.print.next();
             if print > 0.0 && wet != [0.0; 2] {
                 match self.lp.channels {
                     1 => send[0] += print * 0.5 * (wet[0] + wet[1]),

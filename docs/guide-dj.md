@@ -171,6 +171,8 @@ Each **channel** strip, from the top:
 
 - **Filter.** One knob, -1 to 1: left of centre a low-pass, which closes as you go left; right of centre a high-pass. Near the centre it does nothing.
 
+- **Delay, Reverb.** What the deck sends to the effects, 0 to 1. See [Delay and reverb](#delay-and-reverb).
+
 - **Level.** The channel fader.
 
 The **mixer**:
@@ -181,6 +183,8 @@ The **mixer**:
 
 - **Strict.** See [Loading a track](#loading-a-track).
 
+- **FX.** Opens the delay's and the reverb's fields in a window.
+
 - **Cue Off, A, B.** The deck heard in the headphones.
 
 - **Out Split, 3-4.** Where the headphone cue goes; see below.
@@ -188,6 +192,16 @@ The **mixer**:
 - **Curve Smooth, Sharp.** Smooth keeps the level constant across the crossfader's travel, for blends. Sharp holds both decks at full level and fades one out only over the last 5% of the travel, for cuts.
 
 The main mix passes a soft clip, which leaves levels under `dj_knee` in `settings.toml`, -0.9 dBFS by default, untouched. playr's master volume and the decks' fader in the mixer apply after the clip, to the main mix only. The headphone cue has its own fader, `:mix headphones`, which the master leaves alone; see Mixer in the README.
+
+### Delay and reverb
+
+One delay and one reverb serve both decks. Each strip's **Delay** and **Reverb** send the deck as it reaches the main mix: after its fader, the crossfader and Mute. A deck crossfaded out or muted sends nothing, so a deck you prepare in the headphones never reaches the effects. Cutting the fader stops what the deck sends, and the tail rings on: an echo out.
+
+The returns join the main mix before the master's soft clip. The headphone cue hears the deck dry.
+
+**FX** opens their fields: the same as on the tape (see [the tape guide](guide-tape.md#delay-and-reverb)), but for Print FX. **Sync** sets the delay's time to a part of a bar of 4 beats, at the tempo of the deck heard most: playing, with a grid, and the larger of its fader times its side of the crossfader. 1/4 is a beat. The time follows as the tempo changes, and as the other deck takes over.
+
+In the terminal: `:dj a delay 0.5`, `:dj delay model tape`, `:dj delay sync 1/4`, `:dj reverb decay 3`.
 
 ### Headphone cue
 
@@ -228,6 +242,6 @@ A deck off 0% reads between the stored samples. **Heads** in the Mix tab, `:inte
 
 - **More than 2 decks, MIDI controllers, recording the mix.**
 
-- **Remembering the mixer.** Strict, Quantize, the EQ, the faders and the crossfader start afresh each time playr starts. Grid edits and hot cues are kept with the tracks.
+- **Remembering the mixer.** Strict, Quantize, the EQ, the faders, the crossfader and the effects start afresh each time playr starts. Grid edits and hot cues are kept with the tracks.
 
 - **The server.** Its web page and OSC do not reach the decks.

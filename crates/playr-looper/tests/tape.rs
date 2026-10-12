@@ -1,6 +1,8 @@
 //! The DSP, driven offline: the tests listed in `docs/dev/looper-engine.md`.
 
-use playr_looper::{DelayModel, DelayParam, Loop, ReverbModel, Setting, Tape, Window, TAPE};
+use playr_looper::{
+    BusSetting, DelayModel, DelayParam, Loop, ReverbModel, Setting, Tape, Window, TAPE,
+};
 
 const SR: u32 = 48_000;
 
@@ -1112,9 +1114,9 @@ fn click(frames: usize) -> Vec<f32> {
 fn echoing(settings: &[Setting]) -> Tape {
     let mut all = vec![
         Setting::Fade(0, 0.0),
-        Setting::Delay(DelayParam::Time, 0.01),
-        Setting::Delay(DelayParam::Feedback, 0.0),
-        Setting::Delay(DelayParam::Tone, 20_000.0),
+        Setting::Fx(BusSetting::Delay(DelayParam::Time, 0.01)),
+        Setting::Fx(BusSetting::Delay(DelayParam::Feedback, 0.0)),
+        Setting::Fx(BusSetting::Delay(DelayParam::Tone, 20_000.0)),
         Setting::DelaySend(0, 1.0),
     ];
     all.extend_from_slice(settings);
@@ -1131,7 +1133,7 @@ fn a_voice_s_delay_send_returns_its_echo_into_the_mix() {
     assert!((out[480] - 0.5).abs() < 1e-3, "echo {}", out[480]);
     assert!(out[1..479].iter().all(|x| x.abs() < 1e-6));
 
-    let mut half = echoing(&[Setting::DelayReturn(0.5)]);
+    let mut half = echoing(&[Setting::Fx(BusSetting::DelayReturn(0.5))]);
     let out = left(&run(&mut half, 1000));
     assert!(
         (out[480] - 0.25).abs() < 1e-3,
@@ -1157,8 +1159,8 @@ fn level_scales_the_echo_with_the_voice() {
 fn every_model_returns_through_the_tape() {
     for model in DelayModel::ALL {
         let mut t = echoing(&[
-            Setting::DelayModel(model),
-            Setting::Delay(DelayParam::Wow, 0.0),
+            Setting::Fx(BusSetting::DelayModel(model)),
+            Setting::Fx(BusSetting::Delay(DelayParam::Wow, 0.0)),
         ]);
         let out = left(&run(&mut t, 1000));
         assert!(out[478..483].iter().any(|x| x.abs() > 0.1), "{model:?}");
@@ -1167,7 +1169,10 @@ fn every_model_returns_through_the_tape() {
         let mut t = tape(
             click(SR as usize),
             1,
-            &[Setting::ReverbModel(model), Setting::ReverbSend(0, 1.0)],
+            &[
+                Setting::Fx(BusSetting::ReverbModel(model)),
+                Setting::ReverbSend(0, 1.0),
+            ],
         );
         let out = left(&run(&mut t, SR as usize / 2));
         let tail: f32 = out[2400..].iter().map(|x| x * x).sum();
@@ -1220,7 +1225,7 @@ fn a_bus_with_no_input_goes_idle_and_the_tape_is_exact_again() {
         &[
             Setting::ReverbSend(0, 1.0),
             Setting::DelaySend(0, 1.0),
-            Setting::Delay(DelayParam::Feedback, 0.0),
+            Setting::Fx(BusSetting::Delay(DelayParam::Feedback, 0.0)),
         ],
     );
     run(&mut dry, 4800);
@@ -1231,4 +1236,61 @@ fn a_bus_with_no_input_goes_idle_and_the_tape_is_exact_again() {
     run(&mut dry, 6 * SR as usize);
     run(&mut wet, 6 * SR as usize);
     assert_eq!(run(&mut dry, 4800), run(&mut wet, 4800));
+}
+
+#[test]
+fn the_eq_curve_matches_what_the_voice_passes() {
+    use playr_looper::{eq_db, EqShape};
+    let flat = EqShape {
+        high_pass: 20.0,
+        low_pass: 20_000.0,
+        bell_hz: 1000.0,
+        bell_gain: 0.0,
+        bell_q: 1.0,
+    };
+    for shape in [
+        flat,
+        EqShape {
+            high_pass: 400.0,
+            ..flat
+        },
+        EqShape {
+            low_pass: 2000.0,
+            ..flat
+        },
+        EqShape {
+            bell_gain: 9.0,
+            bell_q: 3.0,
+            ..flat
+        },
+        EqShape {
+            bell_gain: -12.0,
+            bell_hz: 300.0,
+            bell_q: 0.5,
+            ..flat
+        },
+        EqShape {
+            high_pass: 150.0,
+            low_pass: 6000.0,
+            bell_hz: 900.0,
+            bell_gain: 6.0,
+            bell_q: 1.5,
+        },
+    ] {
+        let settings = [
+            Setting::HighPass(0, shape.high_pass),
+            Setting::LowPass(0, shape.low_pass),
+            Setting::BellHz(0, shape.bell_hz),
+            Setting::BellGain(0, shape.bell_gain),
+            Setting::BellQ(0, shape.bell_q),
+        ];
+        for hz in [60.0, 250.0, 900.0, 3000.0, 9000.0] {
+            let measured = 20.0 * gain_at(hz, &settings).log10();
+            let curve = eq_db(shape, hz, SR);
+            assert!(
+                (measured - curve).abs() < 0.3,
+                "{shape:?} at {hz} Hz: measured {measured} dB, curve {curve} dB"
+            );
+        }
+    }
 }

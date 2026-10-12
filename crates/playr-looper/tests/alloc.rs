@@ -4,7 +4,9 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use playr_looper::{DelayModel, DelayParam, Loop, Returned, ReverbModel, Setting, Window};
+use playr_looper::{
+    BusSetting, DelayModel, DelayParam, Loop, Returned, ReverbModel, Setting, Window,
+};
 
 struct Counting;
 
@@ -90,9 +92,12 @@ fn the_callback_neither_allocates_nor_frees() {
     h.unload(1).unwrap();
     h.set(Setting::LowPass(0, 800.0)).unwrap();
     h.set(Setting::BellQ(0, 4.0)).unwrap();
-    h.set(Setting::DelayModel(DelayModel::Tape)).unwrap();
-    h.set(Setting::Delay(DelayParam::Time, 0.05)).unwrap();
-    h.set(Setting::ReverbModel(ReverbModel::Jp)).unwrap();
+    h.set(Setting::Fx(BusSetting::DelayModel(DelayModel::Tape)))
+        .unwrap();
+    h.set(Setting::Fx(BusSetting::Delay(DelayParam::Time, 0.05)))
+        .unwrap();
+    h.set(Setting::Fx(BusSetting::ReverbModel(ReverbModel::Jp)))
+        .unwrap();
     let n = counted(|| {
         for _ in 0..400 {
             l.process(&mut out);

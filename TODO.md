@@ -24,7 +24,14 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### DJ decks and tape
 
-- [ ] **Delay and reverb sends for the tape voices.** A send per voice to a shared delay and a shared reverb. The looper has no effects (`docs/dev/looper-engine.md`); this needs two buses on the audio thread and its own design. Each lane has ~120 points free beside its fields. See `docs/dev/tape-lanes.md`.
+- [ ] **Choose the effects' models.** The delay has 3 models and the reverb 4, on the tape and the decks (`docs/dev/fx-buses.md`). Listen, keep those that sound best, and remove the others and their fields.
+
+- [ ] **Modulation on the tape.** Sources that move a setting over time, for the voices, the EQ and the effects. Open questions:
+  - **Sources:** an LFO (sine, triangle, square, sample and hold), synced to voice 1's window as delay Sync is, or free in Hz; an envelope follower on a voice; random walk.
+  - **Destinations:** voice rate, window start, pan, level, sends; HP, LP and bell frequency, bell gain; delay time, feedback, tone; reverb damp; Print FX.
+  - **Where it runs:** on the audio thread at a control rate, such as every 32 frames, with each value smoothed. A Faust parameter recomputes its coefficients in `control()` on each change; its cost at that rate is to measure.
+  - **Controls:** a depth per field, or a small matrix of source to destination. The lanes have little room; the FX lane or a drawer of its own may hold it.
+  - **Kept:** in the saved tape, with the settings.
 
 ### Playlists
 

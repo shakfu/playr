@@ -18,9 +18,10 @@ use playr_core::notice::Notice;
 use playr_core::samples;
 use playr_core::wave::Peaks;
 pub use playr_dj::{Band, CueOut, Curve, Nudge, Range, Side, EQ_DB, HOT_CUES, LOOP_BEATS};
-use playr_dj::{Engine, Handle, Returned, Setting};
+use playr_dj::{BusSetting, DelayParam, Engine, Handle, Returned, Setting};
 
 use crate::dispatch::Frontend;
+use crate::fx::{Division, FxSetting, FxState};
 use crate::message::Message;
 use crate::mix::Strip;
 
@@ -101,6 +102,13 @@ pub enum DjAction {
     /// On: a track picked for a playing deck waits until it stops. Off: it
     /// replaces the playing track, which fades out, and plays.
     Strict(bool),
+    /// The deck's sends to the delay and the reverb, 0 to 1, after its
+    /// fader, the crossfader and mute.
+    DelaySend(Side, f32),
+    ReverbSend(Side, f32),
+    /// A setting of the delay or the reverb. Print is the tape's and does
+    /// nothing here.
+    Fx(FxSetting),
 }
 
 /// What the decks report.
@@ -240,6 +248,9 @@ pub struct DjState {
     pub curve: Curve,
     pub mute: [bool; 2],
     pub strict: bool,
+    /// Each deck's sends, delay then reverb.
+    pub sends: [[f32; 2]; 2],
+    pub fx: FxState,
 }
 
 impl Default for DjState {
@@ -257,6 +268,8 @@ impl Default for DjState {
             curve: Curve::default(),
             mute: [false; 2],
             strict: false,
+            sends: [[0.0; 2]; 2],
+            fx: FxState::default(),
         }
     }
 }
@@ -467,6 +480,81 @@ impl Decks {
         let live = self.live.as_mut().ok_or("no deck is loaded")?;
         live.handle.set(s).map_err(|e| e.to_string())
     }
+
+    /// The delay time, in ms, `division` of a bar of 4 beats makes at the
+    /// tempo of the deck heard most: playing, with a grid, and the larger of
+    /// its fader times its side of the crossfader. `None` while none plays.
+    fn synced(&self, division: Division) -> Option<f32> {
+        let status = self.status()?;
+        let st = &self.state;
+        let bpm = |side: Side| {
+            let grid = self.loaded(side)?.grid?;
+            let d = status.deck(side);
+            let reach = match side {
+                Side::A => 1.0 - st.xfade,
+                Side::B => st.xfade,
+            };
+            let heard = st.level[i(side)] * reach * f32::from(u8::from(!st.mute[i(side)]));
+            (d.playing() && heard > 0.0).then(|| (heard, grid.bpm * (1.0 + d.pct() / 100.0)))
+        };
+        let (_, bpm) = [bpm(Side::A), bpm(Side::B)]
+            .into_iter()
+            .flatten()
+            .reduce(|a, b| if b.0 > a.0 { b } else { a })?;
+        let ms = 4.0 * 60_000.0 / bpm * division.fraction();
+        let ms_of = |s: f32| s * 1000.0;
+        let (lo, hi) = (
+            ms_of(playr_looper::DELAY_MIN),
+            ms_of(playr_looper::DELAY_SECONDS),
+        );
+        Some((ms as f32).clamp(lo, hi))
+    }
+
+    /// Whether a deck heard in the main mix sends to bus `b`: 0 the delay,
+    /// 1 the reverb.
+    fn fed(&self, b: usize) -> bool {
+        let st = &self.state;
+        [Side::A, Side::B].into_iter().any(|side| {
+            let k = i(side);
+            let reach = match side {
+                Side::A => st.xfade < 1.0,
+                Side::B => st.xfade > 0.0,
+            };
+            self.loaded(side).is_some()
+                && reach
+                && !st.mute[k]
+                && st.level[k] > 0.0
+                && st.sends[k][b] > 0.0
+        })
+    }
+
+    /// Why an effect's `field` does nothing as the decks are set.
+    pub fn fx_idle(&self, field: crate::fx::FxField) -> Option<crate::tape::Idle> {
+        crate::fx::idle(&self.state.fx, [self.fed(0), self.fed(1)], field)
+    }
+
+    /// Why `side`'s sends do nothing: they follow the deck as heard.
+    pub fn send_idle(&self, side: Side) -> Option<crate::tape::Idle> {
+        use crate::tape::Idle;
+        let st = &self.state;
+        let k = i(side);
+        st.mute[k]
+            .then_some(Idle::Muted)
+            .or((st.level[k] == 0.0).then_some(Idle::Silent))
+    }
+
+    /// Sets a synced delay's time from the deck heard most, when its tempo
+    /// moved it by more than 0.5 ms.
+    fn resync(&mut self) {
+        let fx = self.state.fx;
+        let Some(ms) = fx.sync.and_then(|d| self.synced(d)) else {
+            return;
+        };
+        let s = Setting::Fx(BusSetting::Delay(DelayParam::Time, ms / 1000.0));
+        if (ms - fx.time).abs() > 0.5 && self.set(s).is_ok() {
+            self.state.fx.time = ms;
+        }
+    }
 }
 
 /// The rate of the track at `path`, for one played from outside the
@@ -583,6 +671,8 @@ pub fn poll(f: &mut impl Frontend) {
         }
         load_next(f, side);
     }
+    // Rates move with sync and nudges, and a synced delay with them.
+    f.dj().resync();
 }
 
 /// Loads the track queued for `side` once the deck has stopped and nothing
@@ -915,7 +1005,10 @@ fn deck_of(action: DjAction) -> Option<Side> {
         | D::Curve(_)
         | D::Mute(..)
         | D::Unqueue(_)
-        | D::Strict(_) => None,
+        | D::Strict(_)
+        | D::DelaySend(..)
+        | D::ReverbSend(..)
+        | D::Fx(_) => None,
     }
 }
 
@@ -964,6 +1057,7 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         return d.set(Setting::Seek(side, to)).map_err(DjMessage::Failed);
     }
     let seek;
+    let fx;
     let seek_to = match action {
         D::Seek(s, pos) => {
             let d = f.dj();
@@ -1023,6 +1117,22 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         }
         D::Mark(..) => &[],
         D::Load(_) | D::Take(_) | D::Grid(..) => &[],
+        D::DelaySend(s, v) => {
+            fx = [Setting::DelaySend(s, v)];
+            &fx
+        }
+        D::ReverbSend(s, v) => {
+            fx = [Setting::ReverbSend(s, v)];
+            &fx
+        }
+        D::Fx(setting) => match setting.bus() {
+            Some(b) => {
+                fx = [Setting::Fx(b)];
+                &fx
+            }
+            // Sync is set from the decks' tempo below; Print is the tape's.
+            None => &[],
+        },
     };
     let d = f.dj();
     for s in settings {
@@ -1048,8 +1158,20 @@ fn send(f: &mut impl Frontend, action: DjAction) -> Result<(), DjMessage> {
         D::CueOut(c) => st.cue_out = c,
         D::Curve(c) => st.curve = c,
         D::Mute(s, on) => st.mute[i(s)] = on,
+        D::DelaySend(s, v) => st.sends[i(s)][0] = v,
+        D::ReverbSend(s, v) => st.sends[i(s)][1] = v,
+        D::Fx(FxSetting::Sync(division)) => st.fx.sync = division,
+        D::Fx(setting) => {
+            if let Some(b) = setting.bus() {
+                st.fx.apply(b);
+            }
+            if matches!(setting, FxSetting::Time(_)) {
+                st.fx.sync = None;
+            }
+        }
         _ => {}
     }
+    d.resync();
     Ok(())
 }
 

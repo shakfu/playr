@@ -8,7 +8,7 @@
 //! way in every frontend. A frontend keeps only its drawing state, such as
 //! scroll offsets, and turns its own input into calls here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
@@ -39,6 +39,9 @@ use crate::View;
 
 /// How long a message stays showing.
 pub const MESSAGE_FOR: Duration = Duration::from_secs(4);
+
+/// Messages [`Model::log`] keeps, the oldest dropped first.
+pub const LOG_LEN: usize = 500;
 
 /// How long the meter keeps showing a peak after it passes.
 pub const PEAK_HOLD: Duration = Duration::from_millis(1500);
@@ -215,6 +218,8 @@ pub struct Model {
     transport_text_buttons: bool,
     /// The message showing, its words, and when it was shown.
     message: Option<(Message, String, Instant)>,
+    /// Every message's words and when it was shown, newest last.
+    log: VecDeque<(Instant, String)>,
     quit: bool,
 
     /// The peak shown, as a sample magnitude, and when it was reached.
@@ -325,6 +330,7 @@ impl Model {
             resume_tape: values.tape.clone(),
             transport_text_buttons: config.transport_text_buttons,
             message: None,
+            log: VecDeque::new(),
             quit: false,
             peak_hold: None,
             meter_holds: [None; 5],
@@ -908,6 +914,11 @@ impl Model {
         self.message.as_ref().map(|(m, _, _)| m)
     }
 
+    /// The messages shown, newest last, up to [`LOG_LEN`].
+    pub fn log(&self) -> &VecDeque<(Instant, String)> {
+        &self.log
+    }
+
     /// The words of the message showing, if any.
     pub fn message_text(&self) -> Option<&str> {
         self.message.as_ref().map(|(_, text, _)| text.as_str())
@@ -1238,7 +1249,12 @@ impl Model {
     fn notify(&mut self, message: impl Into<Message>) {
         let message = message.into();
         let text = message::text(&message);
-        self.message = Some((message, text, Instant::now()));
+        let now = Instant::now();
+        if self.log.len() == LOG_LEN {
+            self.log.pop_front();
+        }
+        self.log.push_back((now, text.clone()));
+        self.message = Some((message, text, now));
     }
 
     /// Adds `tracks`, as opened or handed over at startup, to the end of the

@@ -17,13 +17,13 @@ use std::path::Path;
 
 pub use looper::{new, Cmd, Handle, Looper, Recording, Returned, Status};
 pub use playr_dsp::fx::{
-    DelayModel, DelayParam, ReverbModel, ReverbParam, DECAY_SECONDS, DELAY_DEFAULTS, DELAY_MIN,
-    DELAY_SECONDS, FEEDBACK_MAX, REVERB_DEFAULTS, TONE_HZ,
+    BusSetting, DelayModel, DelayParam, ReverbModel, ReverbParam, DECAY_SECONDS, DELAY_DEFAULTS,
+    DELAY_MIN, DELAY_SECONDS, FEEDBACK_MAX, REVERB_DEFAULTS, TONE_HZ,
 };
 pub use tape::{
-    crossfade, fade_frames, Crossfade, Loop, Setting, Tape, Window, BELL_DB, BELL_Q,
-    DEFAULT_BELL_HZ, DEFAULT_BELL_Q, DEFAULT_FADE_MS, DEFAULT_KNEE, DEFAULT_SLEW_MS, FILTER_HZ,
-    MAX_SLEW_MS,
+    crossfade, eq_db, fade_frames, Crossfade, EqShape, Loop, Setting, Tape, Window, BELL_DB,
+    BELL_Q, DEFAULT_BELL_HZ, DEFAULT_BELL_Q, DEFAULT_FADE_MS, DEFAULT_KNEE, DEFAULT_SLEW_MS,
+    FILTER_HZ, MAX_SLEW_MS,
 };
 
 /// Voices reading the loops.

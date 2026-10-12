@@ -1,6 +1,6 @@
 # Delay and reverb buses
 
-Status: tape side built 2026-10-12, unreleased; DJ decks to follow. Step 5 of `tape-machine-v2-design.md`.
+Status: built 2026-10-12 on the tape and the DJ decks, unreleased. Step 5 of `tape-machine-v2-design.md`.
 
 ## What is decided
 
@@ -147,13 +147,13 @@ The generated code calls `remainderf` and `rintf` through `unsafe extern "C"` fr
 
 ## DJ decks
 
-After the tape, on the same `playr-dsp` buses:
+Built 2026-10-12, on the same `playr_dsp::fx::Buses` as the tape.
 
-- A delay and a reverb send per deck, after its channel fader and before the crossfader.
-- Returns into the main mix before the master, not into the headphone cue: the cue hears the deck dry, as it does now.
-- Delay sync to the deck's beat grid where it has one: 1/4 = one beat.
-
-Its own controls and tests come with that phase; this note fixes only where the buses sit.
+- **Sends after the crossfader.** A send per deck takes the deck as it reaches the main mix: after trim, EQ, filter, fader, crossfader and mute. This note first put them before the crossfader. That would send a deck crossfaded out but with its fader up, as one is while cued, so its reverb would reach the main mix. After the crossfader, a fader cut leaves the tail ringing: an echo out.
+- **Returns** join the main mix before the master's soft clip, not the headphone cue: the cue hears the deck dry.
+- **Sync** is a part of a bar of 4 beats at the played tempo of the deck heard most: playing, with a grid, and the larger of its fader times its side of the crossfader. The app resends the time when it moves by more than 0.5 ms, as rates move with sync and nudges.
+- **Controls:** Delay and Reverb sends in each channel strip; the fields in an FX window, as the tab has no room for them at 800 by 592. The fields are the tape's, from one module in each of `playr-app` and `playr-gui`.
+- **Not kept** between runs, as the rest of the mixer is not.
 
 ## Tests
 

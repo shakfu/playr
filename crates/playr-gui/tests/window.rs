@@ -295,6 +295,21 @@ fn help_about_shows_the_version_and_the_project_s_links() {
     harness.get_by_label("https://github.com/shakfu/playr");
     harness.get_by_label("Releases");
     harness.get_by_label("Issues");
+    // The logo, centred above the name.
+    let logo = harness.get_by_label("playr logo").rect();
+    let name = harness
+        .get_by_label(&format!("playr {}", playr_app::VERSION))
+        .rect();
+    let dialog = harness
+        .get_by_label("https://github.com/shakfu/playr")
+        .rect();
+    assert!(logo.bottom() <= name.top(), "{logo:?} above {name:?}");
+    assert_eq!(logo.size(), egui::vec2(96.0, 96.0));
+    // Centred: on the name and the address under it, which are too.
+    for other in [name, dialog] {
+        let off = (logo.center().x - other.center().x).abs();
+        assert!(off < 1.0, "{logo:?} centred over {other:?}");
+    }
 }
 
 /// The command bar's text field.
@@ -1692,10 +1707,15 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
     ] {
         harness.get_by_label(label);
     }
-    assert!(
-        harness.query_by_label("Voice 3 wear").is_none(),
-        "in the drawer"
-    );
+    for label in ["Voice 3 wear", "Voice 3 EQ response"] {
+        assert!(
+            harness.query_by_label(label).is_none(),
+            "{label}: in the drawer"
+        );
+    }
+    // The FX lane starts folded, its fields hidden.
+    harness.get_by_label("FX lane");
+    assert!(harness.query_by_label("Delay time").is_none());
     assert_fits(&harness, window, "the Tape tab, open");
 
     // Each drawer holds the rest; voice 4's, the write head's too.
@@ -1712,11 +1732,26 @@ fn the_tape_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
         "Voice 3 bell",
         "Voice 3 bell gain",
         "Voice 3 bell q",
+        "Voice 3 delay send",
+        "Voice 3 reverb send",
+        "Voice 3 EQ response",
         "Write wear",
         "Write end",
         "Write thin",
+        "Write print fx",
     ] {
         harness.get_by_label(label);
+    }
+    // The EQ's curve stays in the header, clear of the waveform.
+    for i in 1..=4 {
+        let curve = harness
+            .get_by_label(&format!("Voice {i} EQ response"))
+            .rect();
+        let wave = harness.get_by_label(&format!("Voice {i} waveform")).rect();
+        assert!(
+            curve.right() <= wave.left(),
+            "voice {i}: {curve:?} {wave:?}"
+        );
     }
 
     // With no range set, Load range is refused as :tape load is.
@@ -1807,7 +1842,8 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
     drag(&mut harness, wave_y, at(w.end), at(40_150));
     assert_eq!(window(&harness, 0).end, 40_000);
 
-    // Write makes voice 4's loop, the write loop, voice 1's shape; voices 2
+    // Write makes voice 4's loop, the write loop, voice 1's shape, the
+    // first lane holding one; voices 2
     // and 3 start empty, and voice 2's list puts it on voice 4's loop.
     let tape = |h: &Harness<'_, Gui>| *h.state().model().deck().state().unwrap();
     assert_eq!(tape(&harness).empty, [false, true, true, true]);
@@ -1874,8 +1910,8 @@ fn a_window_s_edge_and_body_drag_along_the_tape_waveform() {
         assert!(solo.right() <= wave.left(), "voice {i}: {solo:?} {wave:?}");
     }
     // The drawer's last field stays inside the window.
-    let fade = rect(&harness, "Voice 1 fade");
-    assert!(fade.right() <= 800.0, "{fade:?}");
+    let last = rect(&harness, "Voice 1 reverb send");
+    assert!(last.right() <= 800.0, "{last:?}");
 
     // Digits typed into a number field go to it, not to the keys that show
     // a view by its number; a frequency is typed in Hz.
@@ -1993,10 +2029,34 @@ fn the_dj_tab_loads_from_its_library_fits_the_smallest_window_and_a_view_key_lea
         "Strict",
         "Deck A loop 32",
         "Deck B mark next",
+        "Deck A delay send",
+        "Deck B reverb send",
+        "FX",
     ] {
         harness.get_by_label(label);
     }
     assert_fits(&harness, window, "the DJ tab");
+    // FX opens the effects' window inside the tab, below the menus, and
+    // closes it.
+    assert!(harness.query_by_label("Delay model").is_none());
+    harness.get_by_label("FX").click();
+    harness.run_steps(2);
+    let menu = harness.get_by_label("File").rect();
+    for label in [
+        "Delay model",
+        "Delay sync",
+        "Delay time",
+        "Delay return",
+        "Reverb model",
+        "Reverb return",
+    ] {
+        let r = harness.get_by_label(label).rect();
+        let inside = r.top() > menu.bottom() && r.right() <= 800.0 && r.bottom() <= 592.0;
+        assert!(inside, "{label} at {r:?}");
+    }
+    harness.get_by_label("FX").click();
+    harness.run_steps(2);
+    assert!(harness.query_by_label("Delay model").is_none());
 
     // Deck B is empty, so its controls are refused as :dj b play is.
     harness.get_by_label("Quantize").click();
@@ -2379,4 +2439,43 @@ fn titles_in_other_scripts_are_drawn_with_system_fonts() {
             "/System/Library/Fonts/\u{30d2}\u{30e9}\u{30ae}\u{30ce}\u{89d2}\u{30b4}\u{30b7}\u{30c3}\u{30af} W3.ttc#0",
         ]
     );
+}
+
+#[test]
+fn a_refused_tape_action_says_why_in_the_status_line_and_the_log() {
+    use playr_app::action::Action;
+    use playr_app::tape::{Deck, TapeAction};
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = smallest(dir.path(), "1", false);
+    harness.state_mut().model_mut().set_deck(Deck::manual());
+    let status = harness.get_by_label("Status line").rect();
+    harness
+        .state_mut()
+        .model_mut()
+        .perform(Action::SetRange(Some((
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(6),
+        ))));
+    harness.get_by_label("Tape").click();
+    harness.run_steps(2);
+    harness.get_by_label("Load range").click();
+    wait(&mut harness, |m| m.deck().loaded().is_some());
+    // Voice 1 plays a range of its own, which Clear refuses.
+    harness
+        .state_mut()
+        .model_mut()
+        .perform(Action::Tape(TapeAction::Clear(1)));
+    harness.run_steps(2);
+    let text = harness.state().model().message_text().unwrap().to_string();
+    // Once, in the status line, which kept its row while empty.
+    let note = harness.get_by_label(&text).rect();
+    assert!(status.contains(note.center()), "{note:?} in {status:?}");
+    assert_eq!(harness.get_by_label("Status line").rect(), status);
+    // A click on it opens every message, the refusal last.
+    harness.get_by_label("Status line").click();
+    harness.run_steps(2);
+    harness.get_by_label("Messages");
+    let log = harness.state().model().log();
+    assert_eq!(log.back().map(|(_, t)| t.as_str()), Some(text.as_str()));
+    assert_eq!(harness.query_all_by_label(&text).count(), 2, "line and log");
 }

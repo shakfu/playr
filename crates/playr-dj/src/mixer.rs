@@ -2,6 +2,7 @@
 
 use std::f64::consts::FRAC_PI_2;
 
+use playr_dsp::fx::{BusSetting, Buses};
 use playr_dsp::soft_clip;
 
 use crate::deck::{Deck, Nudge, Ramp, Range, HOT_CUES};
@@ -123,6 +124,14 @@ pub enum Setting {
     Mute(Side, bool),
     /// How both decks' heads read between frames.
     Interp(playr_dsp::Interp),
+    /// The deck's sends to the delay and the reverb, 0 to 1. They take the
+    /// deck as it reaches the main mix, after its fader, the crossfader and
+    /// mute, so a deck faded out leaves only its tail.
+    DelaySend(Side, f32),
+    ReverbSend(Side, f32),
+    /// The delay's and the reverb's settings. Their returns join the main
+    /// mix, not the cue.
+    Fx(BusSetting),
 }
 
 impl Setting {
@@ -141,7 +150,9 @@ impl Setting {
             | Setting::Loop(_, Some(v))
             | Setting::Seek(_, v)
             | Setting::PlayFrom(_, v) => v.is_finite(),
-            Setting::Knee(v) => v.is_finite(),
+            Setting::Knee(v) | Setting::DelaySend(_, v) | Setting::ReverbSend(_, v) => {
+                v.is_finite()
+            }
             _ => true,
         }
     }
@@ -149,7 +160,7 @@ impl Setting {
 
 /// The decks and the mix. [`Mixer::process`] is the whole signal path and
 /// is deterministic, so tests drive it directly.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Mixer {
     sample_rate: u32,
     decks: [Deck; 2],
@@ -169,6 +180,9 @@ pub struct Mixer {
     cue_out: CueOut,
     curve: Curve,
     mutes: [Ramp; 2],
+    buses: Buses,
+    /// Each deck's sends, delay then reverb.
+    sends: [[Ramp; 2]; 2],
 }
 
 impl Mixer {
@@ -189,6 +203,8 @@ impl Mixer {
             cue_out: CueOut::default(),
             curve: Curve::default(),
             mutes: [Ramp::new(1.0); 2],
+            buses: Buses::new(sample_rate),
+            sends: [[Ramp::new(0.0); 2]; 2],
         }
     }
 
@@ -347,6 +363,15 @@ impl Mixer {
             Setting::Mute(d, on) => {
                 let n = self.smooth();
                 self.mutes[d.index()].set(if on { 0.0 } else { 1.0 }, n);
+            }
+            Setting::DelaySend(d, v) | Setting::ReverbSend(d, v) => {
+                let b = matches!(s, Setting::ReverbSend(..)) as usize;
+                let n = self.smooth();
+                self.sends[d.index()][b].set(f64::from(v.clamp(0.0, 1.0)), n);
+            }
+            Setting::Fx(fx) => {
+                let n = self.smooth();
+                self.buses.set(fx, n);
             }
         }
     }
@@ -677,15 +702,25 @@ impl Mixer {
             let phones = self.headphones.next() as f32;
             let mut main = [0.0f32; 2];
             let mut cue = [0.0f32; 2];
+            let mut buses = [[0.0f32; 2]; 2];
             for (i, d) in self.decks.iter_mut().enumerate() {
                 let s = d.next();
                 if self.cue_bus.is_some_and(|c| c.index() == i) {
                     cue = s;
                 }
                 let g = d.level.next() as f32 * gains[i] * self.mutes[i].next() as f32;
-                main[0] += s[0] * g;
-                main[1] += s[1] * g;
+                let heard = [s[0] * g, s[1] * g];
+                main[0] += heard[0];
+                main[1] += heard[1];
+                for (bus, send) in buses.iter_mut().zip(&mut self.sends[i]) {
+                    let send = send.next() as f32;
+                    bus[0] += heard[0] * send;
+                    bus[1] += heard[1] * send;
+                }
             }
+            let [d, r] = self.buses.frame(buses);
+            main[0] += d[0] + r[0];
+            main[1] += d[1] + r[1];
             let m = [soft_clip(main[0], knee), soft_clip(main[1], knee)];
             self.peak = self.peak.max(m[0].abs()).max(m[1].abs());
             *mo = [m[0] * vol, m[1] * vol];

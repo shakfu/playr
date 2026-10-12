@@ -101,7 +101,7 @@ None of the three contact external services or download any metadata and images.
 
 - Progress bar with elapsed and total time
 
-- Skipped files and audio device errors shown in the status line
+- Skipped files and audio device errors shown in the status line; in the window, a click on it, or View > Messages, lists every message since start
 
 - Vim and arrow key navigation; the window and the web page take the mouse as well, and the page takes touch
 
@@ -580,7 +580,7 @@ The waveform glyphs are the view's only characters outside ASCII. Marks are plac
 
 ### Tape
 
-`:tape load` copies the sampler's range of the playing track into voice 1, or `:tape load N` copies loop slot N; each lane of the Tape tab loads any loop of the [loop library](#the-loop-library), or `:tape N loop ID`. Four voices play at once, each at its own rate and over its own window: a four-track looper. Voice 4's loop is the write loop: with Write on, a write head records every voice's send into it, with feedback, and voice 4 plays it back, so a reversed or half-speed print is heard and printed again. Voices 1 to 3 can play it too. With voice 4 empty, Write makes it silent, the length of voice 1's loop. The terminal has the commands; the window has a Tape tab with the same controls. [`docs/guide-tape.md`](docs/guide-tape.md) explains the tab and how the voices and the write head work together.
+`:tape load` copies the sampler's range of the playing track into voice 1, or `:tape load N` copies loop slot N; each lane of the Tape tab loads any loop of the [loop library](#the-loop-library), or `:tape N loop ID`. Four voices play at once, each at its own rate and over its own window: a four-track looper. Voice 4's loop is the write loop: with Write on, a write head records every voice's send into it, with feedback, and voice 4 plays it back, so a reversed or half-speed print is heard and printed again. Voices 1 to 3 can play it too. With voice 4 empty, Write makes it silent, the length of the first loop in voices 1 to 3. The terminal has the commands; the window has a Tape tab with the same controls. [`docs/guide-tape.md`](docs/guide-tape.md) explains the tab and how the voices and the write head work together.
 
 In the window, `6` opens the Tape view. Its keys are listed in [`docs/guide-tape.md`](docs/guide-tape.md#the-tab).
 
@@ -604,7 +604,7 @@ In the window, `6` opens the Tape view. Its keys are listed in [`docs/guide-tape
 | `:tape delay model clean\|ping-pong\|tape` | the delay's model; `time MS`, `sync off\|1/1\|1/2\|1/4\|1/8\|3/16\|1/16`, `feedback F`, `tone HZ`, `wow W`, `return R` set it |
 | `:tape reverb model freeverb\|zita\|jp\|plate` | the reverb's model; `size S`, `decay SEC`, `damp D`, `return R` set it |
 | `:tape print-fx P` | how much of the delay and reverb the write head records, 0 to 1 |
-| `:tape write on` | record the sends into voice 4's loop; with voice 4 empty, make it silent, the length of voice 1's loop |
+| `:tape write on` | record the sends into voice 4's loop; with voice 4 empty, make it silent, the length of the first loop in voices 1 to 3 |
 | `:tape feedback F` | how much of the loop survives a pass, 0 to 1 |
 | `:tape wear W` | darken everything the write head records, each pass, 0 to 1 |
 | `:tape thin T` | thin everything the write head records with a high-pass, each pass, 0 to 1 for 20 Hz to 2 kHz |
@@ -633,6 +633,8 @@ In the window, `7` opens the DJ view. It lists the library, with search, and its
 | `:dj a unqueue` | forget the next track |
 | `:dj a seek TIME\|PCT%` | move the head to a time, `1:30`, or part of the track, `25%` |
 | `:dj a mute on\|off` | silence the deck in the main mix; the cue still hears it |
+| `:dj a delay S`, `:dj a reverb S` | what the deck, as heard in the main mix, sends to the delay and the reverb, 0 to 1 |
+| `:dj delay ...`, `:dj reverb ...` | the effects' fields, as `:tape delay` and `:tape reverb` take them; `:dj delay sync 1/4` is a beat of the deck heard most |
 | `:dj a play`, `:dj a pause` | play the deck, pausing the player, or pause it |
 | `:dj a cue` | playing: back to the cue point, paused; paused: set the cue point here |
 | `:dj a cue down`, `:dj a cue up` | hold CUE: paused, plays from the cue point until released |

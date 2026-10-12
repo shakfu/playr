@@ -12,8 +12,8 @@ use playr_app::dispatch::Frontend;
 use playr_app::message::idle_text;
 use playr_app::model::Model;
 use playr_app::tape::{
-    model_name, no_effect, Control as C, Division, Extent, FxSetting as F, Layout, Pos,
-    TapeAction as T, TapeState, VoiceSetting as V, DELAY_MODELS, REVERB_MODELS,
+    model_name, no_effect, Control as C, Extent, FxSetting as F, Layout, Pos, TapeAction as T,
+    TapeState, VoiceSetting as V, DELAY_MODELS, REVERB_MODELS,
 };
 use playr_looper::{Window, VOICES, WRITER};
 
@@ -616,7 +616,7 @@ fn window(
 
 /// Adds a control with `add`, dimmed, and with the reason on hover, when
 /// `idle` says it has no effect. It stays usable, so it can be set ahead.
-fn dimmed(
+pub(crate) fn dimmed(
     ui: &mut egui::Ui,
     idle: Option<&str>,
     add: impl FnOnce(&mut egui::Ui) -> egui::Response,
@@ -637,7 +637,7 @@ fn dimmed(
 
 /// A field over `range`, dimmed when `idle` says why it has no effect; the
 /// new value on a change.
-fn field(
+pub(crate) fn field(
     ui: &mut egui::Ui,
     value: f32,
     range: std::ops::RangeInclusive<f32>,
@@ -660,7 +660,13 @@ fn field(
 
 /// A field in ms from 0 to `max`, dimmed when `idle` says why it has no
 /// effect; the new value on a change.
-fn ms(ui: &mut egui::Ui, value: f32, max: f32, name: String, idle: Option<&str>) -> Option<f32> {
+pub(crate) fn ms(
+    ui: &mut egui::Ui,
+    value: f32,
+    max: f32,
+    name: String,
+    idle: Option<&str>,
+) -> Option<f32> {
     let mut v = value;
     let response = dimmed(ui, idle, |ui| {
         ui.add(egui::DragValue::new(&mut v).range(0.0..=max))
@@ -759,7 +765,7 @@ const WRITE_ROWS: [(&str, &str); 5] = [
 
 /// A field over `range` on a log scale, as a frequency or a Q is, shown to
 /// `decimals`; the new value on a change.
-fn log_field(
+pub(crate) fn log_field(
     ui: &mut egui::Ui,
     value: f32,
     range: std::ops::RangeInclusive<f32>,
@@ -797,7 +803,7 @@ type Field<S> = (f32, C, fn(f32) -> S, &'static str);
 
 /// A grid with `headings` in a row, with what each does on hover, and the
 /// controls `add` puts under them.
-fn fields(
+pub(crate) fn fields(
     ui: &mut egui::Ui,
     id: impl egui::AsIdSalt,
     headings: &[(&str, &str)],
@@ -864,6 +870,62 @@ fn voice_head(
         layout.folded[i] = Some(!folded);
         tab.layout = Some(layout);
     }
+    // Beside the EQ's fields, which are in the drawer.
+    if !folded && layout.drawer[i] {
+        eq_curve(ui, state, e, i);
+    }
+}
+
+/// The EQ's height: its gain from -[`EQ_DB`] at the foot to +[`EQ_DB`] at the
+/// top, across 20 Hz to 20 kHz on a log scale.
+const EQ_HEIGHT: f32 = 32.0;
+const EQ_DB: f32 = playr_looper::BELL_DB;
+/// Points along the curve.
+const EQ_POINTS: usize = 64;
+
+/// Voice `i`'s EQ response: what its high-pass, low-pass and bell do to
+/// each frequency, in its colour, dimmed while the voice is off.
+fn eq_curve(ui: &mut egui::Ui, state: &TapeState, e: Extent, i: usize) {
+    let v = &state.voices[i];
+    let size = egui::vec2(HEAD - 8.0, EQ_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let name = format!("Voice {} EQ response", i + 1);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, &name));
+    response.on_hover_text(
+        "the EQ's gain across 20 Hz to 20 kHz, -18 to 18 dB; the line is 0 dB, the ticks 100 Hz, 1 kHz and 10 kHz",
+    );
+    let visuals = ui.visuals();
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, visuals.extreme_bg_color);
+    let (lo, hi) = playr_looper::FILTER_HZ;
+    let (l0, l1) = (lo.log2(), hi.log2());
+    let x = |hz: f32| rect.left() + rect.width() * (hz.log2() - l0) / (l1 - l0);
+    let y = |db: f32| rect.center().y - rect.height() / 2.0 * db.clamp(-EQ_DB, EQ_DB) / EQ_DB;
+    let grid = egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.4));
+    painter.hline(rect.x_range(), y(0.0), grid);
+    for hz in [100.0, 1000.0, 10_000.0] {
+        painter.vline(x(hz), rect.bottom() - 3.0..=rect.bottom(), grid);
+    }
+    let shape = playr_looper::EqShape {
+        high_pass: v.high_pass,
+        low_pass: v.low_pass,
+        bell_hz: v.bell_hz,
+        bell_gain: v.bell_gain,
+        bell_q: v.bell_q,
+    };
+    // An empty lane has no rate; the curve barely moves with it below 10 kHz.
+    let rate = if e.frames > 0 { e.rate } else { 48_000 };
+    let points: Vec<egui::Pos2> = (0..EQ_POINTS)
+        .map(|k| {
+            let hz = (l0 + (l1 - l0) * k as f32 / (EQ_POINTS - 1) as f32).exp2();
+            egui::pos2(x(hz), y(playr_looper::eq_db(shape, hz, rate)))
+        })
+        .collect();
+    let mut colour = colours(Palette::of(visuals)).0[i];
+    if !v.on {
+        colour = colour.gamma_multiply(0.4);
+    }
+    painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, colour)));
 }
 
 /// The chevron that folds a lane named `label`, `>` folded and `v` open;
@@ -1219,7 +1281,7 @@ fn write_toggle(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut V
     let tick = match why {
         Some(_) => tick,
         None => tick.on_hover_text(
-            "records every voice's send into voice 4's loop; with voice 4 empty, the first Write makes it, silent, the length of voice 1's loop",
+            "records every voice's send into voice 4's loop; with voice 4 empty, the first Write makes it, silent, the length of the lowest lane's loop",
         ),
     };
     tick.widget_info(|| {
@@ -1259,64 +1321,6 @@ fn write_fields(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut V
     });
 }
 
-/// The delay's controls.
-const DELAY_ROWS: [(&str, &str); 7] = [
-    (
-        "Delay",
-        "the delay's model: clean repeats; ping-pong, each repeat crossing sides; or tape, with wow, flutter and saturation",
-    ),
-    ("Time", "the delay, in ms; setting it turns Sync off"),
-    (
-        "Sync",
-        "sets Time to a part of voice 1's window, and follows it",
-    ),
-    ("Feedback", "how much of each echo repeats"),
-    (
-        "Tone",
-        "a low-pass on the repeats, in Hz: each repeat darker; the first echo is not filtered",
-    ),
-    ("Wow", "the tape model's wow and flutter: the repeats drift in pitch"),
-    ("Return", "the delay's level in the mix"),
-];
-
-/// The reverb's controls.
-const REVERB_ROWS: [(&str, &str); 5] = [
-    (
-        "Reverb",
-        "the reverb's model: Freeverb; Zita, an 8-line FDN; JP, a modulated hall; or Plate, Dattorro's",
-    ),
-    ("Size", "the room's size; Freeverb and JP"),
-    ("Decay", "seconds for the tail to fall 60 dB; not Freeverb"),
-    ("Damp", "how much faster the highs decay"),
-    ("Return", "the reverb's level in the mix"),
-];
-
-/// A list of `table`'s models named `name`, showing `current`; the one
-/// picked.
-fn model_pick<M: Copy + PartialEq>(
-    ui: &mut egui::Ui,
-    table: &[(&'static str, M)],
-    current: M,
-    name: &str,
-    idle: Option<&str>,
-) -> Option<M> {
-    let mut picked = None;
-    let response = dimmed(ui, idle, |ui| {
-        egui::ComboBox::from_id_salt(name)
-            .selected_text(model_name(table, current))
-            .show_ui(ui, |ui| {
-                for (label, m) in table {
-                    if ui.selectable_label(*m == current, *label).clicked() {
-                        picked = Some(*m);
-                    }
-                }
-            })
-            .response
-    });
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, name));
-    picked
-}
-
 /// The FX lane: its header, and unfolded, the delay's and the reverb's rows.
 fn fx_lane(
     ui: &mut egui::Ui,
@@ -1327,7 +1331,6 @@ fn fx_lane(
     actions: &mut Vec<Action>,
 ) {
     let fx = &state.fx;
-    let why = |c| no_effect(state, e, c).map(idle_text);
     let mut set = |f| actions.push(Action::Tape(T::Fx(f)));
     let folded = !layout.fx;
     lane(
@@ -1357,114 +1360,8 @@ fn fx_lane(
                 ));
                 return;
             }
-            fields(ui, "tape delay", &DELAY_ROWS, |ui| {
-                let idle = why(C::DelayModel);
-                if let Some(m) = model_pick(ui, &DELAY_MODELS, fx.delay_model, "Delay model", idle)
-                {
-                    set(F::DelayModel(m));
-                }
-                let max = playr_looper::DELAY_SECONDS * 1000.0;
-                if let Some(x) = ms(ui, fx.time, max, "Delay time".into(), why(C::Time)) {
-                    set(F::Time(x.max(playr_looper::DELAY_MIN * 1000.0)));
-                }
-                if let Some(d) = sync_pick(ui, fx.sync, why(C::Sync)) {
-                    set(F::Sync(d));
-                }
-                let fb = playr_looper::FEEDBACK_MAX;
-                let feedback = field(
-                    ui,
-                    fx.feedback,
-                    0.0..=fb,
-                    "Delay feedback".into(),
-                    why(C::DelayFeedback),
-                );
-                if let Some(x) = feedback {
-                    set(F::Feedback(x));
-                }
-                let (lo, hi) = playr_looper::TONE_HZ;
-                if let Some(x) =
-                    log_field(ui, fx.tone, lo..=hi, 0, "Delay tone".into(), why(C::Tone))
-                {
-                    set(F::Tone(x));
-                }
-                if let Some(x) = field(ui, fx.wow, 0.0..=1.0, "Delay wow".into(), why(C::Wow)) {
-                    set(F::Wow(x));
-                }
-                let ret = field(
-                    ui,
-                    fx.delay_return,
-                    0.0..=1.0,
-                    "Delay return".into(),
-                    why(C::DelayReturn),
-                );
-                if let Some(x) = ret {
-                    set(F::DelayReturn(x));
-                }
-                ui.end_row();
-            });
-            fields(ui, "tape reverb", &REVERB_ROWS, |ui| {
-                let idle = why(C::ReverbModel);
-                if let Some(m) =
-                    model_pick(ui, &REVERB_MODELS, fx.reverb_model, "Reverb model", idle)
-                {
-                    set(F::ReverbModel(m));
-                }
-                if let Some(x) = field(ui, fx.size, 0.0..=1.0, "Reverb size".into(), why(C::Size)) {
-                    set(F::Size(x));
-                }
-                let (lo, hi) = playr_looper::DECAY_SECONDS;
-                if let Some(x) = log_field(
-                    ui,
-                    fx.decay,
-                    lo..=hi,
-                    1,
-                    "Reverb decay".into(),
-                    why(C::Decay),
-                ) {
-                    set(F::Decay(x));
-                }
-                if let Some(x) = field(ui, fx.damp, 0.0..=1.0, "Reverb damp".into(), why(C::Damp)) {
-                    set(F::Damp(x));
-                }
-                let ret = field(
-                    ui,
-                    fx.reverb_return,
-                    0.0..=1.0,
-                    "Reverb return".into(),
-                    why(C::ReverbReturn),
-                );
-                if let Some(x) = ret {
-                    set(F::ReverbReturn(x));
-                }
-                ui.end_row();
-            });
+            let why = |f| crate::fx::why(no_effect(state, e, C::Fx(f)));
+            crate::fx::rows(ui, "tape", fx, &why, &mut set);
         },
     );
-}
-
-/// Sync's list: off, or a part of voice 1's window; the one picked.
-fn sync_pick(
-    ui: &mut egui::Ui,
-    current: Option<Division>,
-    idle: Option<&str>,
-) -> Option<Option<Division>> {
-    let mut picked = None;
-    let response = dimmed(ui, idle, |ui| {
-        egui::ComboBox::from_id_salt("Delay sync")
-            .selected_text(current.map_or("off", Division::name))
-            .show_ui(ui, |ui| {
-                if ui.selectable_label(current.is_none(), "off").clicked() {
-                    picked = Some(None);
-                }
-                for d in Division::ALL {
-                    if ui.selectable_label(current == Some(d), d.name()).clicked() {
-                        picked = Some(Some(d));
-                    }
-                }
-            })
-            .response
-    });
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Delay sync"));
-    picked
 }

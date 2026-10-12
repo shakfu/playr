@@ -652,7 +652,7 @@ pub fn idle_text(idle: crate::tape::Idle) -> &'static str {
         Idle::WriteOff => "no effect: Write is off",
         Idle::NoSend => "no effect: Send is 0",
         Idle::Silent => "no effect: Level is 0",
-        Idle::Muted => "no effect: the voice is muted",
+        Idle::Muted => "no effect: muted",
         Idle::Flat => "no effect: the bell's gain is 0 dB",
         Idle::Still => "no effect: Rate is 0, so the head never wraps",
         Idle::NoRoom => "no effect: no audio either side of the window to crossfade into",
@@ -660,7 +660,7 @@ pub fn idle_text(idle: crate::tape::Idle) -> &'static str {
             "nothing changes: Feedback is 1, Wear and Thin are 0 and every Send is 0"
         }
         Idle::Turns => "no effect: Ping turns the head at the edges, so it never wraps",
-        Idle::NoFxSend => "no effect: no voice sends to this effect",
+        Idle::NoFxSend => "no effect: nothing heard sends to this effect",
         Idle::Model => "no effect: the selected model has no such control",
     }
 }

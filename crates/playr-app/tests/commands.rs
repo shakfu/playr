@@ -1642,7 +1642,9 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
 #[test]
 fn dj_commands_parse_in_any_view_and_round_trip() {
     use playr_app::dj::{Band, CueOut, Curve, DjAction as D, GridEdit as G, Nudge, Range, Side::*};
+    use playr_app::fx::{Division, FxSetting as F};
     use playr_app::tape::Pos;
+    use playr_looper::{DelayModel, ReverbModel};
     for (text, action) in [
         ("dj a load", D::Load(A)),
         ("dj b take", D::Take(B)),
@@ -1698,6 +1700,21 @@ fn dj_commands_parse_in_any_view_and_round_trip() {
         ("dj xfade a", D::XfadeTo(Some(A))),
         ("dj xfade b", D::XfadeTo(Some(B))),
         ("dj xfade centre", D::XfadeTo(None)),
+        ("dj a delay 0.5", D::DelaySend(A, 0.5)),
+        ("dj b reverb 0.25", D::ReverbSend(B, 0.25)),
+        (
+            "dj delay model ping-pong",
+            D::Fx(F::DelayModel(DelayModel::PingPong)),
+        ),
+        ("dj delay sync 1/4", D::Fx(F::Sync(Some(Division::Quarter)))),
+        ("dj delay time 300", D::Fx(F::Time(300.0))),
+        ("dj delay feedback 0.5", D::Fx(F::Feedback(0.5))),
+        (
+            "dj reverb model plate",
+            D::Fx(F::ReverbModel(ReverbModel::Plate)),
+        ),
+        ("dj reverb decay 3", D::Fx(F::Decay(3.0))),
+        ("dj reverb return 0.7", D::Fx(F::ReverbReturn(0.7))),
     ] {
         let action = Action::Dj(action);
         for view in [Library, Sampler] {
@@ -1723,6 +1740,13 @@ fn dj_commands_parse_in_any_view_and_round_trip() {
         ("dj a loop 3", "loops are 0.25"),
         ("dj a jump 100", "jump is -64 to 64"),
         ("dj cue-out 5-6", "usage: :dj"),
+        ("dj a delay 2", "delay is 0 to 1"),
+        ("dj delay feedback 1", "feedback is 0 to 0.95"),
+        (
+            "dj reverb model hall",
+            "reverb models: freeverb, zita, jp, plate",
+        ),
+        ("dj print-fx 0.5", "usage: :dj"),
     ] {
         let got = parse(text, Library).unwrap_err();
         assert!(got.contains(error), "{text}: {got}");

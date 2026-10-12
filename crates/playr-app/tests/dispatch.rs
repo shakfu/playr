@@ -993,7 +993,7 @@ fn tape_controls_say_when_they_have_no_effect() {
 
 #[test]
 fn effect_controls_say_when_they_have_no_effect() {
-    use playr_app::tape::{no_effect, Control as C, Extent, Idle, TapeState};
+    use playr_app::tape::{no_effect, Control as C, Extent, FxField as X, Idle, TapeState};
     use playr_looper::{DelayModel, ReverbModel, Window};
     let e = Extent {
         frames: 10_000,
@@ -1003,14 +1003,19 @@ fn effect_controls_say_when_they_have_no_effect() {
     let idle = |s: &TapeState, c| no_effect(s, e, c);
     let mut s = TapeState::new(e.range);
     let delay = [
-        C::DelayModel,
-        C::Time,
-        C::Sync,
-        C::DelayFeedback,
-        C::Tone,
-        C::DelayReturn,
+        C::Fx(X::DelayModel),
+        C::Fx(X::Time),
+        C::Fx(X::Sync),
+        C::Fx(X::Feedback),
+        C::Fx(X::Tone),
+        C::Fx(X::DelayReturn),
     ];
-    let reverb = [C::ReverbModel, C::Damp, C::ReverbReturn, C::Decay];
+    let reverb = [
+        C::Fx(X::ReverbModel),
+        C::Fx(X::Damp),
+        C::Fx(X::ReverbReturn),
+        C::Fx(X::Decay),
+    ];
 
     // No voice sends: neither effect hears anything.
     for c in delay.into_iter().chain(reverb) {
@@ -1023,7 +1028,7 @@ fn effect_controls_say_when_they_have_no_effect() {
         assert_eq!(idle(&s, c), None, "{c:?}");
     }
     assert_eq!(
-        idle(&s, C::Decay),
+        idle(&s, C::Fx(X::Decay)),
         Some(Idle::NoFxSend),
         "the reverb hears nothing"
     );
@@ -1032,27 +1037,27 @@ fn effect_controls_say_when_they_have_no_effect() {
     assert_eq!(idle(&s, C::PrintFx), Some(Idle::WriteOff));
 
     // Wow is the tape model's alone.
-    assert_eq!(idle(&s, C::Wow), Some(Idle::Model));
+    assert_eq!(idle(&s, C::Fx(X::Wow)), Some(Idle::Model));
     s.fx.delay_model = DelayModel::Tape;
-    assert_eq!(idle(&s, C::Wow), None);
+    assert_eq!(idle(&s, C::Fx(X::Wow)), None);
 
     // Size is Freeverb's and JP's; Decay all but Freeverb's.
     s.voices[0].reverb = 0.5;
-    assert_eq!(idle(&s, C::Size), Some(Idle::Model), "Zita");
-    assert_eq!(idle(&s, C::Decay), None);
+    assert_eq!(idle(&s, C::Fx(X::Size)), Some(Idle::Model), "Zita");
+    assert_eq!(idle(&s, C::Fx(X::Decay)), None);
     s.fx.reverb_model = ReverbModel::Freeverb;
-    assert_eq!(idle(&s, C::Size), None);
-    assert_eq!(idle(&s, C::Decay), Some(Idle::Model));
+    assert_eq!(idle(&s, C::Fx(X::Size)), None);
+    assert_eq!(idle(&s, C::Fx(X::Decay)), Some(Idle::Model));
 
     // Sends follow the level: a muted or silent voice reaches no effect,
     // and the effects then hear nothing.
     s.voices[0].mute = true;
     assert_eq!(idle(&s, C::DelaySend(0)), Some(Idle::Muted));
-    assert_eq!(idle(&s, C::Time), Some(Idle::NoFxSend));
+    assert_eq!(idle(&s, C::Fx(X::Time)), Some(Idle::NoFxSend));
     s.voices[0].mute = false;
     s.voices[0].level = 0.0;
     assert_eq!(idle(&s, C::ReverbSend(0)), Some(Idle::Silent));
-    assert_eq!(idle(&s, C::Damp), Some(Idle::NoFxSend));
+    assert_eq!(idle(&s, C::Fx(X::Damp)), Some(Idle::NoFxSend));
     s.voices[0].level = 1.0;
     s.voices[1].on = false;
     assert_eq!(idle(&s, C::DelaySend(1)), Some(Idle::VoiceOff));
@@ -1782,7 +1787,8 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
         run(&mut f, line);
         assert_eq!(last(&f), Some(&Message::Tape(M::Empty(4))), "{line}");
     }
-    // Write makes it: silent, voice 1's loop's shape, and turns voice 4 on.
+    // Write makes it: silent, the first lane's loop's shape, here voice 1's,
+    // and turns voice 4 on.
     // Voices on loops of their own do not hold it off.
     run(&mut f, "tape write on");
     assert_eq!(f.tape.loaded(), Some(range));
@@ -1868,11 +1874,14 @@ fn the_loops_view_lists_searches_edits_and_loads_loops_into_voices() {
     assert!(f.tape.state().unwrap().voices[3].on);
     run(&mut f, "tape write on");
     assert!(f.tape.state().unwrap().write, "writes onto the loop loaded");
-    // Dropped, the next Write would need voice 1's length.
+    // Dropped, the next Write takes the first lane's loop's shape: voice 2's,
+    // with voice 1 empty.
     run(&mut f, "tape 4 eject");
     assert!(!f.tape.state().unwrap().write);
     run(&mut f, "tape write on");
-    assert_eq!(last(&f), Some(&Message::Tape(M::Empty(1))));
+    assert!(f.tape.state().unwrap().write);
+    assert_eq!(f.tape.loaded().unwrap(), f.tape.voice_extent(1).unwrap());
+    run(&mut f, "tape 4 eject");
     run(&mut f, "tape 2 eject");
     assert_eq!(last(&f), Some(&Message::Tape(M::Emptied)));
 }
@@ -2008,4 +2017,43 @@ fn a_loaded_write_loop_is_kept_by_its_file_until_written_into() {
     tape_until(&mut f, |m| matches!(m, Message::Tape(M::Resumed { .. })));
     assert_eq!(f.tape.loaded(), shape);
     assert!(!f.tape.state().unwrap().empty[3]);
+}
+
+#[test]
+fn the_decks_delay_syncs_to_the_deck_heard_most() {
+    use playr_app::dj::{DjAction as D, DjMessage as M, Side::*};
+    use playr_app::fx::{Division, FxSetting as F};
+    let dj = |f: &mut Headless, d| dispatch(Action::Dj(d), f);
+    let (mut f, dir) = headless();
+    let a = click_track(&mut f, dir.path(), "a.wav", 120.0, 0.1);
+    let b = click_track(&mut f, dir.path(), "b.wav", 90.0, 0.1);
+    f.results = Some(vec![a, b]);
+    for (side, row) in [(A, 0), (B, 1)] {
+        f.cursors[0] = Some(row);
+        dj(&mut f, D::Load(side));
+        decks_until(&mut f, |m| matches!(m, Message::Dj(M::Loaded { .. })));
+    }
+    dj(&mut f, D::DelaySend(A, 0.5));
+    dj(&mut f, D::ReverbSend(B, 0.25));
+    assert_eq!(f.dj.state().sends, [[0.5, 0.0], [0.0, 0.25]]);
+
+    // A quarter is a beat of deck A, the one playing, at 120 BPM: 500 ms.
+    dj(&mut f, D::Xfade(0.0));
+    dj(&mut f, D::Play(A));
+    dj(&mut f, D::Fx(F::Sync(Some(Division::Quarter))));
+    // The engine reports a deck playing once it has run.
+    run_decks(&mut f, 1);
+    let time = |f: &Headless| f.dj.state().fx.time;
+    assert!((time(&f) - 500.0).abs() < 0.01, "{}", time(&f));
+    // Across to deck B, playing at 90 BPM: the delay follows it.
+    dj(&mut f, D::Play(B));
+    dj(&mut f, D::Xfade(1.0));
+    run_decks(&mut f, 1);
+    assert!((time(&f) - 666.67).abs() < 0.01, "{}", time(&f));
+    // A time set by hand ends sync.
+    dj(&mut f, D::Fx(F::Time(250.0)));
+    assert_eq!((time(&f), f.dj.state().fx.sync), (250.0, None));
+    dj(&mut f, D::Xfade(0.0));
+    run_decks(&mut f, 1);
+    assert_eq!(time(&f), 250.0);
 }

@@ -36,6 +36,8 @@ const MARK_REACH: f32 = 5.0;
 pub struct State {
     cue: [bool; 2],
     nudge: [Nudge; 2],
+    /// The FX window is open.
+    fx: bool,
 }
 
 fn i(side: Side) -> usize {
@@ -82,7 +84,7 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> (Vec<Action>, 
                 channel(&mut c[0], model, Side::A, &mut actions);
                 channel(&mut c[1], model, Side::B, &mut actions);
             });
-            mixer(ui, model, &mut actions);
+            mixer(ui, model, tab, &mut actions);
         });
         column(ui, deck_w, &mut |ui| {
             deck(ui, model, Side::B, tab, &mut actions)
@@ -90,7 +92,27 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> (Vec<Action>, 
     });
     ui.separator();
     let row = browser(ui, model, &mut actions);
+    fx_window(ui.ctx(), model, tab, &mut actions);
     (actions, row)
+}
+
+/// The delay's and the reverb's fields, in a window of their own: the tab
+/// has no room for them at its smallest. Each deck's sends are in its strip.
+fn fx_window(ctx: &egui::Context, model: &Model, tab: &mut State, actions: &mut Vec<Action>) {
+    let decks = model.decks();
+    let fx = decks.state().fx;
+    // Centred: at egui's default, the top left, it covered the menus.
+    egui::Window::new("DJ effects")
+        .open(&mut tab.fx)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            let why = |f| crate::fx::why(decks.fx_idle(f));
+            crate::fx::rows(ui, "dj", &fx, &why, &mut |f| {
+                actions.push(Action::Dj(D::Fx(f)))
+            });
+        });
 }
 
 /// The deck's track around the playhead, fixed at the centre, with its beat
@@ -568,6 +590,28 @@ fn channel(ui: &mut egui::Ui, model: &Model, side: Side, actions: &mut Vec<Actio
                 actions.push(Action::Dj(D::Filter(side, v)));
             }
             ui.end_row();
+            for (b, name, tip) in [
+                (
+                    0,
+                    "Delay",
+                    "what the deck sends to the delay, as heard in the main mix",
+                ),
+                (
+                    1,
+                    "Reverb",
+                    "what the deck sends to the reverb, as heard in the main mix",
+                ),
+            ] {
+                ui.weak(name).on_hover_text(tip);
+                let label = format!("Deck {k} {} send", name.to_lowercase());
+                if let Some(v) = slider(ui, state.sends[s][b], 0.0..=1.0, label, true) {
+                    actions.push(Action::Dj(match b {
+                        0 => D::DelaySend(side, v),
+                        _ => D::ReverbSend(side, v),
+                    }));
+                }
+                ui.end_row();
+            }
             ui.weak("Level").on_hover_text("the deck's channel fader");
             if let Some(v) = slider(
                 ui,
@@ -620,7 +664,7 @@ fn phase(ui: &mut egui::Ui, model: &Model, side: Side) {
 /// The crossfader, and what applies to both decks: quantize, the cue, where
 /// the cue goes, and the crossfader's curve. Centre, or a double click on
 /// the crossfader, puts it in the middle.
-fn mixer(ui: &mut egui::Ui, model: &Model, actions: &mut Vec<Action>) {
+fn mixer(ui: &mut egui::Ui, model: &Model, tab: &mut State, actions: &mut Vec<Action>) {
     let decks = model.decks();
     let state = *decks.state();
     ui.add_space(4.0);
@@ -667,6 +711,15 @@ fn mixer(ui: &mut egui::Ui, model: &Model, actions: &mut Vec<Action>) {
         );
         if r.clicked() {
             actions.push(Action::Dj(D::Strict(!state.strict)));
+        }
+        let r = ui.add(egui::Button::selectable(tab.fx, "FX"));
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, tab.fx, "FX")
+        });
+        if r.on_hover_text("the delay and the reverb the decks send to")
+            .clicked()
+        {
+            tab.fx = !tab.fx;
         }
         ui.weak("Cue")
             .on_hover_text("the deck heard in the headphones");
