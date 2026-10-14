@@ -85,9 +85,21 @@ fn the_player_reports_the_default_device_as_listed() {
         return;
     }
     let default = devices().unwrap().into_iter().find(|d| d.default);
-    assert_eq!(info(&device(None).unwrap()), default);
-    let player = Player::new(None).unwrap();
-    assert_eq!(player.device(), default.as_ref());
+    let Ok(dev) = device(None) else {
+        assert_eq!(default, None);
+        return common::skip("PLAYR_REQUIRE_DEVICE", "no default output device");
+    };
+    let mine = info(&dev).unwrap();
+    assert!(mine.default, "{mine:?}");
+    // A runner's ALSA lists no `default`, though cpal hands it back.
+    if let Some(listed) = &default {
+        assert_eq!(&mine, listed);
+    }
+    let player = match Player::new(None) {
+        Ok(p) => p,
+        Err(e) => return common::skip("PLAYR_REQUIRE_DEVICE", &e.to_string()),
+    };
+    assert_eq!(player.device(), Some(&mine));
 }
 
 #[test]
