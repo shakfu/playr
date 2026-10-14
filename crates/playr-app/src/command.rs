@@ -106,6 +106,7 @@ pub const COMMANDS: &[Command] = &[
     ),
     any("prune", "[DIR]", "remove tracks and marks of missing files"),
     any("info", "", "what analysis measured about this track"),
+    any("device", "", "name the output device playr plays to"),
     any("preview", "", "show the row's waveform without playing it"),
     any(
         "columns",
@@ -589,6 +590,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Analyze(Some(dir)) => format!("analyze {}", dir.display()),
         ShowRoots => "roots".into(),
         ShowInfo => "info".into(),
+        ShowDevice => "device".into(),
         ForgetRoot(dir) => format!("roots rm {}", dir.display()),
         Prune(Some(dir)) => format!("prune {}", dir.display()),
         Prune(None) => "prune".into(),
@@ -1507,6 +1509,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             _ => Err(usage()),
         },
         "info" => nothing(Action::ShowInfo),
+        "device" => nothing(Action::ShowDevice),
         "preview" => nothing(Action::Preview),
         "columns" if rest.is_empty() => Err(usage()),
         "columns" => {

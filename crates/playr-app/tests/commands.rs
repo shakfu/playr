@@ -1220,6 +1220,9 @@ fn scan_and_open_take_a_path_with_home_as_tilde() {
     );
     assert_eq!(lib("prune"), Ok(Action::Prune(None)));
     assert_eq!(lib("roots"), Ok(Action::ShowRoots));
+    assert_eq!(lib("device"), Ok(Action::ShowDevice));
+    assert_eq!(lib("dev"), Ok(Action::ShowDevice));
+    assert_eq!(lib("device x"), Err(":device takes no arguments".into()));
     // `:roots add DIR` is another spelling of `:scan DIR`.
     assert_eq!(
         lib("roots add ~/music"),

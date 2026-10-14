@@ -4,6 +4,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Added
+
+- The output device in use is shown. `playr devices` marks it `>`, beside the default's `*`, and warns when the `device` setting or `--device` names none listed. Every frontend reports it as a message, `output: ID (name)`, at startup and on `:device` (Playback > Output device in the window). Before, nothing said which device a `device` setting resolved to. Through PipeWire, the ALSA device names only PipeWire, so `:device` also names the default sink from `wpctl inspect`, over linking libpipewire for one string. Startup skips it, so a missing or stuck `wpctl` cannot delay the first frame. Library API: `Player::device`, `output::info`, `output::place`, `output::pipewire_sink`, `output::sink_description`, `Message::Output`, `Action::ShowDevice`.
+
 ## [0.19.0]
 
 ### Added

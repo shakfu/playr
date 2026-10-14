@@ -62,6 +62,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:columns NAME...`                    |                         | which columns a track list shows, in order  |
 | `:sort KEY[ desc]... \| off`          |                         | sort every track list by these columns      |
 | `:info`                               |                         | what analysis measured about this track     |
+| `:device`                             |                         | name the output device playr plays to       |
 | `:preview`                            | `v`                     | show the row's waveform without playing it  |
 | `:analyze [DIR]`                      |                         | measure loudness, tempo and file health     |
 | `:prune [DIR]`                        |                         | remove tracks and marks of missing files    |

@@ -76,6 +76,7 @@ pub const PLAYBACK_MENU: &[Control] = &[
     control("Normal speed", Action::SetSpeed(0)),
     control("Fade tracks over 2 s", Action::Fade(Duration::from_secs(2))),
     control("No fades", Action::Fade(Duration::ZERO)),
+    control("Output device", Action::ShowDevice),
 ];
 
 /// In the EQ dialog, under its sliders.

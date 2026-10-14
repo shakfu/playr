@@ -334,19 +334,92 @@ pub fn devices() -> Result<Vec<DeviceInfo>, OutputError> {
         .output_devices()
         .map_err(|e| OutputError::Build(e.to_string()))?;
     Ok(all
-        .filter_map(|d| {
-            let id = d.id().ok()?;
-            let name = d
-                .description()
-                .map_or_else(|_| String::new(), |n| n.name().to_owned());
-            Some(DeviceInfo {
-                default: Some(&id) == default.as_ref(),
-                id: id.to_string(),
-                name,
-            })
-        })
+        .filter_map(|d| describe(&d, default.as_ref()))
         .filter(|d| !by_index(&d.id))
         .collect())
+}
+
+/// The PipeWire sink `device` plays to, by its description, when it goes
+/// through PipeWire: `alsa:pipewire`, or `alsa:default` while PipeWire
+/// serves it. Asks `wpctl`, and gives up after 500 ms.
+pub fn pipewire_sink(device: &DeviceInfo) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let routed = device.id == "alsa:pipewire"
+        || (device.id == "alsa:default" && device.name.contains("PipeWire"));
+    if !routed {
+        return None;
+    }
+    let mut child = Command::new("wpctl")
+        .args(["inspect", "@DEFAULT_AUDIO_SINK@"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    // Polled, as `:device` runs on the interface's thread. The output is
+    // a few KB, under a pipe's buffer, so the child cannot block on it.
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let mut text = String::new();
+    child.stdout.take()?.read_to_string(&mut text).ok()?;
+    status.success().then(|| sink_description(&text)).flatten()
+}
+
+/// `node.description` from `wpctl inspect` output.
+pub fn sink_description(inspect: &str) -> Option<String> {
+    inspect.lines().find_map(|line| {
+        let line = line.trim_start().trim_start_matches('*').trim_start();
+        let value = line.strip_prefix("node.description = ")?;
+        Some(value.trim().trim_matches('"').to_owned()).filter(|v| !v.is_empty())
+    })
+}
+
+/// The index of `used` in `all`, appended first when the listing left it
+/// out, as it leaves out a device named by card index.
+pub fn place(all: &mut Vec<DeviceInfo>, used: DeviceInfo) -> usize {
+    all.iter().position(|d| d.id == used.id).unwrap_or_else(|| {
+        all.push(used);
+        all.len() - 1
+    })
+}
+
+/// `device` as `playr devices` lists it, or `None` when it has no ID.
+pub fn info(device: &Device) -> Option<DeviceInfo> {
+    let default = cpal::default_host()
+        .default_output_device()
+        .and_then(|d| d.id().ok());
+    let mine = describe(device, default.as_ref())?;
+    // The listing's name: cpal names the default device it hands back
+    // "Default Audio Device", not as it lists the same ID.
+    let listed = devices()
+        .ok()
+        .and_then(|all| all.into_iter().find(|d| d.id == mine.id));
+    Some(listed.unwrap_or(mine))
+}
+
+fn describe(device: &Device, default: Option<&DeviceId>) -> Option<DeviceInfo> {
+    let id = device.id().ok()?;
+    let name = device
+        .description()
+        .map_or_else(|_| String::new(), |n| n.name().to_owned());
+    Some(DeviceInfo {
+        default: Some(&id) == default,
+        id: id.to_string(),
+        name,
+    })
 }
 
 /// Whether `id` names an ALSA card by index, as `CARD=2`, which ALSA lists

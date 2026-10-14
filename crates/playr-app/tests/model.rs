@@ -3987,3 +3987,24 @@ fn the_message_log_keeps_every_message_up_to_its_length() {
         "in order"
     );
 }
+
+#[test]
+fn device_names_the_output_or_says_it_is_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut model = Model::new(
+        db::open(&dir.path().join("library.db")).unwrap(),
+        common::fake_player().0,
+        Vec::new(),
+        Config::default(),
+    );
+    // A fake player has no cpal device, so nothing was said at startup.
+    assert_eq!(model.message(), None);
+    model.perform(Action::ShowDevice);
+    assert_eq!(
+        model.message(),
+        Some(&Message::Output {
+            device: None,
+            sink: None
+        })
+    );
+}

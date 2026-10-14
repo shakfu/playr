@@ -802,3 +802,38 @@ fn a_loop_s_span_reads_in_minutes_and_tenths() {
     assert_eq!(span_text(0, 59_940, 1000), "0:00.0-0:59.9");
     assert_eq!(span_text(0, 59_990, 1000), "0:00.0-1:00.0", "no 0:60.0");
 }
+
+#[test]
+fn the_output_device_is_named_by_id_and_by_name_when_it_has_one() {
+    use playr_core::audio::output::DeviceInfo;
+    let info = |name: &str| DeviceInfo {
+        id: "alsa:default".into(),
+        name: name.into(),
+        default: true,
+    };
+    let device = |name: &str| Message::Output {
+        device: Some(info(name)),
+        sink: None,
+    };
+    assert_eq!(
+        text(&device("PipeWire Sound Server")),
+        "output: alsa:default (PipeWire Sound Server)"
+    );
+    assert_eq!(text(&device("")), "output: alsa:default");
+    assert_eq!(
+        text(&Message::Output {
+            device: None,
+            sink: None
+        }),
+        "output device unknown"
+    );
+    assert_eq!(
+        text(&Message::Output {
+            device: Some(info(
+                "Default ALSA Output (currently PipeWire Media Server)"
+            )),
+            sink: Some("Digital Stereo (HDMI 4)".into()),
+        }),
+        "output: alsa:default, PipeWire sink Digital Stereo (HDMI 4)"
+    );
+}

@@ -53,6 +53,7 @@ fn every_action() -> Vec<Action> {
         Action::FixTempo(playr_core::analysis::TempoFix::Double),
         Action::ShowRoots,
         Action::ShowInfo,
+        Action::ShowDevice,
         Action::ForgetRoot("/m".into()),
         Action::Prune(Some("/m".into())),
         Action::Open(vec!["/m".into()]),
@@ -175,6 +176,7 @@ fn every_action() -> Vec<Action> {
             | Action::FixTempo(_)
             | Action::ShowRoots
             | Action::ShowInfo
+            | Action::ShowDevice
             | Action::ForgetRoot(_)
             | Action::Prune(_)
             | Action::Open(_)

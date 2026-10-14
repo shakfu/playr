@@ -317,6 +317,8 @@ pub struct Player {
     events: Events,
     handle: Option<std::thread::JoinHandle<()>>,
     sources: Sources,
+    /// The cpal device played to; `None` for any other backend.
+    device: Option<output::DeviceInfo>,
 }
 
 /// Attaches sources to a player's output stream, from any thread. Cloned
@@ -439,7 +441,11 @@ impl Player {
     /// Starts the engine thread on the output device `device` names, or the
     /// default for `None`. See [`output::device`].
     pub fn new(device: Option<&str>) -> Result<Self, output::OutputError> {
-        Self::with_backend(output::Cpal(output::device(device)?))
+        let device = output::device(device)?;
+        let info = output::info(&device);
+        let mut player = Self::with_backend(output::Cpal(device))?;
+        player.device = info;
+        Ok(player)
     }
 
     /// Starts the engine thread, playing to `backend`.
@@ -479,12 +485,18 @@ impl Player {
             events,
             handle: Some(handle),
             sources,
+            device: None,
         })
     }
 
     /// The largest magnitude of the master since the last call, which resets it.
     pub fn take_master_peak(&self) -> f32 {
         self.shared.take_master_peak()
+    }
+
+    /// The output device, as `playr devices` lists it.
+    pub fn device(&self) -> Option<&output::DeviceInfo> {
+        self.device.as_ref()
     }
 
     /// The handle that attaches sources to this player's stream.

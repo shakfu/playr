@@ -5,7 +5,11 @@
 mod common;
 
 use cpal::traits::DeviceTrait;
-use playr_core::audio::output::{by_index, device, devices, OutputError};
+use playr_core::audio::output::{
+    by_index, device, devices, info, pipewire_sink, place, sink_description, DeviceInfo,
+    OutputError,
+};
+use playr_core::audio::Player;
 
 #[test]
 fn alsa_card_indices_are_duplicates_and_names_are_not() {
@@ -59,4 +63,76 @@ fn the_listing_holds_no_card_index_duplicates_and_one_default_at_most() {
     let listed = devices().unwrap();
     assert!(listed.iter().all(|d| !by_index(&d.id)));
     assert!(listed.iter().filter(|d| d.default).count() <= 1);
+}
+
+#[test]
+fn the_device_played_to_is_placed_in_the_listing_or_after_it() {
+    let listed = |id: &str| DeviceInfo {
+        id: id.into(),
+        name: String::new(),
+        default: false,
+    };
+    let mut all = vec![listed("alsa:default"), listed("alsa:pipewire")];
+    assert_eq!(place(&mut all, listed("alsa:pipewire")), 1);
+    assert_eq!(all.len(), 2);
+    assert_eq!(place(&mut all, listed("alsa:hw:CARD=2,DEV=0")), 2);
+    assert_eq!(all[2].id, "alsa:hw:CARD=2,DEV=0");
+}
+
+#[test]
+fn the_player_reports_the_default_device_as_listed() {
+    if !common::device_tests() {
+        return;
+    }
+    let default = devices().unwrap().into_iter().find(|d| d.default);
+    assert_eq!(info(&device(None).unwrap()), default);
+    let player = Player::new(None).unwrap();
+    assert_eq!(player.device(), default.as_ref());
+}
+
+#[test]
+fn the_pipewire_sink_is_its_node_description() {
+    let inspect = "id 33, type PipeWire:Interface:Node\n    \
+        device.profile.description = \"Digital Stereo (HDMI 4)\"\n  \
+        * node.description = \"Rembrandt Radeon (HDMI 4)\"\n  \
+        * node.name = \"alsa_output.hdmi\"\n";
+    assert_eq!(
+        sink_description(inspect).as_deref(),
+        Some("Rembrandt Radeon (HDMI 4)")
+    );
+    assert_eq!(sink_description("node.description = \"\"\n"), None);
+    assert_eq!(sink_description(""), None);
+}
+
+#[test]
+fn only_a_device_through_pipewire_asks_for_its_sink() {
+    let listed = |id: &str, name: &str| DeviceInfo {
+        id: id.into(),
+        name: name.into(),
+        default: false,
+    };
+    // Each returns before running `wpctl`.
+    assert_eq!(
+        pipewire_sink(&listed("alsa:hw:CARD=DAC,DEV=0", "DAC")),
+        None
+    );
+    assert_eq!(
+        pipewire_sink(&listed("alsa:default", "Default ALSA Output")),
+        None
+    );
+}
+
+#[test]
+fn pipewire_names_the_sink_behind_its_alsa_device() {
+    if !common::device_tests() {
+        return;
+    }
+    let Some(pw) = devices()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.id == "alsa:pipewire")
+    else {
+        return;
+    };
+    assert!(pipewire_sink(&pw).is_some_and(|s| !s.is_empty()));
 }

@@ -147,6 +147,13 @@ pub enum Message {
     StopIn(Option<Duration>),
     /// The sleep timer ran out and stopped playback.
     Slept,
+    /// The output device the player opened, said at startup and by
+    /// `:device`; `None` for a player not on a cpal device. `sink` is the
+    /// PipeWire sink it reaches, which only `:device` asks for.
+    Output {
+        device: Option<playr_core::audio::output::DeviceInfo>,
+        sink: Option<String>,
+    },
     Tape(crate::tape::TapeMessage),
     Dj(crate::dj::DjMessage),
     /// Every fader, as `:mix` reports them.
@@ -248,6 +255,20 @@ pub fn text(message: &Message) -> String {
         Message::StopIn(Some(d)) => format!("stopping in {}", fmt_time(*d)),
         Message::StopIn(None) => "sleep timer off".into(),
         Message::Slept => "sleep timer ran out; stopped".into(),
+        Message::Output { device: None, .. } => "output device unknown".into(),
+        // The sink says more than the ALSA name, which names only PipeWire.
+        Message::Output {
+            device: Some(d),
+            sink: Some(sink),
+        } => format!("output: {}, PipeWire sink {sink}", d.id),
+        Message::Output {
+            device: Some(d), ..
+        } if d.name.is_empty() => {
+            format!("output: {}", d.id)
+        }
+        Message::Output {
+            device: Some(d), ..
+        } => format!("output: {} ({})", d.id, d.name),
         Message::Tape(m) => tape_text(m),
         Message::Dj(m) => dj_text(m),
         Message::Mix(mix) => mix_text(mix),

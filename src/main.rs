@@ -113,7 +113,8 @@ enum Command {
     },
     /// Show which formats this build can decode
     Formats,
-    /// List output devices, by the ID --device and the device setting take
+    /// List output devices, by the ID --device and the device setting take;
+    /// `>` marks the one playr plays to, `*` the system default
     Devices,
     /// Decode library tracks once, recording checks, loudness and tempo;
     /// files are only read. Runs beside a playing playr
@@ -227,7 +228,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(Command::Devices) = cli.command {
-        print_devices()?;
+        print_devices(config.settings.device.as_deref())?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -787,13 +788,33 @@ fn print_formats() {
     println!("playr reports such files and moves to the next track.");
 }
 
-/// One output device a line, its ID then its name, with the default marked `*`.
-fn print_devices() -> Result<(), Box<dyn std::error::Error>> {
-    let devices = playr_core::audio::output::devices()?;
+/// One output device a line, its ID then its name, with the one `want`
+/// names marked `>` and the default `*`.
+fn print_devices(want: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    use playr_core::audio::output;
+    let mut devices = output::devices()?;
+    // A device that is not there is reported after the list, which is how to
+    // pick another.
+    let (used, missing) = match output::device(want) {
+        Ok(d) => (
+            output::info(&d).map(|i| output::place(&mut devices, i)),
+            None,
+        ),
+        Err(e) => (None, Some(e)),
+    };
     let width = devices.iter().map(|d| d.id.len()).max().unwrap_or(0);
-    for d in &devices {
-        let mark = if d.default { '*' } else { ' ' };
-        println!("{mark} {:<width$}  {}", d.id, d.name);
+    for (i, d) in devices.iter().enumerate() {
+        let to = if used == Some(i) { '>' } else { ' ' };
+        let default = if d.default { '*' } else { ' ' };
+        println!("{to}{default} {:<width$}  {}", d.id, d.name);
+    }
+    match missing {
+        // Not its `Display`, which lists the IDs again.
+        Some(output::OutputError::NotFound { want, .. }) => {
+            eprintln!("playr: warning: no output device {want}, so playr will not play")
+        }
+        Some(e) => eprintln!("playr: warning: {e}"),
+        None => {}
     }
     Ok(())
 }

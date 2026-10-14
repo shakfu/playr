@@ -236,7 +236,7 @@ playr import mix.m3u        # save an M3U file as a playlist
 playr analyze               # decode new and changed tracks once; print findings
 playr analyze --report      # print what is recorded, decoding nothing
 playr formats               # show what this build can decode
-playr devices               # list output devices; * marks the default
+playr devices               # list output devices; > marks playr's, * the default
 playr --device ID           # play to that device instead of the default
 ```
 
@@ -800,7 +800,7 @@ Not decoded: WavPack, WMA, Musepack, APE, DSD, TTA, TAK, and Opus in a build wit
 
 The output stream is opened at the file's own sample rate whenever the device accepts it, so nothing is resampled in the common case. When a rate is refused, a sinc resampler converts it rather than linear interpolation. Decoding, mixing and volume are all f32, quantised once at the device. The device format is chosen in the order f32, f64, 32-bit, 24-bit, then 16-bit integer.
 
-This is not bit-perfect output by default. On a PipeWire system the ALSA `default` device accepts every rate and may convert internally. A `hw:` device avoids that: `--device` or the `device` setting selects one by the ID `playr devices` prints. It offers only the card's own rates and formats, and cannot be opened while PipeWire or PulseAudio holds it. `--device` overrides the setting in all three programs. A device that does not exist stops playr at startup with the list, rather than playing somewhere else.
+This is not bit-perfect output by default. On a PipeWire system the ALSA `default` device accepts every rate and may convert internally. A `hw:` device avoids that: `--device` or the `device` setting selects one by the ID `playr devices` prints. It offers only the card's own rates and formats, and cannot be opened while PipeWire or PulseAudio holds it. `--device` overrides the setting in all three programs. A device that does not exist stops playr at startup with the list, rather than playing somewhere else. At startup the status line names the device opened, as `output: alsa:default (...)`. `:device`, or Playback > Output device in the window, names it again. Through `alsa:default` or `alsa:pipewire`, PipeWire picks the speaker, and `:device` names that sink too, as `wpctl` reports it. `wpctl set-default ID` changes it.
 
 Volume is a float gain applied before quantisation. ReplayGain, when on, is a second gain beside it, and the only one that can exceed 1.
 

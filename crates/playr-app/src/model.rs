@@ -360,6 +360,12 @@ impl Model {
         model.session.set_sort(values.sort);
         // Silent, as the other settings are: nothing was asked for.
         let _ = model.session.set_replaygain(values.replaygain);
+        if let Some(device) = model.session.player().device().cloned() {
+            model.notify(Message::Output {
+                device: Some(device),
+                sink: None,
+            });
+        }
         if !tracks.is_empty() {
             model.open_tracks(tracks);
         } else if let Some((path, at, queue)) = model.session.resumable() {

@@ -83,6 +83,8 @@ pub enum Action {
     ShowRoots,
     /// Show what analysis measured about the track under the cursor.
     ShowInfo,
+    /// Name the output device the player plays to.
+    ShowDevice,
     /// Forget a directory, and the tracks and marks under it, once confirmed.
     ForgetRoot(PathBuf),
     /// Remove tracks and marks under a directory whose files are gone, once

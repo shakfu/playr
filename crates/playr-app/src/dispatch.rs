@@ -639,6 +639,13 @@ fn act(action: Action, f: &mut impl Frontend) {
         },
         Action::ShowRoots => f.present(Presentation::RootList),
         Action::ShowInfo => f.present(Presentation::TrackInfo),
+        Action::ShowDevice => {
+            let device = f.session().player().device().cloned();
+            let sink = device
+                .as_ref()
+                .and_then(playr_core::audio::output::pipewire_sink);
+            f.notify(Message::Output { device, sink });
+        }
         Action::ForgetRoot(dir) => match f.session().check_forget(&dir) {
             Ok(()) => f.confirm(Confirm::ForgetRoot(dir)),
             Err(refusal) => f.notify(refusal.into()),

@@ -87,7 +87,7 @@ pub fn allowed(action: &Action) -> bool {
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection
         | StartSave | SaveAs(_) | DeletePlaylist | EditPlaylist | StartSaveSearch
-        | SaveSearch(_) | Sql(_) | StartRename | Analyze(None) | ShowInfo | SetColumns(_)
+        | SaveSearch(_) | Sql(_) | StartRename | Analyze(None) | ShowInfo | ShowDevice | SetColumns(_)
         | SetSort(_) | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None)
         | TogglePause | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | StopAfter
         | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | Tempo(_) | Fade(_) | SetEq(..)
