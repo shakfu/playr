@@ -62,6 +62,21 @@ fn file_names_give_tempo_and_key() {
 }
 
 #[test]
+fn a_data_size_past_the_file_or_left_unset_reads_to_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = wav(&dir.path().join("a.wav"), 8_000, 2.0);
+    let bytes = std::fs::read(&path).unwrap();
+    let at = bytes.windows(4).position(|w| w == b"data").unwrap() + 4;
+    for size in [0u32, 0xFFFF_FFFF, 0x7FFF_FFFF] {
+        let mut b = bytes.clone();
+        b[at..at + 4].copy_from_slice(&size.to_le_bytes());
+        std::fs::write(&path, &b).unwrap();
+        let w = loops::read_wav(&path).unwrap();
+        assert_eq!(w.frames, 16_000, "data size {size:#x}");
+    }
+}
+
+#[test]
 fn wav_chunks_give_frames_acid_and_smpl() {
     let dir = tempfile::tempdir().unwrap();
     let path = wav(&dir.path().join("a.wav"), 8_000, 2.0);
@@ -93,7 +108,7 @@ fn scan_reads_loops_with_tags_tempo_and_key_and_leaves_out_one_shots() {
     let plain = wav(&root.join("plain.wav"), 8_000, 2.0);
 
     let mut conn = db::open_memory().unwrap();
-    let stats = loops::scan_dir(&mut conn, &root, |_| {}).unwrap();
+    let stats = loops::scan_dir(&mut conn, &root, false, |_| {}).unwrap();
     assert_eq!(
         (stats.scan.seen, stats.scan.added, stats.one_shots),
         (4, 3, 1)
@@ -130,7 +145,7 @@ fn scan_reads_loops_with_tags_tempo_and_key_and_leaves_out_one_shots() {
         (Some(4), Some(TempoFrom::Length), "")
     );
 
-    let again = loops::scan_dir(&mut conn, &root, |_| {}).unwrap();
+    let again = loops::scan_dir(&mut conn, &root, false, |_| {}).unwrap();
     assert_eq!(
         (again.scan.skipped, again.scan.added),
         (3, 0),
@@ -149,12 +164,18 @@ fn a_loop_root_takes_its_files_out_of_the_audio_library() {
     db::add_root(&conn, &music).unwrap();
     assert_eq!(query::count(&conn).unwrap(), 2);
 
-    let refused = loops::scan_dir(&mut conn, dir.path(), |_| {});
+    let refused = loops::scan_dir(&mut conn, dir.path(), true, |_| {});
     assert!(
         matches!(refused, Err(loops::Refused::HoldsTrackRoot(_))),
         "a loop root holding a track root would empty the audio library"
     );
-    let stats = loops::scan_dir(&mut conn, &music.join("loops"), |_| {}).unwrap();
+    let refused = loops::scan_dir(&mut conn, &music.join("loops"), false, |_| {});
+    assert!(
+        matches!(refused, Err(loops::Refused::HoldsTracks(1))),
+        "tracks leave the audio library only when asked"
+    );
+    assert_eq!(query::count(&conn).unwrap(), 2);
+    let stats = loops::scan_dir(&mut conn, &music.join("loops"), true, |_| {}).unwrap();
     assert_eq!((stats.scan.added, stats.moved), (1, 1));
     assert_eq!(query::count(&conn).unwrap(), 1);
 
@@ -167,6 +188,20 @@ fn a_loop_root_takes_its_files_out_of_the_audio_library() {
         loops::prune_missing(&conn, &music.join("loops")).unwrap(),
         1
     );
+}
+
+#[test]
+fn a_loop_root_that_reads_empty_is_not_pruned() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("loops");
+    let l = wav(&root.join("l.wav"), 8_000, 1.0);
+    let mut conn = db::open_memory().unwrap();
+    loops::scan_dir(&mut conn, &root, false, |_| {}).unwrap();
+    lib::set_beats(&conn, lib::all(&conn).unwrap()[0].id, 8).unwrap();
+    // As an unmounted drive's mount point reads.
+    std::fs::remove_file(&l).unwrap();
+    assert_eq!(loops::prune_missing(&conn, &root).unwrap(), 0);
+    assert_eq!(lib::count(&conn).unwrap(), 1, "a hand-set tempo went");
 }
 
 #[test]
@@ -227,7 +262,7 @@ fn search_matches_words_tempo_and_key() {
     wav(&root.join("Drums/beat_120bpm_Am.wav"), 8_000, 2.0);
     wav(&root.join("Keys/chords 90bpm Cmaj.wav"), 8_000, 2.0);
     let mut conn = db::open_memory().unwrap();
-    loops::scan_dir(&mut conn, &root, |_| {}).unwrap();
+    loops::scan_dir(&mut conn, &root, false, |_| {}).unwrap();
     let names = |q: &str| -> Vec<String> {
         lib::search(&conn, q)
             .unwrap()
@@ -248,7 +283,7 @@ fn beats_set_by_hand_survive_a_rescan_and_roots_can_be_forgotten() {
     let root = dir.path().join("loops");
     let file = wav(&root.join("x.wav"), 8_000, 2.0);
     let mut conn = db::open_memory().unwrap();
-    loops::scan_dir(&mut conn, &root, |_| {}).unwrap();
+    loops::scan_dir(&mut conn, &root, false, |_| {}).unwrap();
     let id = lib::all(&conn).unwrap()[0].id;
     assert!(lib::set_beats(&conn, id, 2).unwrap());
     assert!(lib::set_key(&conn, id, Some("Dm")).unwrap());
@@ -260,7 +295,7 @@ fn beats_set_by_hand_survive_a_rescan_and_roots_can_be_forgotten() {
         .unwrap()
         .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
         .unwrap();
-    let again = loops::scan_dir(&mut conn, &root, |_| {}).unwrap();
+    let again = loops::scan_dir(&mut conn, &root, false, |_| {}).unwrap();
     assert_eq!(again.scan.added, 1);
     let l = lib::get(&conn, id).unwrap().unwrap();
     assert_eq!(

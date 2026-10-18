@@ -262,3 +262,55 @@ fn every_model_builds_at_192_khz() {
         assert!(r.frame([1.0; 2]).iter().all(|v| v.is_finite()));
     }
 }
+
+#[test]
+fn a_skipped_bus_still_plays_echoes_longer_than_its_idle_wait() {
+    use playr_dsp::fx::{BusSetting, Buses};
+    let time = 1.9;
+    let at = (time * RATE as f32) as usize;
+    for model in [DelayModel::Clean, DelayModel::PingPong, DelayModel::Tape] {
+        let mut b = Buses::new(RATE);
+        b.set(BusSetting::DelayModel(model), 0);
+        b.set(BusSetting::Delay(DelayParam::Time, time), 0);
+        b.set(BusSetting::Delay(DelayParam::Feedback, 0.5), 0);
+        b.set(BusSetting::Delay(DelayParam::Wow, 0.0), 0);
+        // A burst, then silence in: the bus must not go idle with echoes due.
+        let y = run(3 * at, |i| {
+            let x = if i < 100 { [0.5; 2] } else { [0.0; 2] };
+            b.frame([x, [0.0; 2]])[0]
+        });
+        let peak = |r: std::ops::Range<usize>| {
+            y[r].iter()
+                .flat_map(|f| f.iter())
+                .fold(0.0f32, |m, v| m.max(v.abs()))
+        };
+        let window = |n: usize| n * at - RATE as usize / 20..n * at + RATE as usize / 20;
+        assert!(peak(window(1)) > 0.1, "{model:?}: first echo lost");
+        assert!(peak(window(2)) > 0.05, "{model:?}: second echo lost");
+    }
+}
+
+#[test]
+fn every_delay_stays_finite_with_its_tone_at_the_top_at_low_rates() {
+    for rate in [16000, 22050, 32000] {
+        for model in DelayModel::ALL {
+            let mut d = Delay::new(rate);
+            d.set_model(model);
+            d.set(DelayParam::Time, 0.05);
+            d.set(DelayParam::Feedback, 0.95);
+            d.set(DelayParam::Tone, 20000.0);
+            let y = run(rate as usize * 2, |i| d.frame(noise_frame(i)));
+            assert!(
+                y.iter().flatten().all(|v| v.is_finite() && v.abs() < 100.0),
+                "{model:?} at {rate} Hz"
+            );
+        }
+    }
+}
+
+/// Deterministic noise in -0.5..0.5, both channels.
+fn noise_frame(i: usize) -> [f32; 2] {
+    let x = (i as u32).wrapping_mul(0x9e37_79b9) ^ 0x5bd1_e995;
+    let v = x as f32 / u32::MAX as f32 - 0.5;
+    [v, -v]
+}

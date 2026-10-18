@@ -41,7 +41,7 @@ Two causes:
 
 - **The periods differ.** Each 9 s pass prints a different slice of voices 2 and 3. At feedback 0.90 a pass fades by 10% per pass. The loop never holds a single take of the mix.
 
-- **Sends ignore the mix.** `Voice::render` takes the send after drive and filter, but before level and pan (`crates/playr-looper/src/tape.rs:572-577`). Filter settings reach the print; level and pan do not. Sends are summed per loop channel, so a mono write loop prints mono.
+- **Sends ignore the mix.** `Voice::render` takes the send after drive and filter, but before level and pan (`crates/playr-looper/src/tape.rs:572-577`). Filter settings reach the print; level and pan do not. Each send is mapped to the write loop's channels: a mono voice reaches both channels of a stereo loop, and a stereo voice is summed into a mono one.
 
 ### Voice off
 

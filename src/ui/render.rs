@@ -873,13 +873,13 @@ fn draw_loops(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
     use playr_app::loops;
     let p = app.palette();
     // Name and Tags take what the fixed columns leave.
-    let widths = [0usize, 7, 5, 4, 7, 7, 6, 0];
+    let widths = [0usize, 7, 5, 4, 7, 7, 6, 0, 5];
     // Inside the list's border, as the rows are.
     let fixed: usize = widths.iter().sum::<usize>() + 2 * widths.len() + 2;
     let spare = usize::from(area.width.saturating_sub(2)).saturating_sub(fixed);
     let name_w = (spare * 3 / 5).max(8);
     let tags_w = spare.saturating_sub(name_w);
-    let line = |cells: [String; 8]| -> String {
+    let line = |cells: [String; 9]| -> String {
         let mut out = String::from("  ");
         for (i, c) in cells.iter().enumerate() {
             let w = match i {
@@ -889,7 +889,7 @@ fn draw_loops(app: &Screen<'_>, f: &mut Frame, area: Rect) -> Scroll {
             };
             let text = fit(c, w);
             match i {
-                1 | 2 | 6 => out.push_str(&format!("{text:>w$}  ")),
+                1 | 2 | 6 | 8 => out.push_str(&format!("{text:>w$}  ")),
                 _ => out.push_str(&format!("{text:<w$}  ")),
             }
         }

@@ -1316,7 +1316,10 @@ fn move_cursor(f: &mut impl Frontend, rows: i64) {
         return;
     }
     let at = f.cursor(view).unwrap_or(0) as i64;
-    f.set_cursor(view, Some((at + rows).clamp(0, n as i64 - 1) as usize));
+    f.set_cursor(
+        view,
+        Some(at.saturating_add(rows).clamp(0, n as i64 - 1) as usize),
+    );
 }
 
 /// The playlist under the cursor, when the playlists view is showing.

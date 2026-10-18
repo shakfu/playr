@@ -1,6 +1,6 @@
-//! A tape looper: 3 voices read one loop, or a loop each, at their own rates
-//! and directions, and a write head records their sends back into the first
-//! with feedback.
+//! A tape looper: 4 voices read the write loop, or a loop each, at their own
+//! rates and directions, and a write head records their sends into the
+//! write loop, voice 4's, with feedback.
 //!
 //! - [`Tape`]: the loop and all of the DSP; any thread, no device.
 //! - [`Looper`]: the tape in the audio callback, fed by a command ring.

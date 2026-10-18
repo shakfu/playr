@@ -3,11 +3,14 @@
 use playr_core::db::loops::{Loop, TempoFrom};
 
 /// The Loops view's column headings, in order.
-pub const HEADINGS: [&str; 8] = ["Name", "BPM", "Beats", "Key", "From", "To", "Time", "Tags"];
+pub const HEADINGS: [&str; 9] = [
+    "Name", "BPM", "Beats", "Key", "From", "To", "Time", "Tags", "ID",
+];
 
 /// Loop `l`'s cells under [`HEADINGS`]: From and To are where it lies in
-/// its file. A tempo guessed from the length alone is marked `~`.
-pub fn cells(l: &Loop) -> [String; 8] {
+/// its file. A tempo guessed from the length alone is marked `~`. The ID is
+/// what `:tape N loop ID` takes.
+pub fn cells(l: &Loop) -> [String; 9] {
     let bpm = match (l.bpm, l.bpm_from) {
         (Some(b), Some(TempoFrom::Length)) => format!("~{b:.1}"),
         (Some(b), _) => format!("{b:.1}"),
@@ -22,6 +25,7 @@ pub fn cells(l: &Loop) -> [String; 8] {
         clock(l.end, l.rate),
         format!("{:.2}", l.seconds()),
         l.tags.clone(),
+        l.id.to_string(),
     ]
 }
 

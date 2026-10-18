@@ -203,8 +203,10 @@ impl Gui {
                     .answer(key == playr_app::action::Key::parse("y").expect("a key")),
                 // As in the terminal: anything but an answer leaves the draft alone.
                 Input::Draft(_) => self.model.answer_draft(DraftAnswer::of_key(key)),
-                // Any key closes a list.
-                Input::Help | Input::CommandHelp => self.model.set_input(Input::None),
+                // Any key closes a list, as in the terminal.
+                Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_) => {
+                    self.model.set_input(Input::None)
+                }
                 _ => match self.model.keymap().lookup(key, self.model.view()).cloned() {
                     Some(action) => self.perform(action),
                     // An unbound key stays for egui, as Escape closing a menu.

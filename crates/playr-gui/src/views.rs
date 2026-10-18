@@ -304,6 +304,7 @@ pub fn loops(model: &Model, ui: &mut egui::Ui, scroll: Option<usize>) -> Clicked
         .column(Column::exact(52.0))
         .column(Column::exact(48.0))
         .column(Column::remainder().at_least(80.0).clip(true))
+        .column(Column::exact(40.0))
         .header(ROW, |mut header| {
             for name in playr_app::loops::HEADINGS {
                 header.col(|ui| {

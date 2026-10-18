@@ -88,6 +88,7 @@ pub fn read_wav(path: &Path) -> Option<Wav> {
     if &head[0..4] != b"RIFF" || &head[8..12] != b"WAVE" {
         return None;
     }
+    let len = f.metadata().ok()?.len();
     let (mut wav, mut block, mut data) = (Wav::default(), 0u16, None);
     loop {
         let mut h = [0u8; 8];
@@ -112,7 +113,14 @@ pub fn read_wav(path: &Path) -> Option<Wav> {
                 wav.rate = u32::from_le_bytes(b[4..8].try_into().expect("4 bytes"));
                 block = u16::from_le_bytes([b[12], b[13]]);
             }
-            b"data" => data = Some(size),
+            // Streaming writers leave the size 0 or 0xFFFFFFFF: the data runs to the end.
+            b"data" => {
+                let rest = len.saturating_sub(at);
+                data = Some(match size {
+                    0 | 0xFFFF_FFFF => rest,
+                    _ => size.min(rest),
+                });
+            }
             b"acid" => wav.acid = body(&mut f).as_deref().and_then(Acid::parse),
             b"smpl" => {
                 let b = body(&mut f)?;
@@ -325,6 +333,8 @@ pub struct LoopStats {
 pub enum Refused {
     /// The directory holds a track root, whose tracks it would take away.
     HoldsTrackRoot(PathBuf),
+    /// This many tracks are under the directory, and moving them was not asked.
+    HoldsTracks(usize),
     Db(String),
 }
 
@@ -335,6 +345,11 @@ impl std::fmt::Display for Refused {
                 f,
                 "it holds the library directory {}; scan a directory of loops inside it",
                 r.display()
+            ),
+            Refused::HoldsTracks(n) => write!(
+                f,
+                "{n} tracks are under it; --move takes them out of the audio library, \
+                 with their playlist places and marks"
             ),
             Refused::Db(e) => write!(f, "{e}"),
         }
@@ -348,11 +363,12 @@ impl From<rusqlite::Error> for Refused {
 }
 
 /// Scans `root` into the loop library, recording it as a loop root once a
-/// file is seen. Tracks under it leave the audio library. Refused when
-/// `root` holds a track root.
+/// file is seen. Tracks under it leave the audio library when `move_tracks`
+/// is set, and are refused otherwise. Refused when `root` holds a track root.
 pub fn scan_dir(
     conn: &mut Connection,
     root: &Path,
+    move_tracks: bool,
     mut progress: impl FnMut(&ScanStats),
 ) -> std::result::Result<LoopStats, Refused> {
     let mut stats = LoopStats::default();
@@ -361,6 +377,10 @@ pub fn scan_dir(
     };
     if let Some(r) = db::roots(conn)?.into_iter().find(|r| r.starts_with(&root)) {
         return Err(Refused::HoldsTrackRoot(r));
+    }
+    let tracks = tracks_under(conn, &root)?;
+    if tracks > 0 && !move_tracks {
+        return Err(Refused::HoldsTracks(tracks));
     }
     let mut files = Vec::new();
     for entry in WalkDir::new(&root).follow_links(false) {
@@ -416,6 +436,16 @@ pub fn scan_dir(
     Ok(stats)
 }
 
+/// The tracks under `root` in the audio library.
+fn tracks_under(conn: &Connection, root: &Path) -> Result<usize> {
+    let prefix = root.join("").to_string_lossy().into_owned();
+    conn.query_row(
+        "SELECT count(*) FROM tracks WHERE substr(path, 1, length(?1)) = ?1",
+        [&prefix],
+        |r| r.get::<_, i64>(0).map(|n| n as usize),
+    )
+}
+
 /// Takes the tracks under `root` out of the audio library, with their
 /// places in playlists. Returns how many.
 fn remove_tracks_under(conn: &Connection, root: &Path) -> Result<usize> {
@@ -428,6 +458,10 @@ fn remove_tracks_under(conn: &Connection, root: &Path) -> Result<usize> {
 
 /// Removes the scanned loops under `root` whose files are gone. Returns how many.
 pub fn prune_missing(conn: &Connection, root: &Path) -> Result<usize> {
+    // An empty root reads as an unmounted drive, not deleted loops.
+    if db::empty_dir(root) {
+        return Ok(0);
+    }
     let gone = lib::missing_under(conn, root)?;
     let tx = conn.unchecked_transaction()?;
     for l in &gone {

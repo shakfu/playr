@@ -4,6 +4,29 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// `println!` and `print!`, but a closed pipe, as `| head` leaves, ends playr
+/// quietly rather than in a panic.
+macro_rules! outln {
+    ($($t:tt)*) => {{
+        use std::io::Write as _;
+        $crate::out_ok(writeln!(std::io::stdout(), $($t)*))
+    }};
+}
+macro_rules! out {
+    ($($t:tt)*) => {{
+        use std::io::Write as _;
+        $crate::out_ok(write!(std::io::stdout(), $($t)*))
+    }};
+}
+
+fn out_ok(written: std::io::Result<()>) {
+    match written {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(e) => panic!("failed printing to stdout: {e}"),
+        Ok(()) => {}
+    }
+}
+
 mod analyze;
 
 use playr_app::config::Program;
@@ -153,11 +176,14 @@ enum RootsOp {
 
 #[derive(Subcommand)]
 enum LoopsOp {
-    /// Add directories of loops, taking their files out of the tracks; with
-    /// none, re-scans those recorded
+    /// Add directories of loops; with none, re-scans those recorded
     Scan {
         #[arg(value_name = "DIR")]
         dirs: Vec<PathBuf>,
+        /// Take tracks under the directories out of the audio library, with
+        /// their playlist places and marks
+        #[arg(long = "move")]
+        move_tracks: bool,
     },
     /// List the loop directories
     Roots,
@@ -191,7 +217,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         if cli.command.is_some() {
             return Err("--print-settings takes no command".into());
         }
-        print!("{}", playr_app::config::default_text());
+        out!("{}", playr_app::config::default_text());
         return Ok(ExitCode::SUCCESS);
     }
     // Read whatever the command, so a bad file is seen early. Only playback
@@ -314,7 +340,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }) => return cmd_forget(&conn, &dirs),
         Some(Command::Roots { op: None }) => {
             for root in db::roots(&conn)? {
-                println!("{}", root.display());
+                outln!("{}", root.display());
             }
             return Ok(ExitCode::SUCCESS);
         }
@@ -338,7 +364,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Some(Command::Playlists) => {
             for p in db::query::playlists(&conn)? {
-                println!("{:<40} {:>4} tracks", p.name, p.len);
+                outln!("{:<40} {:>4} tracks", p.name, p.len);
             }
             return Ok(ExitCode::SUCCESS);
         }
@@ -354,7 +380,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             let hits = db::query::search(&conn, &q)?;
             if json {
                 // `[]` for no matches, so a script can always parse the output.
-                println!("{}", tracks_json(&hits));
+                outln!("{}", tracks_json(&hits));
                 return Ok(if hits.is_empty() {
                     ExitCode::FAILURE
                 } else {
@@ -420,7 +446,7 @@ fn cmd_export(
         eprintln!("playr: {left_out} tracks left out: their paths hold a line break");
     }
     match file {
-        None => print!("{text}"),
+        None => out!("{text}"),
         Some(file) => {
             // Not `write`, which would replace a file the user may not mean to lose.
             let mut out = std::fs::OpenOptions::new();
@@ -487,11 +513,11 @@ fn cmd_import(
         }
         let ids: Vec<i64> = tracks.iter().map(|t| t.id).collect();
         db::query::save_playlist(conn, &title, &ids)?;
-        println!("saved {title:?}, {} tracks", ids.len());
+        outln!("saved {title:?}, {} tracks", ids.len());
         if !missing.is_empty() {
-            println!("  {} not in the library, left out:", missing.len());
+            outln!("  {} not in the library, left out:", missing.len());
             for path in &missing {
-                println!("  {}", path.display());
+                outln!("  {}", path.display());
             }
         }
     }
@@ -552,12 +578,14 @@ fn cmd_scan(
     };
     let mut total = scan::ScanStats::default();
     let multi = dirs.len() > 1;
+    let mut code = ExitCode::SUCCESS;
     for path in dirs {
         if !path.is_dir() {
             eprintln!("playr: not a directory: {}", path.display());
+            code = ExitCode::FAILURE;
             continue;
         }
-        println!("scanning {}", path.display());
+        outln!("scanning {}", path.display());
         let stats = scan::scan_dir(conn, path, |s, p| {
             // Overwrite one line rather than scrolling a wall of filenames.
             if s.seen % 25 == 0 {
@@ -565,7 +593,7 @@ fn cmd_scan(
                     .file_name()
                     .map(|n| n.to_string_lossy())
                     .unwrap_or_default();
-                print!("\r  {} files, {} added  {:<40.40}", s.seen, s.added, name);
+                out!("\r  {} files, {} added  {:<40.40}", s.seen, s.added, name);
                 use std::io::Write;
                 let _ = std::io::stdout().flush();
             }
@@ -573,34 +601,43 @@ fn cmd_scan(
         if stats.seen > 0 {
             db::add_root(conn, path)?;
         }
-        println!(
+        outln!(
             "\r  {} files, {} added, {} unchanged, {} unreadable{:<20}",
-            stats.seen, stats.added, stats.skipped, stats.failed, ""
+            stats.seen,
+            stats.added,
+            stats.skipped,
+            stats.failed,
+            ""
         );
         total.seen += stats.seen;
         total.added += stats.added;
         total.skipped += stats.skipped;
         total.failed += stats.failed;
         let missing = db::missing_under(conn, path)?.len();
-        if missing > 0 {
+        if missing > 0 && db::empty_dir(path) {
+            outln!("  {missing} tracks missing; {EMPTY_ROOT}");
+        } else if missing > 0 {
             let path = path.display();
-            println!("  {missing} tracks missing; `playr prune {path}` removes them");
+            outln!("  {missing} tracks missing; `playr prune {path}` removes them");
         }
     }
     if multi {
-        println!(
+        outln!(
             "total: {} files, {} added, {} unchanged, {} unreadable",
-            total.seen, total.added, total.skipped, total.failed
+            total.seen,
+            total.added,
+            total.skipped,
+            total.failed
         );
     }
-    println!("library now holds {} tracks", db::query::count(conn)?);
+    outln!("library now holds {} tracks", db::query::count(conn)?);
     // The interface can analyse as it scans, with `analyze_on_scan`; here the
     // settings are not read, so say what is waiting instead.
     let waiting = playr_core::analysis::pending(conn, &db::query::all(conn)?)?.len();
     if waiting > 0 {
-        println!("  {waiting} tracks not analysed; `playr analyze` measures them");
+        outln!("  {waiting} tracks not analysed; `playr analyze` measures them");
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(code)
 }
 
 fn cmd_prune(
@@ -618,22 +655,32 @@ fn cmd_prune(
     } else {
         dirs
     };
+    let mut code = ExitCode::SUCCESS;
     for path in dirs {
         if !path.is_dir() {
             eprintln!("playr: not a directory: {}", path.display());
+            code = ExitCode::FAILURE;
+            continue;
+        }
+        if db::empty_dir(path) {
+            outln!("pruning {}: {EMPTY_ROOT}", path.display());
             continue;
         }
         let pruned = db::prune_missing(conn, path)?;
-        println!(
+        outln!(
             "pruning {}: removed {} tracks and {} marks of missing files",
             path.display(),
             pruned.tracks,
             pruned.marks
         );
     }
-    println!("library now holds {} tracks", db::query::count(conn)?);
-    Ok(ExitCode::SUCCESS)
+    outln!("library now holds {} tracks", db::query::count(conn)?);
+    Ok(code)
 }
+
+/// Why a directory that reads empty is not pruned.
+const EMPTY_ROOT: &str =
+    "it reads empty, as an unmounted drive does, so nothing under it is pruned";
 
 /// `playr loops`: the loop library's directories.
 fn cmd_loops(
@@ -649,11 +696,11 @@ fn cmd_loops(
     match op {
         LoopsOp::Roots => {
             for root in lib::roots(conn)? {
-                println!("{}", root.display());
+                outln!("{}", root.display());
             }
             return Ok(code);
         }
-        LoopsOp::Scan { dirs } => {
+        LoopsOp::Scan { dirs, move_tracks } => {
             let dirs = recorded(conn, dirs)?;
             if dirs.is_empty() {
                 eprintln!("playr: no loop directories recorded; give one: playr loops scan DIR");
@@ -665,10 +712,10 @@ fn cmd_loops(
                     code = ExitCode::FAILURE;
                     continue;
                 }
-                println!("scanning loops in {}", path.display());
-                let stats = playr_core::loops::scan_dir(conn, path, |s| {
+                outln!("scanning loops in {}", path.display());
+                let stats = playr_core::loops::scan_dir(conn, path, move_tracks, |s| {
                     if s.seen % 25 == 0 {
-                        print!("\r  {} files, {} added", s.seen, s.added);
+                        out!("\r  {} files, {} added", s.seen, s.added);
                         use std::io::Write;
                         let _ = std::io::stdout().flush();
                     }
@@ -682,24 +729,24 @@ fn cmd_loops(
                     }
                 };
                 let s = stats.scan;
-                println!(
+                outln!(
                     "\r  {} files, {} added, {} unchanged, {} one-shots left out, {} unreadable{:<10}",
                     s.seen, s.added, s.skipped, stats.one_shots, s.failed, ""
                 );
                 if stats.moved > 0 {
-                    println!("  {} tracks taken out of the audio library", stats.moved);
+                    outln!("  {} tracks taken out of the audio library", stats.moved);
                 }
                 let missing = lib::missing_under(conn, path)?.len();
                 if missing > 0 {
                     let path = path.display();
-                    println!("  {missing} loops missing; `playr loops prune {path}` removes them");
+                    outln!("  {missing} loops missing; `playr loops prune {path}` removes them");
                 }
             }
         }
         LoopsOp::Rm { dirs } => {
             for path in &dirs {
                 match lib::forget_root(conn, path)? {
-                    Some(n) => println!("forgot {}: removed {n} loops", path.display()),
+                    Some(n) => outln!("forgot {}: removed {n} loops", path.display()),
                     None => {
                         eprintln!("playr: not a loop directory: {}", path.display());
                         code = ExitCode::FAILURE;
@@ -709,15 +756,24 @@ fn cmd_loops(
         }
         LoopsOp::Prune { dirs } => {
             for path in &recorded(conn, dirs)? {
+                if !path.is_dir() {
+                    eprintln!("playr: not a directory: {}", path.display());
+                    code = ExitCode::FAILURE;
+                    continue;
+                }
+                if db::empty_dir(path) {
+                    outln!("pruning {}: {EMPTY_ROOT}", path.display());
+                    continue;
+                }
                 let n = playr_core::loops::prune_missing(conn, path)?;
-                println!(
+                outln!(
                     "pruning {}: removed {n} loops of missing files",
                     path.display()
                 );
             }
         }
     }
-    println!("loop library now holds {} loops", lib::count(conn)?);
+    outln!("loop library now holds {} loops", lib::count(conn)?);
     Ok(code)
 }
 
@@ -730,7 +786,7 @@ fn cmd_forget(
     let mut code = ExitCode::SUCCESS;
     for path in dirs {
         match db::forget_root(conn, path)? {
-            Some(removed) => println!(
+            Some(removed) => outln!(
                 "forgot {}: removed {} tracks and {} marks",
                 path.display(),
                 removed.tracks,
@@ -745,7 +801,7 @@ fn cmd_forget(
             }
         }
     }
-    println!("library now holds {} tracks", db::query::count(conn)?);
+    outln!("library now holds {} tracks", db::query::count(conn)?);
     Ok(code)
 }
 
@@ -766,26 +822,26 @@ fn collect_paths(
 
 fn print_formats() {
     let opus = cfg!(feature = "opus");
-    println!("containers: WAV, AIFF, CAF, ISO/MP4 (m4a), MKV/WebM, OGG, FLAC, ADTS");
-    print!("codecs:     FLAC, ALAC, MP1/MP2/MP3, AAC-LC, Vorbis, PCM, ADPCM");
-    println!("{}", if opus { ", Opus" } else { "" });
-    println!();
+    outln!("containers: WAV, AIFF, CAF, ISO/MP4 (m4a), MKV/WebM, OGG, FLAC, ADTS");
+    out!("codecs:     FLAC, ALAC, MP1/MP2/MP3, AAC-LC, Vorbis, PCM, ADPCM");
+    outln!("{}", if opus { ", Opus" } else { "" });
+    outln!();
     if opus {
-        println!("Opus is decoded by playr itself, in OGG and WebM; Symphonia 0.6");
-        println!("demuxes it but ships no decoder. Mono and stereo only.");
+        outln!("Opus is decoded by playr itself, in OGG and WebM; Symphonia 0.6");
+        outln!("demuxes it but ships no decoder. Mono and stereo only.");
     } else {
-        println!("Opus is NOT in this build. It needs libopus, which needs cmake,");
-        println!("so it is opt-in. To add it:");
-        println!();
-        println!("    cargo build --release --features opus");
+        outln!("Opus is NOT in this build. It needs libopus, which needs cmake,");
+        outln!("so it is opt-in. To add it:");
+        outln!();
+        outln!("    cargo build --release --features opus");
     }
-    println!();
-    print!("not decodable: ");
+    outln!();
+    out!("not decodable: ");
     if !opus {
-        print!("Opus, ");
+        out!("Opus, ");
     }
-    println!("WavPack, WMA, Musepack, APE, DSD, TTA, TAK.");
-    println!("playr reports such files and moves to the next track.");
+    outln!("WavPack, WMA, Musepack, APE, DSD, TTA, TAK.");
+    outln!("playr reports such files and moves to the next track.");
 }
 
 /// One output device a line, its ID then its name, with the one `want`
@@ -806,7 +862,7 @@ fn print_devices(want: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     for (i, d) in devices.iter().enumerate() {
         let to = if used == Some(i) { '>' } else { ' ' };
         let default = if d.default { '*' } else { ' ' };
-        println!("{to}{default} {:<width$}  {}", d.id, d.name);
+        outln!("{to}{default} {:<width$}  {}", d.id, d.name);
     }
     match missing {
         // Not its `Display`, which lists the IDs again.

@@ -122,6 +122,10 @@ pub enum TapeAction {
     /// Record the mix as heard into voice 4's loop, for one pass of the
     /// write window or until stopped; `None` stops either.
     Bounce(Option<Bounce>),
+    /// Fold or unfold lane `n`, from 1; `None` is the FX lane.
+    Fold(Option<u8>),
+    /// Open or shut lane `n`'s drawer, from 1.
+    Drawer(u8),
 }
 
 /// How long a bounce records.
@@ -254,6 +258,17 @@ struct Loading {
     beats: Option<u32>,
     /// What it reads, for the tape to be resumed from.
     source: Source,
+    /// A bounce's WAV, removed once the load is done or dropped.
+    bounce: Option<TempFile>,
+}
+
+/// A file removed when dropped.
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// What a load reads.
@@ -303,8 +318,8 @@ struct Live {
     bounce: Option<bool>,
     /// A bounce until stopped: the WAV it records to, and when it began.
     long: Option<(PathBuf, Instant)>,
-    /// A bounce until stopped's WAV, loading into voice 4.
-    bounced: Option<PathBuf>,
+    /// A bounce until stopped's WAV, until its load takes it.
+    bounced: Option<TempFile>,
     state: TapeState,
     /// The volume last sent to the looper.
     volume: f32,
@@ -751,6 +766,10 @@ impl Deck {
             voice: None,
             ..src.clone()
         };
+        let bounce = self
+            .live
+            .as_mut()
+            .and_then(|l| l.bounced.take_if(|b| b.0 == src.path));
         std::thread::spawn(move || _ = tx.send(read(&src, to)));
         self.loading = Some(Loading {
             result: rx,
@@ -759,6 +778,7 @@ impl Deck {
             voice,
             beats,
             source,
+            bounce,
         });
         Ok(())
     }
@@ -1209,14 +1229,13 @@ impl Deck {
                 live.extent = extent;
                 // A bounce keeps the tape's name for saves; its file is read,
                 // and goes, so the write loop resumes silent, as printed.
-                match live.bounced.take_if(|p| *p == loading.source.path) {
-                    Some(path) => {
-                        _ = std::fs::remove_file(path);
+                match loading.bounce.is_some() {
+                    true => {
                         live.sources[i] = None;
                         live.printed = true;
                         bounced = true;
                     }
-                    None => {
+                    false => {
                         (live.name, live.span, live.beats) =
                             (loading.name, loading.span, loading.beats);
                         live.sources[i] = Some(loading.source);
@@ -1392,6 +1411,18 @@ fn report(f: &mut impl Frontend, found: Found) {
     }
 }
 
+/// Folds lane `lane`, from 1, if open, or opens it; `None` is the FX lane.
+fn fold(deck: &mut Deck, lane: Option<u8>) {
+    match lane {
+        None => deck.layout.fx ^= true,
+        Some(n) => {
+            let i = usize::from(n) - 1;
+            let folded = deck.layout.is_folded(i, deck.voice_name(i).is_none());
+            deck.layout.folded[i] = Some(!folded);
+        }
+    }
+}
+
 /// Does `action`.
 pub fn act(f: &mut impl Frontend, action: TapeAction) {
     match action {
@@ -1403,6 +1434,12 @@ pub fn act(f: &mut impl Frontend, action: TapeAction) {
             return end_long(f);
         }
         TapeAction::Loop(n, id) => return load_loop(f, id, Some(n)),
+        TapeAction::Fold(lane) => return fold(f.tape(), lane),
+        TapeAction::Drawer(n) => {
+            let i = usize::from(n) - 1;
+            f.tape().layout.drawer[i] ^= true;
+            return;
+        }
         _ => {}
     }
     let samples = f.session().samples_dir().to_path_buf();
@@ -1774,10 +1811,19 @@ fn bounce_long(f: &mut impl Frontend) {
     if live.long.is_some() {
         return;
     }
-    if live.handle.recording() {
+    let loading = live.bounced.is_some()
+        || f.tape()
+            .loading
+            .as_ref()
+            .is_some_and(|l| l.bounce.is_some());
+    let live = f.tape().live.as_mut().expect("checked above");
+    if live.handle.recording() || loading {
         return f.notify(TapeMessage::RecorderBusy.into());
     }
-    let path = std::env::temp_dir().join(format!("playr-bounce-{}.wav", std::process::id()));
+    static BOUNCES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = BOUNCES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!("playr-bounce-{}-{n}.wav", std::process::id());
+    let path = std::env::temp_dir().join(name);
     match live.handle.record(&path) {
         Ok(()) => {
             live.long = Some((path, Instant::now()));
@@ -1816,7 +1862,7 @@ fn end_long(f: &mut impl Frontend) {
             return f.notify(TapeMessage::Failed(e.to_string()).into());
         }
     };
-    live.bounced = Some(path);
+    live.bounced = Some(TempFile(path));
     start_load(f, src);
 }
 
@@ -2028,6 +2074,8 @@ pub fn settings(action: TapeAction, e: Extent) -> Result<Vec<Setting>, TapeMessa
         | TapeAction::Loop(..)
         | TapeAction::Save
         | TapeAction::Record
-        | TapeAction::Bounce(_) => return Ok(Vec::new()),
+        | TapeAction::Bounce(_)
+        | TapeAction::Fold(_)
+        | TapeAction::Drawer(_) => return Ok(Vec::new()),
     }])
 }

@@ -1349,12 +1349,7 @@ impl Engine {
             return false;
         };
 
-        let pinned = self
-            .out
-            .as_ref()
-            .filter(|_| self.holds_bus())
-            .map(|o| o.plan);
-        let plan = match pinned.map_or_else(|| self.backend.negotiate(spec), Ok) {
+        let plan = match self.plan_for(spec) {
             Ok(p) => p,
             Err(e) => {
                 self.fail(e.to_string());
@@ -1526,6 +1521,15 @@ impl Engine {
         {
             Ok(()) => {}
             Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// The output plan for a track of `spec`: the open stream's while the
+    /// bus is held, else the device's choice.
+    fn plan_for(&self, spec: Spec) -> Result<Plan, output::OutputError> {
+        match self.out.as_ref().filter(|_| self.holds_bus()) {
+            Some(o) => Ok(o.plan),
+            None => self.backend.negotiate(spec),
         }
     }
 
@@ -1988,7 +1992,7 @@ impl Engine {
             self.finish_track();
             return;
         };
-        let plan = match self.backend.negotiate(spec) {
+        let plan = match self.plan_for(spec) {
             Ok(p) => p,
             Err(e) => {
                 self.fail(e.to_string());
@@ -2029,7 +2033,21 @@ impl Engine {
         let Some(staged) = self.staged.take() else {
             return;
         };
-        if let Err(e) = self.rebuild_output(staged.plan) {
+        // A source attached since staging holds the stream: play on in it.
+        let plan = match self.out.as_ref().filter(|_| self.holds_bus()) {
+            Some(o) => o.plan,
+            None => staged.plan,
+        };
+        let duration = staged.stream.duration();
+        if self.out.as_ref().map(|o| o.plan) == Some(plan) {
+            self.conv = Some(Converter::new(staged.spec, plan, self.speed()));
+            self.push_mark(self.written, staged.index, duration, 0);
+            self.stream = Some(staged.stream);
+            self.decoded = (staged.first.len() / staged.spec.channels.max(1) as usize) as u64;
+            self.carry_faded(&staged.first, 0);
+            return;
+        }
+        if let Err(e) = self.rebuild_output(plan) {
             self.fail(e.to_string());
             // Otherwise the previous track's state stays, and play restarts it.
             self.teardown();
@@ -2037,8 +2055,7 @@ impl Engine {
             self.state = State::Stopped;
             return;
         }
-        self.conv = Some(Converter::new(staged.spec, staged.plan, self.speed()));
-        let duration = staged.stream.duration();
+        self.conv = Some(Converter::new(staged.spec, plan, self.speed()));
         self.index = staged.index;
         self.stream = Some(staged.stream);
         self.decoded = (staged.first.len() / staged.spec.channels.max(1) as usize) as u64;

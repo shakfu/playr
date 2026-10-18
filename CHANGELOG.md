@@ -8,6 +8,38 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - The output device in use is shown. `playr devices` marks it `>`, beside the default's `*`, and warns when the `device` setting or `--device` names none listed. Every frontend reports it as a message, `output: ID (name)`, at startup and on `:device` (Playback > Output device in the window). Before, nothing said which device a `device` setting resolved to. Through PipeWire, the ALSA device names only PipeWire, so `:device` also names the default sink from `wpctl inspect`, over linking libpipewire for one string. Startup skips it, so a missing or stuck `wpctl` cannot delay the first frame. Library API: `Player::device`, `output::info`, `output::place`, `output::pipewire_sink`, `output::sink_description`, `Message::Output`, `Action::ShowDevice`.
 
+- `:tape fx` folds or opens the FX lane, `:tape N fold` lane N, and `:tape N more` its drawer. Before, only the window's chevrons and More did. Library API: `TapeAction::Fold`, `TapeAction::Drawer`.
+
+- The Loops view has an ID column, the ID `:tape N loop ID` takes. Library API: `loops::HEADINGS` and `loops::cells` have 9 cells.
+
+### Changed
+
+- `playr loops scan DIR` refuses a directory holding tracks in the audio library, and says how many, unless `--move` is given. It took them out unasked, with their playlist places and marks, so a mistyped directory lost them. Library API: `loops::scan_dir` takes `move_tracks`; `Refused::HoldsTracks`.
+
+### Fixed
+
+- `playr prune` and `playr loops prune` remove nothing under a directory that reads empty, and say why: that is how an unmounted drive's mount point reads. Pruning a root whose drive was unmounted removed every track under it, with its marks and playlist places. A file counts as gone only when its directory is there, or when the nearest directory above it that is there holds something, so a drive unmounted below a root keeps its tracks too. `playr scan` names an empty root rather than suggesting prune. Library API: `db::empty_dir`.
+
+- `playr scan`, `playr prune` and `playr loops prune` exit 1 when a directory given is not one. Scan and prune reported it and exited 0. `playr loops prune` did not check, and removed every loop under a directory that was not there.
+
+- Output into a closed pipe, as `playr search a | head` leaves, ends playr with exit 0. It panicked.
+
+- A gapless change to a track at another sample rate, while the tape or the decks held the output, reopened the stream at the new track's rate. The track is now resampled to the held rate, and the stream stays open.
+
+- The delay bus keeps echoes longer than 1 s. It was skipped, and its line cleared, after 1 s with no input and its output below -120 dB, which the gap before a 1.9 s echo is. It now waits 1 s past the longest delay, 2 s.
+
+- The delay's Tone is capped at 0.45 of the sample rate. Faust's low-pass is unstable above Nyquist, so at 16 to 32 kHz a Tone near its 20 kHz top could blow the delay up.
+
+- A voice prints into a write loop of another channel count: mono reaches both channels of a stereo loop, stereo is summed into a mono one. Mono printed into the left channel only, and stereo into mono dropped the right channel.
+
+- A bounce until stopped's WAV is removed from the temp directory when its load is replaced by another. It stayed. Each bounce has its own file, and a second bounce is refused with `RecorderBusy` until the first is loaded; both had one file per process.
+
+- A WAV loop whose `data` size is 0 or 0xFFFFFFFF, as streaming writers leave it, reads to the end of the file, and a size past the end is cut to it. Such loops were indexed with no length, or 4 GB of one.
+
+- A time over a week, as `:seek 1e30`, is refused. Such times panicked in `:seek`, `:mark`, `:range`, `:tape window` and every other command taking a time. Huge cursor, queue and selection moves stop at the ends, and a sleep timer past the clock is not set, where each overflowed.
+
+- In the window, a key closes the Roots and Info lists and does nothing else, as in the terminal. It also acted: `d` in Playlists asked to delete the playlist.
+
 ## [0.19.0]
 
 ### Added

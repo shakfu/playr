@@ -308,6 +308,8 @@ pub struct Delay {
     /// Each Faust model's indices for Time, Feedback and Tone; Wow last.
     pingpong_params: [ParamIndex; 3],
     tape_params: [ParamIndex; 4],
+    /// The highest tone below Nyquist: Faust's low-pass is unstable above it.
+    tone_max: f32,
 }
 
 impl Delay {
@@ -322,6 +324,7 @@ impl Delay {
             tape: Faust::new(rate),
             pingpong_params: ["time", "feedback", "tone"].map(Faust::<P>::param),
             tape_params: ["time", "feedback", "tone", "wow"].map(Faust::<T>::param),
+            tone_max: TONE_HZ.1.min(0.45 * rate as f32),
         };
         for (param, value) in DELAY_DEFAULTS {
             delay.set(param, value);
@@ -345,9 +348,12 @@ impl Delay {
     /// Sets `param` on every model, so a switch keeps the settings. A value
     /// not finite is ignored.
     pub fn set(&mut self, param: DelayParam, value: f32) {
-        let Some(value) = param.clamp(value) else {
+        let Some(mut value) = param.clamp(value) else {
             return;
         };
+        if param == DelayParam::Tone {
+            value = value.min(self.tone_max);
+        }
         self.clean.set(param, value);
         let i = param as usize;
         if let Some(&p) = self.pingpong_params.get(i) {
@@ -475,7 +481,8 @@ impl Reverb {
 }
 
 /// A bus with no input and its output below -120 dB for this long is
-/// skipped, and its tail cleared: the dry signal is then bit-exact.
+/// skipped, and its tail cleared: the dry signal is then bit-exact. The
+/// delay waits [`DELAY_SECONDS`] longer, so an echo still in its line plays.
 const BUS_QUIET_SECONDS: f32 = 1.0;
 const BUS_FLOOR: f32 = 1e-6;
 
@@ -502,19 +509,20 @@ pub struct Buses {
     ret: [Ramp<f32>; 2],
     /// Frames each bus has had no input and its output below [`BUS_FLOOR`].
     quiet: [u32; 2],
-    /// Quiet frames after which a bus is skipped.
-    idle: u32,
+    /// Quiet frames after which each bus is skipped.
+    idle: [u32; 2],
 }
 
 impl Buses {
     /// Allocates megabytes; build them off the audio thread.
     pub fn new(sample_rate: u32) -> Self {
-        let idle = (BUS_QUIET_SECONDS * sample_rate as f32) as u32;
+        let idle = [BUS_QUIET_SECONDS + DELAY_SECONDS, BUS_QUIET_SECONDS]
+            .map(|s| (s * sample_rate as f32) as u32);
         Buses {
             delay: Delay::new(sample_rate),
             reverb: Reverb::new(sample_rate),
             ret: [Ramp::new(1.0); 2],
-            quiet: [idle; 2],
+            quiet: idle,
             idle,
         }
     }
@@ -543,7 +551,7 @@ impl Buses {
         for (b, x) in input.into_iter().enumerate() {
             let level = self.ret[b].next();
             let loud = x != [0.0; 2];
-            let idle = self.quiet[b] >= self.idle;
+            let idle = self.quiet[b] >= self.idle[b];
             if !loud && idle {
                 continue;
             }
@@ -558,7 +566,7 @@ impl Buses {
                 true => self.quiet[b] = 0,
                 false => {
                     self.quiet[b] += 1;
-                    if self.quiet[b] == self.idle {
+                    if self.quiet[b] == self.idle[b] {
                         match b {
                             0 => self.delay.clear(),
                             _ => self.reverb.clear(),

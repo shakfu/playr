@@ -44,7 +44,7 @@ pub fn run(
         let total = todo.len();
         let started = std::time::Instant::now();
         if !opts.json {
-            println!(
+            outln!(
                 "analysing {total} of {} tracks, {workers} at a time",
                 chosen.len()
             );
@@ -55,13 +55,13 @@ pub fn run(
                     .file_name()
                     .map(|n| n.to_string_lossy())
                     .unwrap_or_default();
-                print!("\r  {n}/{total}  {name:<40.40}");
+                out!("\r  {n}/{total}  {name:<40.40}");
                 let _ = std::io::stdout().flush();
             }
         })?;
         if !opts.json && total > 0 {
             let secs = started.elapsed().as_secs_f64().max(0.001);
-            println!(
+            outln!(
                 "\r  {} analysed, {} unreadable, {} albums, {:.1} files a second{:<20}",
                 done.analysed,
                 done.failed,
@@ -75,7 +75,7 @@ pub fn run(
     let current = db::analysis::current(conn, &chosen)?;
     let dupes = analysis::duplicates(&chosen, &current);
     if opts.json {
-        println!("{}", report_json(&chosen, &current, &dupes));
+        outln!("{}", report_json(&chosen, &current, &dupes));
     } else {
         print_report(&chosen, &current, &dupes);
     }
@@ -87,7 +87,7 @@ fn print_report(tracks: &[Track], rows: &HashMap<String, Analysis>, dupes: &[Vec
     for t in tracks {
         let Some(a) = rows.get(&t.path) else { continue };
         for f in analysis::findings(a) {
-            println!("{:<22} {}  ({})", f.name(), t.path, finding_detail(&f));
+            outln!("{:<22} {}  ({})", f.name(), t.path, finding_detail(&f));
             match counts.iter_mut().find(|c| c.0 == f.name()) {
                 Some(c) => c.1 += 1,
                 None => counts.push((f.name(), 1)),
@@ -95,29 +95,29 @@ fn print_report(tracks: &[Track], rows: &HashMap<String, Analysis>, dupes: &[Vec
         }
     }
     if !dupes.is_empty() {
-        println!("duplicates");
+        outln!("duplicates");
         for group in dupes {
             for path in group {
-                println!("  {path}");
+                outln!("  {path}");
             }
-            println!();
+            outln!();
         }
     }
 
     let missing = tracks.len() - rows.len();
-    print!("{} tracks analysed", rows.len());
+    out!("{} tracks analysed", rows.len());
     if missing > 0 {
-        print!(", {missing} not yet or changed since");
+        out!(", {missing} not yet or changed since");
     }
     for (name, n) in &counts {
-        print!("; {n} {name}");
+        out!("; {n} {name}");
     }
     if !dupes.is_empty() {
-        print!("; {} groups of duplicates", dupes.len());
+        out!("; {} groups of duplicates", dupes.len());
     }
-    println!();
+    outln!();
     if let Some(line) = tempo_check(rows.values()) {
-        println!("{line}");
+        outln!("{line}");
     }
 }
 

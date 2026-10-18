@@ -351,6 +351,12 @@ fn scan_keeps_missing_tracks_and_prune_removes_them_with_their_marks() {
     .unwrap();
     drop(conn);
 
+    // An empty directory reads as an unmounted drive, and is not pruned.
+    let (code, stdout, stderr) = output(&db_path, &["prune", music.to_str().unwrap()]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("reads empty"), "{stdout}");
+    std::fs::write(music.join("kept.txt"), b"").unwrap();
+
     let (code, stdout, stderr) = output(&db_path, &["scan", music.to_str().unwrap()]);
     assert_eq!(code, Some(0), "{stderr}");
     assert!(stdout.contains("1 tracks missing"), "{stdout}");
@@ -362,6 +368,14 @@ fn scan_keeps_missing_tracks_and_prune_removes_them_with_their_marks() {
     assert!(stdout.contains("removed 1 tracks and 1 marks"), "{stdout}");
     assert_eq!(query::count(&conn).unwrap(), 0);
     assert!(query::marks(&conn, &gone).unwrap().is_empty());
+
+    // A directory that is not there is an error, for scan and prune alike.
+    let absent = dir.path().join("absent");
+    for command in ["scan", "prune"] {
+        let (code, _, stderr) = output(&db_path, &[command, absent.to_str().unwrap()]);
+        assert_eq!(code, Some(1), "{command}: {stderr}");
+        assert!(stderr.contains("not a directory"), "{stderr}");
+    }
 
     // Pruning needs a library; it does not make one.
     let other = dir.path().join("other.db");
@@ -599,4 +613,38 @@ fn print_settings_prints_the_defaults_whatever_the_user_file_holds() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("takes no command"));
     assert!(!dir.path().join("playr/library.db").exists());
+}
+
+#[test]
+fn output_into_a_closed_pipe_ends_quietly() {
+    use playr_core::db::{self, Track};
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("library.db");
+    let conn = db::open(&db_path).unwrap();
+    let track = Track {
+        path: "/m/a.flac".into(),
+        title: Some("A".into()),
+        mtime: 1,
+        size: 2,
+        ..Default::default()
+    };
+    db::upsert(&conn, &track).unwrap();
+    drop(conn);
+    // As `playr search a | head -c 0` leaves it: nothing reads the output.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = Command::new(env!("CARGO_BIN_EXE_playr"))
+        .env("XDG_CONFIG_HOME", dir.path())
+        .env("XDG_DATA_HOME", dir.path())
+        .arg("--db")
+        .arg(&db_path)
+        .args(["search", "--json", "a"])
+        .stdin(Stdio::null())
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }

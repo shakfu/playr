@@ -1351,3 +1351,38 @@ fn bounce_off_ends_it_early_with_a_fade() {
     // Past the fade, the loop is as it was.
     assert_eq!(b[4000 + FADE..], src[4000 + FADE..]);
 }
+
+#[test]
+fn a_voice_prints_into_a_write_loop_of_another_channel_count() {
+    let sums = |b: &[f32], c: usize| -> Vec<f32> {
+        (0..c)
+            .map(|ch| b.iter().skip(ch).step_by(c).map(|s| s.abs()).sum())
+            .collect()
+    };
+    // Mono into stereo: both channels, equally.
+    let print = [
+        Setting::Write(true),
+        Setting::Feedback(0.0),
+        Setting::Send(0, 1.0),
+    ];
+    let mut t = tape(vec![0.0; 4800 * 2], 2, &print);
+    t.load_voice(0, Box::new(Loop::new(sine(4800, 440.0, 0.5), 1).unwrap()));
+    run(&mut t, 4800 * 3);
+    let s = sums(&buffer(&t), 2);
+    assert!(s[0] > 100.0, "nothing printed: {s:?}");
+    assert!(
+        (s[0] - s[1]).abs() < 1e-3 * s[0],
+        "mono printed off centre: {s:?}"
+    );
+
+    // Stereo into mono: the right channel is summed in, not dropped.
+    let mut t = tape(vec![0.0; 4800], 1, &print);
+    let right_only: Vec<f32> = sine(4800, 440.0, 0.5)
+        .into_iter()
+        .flat_map(|s| [0.0, s])
+        .collect();
+    t.load_voice(0, Box::new(Loop::new(right_only, 2).unwrap()));
+    run(&mut t, 4800 * 3);
+    let s = sums(&buffer(&t), 1);
+    assert!(s[0] > 100.0, "the right channel was dropped: {s:?}");
+}

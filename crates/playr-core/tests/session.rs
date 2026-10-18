@@ -116,6 +116,14 @@ fn the_selection_is_edited_by_track_and_by_index() {
     assert_eq!(session.move_in_selection(0, -1), None);
     assert_eq!(session.move_in_selection(2, 1), None);
     assert_eq!(session.move_in_selection(7, -1), None);
+    assert_eq!(session.move_in_selection(2, i64::MAX), None, "no overflow");
+    assert_eq!(session.move_in_queue(0, i64::MAX), None, "no overflow");
+    session.sleep_in(Some(Duration::MAX));
+    assert_eq!(
+        session.sleep_left(),
+        None,
+        "a timer past the clock is not set"
+    );
 
     assert_eq!(
         session.remove_from_selection(1),

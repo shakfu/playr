@@ -665,7 +665,7 @@ impl Session {
     /// or nothing if the move leaves the played rows or the waiting rows it
     /// started in. The track playing keeps its place.
     pub fn move_in_queue(&mut self, row: usize, by: i64) -> Option<usize> {
-        let to = usize::try_from(row as i64 + by).ok()?;
+        let to = usize::try_from((row as i64).checked_add(by)?).ok()?;
         let h = self.played.len();
         if row < h {
             if to >= h {
@@ -975,7 +975,7 @@ impl Session {
     /// Sets the sleep timer to stop playback `after` from now, or turns it
     /// off with `None`.
     pub fn sleep_in(&mut self, after: Option<Duration>) {
-        self.sleep_at = after.map(|d| Instant::now() + d);
+        self.sleep_at = after.and_then(|d| Instant::now().checked_add(d));
     }
 
     /// Time left on the sleep timer, if set.
@@ -1141,7 +1141,7 @@ impl Session {
     /// Moves the track at `index` by `by` places, returning where it is now,
     /// or nothing if either place is outside the selection.
     pub fn move_in_selection(&mut self, index: usize, by: i64) -> Option<usize> {
-        let to = usize::try_from(index as i64 + by).ok()?;
+        let to = usize::try_from((index as i64).checked_add(by)?).ok()?;
         if index >= self.selection.len() || to >= self.selection.len() {
             return None;
         }

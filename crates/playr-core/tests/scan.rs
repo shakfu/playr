@@ -252,6 +252,8 @@ fn prune_leaves_rows_outside_the_scanned_root() {
     let base = dir.path().canonicalize().unwrap();
     let music = base.join("music");
     std::fs::create_dir(&music).unwrap();
+    // A root left empty reads as unmounted, and is not pruned.
+    std::fs::write(music.join("kept.flac"), b"").unwrap();
 
     let conn = db::open_memory().unwrap();
     db::upsert(&conn, &untagged(&music.join("gone.flac"))).unwrap();
@@ -276,6 +278,7 @@ fn prune_leaves_rows_under_a_root_that_differs_only_in_case() {
     let base = dir.path().canonicalize().unwrap();
     let music = base.join("music");
     std::fs::create_dir(&music).unwrap();
+    std::fs::write(music.join("kept.flac"), b"").unwrap();
 
     let mut conn = db::open_memory().unwrap();
     db::upsert(&conn, &untagged(&music.join("gone.flac"))).unwrap();
@@ -692,4 +695,29 @@ fn prune_removes_the_hot_cues_of_missing_files_under_the_root() {
         query::hot_cues(&conn, &here.to_string_lossy()).unwrap(),
         [(4, 2.25)]
     );
+}
+
+#[test]
+fn prune_keeps_tracks_of_a_drive_unmounted_below_a_live_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    let (a, b) = (base.join("a"), base.join("b"));
+    std::fs::create_dir_all(a.join("album")).unwrap();
+    std::fs::create_dir_all(b.join("album")).unwrap();
+    std::fs::write(a.join("album/kept.flac"), b"").unwrap();
+
+    let conn = db::open_memory().unwrap();
+    // `b` is an empty mount point: its album has gone with the drive.
+    db::upsert(&conn, &untagged(&b.join("album/x.flac"))).unwrap();
+    std::fs::remove_dir(b.join("album")).unwrap();
+    // A deleted album under a directory that still holds others is gone.
+    db::upsert(&conn, &untagged(&a.join("deleted/y.flac"))).unwrap();
+
+    assert_eq!(db::prune_missing(&conn, &base).unwrap().tracks, 1);
+    let left: Vec<String> = query::all(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|t| t.path)
+        .collect();
+    assert_eq!(left, [b.join("album/x.flac").to_string_lossy()]);
 }

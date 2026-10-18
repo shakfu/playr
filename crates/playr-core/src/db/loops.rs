@@ -430,6 +430,6 @@ pub fn missing_under(conn: &Connection, root: &Path) -> Result<Vec<Loop>> {
     ))?;
     let rows = stmt.query_map([&prefix], row_to_loop)?;
     let mut loops = rows.collect::<Result<Vec<_>>>()?;
-    loops.retain(|l| matches!(Path::new(&l.path).try_exists(), Ok(false)));
+    loops.retain(|l| super::gone(&l.path));
     Ok(loops)
 }

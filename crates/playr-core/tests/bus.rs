@@ -478,6 +478,46 @@ fn a_source_pins_the_rate_and_outlives_a_reopen() {
     });
 }
 
+/// A gapless change to a track at another rate keeps the stream a source
+/// holds: the next track is resampled to it, and the source plays on.
+#[test]
+fn a_source_pins_the_rate_across_a_gapless_change() {
+    // Attached after the next track is staged, and before it is.
+    for attach_first in [false, true] {
+        source_pins_across_gapless_change(attach_first);
+    }
+}
+
+fn source_pins_across_gapless_change(attach_first: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.wav"), dir.path().join("b.wav"));
+    common::silence(&a, 8000, 0.5);
+    common::silence(&b, 16000, 30.0);
+    let (player, control) = common::fake_player();
+    let sources = player.sources();
+    let attach = || sources.attach(sources.rate_for(8000), watched(0.25).0);
+    let early = attach_first.then(attach);
+    player.send(Cmd::Play(vec![a, b], 0));
+    let _attached = early.unwrap_or_else(attach);
+    until_last(&control, 160, 0.25, "the source beside the first track");
+    let opened = control.opened.load(Ordering::Relaxed);
+
+    until(&control, "the second track", || {
+        player
+            .status()
+            .current()
+            .is_some_and(|p| p.ends_with("b.wav"))
+    });
+    control.played.lock().unwrap().clear();
+    until_last(&control, 160, 0.25, "the source with the second track");
+    assert_eq!(
+        control.opened.load(Ordering::Relaxed),
+        opened,
+        "the stream reopened"
+    );
+    assert_eq!(control.rate(), 8000);
+}
+
 /// With the player stopped, a source opens a stream at its rate, plays on
 /// when a track stops, and its detach closes the stream.
 #[test]

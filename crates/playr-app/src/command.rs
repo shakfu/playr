@@ -747,11 +747,11 @@ pub const MIN_BEATS: f32 = 0.125;
 pub const MAX_BEATS: f32 = 64.0;
 
 const TAPE_USAGE: &str = "usage: :tape load [N] | take | play | stop | reset | save | rec | bounce [long|off] | \
-     write on|off | feedback F | wear W | thin T | window A B | print-fx P | \
+     write on|off | feedback F | wear W | thin T | window A B | print-fx P | fx | \
      delay model clean|ping-pong|tape|time MS|sync off|1/1|1/2|1/4|1/8|3/16|1/16|\
      feedback F|tone HZ|wow W|return R | \
      reverb model freeverb|zita|jp|plate|size S|decay SEC|damp D|return R | \
-     V on|off | V clear|eject|share | V loop ID | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
+     V on|off | V clear|eject|share|fold|more | V loop ID | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
      ping on|off|slew MS|drive D|hp HZ|off|lp HZ|off|bell HZ|bell-gain DB|bell-q Q|\
      solo on|off|mute on|off|delay S|reverb S";
 
@@ -862,6 +862,7 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
         ["window", a, b] => Ok(T::WriteWindow(tape_pos(a)?, tape_pos(b)?)),
         ["print-fx", v] => value(v, "print-fx", 0.0, 1.0).map(|v| T::Fx(F::Print(v))),
         ["delay" | "reverb", ..] => fx(&words).map(T::Fx),
+        ["fx"] => Ok(T::Fold(None)),
         [n, setting @ ..] if n.parse::<u8>().is_ok() => {
             let n: u8 = n.parse().expect("checked");
             if !(1..=playr_looper::VOICES as u8).contains(&n) {
@@ -870,6 +871,8 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
             let s = match setting {
                 ["clear"] => return Ok(T::Clear(n)),
                 ["eject"] => return Ok(T::Eject(n)),
+                ["fold"] => return Ok(T::Fold(Some(n))),
+                ["more"] => return Ok(T::Drawer(n)),
                 ["share"] if usize::from(n) - 1 == playr_looper::WRITER => {
                     return Err(format!("voice {n} plays the write loop"))
                 }
@@ -1214,6 +1217,9 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
         T::Stop => "stop".into(),
         T::Reset => "reset".into(),
         T::Clear(n) => format!("{n} clear"),
+        T::Fold(None) => "fx".into(),
+        T::Fold(Some(n)) => format!("{n} fold"),
+        T::Drawer(n) => format!("{n} more"),
         T::Eject(n) => format!("{n} eject"),
         T::Share(n) => format!("{n} share"),
         T::Loop(n, id) => format!("{n} loop {id}"),
@@ -1284,6 +1290,9 @@ fn nudge(text: &str) -> Option<Nudge> {
     })
 }
 
+/// The longest time a command takes: a week, so frame counts cannot overflow.
+const MAX_TIME_SECS: f64 = 7.0 * 24.0 * 3600.0;
+
 /// Parses `90`, `1:23`, `1:02:03` or `83.5` as a time into a track.
 fn parse_time(text: &str) -> Result<Duration, String> {
     let bad = || format!("not a time: {text} (try 1:23 or 90)");
@@ -1297,7 +1306,7 @@ fn parse_time(text: &str) -> Result<Duration, String> {
         let n: u64 = part.parse().map_err(|_| bad())?;
         seconds += n as f64 * 60f64.powi(i as i32 + 1);
     }
-    if !seconds.is_finite() || seconds < 0.0 {
+    if !(0.0..=MAX_TIME_SECS).contains(&seconds) {
         return Err(bad());
     }
     Ok(Duration::from_secs_f64(seconds))

@@ -283,6 +283,37 @@ fn the_menu_bar_performs_its_items() {
 }
 
 #[test]
+fn a_key_closes_the_roots_and_info_windows_and_goes_no_further() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    // Info is about the row under the cursor, so it opens in the library.
+    for (open, view, input) in [
+        (
+            playr_app::action::Action::ShowRoots,
+            View::Playlists,
+            "roots",
+        ),
+        (playr_app::action::Action::ShowInfo, View::Library, "info"),
+    ] {
+        harness
+            .state_mut()
+            .model_mut()
+            .perform(playr_app::action::Action::ShowView(view));
+        harness.state_mut().model_mut().perform(open);
+        harness.run_steps(2);
+        assert_ne!(
+            model(&harness).input(),
+            &Input::None,
+            "{input} did not open"
+        );
+        // `d` in Playlists asks to delete, unless the window takes it.
+        typing(&mut harness, "d");
+        assert_eq!(model(&harness).view(), view);
+        assert_eq!(model(&harness).input(), &Input::None, "{input} stayed open");
+    }
+}
+
+#[test]
 fn help_about_shows_the_version_and_the_project_s_links() {
     let (mut harness, _dir) = window();
     harness.run_steps(2);
@@ -2487,4 +2518,37 @@ fn a_refused_tape_action_says_why_in_the_status_line_and_the_log() {
     let log = harness.state().model().log();
     assert_eq!(log.back().map(|(_, t)| t.as_str()), Some(text.as_str()));
     assert_eq!(harness.query_all_by_label(&text).count(), 2, "line and log");
+}
+
+#[test]
+fn a_loaded_tape_with_every_lane_and_the_fx_lane_open_fits_800_by_648() {
+    // Smaller, the lanes scroll: their headers do not shrink below their fields.
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 648.0));
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = sized(dir.path(), "1", false, 648.0);
+    harness
+        .state_mut()
+        .model_mut()
+        .set_deck(playr_app::tape::Deck::manual());
+    harness
+        .state_mut()
+        .model_mut()
+        .perform(playr_app::action::Action::SetRange(Some((
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(6),
+        ))));
+    harness.get_by_label("Tape").click();
+    harness.run_steps(2);
+    harness.get_by_label("Load range").click();
+    wait(&mut harness, |m| m.deck().loaded().is_some());
+    let layout = playr_app::tape::Layout {
+        folded: [Some(false); 4],
+        fx: true,
+        ..Default::default()
+    };
+    harness.state_mut().model_mut().set_tape_layout(layout);
+    harness.run_steps(2);
+    harness.get_by_label("Delay time");
+    harness.get_by_label("Voice 1 drawer");
+    assert_fits(&harness, window, "a loaded tape, FX open");
 }

@@ -141,7 +141,7 @@ The voices read before the write head writes, so on the next pass every voice re
 
 One delay and one reverb serve all four voices. Each voice's drawer has a **Delay** and a **Reverb** send. The sends take the voice after Level, Pan, Mute and Solo: a muted voice has no echo, and fading a voice fades its tail. The Send to the write head is different: it is taken before Level and goes on under Mute.
 
-The **FX** lane, above voice 4, holds the effects' controls. It is folded until opened with its chevron.
+The **FX** lane, above voice 4, holds the effects' controls. It is folded until opened with its chevron. Open, with every lane open, it needs a window 648 points high; in a smaller one the lanes scroll.
 
 | row | range | default | does |
 |-|-|-|-|

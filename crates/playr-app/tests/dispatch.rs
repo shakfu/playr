@@ -207,6 +207,12 @@ fn adding_moves_the_cursor_and_playing_starts_from_it() {
     assert_eq!(selection(&f), ["/m/a.flac", "/m/b.flac"]);
     assert_eq!(last(&f), Some(&Outcome::RemovedFromSelection.into()));
 
+    // A huge count stops at either end rather than overflowing.
+    dispatch(Action::Cursor(i64::MAX), &mut f);
+    assert_eq!(f.cursor(Library), Some(2));
+    dispatch(Action::Cursor(i64::MIN), &mut f);
+    assert_eq!(f.cursor(Library), Some(0));
+
     dispatch(Action::CursorFirst, &mut f);
     dispatch(Action::Cursor(1), &mut f);
     dispatch(Action::Activate, &mut f);
@@ -2059,6 +2065,23 @@ fn the_decks_delay_syncs_to_the_deck_heard_most() {
 }
 
 #[test]
+fn lanes_and_the_fx_lane_fold_and_drawers_open_by_command() {
+    use playr_app::tape::TapeAction as T;
+    let (mut f, _dir) = headless();
+    let layout = |f: &Headless| *f.tape.layout();
+    // An empty lane is folded until unfolded.
+    assert!(layout(&f).is_folded(1, true));
+    dispatch(Action::Tape(T::Fold(Some(2))), &mut f);
+    assert!(!layout(&f).is_folded(1, true));
+    dispatch(Action::Tape(T::Fold(Some(2))), &mut f);
+    assert!(layout(&f).is_folded(1, true));
+    dispatch(Action::Tape(T::Drawer(4)), &mut f);
+    assert_eq!(layout(&f).drawer, [false, false, false, true]);
+    dispatch(Action::Tape(T::Fold(None)), &mut f);
+    assert!(layout(&f).fx);
+}
+
+#[test]
 fn a_bounce_makes_the_write_loop_records_one_pass_and_says_so() {
     use playr_app::tape::{TapeAction as T, TapeMessage as M};
     let tape = |f: &mut Headless, t| dispatch(Action::Tape(t), f);
@@ -2102,9 +2125,20 @@ fn a_bounce_until_stopped_replaces_voice_4_s_loop_with_what_it_recorded() {
     assert_eq!(last(&f), Some(&Message::Tape(M::RecorderBusy)));
     // 1 s at the tape's 8 kHz.
     run_tape(&mut f, 8192);
-    let file = std::env::temp_dir().join(format!("playr-bounce-{}.wav", std::process::id()));
-    assert!(file.exists());
+    let prefix = format!("playr-bounce-{}-", std::process::id());
+    let bounces = || -> Vec<_> {
+        std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+            .map(|e| e.path())
+            .collect()
+    };
+    let file = bounces().pop().expect("the bounce's WAV");
     tape(&mut f, T::Bounce(None));
+    // A second bounce waits until the first is loaded.
+    tape(&mut f, T::Bounce(Some(Bounce::Long)));
+    assert_eq!(last(&f), Some(&Message::Tape(M::RecorderBusy)));
     tape_until(&mut f, |m| m == &Message::Tape(M::Bounced));
     assert!(!f.tape.bouncing());
     // Voice 4's loop is the 8192 frames recorded, its rolls its own ends.
@@ -2112,6 +2146,7 @@ fn a_bounce_until_stopped_replaces_voice_4_s_loop_with_what_it_recorded() {
     assert_eq!(e.range.len(), 8192, "{e:?}");
     assert!(f.tape.state().unwrap().voices[3].on);
     assert!(!file.exists(), "the WAV is read and goes");
+    assert!(bounces().is_empty(), "{:?}", bounces());
     // Kept as printed: its shape, not its file.
     let saved = f.tape.saved().unwrap();
     assert_eq!(saved.reads()[3], playr_app::tape::Reads::Write);

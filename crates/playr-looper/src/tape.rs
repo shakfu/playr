@@ -595,9 +595,10 @@ impl Voice {
         }
     }
 
-    /// Reads one frame into `mix` (stereo), `send` (the loop's channels) and
-    /// `buses` (stereo, delay then reverb), then advances. Returns whether
-    /// the voice sent anything to the write head.
+    /// Reads one frame into `mix` (stereo), `send` (`to` channels, the write
+    /// loop's) and `buses` (stereo, delay then reverb), then advances.
+    /// Returns whether the voice sent anything to the write head.
+    #[allow(clippy::too_many_arguments)]
     fn render(
         &mut self,
         lp: &Loop,
@@ -605,6 +606,7 @@ impl Voice {
         interp: Interp,
         mix: &mut [f32; 2],
         send: &mut [f32; 2],
+        to: usize,
         buses: &mut [[f32; 2]; 2],
     ) -> bool {
         let gate = self.gate.next();
@@ -651,12 +653,24 @@ impl Voice {
         mix[0] += heard[0];
         mix[1] += heard[1];
         // The send's low-pass tracks its input while off, so it resumes without a step.
-        for ((o, s), y) in send.iter_mut().zip(s).zip(&mut self.wear_lp) {
+        for (s, y) in s.into_iter().zip(&mut self.wear_lp) {
             *y = match wear > 0.0 {
                 true => flush(*y + self.wear_a * (s - *y)),
                 false => s,
             };
-            *o += *y * sends;
+        }
+        // Mono reaches both channels of a stereo write loop; stereo is summed into a mono one.
+        let y = self.wear_lp;
+        match (lp.channels, to) {
+            (1, 2) => {
+                send[0] += y[0] * sends;
+                send[1] += y[0] * sends;
+            }
+            (2, 1) => send[0] += 0.5 * (y[0] + y[1]) * sends,
+            _ => {
+                send[0] += y[0] * sends;
+                send[1] += y[1] * sends;
+            }
         }
 
         self.advance(rate, sample_rate, lp.frames());
@@ -1395,10 +1409,11 @@ impl Tape {
             let mut send = [0.0; 2];
             let mut buses = [[0.0; 2]; 2];
             let mut sending = false;
+            let to = self.lp.channels;
             for (v, own) in self.voices.iter_mut().zip(&self.own) {
                 let lp = own.as_deref().unwrap_or(&self.lp);
                 if lp.frames() > 0 {
-                    sending |= v.render(lp, sr, self.interp, &mut mix, &mut send, &mut buses);
+                    sending |= v.render(lp, sr, self.interp, &mut mix, &mut send, to, &mut buses);
                 }
             }
             let [d, r] = self.buses.frame(buses);

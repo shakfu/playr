@@ -765,6 +765,8 @@ fn pruning_a_gone_file_removes_its_tempo_correction() {
     let root = dir.path().canonicalize().unwrap();
     let path = root.join("gone.flac");
     std::fs::write(&path, b"").unwrap();
+    // A root left empty reads as unmounted, and is not pruned.
+    std::fs::write(root.join("kept.flac"), b"").unwrap();
     let conn = db::open_memory().unwrap();
     let t = with_tempo(&conn, path.to_str().unwrap(), Some(120.0), None);
     db::analysis::set_tempo_fix(&conn, &t.path, 2.0).unwrap();
@@ -780,6 +782,7 @@ fn a_grid_set_by_hand_is_shown_kept_through_analysis_and_pruned() {
     let root = dir.path().canonicalize().unwrap();
     let path = root.join("live.flac");
     std::fs::write(&path, b"").unwrap();
+    std::fs::write(root.join("kept.flac"), b"").unwrap();
     let conn = db::open_memory().unwrap();
     let t = with_tempo(&conn, path.to_str().unwrap(), None, Some((140.0, 0.9)));
     db::analysis::set_grid_edit(&conn, &t.path, Some(Grid { bpm: 96.5, t0: 0.2 })).unwrap();

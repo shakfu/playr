@@ -463,9 +463,23 @@ fn prefix_of(root: &Path) -> Option<String> {
 }
 
 /// Whether the file at `path` is known to be gone. One whose existence
-/// cannot be checked is not.
-fn gone(path: &str) -> bool {
-    matches!(Path::new(path).try_exists(), Ok(false))
+/// cannot be checked is not, nor one whose directory is gone too under an
+/// empty one: that is how a drive unmounted below a root reads.
+pub(crate) fn gone(path: &str) -> bool {
+    let path = Path::new(path);
+    if !matches!(path.try_exists(), Ok(false)) {
+        return false;
+    }
+    match path.ancestors().skip(1).find(|d| d.is_dir()) {
+        Some(dir) if Some(dir) == path.parent() => true,
+        Some(dir) => !empty_dir(dir),
+        None => false,
+    }
+}
+
+/// Whether `dir` reads as holding nothing, as an unmounted drive's mount point does.
+pub fn empty_dir(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
 }
 
 /// Tracks under `root` whose file is gone, in library order.
@@ -488,7 +502,7 @@ pub fn missing_under(conn: &Connection, root: &Path) -> Result<Vec<Track>> {
 /// Files are checked before the transaction opens, so the write lock is held
 /// for the deletes alone.
 pub fn prune_missing(conn: &Connection, root: &Path) -> Result<Pruned> {
-    let Some(prefix) = prefix_of(root) else {
+    let Some(prefix) = prefix_of(root).filter(|_| !empty_dir(root)) else {
         return Ok(Pruned::default());
     };
     let tracks = missing_under(conn, root)?;

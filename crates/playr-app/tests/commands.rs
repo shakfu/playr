@@ -488,6 +488,36 @@ fn seek_takes_a_time_or_a_signed_offset() {
 }
 
 #[test]
+fn huge_times_are_refused_not_panicked_on() {
+    let times = ["1e30", "18446744073709551615:00", "1e19", "+1e30", "604801"];
+    let commands = [
+        "seek",
+        "mark",
+        "stop in",
+        "range",
+        "in",
+        "out",
+        "scrub",
+        "select",
+        "move-to",
+        "tape window",
+        "dj a seek",
+    ];
+    for view in View::ALL {
+        for command in commands {
+            for time in times {
+                let line = format!("{command} {time}");
+                let parsed = std::panic::catch_unwind(|| parse(&line, view));
+                assert!(parsed.is_ok(), "{line:?} panicked in {view:?}");
+            }
+        }
+    }
+    assert!(lib("seek 1e30").is_err());
+    assert!(lib("seek 604801").is_err());
+    assert_eq!(lib("seek 604800"), Ok(Action::SeekTo(secs(604_800.0))));
+}
+
+#[test]
 fn volume_is_a_percentage_or_a_signed_change() {
     assert_eq!(lib("volume 100"), Ok(Action::SetVolume(1.0)));
     assert_eq!(lib("volume 0"), Ok(Action::SetVolume(0.0)));
@@ -1515,6 +1545,9 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape reset", T::Reset),
         ("tape 2 clear", T::Clear(2)),
         ("tape 1 eject", T::Eject(1)),
+        ("tape 3 fold", T::Fold(Some(3))),
+        ("tape fx", T::Fold(None)),
+        ("tape 4 more", T::Drawer(4)),
         ("tape save", T::Save),
         ("tape rec", T::Record),
         (
