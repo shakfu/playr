@@ -5,7 +5,8 @@
 #   systemctl --user enable --now playr-server
 #   loginctl enable-linger "$USER"    # start at boot, without logging in
 #
-# Change the flags with: systemctl --user edit --full playr-server
+# Change the flags with: systemctl --user edit --full playr-server, or set
+# them under [server] in ~/.config/playr/settings.toml; a flag wins.
 
 [Unit]
 Description=playr, controlled from a web page and OSC

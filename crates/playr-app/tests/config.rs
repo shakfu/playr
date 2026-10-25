@@ -376,3 +376,38 @@ fn the_read_heads_interpolation_is_a_top_level_setting() {
         ["line 1: unknown interp linear; choices: sinc, hermite"]
     );
 }
+
+/// `[server]` holds playr-server's flags, and only the server reads them.
+#[test]
+fn the_server_table_holds_its_flags() {
+    let text = r#"[server]
+listen = "0.0.0.0:8080"
+open = true
+hosts = ["pi.home"]
+osc = "0.0.0.0:9000"
+osc_reply = "ipad.local:9001"
+"#;
+    let server = Config::parse_for(Program::Server, text).unwrap().server;
+    assert_eq!(server.listen, Some("0.0.0.0:8080".parse().unwrap()));
+    assert_eq!(server.open, Some(true));
+    assert_eq!(server.hosts, ["pi.home"]);
+    assert_eq!(server.osc, Some("0.0.0.0:9000".parse().unwrap()));
+    assert_eq!(server.osc_reply.as_deref(), Some("ipad.local:9001"));
+    assert_eq!(
+        Config::parse_for(Program::Server, "").unwrap().server,
+        Default::default()
+    );
+
+    let gui = Config::parse_for(Program::Gui, "[gui]\nlisten = \"0.0.0.0:1\"\n").unwrap_err();
+    assert!(gui[0].contains("unknown setting: listen"), "{gui:?}");
+    for bad in [
+        "listen = \"pi:8080\"",
+        "osc = 9000",
+        "osc_reply = \"ipad.local\"",
+        "open = \"yes\"",
+        "hosts = \"pi\"",
+    ] {
+        let errors = Config::parse_for(Program::Server, &format!("[server]\n{bad}\n"));
+        assert!(errors.is_err(), "{bad} accepted");
+    }
+}

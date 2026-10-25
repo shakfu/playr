@@ -2,13 +2,13 @@
 
 The tape is a four-track looper with a write head. Each of four voices plays a loop at its own rate, forward or in reverse, over its own part of it. Voice 4's loop is the write loop: with **Write** on, a write head records every voice's send into it, with feedback, so it changes on every pass. Voices 1 to 3 can play it too. You can save the write loop as a sample, or record what you hear.
 
-The window shows it in the **Tape** tab; the terminal has the `:tape` commands only, listed under [Tape](../README.md#tape) in the README. The design is in [`docs/dev/looper-engine.md`](https://github.com/shakfu/playr/blob/main/docs/dev/looper-engine.md).
+The window shows it in the **Tape** tab; the terminal has the `:tape` commands only, listed under [Tape](manual.md#tape) in the manual. The design is in [`docs/dev/looper-engine.md`](https://github.com/shakfu/playr/blob/main/docs/dev/looper-engine.md).
 
 ## Loading a loop
 
 A loop comes from the playing track, so play a track first. Then either:
 
-- **Pick a loop in a lane**: each lane's list searches the [loop library](../README.md#the-loop-library) as you type, as `/` does in the Loops view, and loads the loop picked into that voice. Each row shows where the loop lies in its file, `1:02.3-1:06.1`, so loops cut from one track can be told apart; the lane shows it under the name. `:tape N loop ID` does the same.
+- **Pick a loop in a lane**: each lane's list searches the [loop library](manual.md#the-loop-library) as you type, as `/` does in the Loops view, and loads the loop picked into that voice. Each row shows where the loop lies in its file, `1:02.3-1:06.1`, so loops cut from one track can be told apart; the lane shows it under the name. `:tape N loop ID` does the same.
 
 - **Set a range** in the sampler view: `i` and `o` at the playhead, or a drag across the waveform in the window. [`guide-sampler.md`](guide-sampler.md) covers ranges. Then **Load range** in the Tape tab, or `:tape load`, loads it into voice 1.
 

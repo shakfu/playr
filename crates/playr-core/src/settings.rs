@@ -57,6 +57,8 @@ pub struct Settings {
     pub speed: i32,
     /// How long each track fades in and out; zero, the default, for none.
     pub fade: std::time::Duration,
+    /// How long consecutive tracks overlap; zero for none.
+    pub crossfade: std::time::Duration,
     /// Where exported slices are written.
     pub samples: PathBuf,
     pub convert_with_moss: ConvertWithMoss,
@@ -73,6 +75,8 @@ pub struct Settings {
     pub slice_ot_file: bool,
     /// After a scan, remove tracks whose files are gone, without asking.
     pub auto_prune: bool,
+    /// Rescan once files under the library's directories change.
+    pub watch: bool,
     /// Store the queue, to offer with the track playing at the next start.
     pub keep_queue: bool,
     /// What a session does with the draft playlist an earlier one left.
@@ -166,6 +170,7 @@ impl Default for Settings {
             after_queue: AfterQueue::Resume,
             speed: 0,
             fade: std::time::Duration::ZERO,
+            crossfade: std::time::Duration::ZERO,
             samples: PathBuf::new(),
             convert_with_moss: ConvertWithMoss {
                 enable: false,
@@ -178,6 +183,7 @@ impl Default for Settings {
             slice_fades: crate::samples::Fades::default(),
             slice_ot_file: false,
             auto_prune: false,
+            watch: false,
             keep_queue: true,
             draft: Draft::Ask,
             analyze_on_scan: false,
@@ -388,6 +394,12 @@ impl Settings {
                     }
                     _ => errors.add(at, "fade is a number of seconds from 0 to 10"),
                 },
+                ("crossfade", v) => match number(v) {
+                    Some(n) if (0.0..=MAX_FADE_SECS).contains(&n) => {
+                        self.crossfade = std::time::Duration::from_secs_f64(n)
+                    }
+                    _ => errors.add(at, "crossfade is a number of seconds from 0 to 10"),
+                },
                 ("onset_sensitivity", v) => match number(v) {
                     Some(n) if (0.0..=1.0).contains(&n) => self.onset_sensitivity = n as f32,
                     _ => errors.add(at, "onset_sensitivity is a number from 0 to 1"),
@@ -423,6 +435,7 @@ impl Settings {
                     ),
                 },
                 ("auto_prune", DeValue::Boolean(b)) => self.auto_prune = *b,
+                ("watch", DeValue::Boolean(b)) => self.watch = *b,
                 ("keep_queue", DeValue::Boolean(b)) => self.keep_queue = *b,
                 ("draft", DeValue::String(s)) => {
                     match Draft::NAMES.iter().find(|d| d.0.eq_ignore_ascii_case(s)) {
@@ -498,7 +511,7 @@ impl Settings {
                     }
                 }
                 (
-                    "mode" | "samples" | "extensions" | "slice_edges" | "auto_prune"
+                    "mode" | "samples" | "extensions" | "slice_edges" | "auto_prune" | "watch"
                     | "analyze_on_scan" | "slice_ot_file" | "device" | "replaygain" | "persist"
                     | "after_queue" | "keep_queue" | "draft",
                     v,
@@ -538,13 +551,9 @@ fn expand_home(path: &str) -> Option<PathBuf> {
     path.is_absolute().then_some(path)
 }
 
-/// `$XDG_CONFIG_HOME/playr/settings.toml`, else `~/.config/playr/settings.toml`.
+/// `settings.toml` under [`crate::paths::config_dir`].
 pub fn default_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::home_dir().map(|h| h.join(".config")))?;
-    Some(base.join("playr/settings.toml"))
+    crate::paths::config_dir(&crate::paths::Env::current()).map(|d| d.join(crate::paths::SETTINGS))
 }
 
 /// The columns a `columns = [...]` value names, or why it is not one.

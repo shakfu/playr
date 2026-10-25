@@ -19,7 +19,7 @@ use playr_core::samples::{Cut, Job, Plan};
 use playr_core::session::Session;
 use playr_core::wave::Peaks;
 
-use crate::action::{Action, Keymap, LoopAction, Slicing, Zoom};
+use crate::action::{Action, FilterBy, Keymap, LoopAction, Slicing, Zoom};
 use crate::command::view_name;
 use crate::message::Message;
 use crate::mix::{MixAction, Strip};
@@ -184,6 +184,8 @@ pub enum Presentation {
     Sorted(Vec<playr_core::columns::SortKey>),
     /// What analysis measured about one track.
     TrackInfo,
+    /// Every message since start.
+    MessageList,
     Zoom(Zoom),
     /// Draw the waveform this way, or the next way when `None`.
     Display(Option<Display>),
@@ -467,6 +469,38 @@ fn act(action: Action, f: &mut impl Frontend) {
                 f.notify(Message::NoMatches);
             }
         }
+        Action::Filter(by) => {
+            let playing = || {
+                let path = f
+                    .session()
+                    .player()
+                    .status()
+                    .current()?
+                    .to_str()?
+                    .to_string();
+                f.session()
+                    .tracks()
+                    .iter()
+                    .find(|t| t.path == path)
+                    .cloned()
+            };
+            let Some(track) = cursor_track(f).or_else(playing) else {
+                return f.notify(Refusal::NothingPlaying.into());
+            };
+            let (field, value) = match by {
+                FilterBy::Album => ("album", track.album),
+                FilterBy::Artist => ("artist", track.artist),
+            };
+            let Some(value) = value.filter(|v| !v.trim().is_empty()) else {
+                return f.notify(Refusal::NoTag(field).into());
+            };
+            // A phrase, matched from the start of its words: `album:"Kind of
+            // Blue"` also finds "Kind of Blue (Legacy Edition)".
+            search(f, &format!("{field}:\"{}\"", value.replace('"', "")));
+            if f.listed().is_empty() {
+                f.notify(Message::NoMatches);
+            }
+        }
         Action::Search(query) => {
             search(f, &query);
             if f.listed().is_empty() {
@@ -489,6 +523,12 @@ fn act(action: Action, f: &mut impl Frontend) {
         Action::LoopLib(a) => loop_lib(f, a),
 
         Action::Add => add(f),
+        Action::ToggleAll => {
+            let listed = f.listed().to_vec();
+            if let Some(outcome) = f.session_mut().toggle_all_selected(listed) {
+                f.notify(outcome.into());
+            }
+        }
         Action::Enqueue(next) => enqueue(f, next),
         Action::EnqueueAll => {
             let tracks = match f.view() {
@@ -639,6 +679,7 @@ fn act(action: Action, f: &mut impl Frontend) {
         },
         Action::ShowRoots => f.present(Presentation::RootList),
         Action::ShowInfo => f.present(Presentation::TrackInfo),
+        Action::ShowMessages => f.present(Presentation::MessageList),
         Action::ShowDevice => {
             let device = f.session().player().device().cloned();
             let sink = device
@@ -713,6 +754,10 @@ fn act(action: Action, f: &mut impl Frontend) {
             let interp = interp.unwrap_or(other);
             f.mix().set_interp(interp);
             f.notify(Message::Interp(interp));
+        }
+        Action::Crossfade(d) => {
+            f.session().send(Cmd::SetCrossfade(d));
+            f.notify(Message::Crossfade(d));
         }
         Action::Fade(d) => {
             f.session().send(Cmd::SetFade(d));

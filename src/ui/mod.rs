@@ -7,8 +7,8 @@ pub mod palette;
 pub mod render;
 pub mod sampler;
 
-use std::collections::HashMap;
-use std::time::Duration;
+use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 pub use playr_app::dispatch::Confirm;
 pub use playr_app::model::{Input, Snapshot};
@@ -121,6 +121,8 @@ pub struct Screen<'a> {
     /// Rows the key or command list is scrolled by.
     pub help_scroll: usize,
     pub message: Option<&'a str>,
+    /// Every message since start, newest last, for `:messages`.
+    pub log: Option<&'a VecDeque<(Instant, String)>>,
     /// The playing track's tempo, as it sounds. `None` until `playr analyze`
     /// has measured it.
     pub bpm: Option<f32>,
@@ -169,6 +171,7 @@ impl<'a> Screen<'a> {
             sampler,
             help_scroll: 0,
             message: None,
+            log: None,
             lists: Lists::default(),
             colour: true,
             theme: Theme::Dark,
@@ -264,6 +267,7 @@ impl App {
             theme: m.theme(),
             extensions: m.session().convert_enabled(),
             message: m.message_text(),
+            log: Some(m.log()),
             bpm: m.bpm(),
             columns: m.columns(),
             measures: m.measures_map(),
@@ -361,7 +365,11 @@ impl App {
             Input::Draft(_) => self
                 .model
                 .answer_draft(key_of(&key).and_then(DraftAnswer::of_key)),
-            Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_) => {
+            Input::Help
+            | Input::CommandHelp
+            | Input::Roots(_)
+            | Input::Info(_)
+            | Input::Messages => {
                 // The lists can be longer than the screen.
                 match key.code {
                     KeyCode::Char('j') | KeyCode::Down => self.help_scroll += 1,
@@ -410,7 +418,7 @@ impl App {
     fn follow_help(&mut self) {
         if !matches!(
             self.model.input(),
-            Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_)
+            Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_) | Input::Messages
         ) {
             self.help_scroll = 0;
         }

@@ -17,6 +17,23 @@ use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_gui::Gui;
 
+/// A window of `size` over `model`, with the fonts main.rs sets.
+fn open(size: egui::Vec2, model: Model) -> Harness<'static, Gui> {
+    // The build's own step draws nothing, so the window's first frame has
+    // the fonts, as in main.rs; a set_fonts after it would drop fallbacks.
+    let mut built = false;
+    let mut harness = Harness::builder().with_size(size).build_ui_state(
+        move |ui, gui: &mut Gui| match std::mem::replace(&mut built, true) {
+            true => gui.show(ui),
+            false => ui.ctx().set_fonts(playr_gui::fonts::definitions()),
+        },
+        Gui::new(model),
+    );
+    // A playing window never settles for `run`.
+    harness.run_steps(1);
+    harness
+}
+
 /// A window over a library file of tracks A, B and C and playlists "early"
 /// and "late", with its directory.
 fn window() -> (Harness<'static, Gui>, tempfile::TempDir) {
@@ -38,10 +55,7 @@ fn window() -> (Harness<'static, Gui>, tempfile::TempDir) {
     query::save_playlist(&mut conn, "late", &ids[..2]).unwrap();
     query::save_playlist(&mut conn, "early", &ids[2..]).unwrap();
     let model = Model::new(conn, common::fake_player().0, Vec::new(), Config::default());
-    let harness = Harness::builder()
-        .with_size(egui::vec2(1100.0, 720.0))
-        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
-    (harness, dir)
+    (open(egui::vec2(1100.0, 720.0), model), dir)
 }
 
 /// Types `text` as key presses outside any text field.
@@ -399,9 +413,7 @@ fn shift_clicking_the_progress_bar_marks_there() {
         vec![track],
         Config::default(),
     );
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(1100.0, 720.0))
-        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(playing));
+    let mut harness = open(egui::vec2(1100.0, 720.0), playing);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while model(&harness).snapshot().status.duration.is_none() {
         assert!(
@@ -445,9 +457,7 @@ fn sampling(samples: &std::path::Path) -> (Harness<'static, Gui>, tempfile::Temp
         Config::default(),
     );
     model.session_mut().set_samples_dir(samples.to_path_buf());
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(1100.0, 720.0))
-        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
+    let mut harness = open(egui::vec2(1100.0, 720.0), model);
     harness.run_steps(2);
     typing(&mut harness, "5");
     wait(&mut harness, |m| {
@@ -1177,9 +1187,7 @@ fn convert_to_shows_once_enabled_and_is_disabled_until_convertwithmoss_is_instal
         Vec::new(),
         config,
     );
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(800.0, 592.0))
-        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
+    let mut harness = open(egui::vec2(800.0, 592.0), model);
     harness.run_steps(2);
     let open = |harness: &mut Harness<'_, Gui>| {
         topmost(harness, "Sampler").click();
@@ -1254,9 +1262,7 @@ fn sized(dir: &std::path::Path, view: &str, text: bool, height: f32) -> Harness<
             ..Config::default()
         },
     );
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(800.0, height))
-        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
+    let mut harness = open(egui::vec2(800.0, height), model);
     harness.run_steps(2);
     // The sampler reads the waveform only while shown.
     typing(&mut harness, "5");
@@ -2401,14 +2407,12 @@ fn titled(titles: &[&str]) -> (Harness<'static, Gui>, tempfile::TempDir) {
         db::upsert(&conn, &track).unwrap();
     }
     let model = Model::new(conn, common::fake_player().0, Vec::new(), Config::default());
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(1100.0, 720.0))
-        .build_ui_state(|ui, gui: &mut Gui| gui.show(ui), Gui::new(model));
+    let mut harness = open(egui::vec2(1100.0, 720.0), model);
     harness.run_steps(3);
     (harness, dir)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn drawable(harness: &Harness<'_, Gui>, c: char) -> bool {
     harness
         .ctx
@@ -2424,7 +2428,7 @@ fn a_latin_library_adds_no_font() {
         "\u{416}\u{438}\u{437}\u{43d}\u{44c}",
         "a\u{200d}b\u{ad}c\u{feff}",
     ]);
-    let fonts = egui::FontDefinitions::default().font_data.len();
+    let fonts = playr_gui::fonts::definitions().font_data.len();
     assert_eq!(
         harness.ctx.fonts(|f| f.definitions().font_data.len()),
         fonts
@@ -2447,12 +2451,42 @@ fn a_combining_mark_is_drawn_with_the_small_latin_font() {
 #[cfg(target_os = "macos")]
 fn added_fonts(harness: &Harness<'_, Gui>) -> Vec<String> {
     harness.ctx.fonts(|f| {
-        let defaults = egui::FontDefinitions::default().font_data;
+        let defaults = playr_gui::fonts::definitions().font_data;
         (f.definitions().font_data.keys())
             .filter(|k| !defaults.contains_key(*k))
             .cloned()
             .collect()
     })
+}
+
+/// On Linux the fonts are fontconfig's choice, so only coverage is checked,
+/// for each script fontconfig has a font for; a bare runner has none.
+#[cfg(target_os = "linux")]
+#[test]
+fn titles_in_other_scripts_are_drawn_with_fontconfig_s_fonts() {
+    let titles = [
+        "\u{4e2d}\u{6587}",
+        "\u{d55c}\u{ad6d}\u{c5b4}",
+        "\u{e44}\u{e17}\u{e22}",
+        "\u{627}\u{644}\u{639}\u{631}\u{628}\u{64a}\u{629}",
+        "\u{5e2}\u{5d1}\u{5e8}\u{5d9}\u{5ea}",
+    ];
+    let covered = |t: &str| {
+        let charset: Vec<String> = t.chars().map(|c| format!("{:x}", c as u32)).collect();
+        std::process::Command::new("fc-list")
+            .arg(format!(":charset={}", charset.join(" ")))
+            .output()
+            .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
+    };
+    let titles: Vec<&str> = titles.into_iter().filter(|t| covered(t)).collect();
+    if titles.is_empty() {
+        eprintln!("skipped: fontconfig has no font for any of the scripts");
+        return;
+    }
+    let (harness, _dir) = titled(&titles);
+    for c in titles.iter().flat_map(|t| t.chars()) {
+        assert!(drawable(&harness, c), "{c} is drawn as a box");
+    }
 }
 
 /// macOS ships these fonts; a Linux runner may have none for CJK.

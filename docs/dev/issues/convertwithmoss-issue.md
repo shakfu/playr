@@ -1,6 +1,6 @@
 # ConvertWithMoss issue: OP-XY frame counts after resampling
 
-A draft report for [git-moss/ConvertWithMoss](https://github.com/git-moss/ConvertWithMoss/issues), not yet filed. playr has no workaround: `:convert opxy` passes any export not at 44.1 kHz through, and `TODO.md`, "OP-XY frame counts at other rates", tracks it. Test X6 in `docs/dev/device_tests.md` checks what the device does; its result can replace "Effect on the device" before filing. The cause below is read from the source, not confirmed by a build.
+A draft report for [git-moss/ConvertWithMoss](https://github.com/git-moss/ConvertWithMoss/issues), not yet filed. Since 2026-10-25 `:convert opxy` rewrites the counts in each `patch.json` from its WAV's frame count; a fixed release makes that a no-op. Test X6 in `docs/dev/device_tests.md` checks what the device does; its result can replace "Effect on the device" before filing. The cause below is read from the source, not confirmed by a build.
 
 Everything below the line is the issue text.
 

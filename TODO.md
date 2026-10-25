@@ -37,23 +37,15 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Playback
 
-- [ ] **Crossfade.** `:crossfade 2` overlaps a track's last 2 s with the next one's first, fading one out as the other fades in. Needs two decoders and a mixer stage in the engine. Tracks at different sample rates cannot share one output stream, so one side must be resampled; see "Gapless across a sample-rate change". The first step is built: `:fade` fades each end with one decoder, no overlap. Off by default, as the crossfade must be.
+- [ ] **Crossfade across sample rates.** `:crossfade` overlaps tracks that share a rate and channel count; others join gaplessly. Overlapping them needs one side resampled to the other's rate; see "Gapless across a sample-rate change".
 
 ### Sampler
-
-- [ ] **Read the selection's waveforms ahead.** The sampler keeps recent waveforms in memory (`wave::Cache`), so a return to a track is fast; a first visit still decodes, 0.35 to 2.7 s on one machine. Reading the selection's tracks ahead, in the background, would make a first visit fast too, at the cost of decoding tracks never opened.
-
-- [ ] **OP-XY frame counts at other rates.** ConvertWithMoss 20.3.0 resamples a 48 or 96 kHz slice to 44.1 kHz for the OP-XY, but `patch.json` keeps the old counts: `framecount`, `sample.end` and `loop.end` say 24,000 or 48,000 for a file of 22,050 frames. Every playr export keeps its source's rate, so a 48 kHz track hits it. What the device does with an end past the file is X6 in `docs/dev/device_tests.md`. Fix upstream: the report is drafted in `docs/dev/issues/convertwithmoss-issue.md`. Until then `:convert opxy` could resample to 44.1 kHz first, or warn. Found 2026-10-01.
 
 - [ ] **Which samplers read the `smpl` loop.** A range cut whole while it loops carries its loop in a `smpl` chunk since 2026-10-04, in frames, like the cue points. No device or sampler has read one yet; "Which devices read `smpl` loops" in `docs/dev/hardware_samplers.md` stays open. `docs/dev/device_tests.md` has the test, M8; run it.
 
 ### Library
 
-- [ ] **Deduplicate entries.** Scanning one album from two paths adds it twice. `is:duplicate` lists the copies, and `is:duplicate path:DIR` the copies under one folder. Removing them is manual: delete the duplicate folder, then rescan.
-
-- [ ] **Group, a date added, and play history.** `columns` and `sort` order the library by any column, but there is no grouping, and no date added to sort by: the schema has no `added_at`, and `mtime` is the file's. A column would only be meaningful for tracks added after it. A `plays(path, at)` table would add history; with every column a search field, `added:30d..` and `played:..1y` follow. Album and artist grouping needs a new view in three frontends, and `Frontend` assumes one cursor row per view. A cheaper first step: `:filter album|artist` searches for the cursor row's album or artist. A buyer of music thinks in releases (decision 2), which argues for grouping (inference about users).
-
-- [ ] **Columns on the page.** `[server] columns` is read but not used: the page's rows are a responsive grid, tuned for a phone's two-line rows, and making the columns dynamic means rebuilding that layout. It sorts and shows a fixed set for now.
+- [ ] **Group, a date added, and play history.** `columns` and `sort` order the library by any column, but there is no grouping, and no date added to sort by: the schema has no `added_at`, and `mtime` is the file's. A column would only be meaningful for tracks added after it. A `plays(path, at)` table would add history; with every column a search field, `added:30d..` and `played:..1y` follow. Album and artist grouping needs a new view in three frontends, and `Frontend` assumes one cursor row per view. `:filter album|artist` is the first step: it searches for the row's album or artist. A buyer of music thinks in releases (decision 2), which argues for grouping (inference about users).
 
 - [ ] **Calibrate the cutoff heuristics.** The two spectral findings were set against ffmpeg's encoders, not files whose provenance is known; a library of lossless files with known sources would settle them. The tempo confidence is calibrated, against librosa; see `docs/dev/analyze.md`.
 
@@ -63,25 +55,13 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **Check the grid's level against a reference.** `HALVED_BELOW`, 80 BPM, was set on one library by counting tracks shown at double; no reference tempo was available, since librosa is not installed. Running librosa's `beat_track` over the same files beside `grid_report.rs` would test the limit, and the phase with a better judge than the low-band fold, which a bassline pulls.
 
-- [ ] **Watch for changes.** A scan is manual. `notify` could pick up new files, at the cost of a watcher thread.
-
-- [ ] **Relative rows from 0.1.0.** A 0.1.0 scan with a relative path stored relative rows. Rescanning adds absolute duplicates, and pruning never matches the old rows. A one-off cleanup would delete them, and their playlist entries with them.
-
 ### Interface
 
-- [ ] **No emoji fonts in the window.** egui's `default_fonts` feature bundles `NotoEmoji-Regular.ttf` and `emoji-icon-font.ttf`, 726 KB of the 16.7 MB binary. The window uses them for five symbols only: Pause, Previous, Stop and Next (U+23F8, U+23EE, U+23F9, U+23ED) from the icon font, and the sampler's zoom-all arrow (U+2194) from NotoEmoji. Turn the feature off and bundle Ubuntu-Light and Hack alone; paint the five as shapes, as Play and From start already are. Emoji in library tags then show as boxes: the system fallback in `fonts.rs` loads no emoji font, and egui cannot draw Apple Color Emoji's colour glyphs.
-
-- [ ] **System fonts on Windows and Linux.** The window draws other scripts with system fonts, tested on macOS only. The Windows list of files and the `fc-match` query on Linux are untried there. Right-to-left text may show out of order: egui 0.36 has no bidi algorithm (inference).
+- [ ] **System fonts on Windows.** The window draws other scripts with system fonts, tested on macOS and Linux. The Windows list of files is untried there. Right-to-left text may show out of order: egui 0.36 has no bidi algorithm (inference).
 
 - [ ] **One list for the selection and the queue.** Both are hand-edited track lists that save as playlists, in two views. Option B in `docs/dev/selection-and-queue.md` merges them. Weigh it with "Multi-row selection", which uses "selection" for rows picked in any view.
 
-- [ ] **Multi-row selection.** Select several rows at once, in the window especially. `dispatch` assumes one cursor row per view, so `Frontend` grows; see `docs/architecture.md`. A cheaper step: `:toggle all` on the listed rows keeps one cursor per view.
-
-- [ ] **Platform directories.** Both interfaces keep the library in `~/.local/share/playr` and settings in `~/.config/playr` on every platform, which is unusual on macOS and Windows. Moving to each platform's directories must move existing libraries.
-
-- [ ] **README as manual.** It is 57 KB and 619 lines; install starts at line 140 and the first command at line 205. Keep the description, install and a ten-line first session. Move the rest to `docs/manual.md`.
-
-- [ ] **Long messages cut off in the terminal.** The bottom line shares its width with the mode and volume. At 100 columns about 58 characters are free, so a ConvertWithMoss warning showed "The preset has 40 regions but the device" and lost "at most 24". The window shows more. Options: wrap onto a second line, or keep the last messages for a `:messages` list.
+- [ ] **Multi-row selection.** Select several rows at once, in the window especially. `dispatch` assumes one cursor row per view, so `Frontend` grows; see `docs/architecture.md`. `:toggle all` is the first step: it selects or unselects every listed row, keeping one cursor per view.
 
 ### Output
 
@@ -93,27 +73,13 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **Tried in TouchOSC.** The generated layout rests on inference for three bindings: a radio sending its segment's index, a received speed scaled back onto the fader, and a dragged fader not moved by the progress sent back. See `docs/dev/server.md`.
 
-- [ ] **Browser tests in CI.** `make page-test` needs an audio device, which runners lack. A null output device for tests would let the release and test workflows run it.
-
-- [ ] **Reordering the selection by dragging.** The web page moves a selected track with its row menu; the window also drags rows.
-
-- [ ] **A hostname for `--osc-reply`.** It takes an IP address, so the tablet needs a fixed one. Resolving a name at startup would allow `ipad.local`.
-
 - [ ] **The terminal alongside the server.** The lock stops `playr` while `playr-server` runs. A `--tui` mode would drain the server's request channel in the terminal's loop, so both control one playback.
-
-- [ ] **A `[server]` table in `settings.toml`.** The server's settings are flags in its systemd unit. No longer blocked: `FRONTEND_TABLES` already names `server`, so the table is passed over by the other two programs. It needs the flags given settings equivalents and a precedence rule, flag over file.
-
-- [ ] **Marks on the page.** The page shows marks as a count, so a mark made on a phone does not appear on the progress bar (inference).
 
 ### Formats
 
-- [ ] **Opus surround.** Multistream Opus is rejected at construction. The `opus` crate exposes `MSDecoder`; wiring it up is contained.
-
-- [ ] **Tags and duration for CAF, MKV and WebM.** lofty cannot parse these, so they are indexed under their file names, and Symphonia's Matroska reader reports no duration. Symphonia's own metadata might supply the tags; untested. Duration would otherwise mean decoding each file at scan time.
+- [ ] **Titles of MKV and WebM files from ffmpeg.** ffmpeg writes a file's title into the segment's Info and a stream's into its track entry, neither of which Symphonia 0.6 exposes; such files show their file names. **upstream**, unless playr reads the EBML itself.
 
 ### Packaging
-
-- [ ] **Man page and shell completions.** The command line is parsed with clap, so `clap_mangen` and `clap_complete` can generate them.
 
 - [ ] **Publishing to crates.io.** Manual, with `cargo publish --workspace`. `playr-gui` and `playr-server` have `publish = false`; decide whether they go to crates.io, and whether the release workflow publishes.
 
@@ -132,6 +98,8 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 - [ ] **Pitch-preserving speed.** The README rules it out by definition. For a musician practising against a loop it outranks most items; for a person who samples, varispeed is the right tool. Needs a phase vocoder or a dependency, and a new engine stage. The primary user samples (decision 2), and time-stretching a sample is a DAW's job on an exact slice, so this stays low.
 
 ### Sampler
+
+- [ ] **File the OP-XY frame count issue.** `:convert opxy` corrects ConvertWithMoss 20.3.0's counts for 48 and 96 kHz exports itself. The report is drafted in `docs/dev/issues/convertwithmoss-issue.md`.
 
 - [ ] **Live marks for sampling tools.** Slices can be exported as files. Handing a marked passage to a running tool, such as SuperCollider, is not done: `docs/guide-sampler.md` weighs a JSON Lines file against OSC.
 

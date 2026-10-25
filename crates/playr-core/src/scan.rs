@@ -86,6 +86,30 @@ pub fn read_track(path: &Path) -> Option<Track> {
         t.sample_rate = Some(spec.rate).filter(|r| *r != 0);
         t.channels = Some(spec.channels).filter(|c| *c != 0);
         t.duration_ms = stream.duration().map(|d| d.as_millis() as i64);
+        let tags = stream.tags();
+        t.title = tags.title;
+        t.artist = tags.artist;
+        t.album = tags.album;
+        t.album_artist = tags.album_artist;
+        t.genre = tags.genre;
+        t.track_no = tags.track;
+        t.disc_no = tags.disc;
+        t.year = tags.year;
+        let info = caf_info(path);
+        let get = |keys: &[&str]| {
+            info.iter()
+                .find(|(k, _)| keys.iter().any(|w| k.eq_ignore_ascii_case(w)))
+                .map(|(_, v)| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        t.title = t.title.or(get(&["title"]));
+        t.artist = t.artist.or(get(&["artist"]));
+        t.album = t.album.or(get(&["album"]));
+        t.genre = t.genre.or(get(&["genre"]));
+        t.track_no =
+            (t.track_no).or(get(&["track number", "track"]).and_then(|s| parse_leading_num(&s)));
+        t.year = (t.year)
+            .or(get(&["year", "date", "recorded date"]).and_then(|s| s.get(..4)?.parse().ok()));
         return Some(t);
     };
 
@@ -113,6 +137,54 @@ pub fn read_track(path: &Path) -> Option<Track> {
             .and_then(|s| s.get(..4).and_then(|y| y.parse().ok()));
     }
     Some(t)
+}
+
+/// The key and value pairs of a CAF file's `info` chunk, which Symphonia
+/// skips; empty for any other file. Apple's keys are `title`, `artist`,
+/// `track number` and `year`; ffmpeg writes `track` and `date`.
+fn caf_info(path: &Path) -> Vec<(String, String)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut head = [0u8; 8];
+    if f.read_exact(&mut head).is_err() || &head[..4] != b"caff" {
+        return Vec::new();
+    }
+    let mut chunk = [0u8; 12];
+    while f.read_exact(&mut chunk).is_ok() {
+        let size = i64::from_be_bytes(chunk[4..].try_into().expect("8 bytes"));
+        if &chunk[..4] == b"info" {
+            // A tag chunk is small; a size past 1 MB is not one.
+            let Some(len) = usize::try_from(size)
+                .ok()
+                .filter(|&n| (4..1 << 20).contains(&n))
+            else {
+                return Vec::new();
+            };
+            let mut data = vec![0u8; len];
+            if f.read_exact(&mut data).is_err() {
+                return Vec::new();
+            }
+            let n = u32::from_be_bytes(data[..4].try_into().expect("4 bytes")) as usize;
+            let mut fields = data[4..]
+                .split(|&b| b == 0)
+                .map(|s| String::from_utf8_lossy(s).into_owned());
+            let mut pairs = Vec::new();
+            for _ in 0..n {
+                match (fields.next(), fields.next()) {
+                    (Some(k), Some(v)) => pairs.push((k, v)),
+                    _ => break,
+                }
+            }
+            return pairs;
+        }
+        // The audio data's size may be -1, to the end of the file.
+        if size < 0 || f.seek(SeekFrom::Current(size)).is_err() {
+            return Vec::new();
+        }
+    }
+    Vec::new()
 }
 
 /// `(mtime, size)` as stored in the library, with mtime in nanoseconds.
@@ -156,11 +228,14 @@ where
     };
     // Files under a loop root are loops, kept out of the audio library.
     let loop_roots = db::loops::roots(conn)?;
+    // Copies `playr dedupe` dropped.
+    let excluded = db::dedupe::excluded(conn)?;
     let mut files = Vec::new();
     for entry in WalkDir::new(root).follow_links(false) {
         match entry {
             Ok(e) if e.file_type().is_file() && is_audio(e.path()) => {
-                if !db::loops::under_root(&loop_roots, e.path()) {
+                let skip = e.path().to_str().is_some_and(|p| excluded.contains(p));
+                if !skip && !db::loops::under_root(&loop_roots, e.path()) {
                     files.push(e)
                 }
             }
@@ -229,6 +304,7 @@ pub fn scan_into(
     if stats.seen > 0 {
         db::add_root(&conn, dir).map_err(fail)?;
     }
+    db::dedupe::fix_relative(&conn).map_err(fail)?;
     let missing = db::missing_under(&conn, dir).map_err(fail)?.len();
     let total = db::query::count(&conn).map_err(fail)? as usize;
     Ok(ScanReport {
@@ -275,6 +351,7 @@ pub fn scan_roots(
         }
         missing += gone;
     }
+    db::dedupe::fix_relative(&conn).map_err(fail)?;
     let total = db::query::count(&conn).map_err(fail)? as usize;
     Ok(ScanReport {
         stats,

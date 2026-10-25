@@ -253,6 +253,19 @@ pub struct Feedback {
     since: Instant,
 }
 
+/// The address `to`, `HOST:PORT`, names: an IPv4 one where it has one, since
+/// a `.local` name's IPv6 address is often link-local and needs a scope.
+pub fn resolve(to: &str) -> io::Result<SocketAddr> {
+    use std::net::ToSocketAddrs;
+    let addrs: Vec<SocketAddr> = to.to_socket_addrs()?.collect();
+    addrs
+        .iter()
+        .find(|a| a.is_ipv4())
+        .or(addrs.first())
+        .copied()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address for that host"))
+}
+
 impl Feedback {
     pub fn new(to: SocketAddr) -> io::Result<Feedback> {
         let any: SocketAddr = if to.is_ipv4() {

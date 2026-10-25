@@ -2,7 +2,7 @@
 
 playr keeps an index of your music in one SQLite file, the library. It holds what it read from your files, what `playr analyze` measured, and what you made: playlists, marks, loops, saved searches. It never writes to the music files themselves.
 
-The terminal, the window and the server all read the same library. The README has the details: [The library](../README.md#the-library), [Analysis](../README.md#analysis), [Columns and order](../README.md#columns-and-order), [Search](../README.md#search) and [Keys](../README.md#keys). [`cheatsheet.md`](cheatsheet.md) lists every command. This page explains how the parts fit together.
+The terminal, the window and the server all read the same library. The manual has the details: [The library](manual.md#the-library), [Analysis](manual.md#analysis), [Columns and order](manual.md#columns-and-order), [Search](manual.md#search) and [Keys](manual.md#keys). [`cheatsheet.md`](cheatsheet.md) lists every command. This page explains how the parts fit together.
 
 ## Building the library
 
@@ -19,7 +19,7 @@ In the window: File, Add folder to library, then File, Analyze library. Inside p
 
 - **Analysis** decodes each track once and records its loudness and peak, for ReplayGain; its tempo and beat grid, for the tempo column, `:slice beats` and the DJ decks; and checks such as damaged files and likely transcodes. A later run decodes only what changed. With `analyze_on_scan = true` in `settings.toml`, a scan inside playr analyses what it added.
 
-The library file is `~/.local/share/playr/library.db`, or under `$XDG_DATA_HOME`; `--db PATH` uses another. Only one of the three programs runs at a time.
+The library file is `library.db` in `~/.local/share/playr` on Linux, `~/Library/Application Support/playr` on macOS, `%LOCALAPPDATA%\playr` on Windows, or under `$XDG_DATA_HOME`; `--db PATH` uses another. Only one of the three programs runs at a time.
 
 ## Finding tracks
 
@@ -34,7 +34,7 @@ The library file is `~/.local/share/playr/library.db`, or under `$XDG_DATA_HOME`
 | loudness or peak | `loudness:..-14`, `peak:0.99..` |
 | what analysis flagged | `is:damaged`, `is:lossy`, `is:duplicate`, `is:unanalysed` |
 
-Every term narrows the results; there is no OR or NOT. For anything else, `:sql` lists the tracks a `SELECT` names, as in `:sql SELECT path FROM library GROUP BY album HAVING count(*) = 1`. The README lists the views and columns it reads.
+Every term narrows the results; there is no OR or NOT. For anything else, `:sql` lists the tracks a `SELECT` names, as in `:sql SELECT path FROM library GROUP BY album HAVING count(*) = 1`. The manual lists the views and columns it reads.
 
 `:save-search NAME` keeps a search, or an `:sql` statement, in the Playlists view. It runs again each time you open it, so it finds tracks added or analysed since.
 

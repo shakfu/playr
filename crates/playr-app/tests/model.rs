@@ -4008,3 +4008,152 @@ fn device_names_the_output_or_says_it_is_unknown() {
         })
     );
 }
+
+#[test]
+fn the_messages_command_opens_the_log() {
+    let conn = db::open_memory().unwrap();
+    let mut model = Model::new(conn, common::fake_player().0, Vec::new(), Config::default());
+    model.run_command("messages");
+    assert_eq!(model.input(), &Input::Messages);
+}
+
+#[test]
+fn a_watched_library_rescans_once_files_stop_changing_and_asks_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir(&music).unwrap();
+    common::silence(&music.join("a.wav"), 8000, 0.5);
+    let mut conn = db::open(&dir.path().join("library.db")).unwrap();
+    playr_core::scan::scan_dir(&mut conn, &music, |_, _| {}).unwrap();
+    db::add_root(&conn, &music).unwrap();
+    let mut config = Config::default();
+    config.settings.watch = true;
+    let mut model = Model::new(conn, common::fake_player().0, Vec::new(), config);
+    assert!(model.session().watching());
+
+    common::silence(&music.join("b.wav"), 8000, 0.5);
+    std::fs::remove_file(music.join("a.wav")).unwrap();
+    until(&mut model, |m| m.session().tracks().len() == 2);
+    // a.wav is missing, but without auto_prune a rescan nobody asked for
+    // leaves it and asks nothing.
+    until(&mut model, |m| {
+        matches!(
+            m.message(),
+            Some(Message::Core(Notice::Done(Outcome::Scanned { .. })))
+        )
+    });
+    assert_eq!(model.input(), &Input::None);
+}
+
+#[test]
+fn the_sampler_reads_the_next_track_s_waveform_ahead() {
+    let dir = tempfile::tempdir().unwrap();
+    let tracks: Vec<Track> = ["a", "b"]
+        .iter()
+        .map(|name| {
+            let path = dir.path().join(format!("{name}.wav"));
+            common::silence(&path, 8000, 2.0);
+            Track {
+                path: path.to_string_lossy().into_owned(),
+                ..Default::default()
+            }
+        })
+        .collect();
+    let next = Path::new(&tracks[1].path).to_path_buf();
+    let conn = db::open_memory().unwrap();
+    let mut model = Model::new(conn, common::fake_player().0, tracks, Config::default());
+    // Not ahead of being asked for in the library view.
+    std::thread::sleep(Duration::from_millis(300));
+    model.refresh();
+    assert!(!model.session().has_peaks(&next));
+    model.perform(Action::ShowView(View::Sampler));
+    until(&mut model, |m| m.session().has_peaks(&next));
+}
+
+#[test]
+fn filter_searches_for_the_row_s_album_or_artist() {
+    let conn = db::open_memory().unwrap();
+    for (path, album, artist) in [
+        ("/m/1.flac", Some("Kind of Blue"), Some("Miles Davis")),
+        ("/m/2.flac", Some("Kind of Blue"), Some("Miles Davis")),
+        ("/m/3.flac", Some("Sketches of Spain"), Some("Miles Davis")),
+        ("/m/4.flac", Some("Waltz for Debby"), Some("Bill Evans")),
+        ("/m/5.flac", None, None),
+    ] {
+        let t = Track {
+            path: path.into(),
+            album: album.map(String::from),
+            artist: artist.map(String::from),
+            mtime: 1,
+            size: 1,
+            ..Default::default()
+        };
+        db::upsert(&conn, &t).unwrap();
+    }
+    let mut model = Model::new(conn, common::fake_player().0, Vec::new(), Config::default());
+    let row = |m: &Model, path: &str| m.listed().iter().position(|t| t.path == path);
+    let paths = |m: &Model| {
+        let mut p: Vec<String> = m.listed().iter().map(|t| t.path.clone()).collect();
+        p.sort();
+        p
+    };
+    model.set_cursor(View::Library, row(&model, "/m/1.flac"));
+    model.run_command("filter album");
+    assert_eq!(paths(&model), ["/m/1.flac", "/m/2.flac"]);
+    model.run_command("filter artist");
+    assert_eq!(paths(&model), ["/m/1.flac", "/m/2.flac", "/m/3.flac"]);
+
+    model.perform(Action::ClearSearch);
+    model.set_cursor(View::Library, row(&model, "/m/5.flac"));
+    model.run_command("filter album");
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Refused(Refusal::NoTag("album"))))
+    );
+    assert_eq!(model.listed().len(), 5, "the list is left as it was");
+}
+
+#[test]
+fn toggle_all_selects_the_listed_rows_then_unselects_them() {
+    let conn = db::open_memory().unwrap();
+    for (path, artist) in [
+        ("/m/1.flac", "Monk"),
+        ("/m/2.flac", "Monk"),
+        ("/m/3.flac", "Evans"),
+    ] {
+        let t = Track {
+            path: path.into(),
+            artist: Some(artist.into()),
+            mtime: 1,
+            size: 1,
+            ..Default::default()
+        };
+        db::upsert(&conn, &t).unwrap();
+    }
+    let mut model = Model::new(conn, common::fake_player().0, Vec::new(), Config::default());
+    let selected = |m: &Model| m.session().selection().len();
+    // One listed row selected already: the rest join it.
+    model.perform(Action::Search("artist:monk".into()));
+    model.set_cursor(View::Library, Some(0));
+    model.perform(Action::Add);
+    model.run_command("toggle all");
+    assert_eq!(selected(&model), 2);
+    // All listed rows selected: they all go, and the rest stay.
+    model.perform(Action::ClearSearch);
+    model.set_cursor(
+        View::Library,
+        model.listed().iter().position(|t| t.path == "/m/3.flac"),
+    );
+    model.perform(Action::Add);
+    model.perform(Action::Search("artist:monk".into()));
+    model.run_command("toggle all");
+    assert_eq!(
+        model
+            .session()
+            .selection()
+            .iter()
+            .map(|t| t.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/m/3.flac"]
+    );
+}

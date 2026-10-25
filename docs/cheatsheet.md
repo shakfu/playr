@@ -2,7 +2,7 @@
 
 `:` opens a command line on the bottom row. `:help` shows this list inside playr.
 
-A command works in every view, or only in the view named by its heading. Typed in another view, it is refused with the view it belongs to. The key column gives the default key for the same action. `:map` and `:unmap` change keys until playr exits; [`settings.toml`](../README.md#configuration) changes them for good.
+A command works in every view, or only in the view named by its heading. Typed in another view, it is refused with the view it belongs to. The key column gives the default key for the same action. `:map` and `:unmap` change keys until playr exits; [`settings.toml`](manual.md#configuration) changes them for good.
 
 ## Arguments
 
@@ -18,11 +18,11 @@ A command works in every view, or only in the view named by its heading. Typed i
 
 - Renamed commands keep their old names, so bindings written for them still work: `:next-view` and `:prev-view` are `:view next` and `:view prev`; `:unmark`, `:delmarks`, `:next-mark` and `:prev-mark` are `:mark-undo`, `:mark-clear`, `:mark-next` and `:mark-prev`; `:move-mark` and `:mark-move` are `:move-to`; `:clear-search` is `:search-clear`; in the queue, `:dequeue`, `:reorder` and `:queue-clear` are `:remove`, `:move` and `:clear`.
 
-- `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](../README.md#configuration). See [Samples](../README.md#samples).
+- `:slice` acts on the playing track and writes to the `samples` directory; `:slice onsets` without `S` uses `onset_sensitivity`. Both are set in [`settings.toml`](manual.md#configuration). See [Samples](manual.md#samples).
 
 ## Search
 
-What `/`, `:search` and `playr search` accept. [Search](../README.md#search) has the details.
+What `/`, `:search` and `playr search` accept. [Search](manual.md#search) has the details.
 
 | form | example | matches |
 |-|-|-|
@@ -62,6 +62,8 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:columns NAME...`                    |                         | which columns a track list shows, in order  |
 | `:sort KEY[ desc]... \| off`          |                         | sort every track list by these columns      |
 | `:info`                               |                         | what analysis measured about this track     |
+| `:messages`                           |                         | every message since playr started           |
+| `:filter album \| artist`             |                         | search for the row's album or artist        |
 | `:device`                             |                         | name the output device playr plays to       |
 | `:preview`                            | `v`                     | show the row's waveform without playing it  |
 | `:analyze [DIR]`                      |                         | measure loudness, tempo and file health     |
@@ -78,6 +80,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:speed N \| =-N \| +N \| -N`         | `(` `)` `\`             | varispeed in semitones, or Nc in cents      |
 | `:tempo BPM`                          |                         | varispeed to this tempo, once analysed      |
 | `:fade SECONDS \| off`                |                         | fade each track in and out                  |
+| `:crossfade SECONDS \| off`           |                         | overlap each track with the next            |
 | `:interp [sinc\|hermite]`             | `i` in Tape, DJ, Mix    | how deck and tape heads read; toggles       |
 | `:eq BAND =N\|+N\|-N \| flat\|bypass` | `t` bypass              | bass, mid or treble, -12 to 12 dB           |
 | `:mode MODE \| + \| -`                | `m` `M`                 | normal, shuffle, repeat, repeat-one, + or - |
@@ -105,6 +108,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | command         | key   | does                         |
 |-----------------|-------|------------------------------|
 | `:toggle`       | `a`   | select or unselect the track |
+| `:toggle [all]` |       | select every track listed, or unselect them all when all are |
 | `:search-clear` | `esc` | show the whole library again |
 
 ## Selection
@@ -182,7 +186,7 @@ The edit keys act on one selected item: a mark, selected by `{` `}`, `b` or a cl
 
 ## Extensions
 
-An extension runs a program that is not part of playr. Each is off, and its command left out of `:help` and of Tab completion, until enabled under `[extensions]` in [`settings.toml`](../README.md#configuration).
+An extension runs a program that is not part of playr. Each is off, and its command left out of `:help` and of Tab completion, until enabled under `[extensions]` in [`settings.toml`](manual.md#configuration).
 
 | command           | enable with                        | does                                    |
 |-------------------|------------------------------------|-----------------------------------------|

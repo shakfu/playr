@@ -38,7 +38,7 @@ use playr_core::db::{self, Track};
 use playr_core::m3u;
 use playr_core::scan;
 
-/// playr - a local music player with a sampler, a tape looper and DJ decks
+/// A local music player with a sampler, a tape looper and DJ decks
 ///
 /// With no command, browses the library; with paths, plays them.
 #[derive(Parser)]
@@ -69,6 +69,15 @@ struct Cli {
     #[arg(long, exclusive = true)]
     print_settings: bool,
 
+    /// Print a completion script for SHELL (bash, zsh, fish, elvish,
+    /// powershell), and exit
+    #[arg(long, exclusive = true, value_name = "SHELL")]
+    completions: Option<clap_complete::Shell>,
+
+    /// Print the man page, in roff, and exit
+    #[arg(long, exclusive = true)]
+    man: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -91,6 +100,16 @@ enum Command {
         /// Directories to check. With none, checks every directory previously scanned.
         #[arg(value_name = "DIR")]
         dirs: Vec<PathBuf>,
+    },
+    /// List byte-identical copies of tracks; --apply keeps one of each
+    Dedupe {
+        /// Remove the other copies' rows, moving their playlist places to the
+        /// one kept; files stay on disk, and later scans pass them over
+        #[arg(long)]
+        apply: bool,
+        /// Let later scans add every copy removed before
+        #[arg(long, conflicts_with = "apply")]
+        restore: bool,
     },
     /// Play everything matching a search; put a query that starts with - after --
     Search {
@@ -211,6 +230,22 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    // `exclusive` refuses other options, but not a command.
+    if (cli.completions.is_some() || cli.man) && cli.command.is_some() {
+        return Err("--completions and --man take no command".into());
+    }
+    if let Some(shell) = cli.completions {
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        clap_complete::generate(shell, &mut cmd, "playr", &mut std::io::stdout());
+        return Ok(ExitCode::SUCCESS);
+    }
+    if cli.man {
+        let cmd = <Cli as clap::CommandFactory>::command();
+        let mut page = Vec::new();
+        clap_mangen::Man::new(cmd).render(&mut page)?;
+        out!("{}", String::from_utf8_lossy(&page));
+        return Ok(ExitCode::SUCCESS);
+    }
     // Before the settings are read, so a broken file cannot stop it.
     if cli.print_settings {
         // `exclusive` refuses other options, but not a command.
@@ -297,6 +332,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         cli.command,
         Some(
             Command::Prune { .. }
+                | Command::Dedupe { .. }
                 | Command::Analyze { .. }
                 | Command::Export { .. }
                 | Command::Import { .. }
@@ -345,6 +381,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Prune { dirs }) => return cmd_prune(&conn, &dirs),
+        Some(Command::Dedupe { apply, restore }) => return cmd_dedupe(&conn, apply, restore),
         Some(Command::Loops { op }) => return cmd_loops(&mut conn, op),
         Some(Command::Analyze {
             paths,
@@ -630,6 +667,13 @@ fn cmd_scan(
             total.failed
         );
     }
+    let fixed = db::dedupe::fix_relative(conn)?;
+    if fixed.merged + fixed.resolved > 0 {
+        outln!(
+            "  {} relative rows from playr 0.1.0 repaired",
+            fixed.merged + fixed.resolved
+        );
+    }
     outln!("library now holds {} tracks", db::query::count(conn)?);
     // The interface can analyse as it scans, with `analyze_on_scan`; here the
     // settings are not read, so say what is waiting instead.
@@ -676,6 +720,38 @@ fn cmd_prune(
     }
     outln!("library now holds {} tracks", db::query::count(conn)?);
     Ok(code)
+}
+
+/// Lists byte-identical copies, or with `apply` drops all but one of each.
+fn cmd_dedupe(
+    conn: &rusqlite::Connection,
+    apply: bool,
+    restore: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    use db::dedupe;
+    if restore {
+        let n = dedupe::restore(conn)?;
+        outln!("{n} copies will be added by the next scan");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let groups = dedupe::identical(conn)?;
+    for g in &groups {
+        outln!("keep {}", g.keep.path);
+        for t in &g.drop {
+            outln!("  drop {}", t.path);
+        }
+    }
+    let copies: usize = groups.iter().map(|g| g.drop.len()).sum();
+    if apply {
+        let n = dedupe::apply(conn, &groups)?;
+        outln!("removed {n} copies; files are untouched");
+        outln!("library now holds {} tracks", db::query::count(conn)?);
+    } else if copies > 0 {
+        outln!("{copies} copies; `playr dedupe --apply` removes them from the library");
+    } else {
+        outln!("no identical copies");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Why a directory that reads empty is not pruned.
@@ -828,7 +904,7 @@ fn print_formats() {
     outln!();
     if opus {
         outln!("Opus is decoded by playr itself, in OGG and WebM; Symphonia 0.6");
-        outln!("demuxes it but ships no decoder. Mono and stereo only.");
+        outln!("demuxes it but ships no decoder. Mono to 7.1.");
     } else {
         outln!("Opus is NOT in this build. It needs libopus, which needs cmake,");
         outln!("so it is opt-in. To add it:");

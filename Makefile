@@ -49,9 +49,9 @@ touchosc:
 touchosc-test:
 	@uv run -q --with pytest --with "py2tosc>=0.6,<0.7" pytest -q packaging/touchosc
 
-# playr-server's web page in Chromium. Not part of `test`: it needs uv,
+# playr-server's web page in Chromium. Not part of `test`: it needs uv and
 # Playwright's Chromium (`uv run --with playwright==1.62.0 playwright install
-# chromium`) and an audio device.
+# chromium`). It plays to no device, so it needs none.
 page-test:
 	@uv run -q --with pytest --with playwright==1.62.0 pytest -q -p no:cacheprovider crates/playr-server/tests/page
 

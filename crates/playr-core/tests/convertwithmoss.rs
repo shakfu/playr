@@ -199,3 +199,68 @@ fn a_kit_past_the_format_s_limit_is_converted_in_parts() {
 fn preset_in(dir: &Path, name: &str) -> String {
     std::fs::read_to_string(dir.join(name)).unwrap()
 }
+
+/// A region as ConvertWithMoss 20.3.0 writes it for a 0.5 s, 48 kHz loop
+/// it resampled to 22,050 frames at 44.1 kHz.
+const OPXY_48K: &str = r#"  "regions" : [ {
+    "sample" : "tone.wav",
+    "framecount" : 24000,
+    "lokey" : 0,
+    "sample.start" : 0,
+    "sample.end" : 24000,
+    "loop.enabled" : true,
+    "loop.start" : 0,
+    "loop.end" : 23999,
+    "loop.crossfade" : 0
+  } ]
+"#;
+
+#[test]
+fn opxy_counts_follow_the_resampled_file() {
+    use playr_core::convertwithmoss::opxy_counts;
+    let fixed = opxy_counts(OPXY_48K, |name| (name == "tone.wav").then_some(22050)).unwrap();
+    for want in [
+        r#""framecount" : 22050,"#,
+        r#""sample.start" : 0,"#,
+        r#""sample.end" : 22050,"#,
+        r#""loop.end" : 22049,"#,
+        r#""lokey" : 0,"#,
+        r#""loop.crossfade" : 0"#,
+    ] {
+        assert!(fixed.contains(want), "{want} in\n{fixed}");
+    }
+    assert_eq!(fixed.lines().count(), OPXY_48K.lines().count());
+    // At 44.1 kHz, or once ConvertWithMoss counts after resampling.
+    assert_eq!(opxy_counts(OPXY_48K, |_| Some(24000)), None);
+    assert_eq!(opxy_counts(OPXY_48K, |_| None), None, "an unreadable WAV");
+}
+
+#[test]
+fn an_opxy_conversion_rewrites_counts_from_before_resampling() {
+    let _alone = alone();
+    let dir = tempfile::tempdir().unwrap();
+    // A 44.1 kHz WAV of 22,050 frames beside a patch counting 24,000.
+    let wav = dir.path().join("tone.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+    for _ in 0..22050 {
+        w.write_sample(0i16).unwrap();
+    }
+    w.finalize().unwrap();
+    std::fs::write(dir.path().join("patch.json"), OPXY_48K).unwrap();
+    let program = program(
+        dir.path(),
+        &format!(
+            r#"for last; do :; done; mkdir "$last/amen.preset"; cp {0}/tone.wav {0}/patch.json "$last/amen.preset/""#,
+            dir.path().display()
+        ),
+    );
+    let converted = convert(&program, &kit(dir.path()), "opxy").unwrap();
+    let patch = std::fs::read_to_string(converted.dir.join("amen.preset/patch.json")).unwrap();
+    assert!(patch.contains(r#""framecount" : 22050,"#), "{patch}");
+}

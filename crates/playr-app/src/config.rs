@@ -7,6 +7,7 @@
 //! key and its command cannot mean different things. Any error stops playr
 //! from starting, so a mistyped binding cannot go unnoticed.
 
+use std::net::SocketAddr;
 use std::path::Path;
 
 use playr_core::settings::toml::de::DeValue;
@@ -53,6 +54,8 @@ pub struct Config {
     /// `[gui] transport_text_buttons`: the window's transport buttons as
     /// words rather than media symbols.
     pub transport_text_buttons: bool,
+    /// `[server]`: playr-server's flags as settings. Its flags win.
+    pub server: ServerSettings,
     /// The program these settings are for, whose remembered columns and sort
     /// apply.
     pub program: Program,
@@ -67,6 +70,7 @@ impl Default for Config {
             fader: crate::mix::Law::Db,
             interp: playr_dsp::Interp::default(),
             transport_text_buttons: false,
+            server: ServerSettings::default(),
             program: Program::Terminal,
         };
         if let Err(errors) = config.apply(DEFAULT_KEYS) {
@@ -74,6 +78,26 @@ impl Default for Config {
         }
         config
     }
+}
+
+/// playr-server's settings in `[server]`, each the flag of the same name.
+/// `None` and empty leave the flag's default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ServerSettings {
+    pub listen: Option<SocketAddr>,
+    pub open: Option<bool>,
+    pub hosts: Vec<String>,
+    pub osc: Option<SocketAddr>,
+    /// `HOST:PORT`, resolved when the server starts.
+    pub osc_reply: Option<String>,
+}
+
+/// Whether `text` reads as `HOST:PORT`: a host, or a bracketed IPv6
+/// address, and a port. Whether the host resolves is left to startup.
+pub fn is_host_port(text: &str) -> bool {
+    text.rsplit_once(':').is_some_and(|(host, port)| {
+        !host.is_empty() && !host.contains(char::is_whitespace) && port.parse::<u16>().is_ok()
+    })
 }
 
 /// Which program is reading the settings, for the table it owns.
@@ -237,10 +261,55 @@ impl Config {
                     DeValue::Boolean(b) => self.transport_text_buttons = *b,
                     v => errors.add(at, format!("transport_text_buttons cannot be {}", kind(v))),
                 },
-                // The server's own flags are not settings yet; see TODO.md.
+                "listen" | "osc" | "osc_reply" | "open" | "hosts" if program == Program::Server => {
+                    if let Err(e) = self.set_server(key.get_ref(), value.get_ref()) {
+                        errors.add(at, e);
+                    }
+                }
                 other => errors.add(key.span().start, format!("unknown setting: {other}")),
             }
         }
+    }
+
+    /// Sets one of `[server]`'s flags from `value`.
+    fn set_server(&mut self, key: &str, value: &DeValue) -> Result<(), String> {
+        let text = |v: &DeValue| match v {
+            DeValue::String(s) => Ok(s.to_string()),
+            v => Err(format!("{key} cannot be {}", kind(v))),
+        };
+        let addr = |v: &DeValue| {
+            let s = text(v)?;
+            s.parse::<SocketAddr>()
+                .map_err(|_| format!("{key} {s:?} is not ADDR:PORT, such as 0.0.0.0:8080"))
+        };
+        let server = &mut self.server;
+        match key {
+            "listen" => server.listen = Some(addr(value)?),
+            "osc" => server.osc = Some(addr(value)?),
+            "osc_reply" => {
+                let s = text(value)?;
+                if !is_host_port(&s) {
+                    return Err(format!(
+                        "osc_reply {s:?} is not HOST:PORT, such as ipad.local:9000"
+                    ));
+                }
+                server.osc_reply = Some(s);
+            }
+            "open" => match value {
+                DeValue::Boolean(b) => server.open = Some(*b),
+                v => return Err(format!("open cannot be {}", kind(v))),
+            },
+            _ => {
+                let DeValue::Array(items) = value else {
+                    return Err(format!("hosts cannot be {}", kind(value)));
+                };
+                server.hosts = items
+                    .iter()
+                    .map(|v| text(v.get_ref()))
+                    .collect::<Result<_, _>>()?;
+            }
+        }
+        Ok(())
     }
 
     fn set_fader(&mut self, value: &DeValue) -> Result<(), String> {

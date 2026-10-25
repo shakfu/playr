@@ -721,3 +721,79 @@ fn prune_keeps_tracks_of_a_drive_unmounted_below_a_live_root() {
         .collect();
     assert_eq!(left, [b.join("album/x.flac").to_string_lossy()]);
 }
+
+/// lofty reads no Matroska, so its tags and length come from Symphonia.
+#[test]
+fn matroska_tags_and_length_are_read_without_lofty() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for (name, codec) in [("t.mkv", "flac"), ("t.webm", "libopus")] {
+        let path = dir.path().join(name);
+        let ok = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=3:sample_rate=48000",
+            ])
+            .args(["-c:a", codec])
+            .args([
+                "-metadata",
+                "title=Peace Piece",
+                "-metadata",
+                "artist=Bill Evans",
+            ])
+            .args(["-metadata", "album=Everybody Digs", "-metadata", "track=7"])
+            .args(["-metadata", "date=1959"])
+            .arg(&path)
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !ok {
+            common::skip(
+                "PLAYR_REQUIRE_FFMPEG",
+                &format!("this ffmpeg cannot write {name}"),
+            );
+            continue;
+        }
+        let t = scan::read_track(&path).unwrap();
+        // ffmpeg writes the title into the segment's Info, which Symphonia
+        // does not expose; the rest are tags.
+        assert_eq!(t.artist.as_deref(), Some("Bill Evans"), "{name}");
+        assert_eq!(t.album.as_deref(), Some("Everybody Digs"), "{name}");
+        assert_eq!(t.track_no, Some(7), "{name}");
+        assert_eq!(t.year, Some(1959), "{name}");
+        let ms = t.duration_ms.expect("the segment's duration");
+        assert!((ms - 3000).abs() < 50, "{name}: {ms} ms");
+    }
+}
+
+/// Symphonia skips a CAF's `info` chunk, so playr reads it itself.
+#[test]
+fn caf_tags_come_from_its_info_chunk() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.caf");
+    let ok = Command::new("ffmpeg")
+        .args(["-y", "-v", "error", "-f", "lavfi", "-i", "sine=duration=1"])
+        .args(["-c:a", "pcm_s16le", "-metadata", "title=Peace Piece"])
+        .args(["-metadata", "artist=Bill Evans", "-metadata", "track=7/9"])
+        .args(["-metadata", "date=1959"])
+        .arg(&path)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        common::skip("PLAYR_REQUIRE_FFMPEG", "this ffmpeg cannot write CAF");
+        return;
+    }
+    let t = scan::read_track(&path).unwrap();
+    assert_eq!(t.title.as_deref(), Some("Peace Piece"));
+    assert_eq!(t.artist.as_deref(), Some("Bill Evans"));
+    assert_eq!((t.track_no, t.year), (Some(7), Some(1959)));
+}

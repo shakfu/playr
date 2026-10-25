@@ -12,6 +12,7 @@ use playr_app::instance;
 use playr_app::model::Model;
 use playr_core::audio::Player;
 use playr_core::db;
+use playr_server::flags::Flags;
 use playr_server::state::Latest;
 use playr_server::{http, osc, owner, token, web};
 
@@ -35,9 +36,10 @@ struct Cli {
     #[arg(long, value_name = "ID")]
     device: Option<String>,
 
-    /// Address and port for the web page; 0.0.0.0 reaches it from the network
-    #[arg(long, value_name = "ADDR:PORT", default_value = "127.0.0.1:8080")]
-    listen: SocketAddr,
+    /// Address and port for the web page, 127.0.0.1:8080 by default; 0.0.0.0
+    /// reaches it from the network
+    #[arg(long, value_name = "ADDR:PORT")]
+    listen: Option<SocketAddr>,
 
     /// Serve the page without a token, on a network whose every device is
     /// trusted: anyone who can reach the address controls playr
@@ -53,9 +55,17 @@ struct Cli {
     #[arg(long, value_name = "ADDR:PORT")]
     osc: Option<SocketAddr>,
 
-    /// Where to send playback state as OSC, such as a tablet running TouchOSC
-    #[arg(long, value_name = "ADDR:PORT")]
-    osc_reply: Option<SocketAddr>,
+    /// Where to send playback state as OSC, such as a tablet running
+    /// TouchOSC; the host may be a name, as ipad.local, resolved at startup
+    #[arg(long, value_name = "HOST:PORT", value_parser = host_port)]
+    osc_reply: Option<String>,
+}
+
+fn host_port(text: &str) -> Result<String, String> {
+    match config::is_host_port(text) {
+        true => Ok(text.to_string()),
+        false => Err("not HOST:PORT, such as ipad.local:9000".into()),
+    }
 }
 
 #[derive(Subcommand)]
@@ -86,7 +96,21 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), Vec<String>> {
     let fail = |e: &dyn std::fmt::Display| vec![e.to_string()];
     let _instance = instance::claim().map_err(|e| vec![e])?;
-    let token = match cli.open {
+    // Read first: `[server]` may hold the flags below.
+    let config = match (&cli.settings, config::default_path()) {
+        (Some(path), _) => Config::load_for(Program::Server, path, true),
+        (None, Some(path)) => Config::load_for(Program::Server, &path, false),
+        (None, None) => Ok(Config::default()),
+    }?;
+    let given = config::ServerSettings {
+        listen: cli.listen,
+        open: cli.open.then_some(true),
+        hosts: cli.hosts.clone(),
+        osc: cli.osc,
+        osc_reply: cli.osc_reply.clone(),
+    };
+    let flags = Flags::of(&given, &config.server);
+    let token = match flags.open {
         true => None,
         false => {
             let path = token::default_path();
@@ -96,13 +120,16 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
         }
     };
     let listener =
-        TcpListener::bind(cli.listen).map_err(|e| vec![format!("{}: {e}", cli.listen)])?;
-    let osc_socket = match cli.osc {
+        TcpListener::bind(flags.listen).map_err(|e| vec![format!("{}: {e}", flags.listen)])?;
+    let osc_socket = match flags.osc {
         Some(addr) => Some(UdpSocket::bind(addr).map_err(|e| vec![format!("{addr}: {e}")])?),
         None => None,
     };
-    let mut feedback = match cli.osc_reply {
-        Some(to) => Some(osc::Feedback::new(to).map_err(|e| vec![format!("{to}: {e}")])?),
+    let mut feedback = match &flags.osc_reply {
+        Some(to) => {
+            let addr = osc::resolve(to).map_err(|e| vec![format!("{to}: {e}")])?;
+            Some(osc::Feedback::new(addr).map_err(|e| vec![format!("{to}: {e}")])?)
+        }
         None => None,
     };
     let library = cli.db.unwrap_or_else(db::default_path);
@@ -113,11 +140,6 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
         Err(e) => return Err(fail(&e)),
     }
     .map_err(|e| fail(&e))?;
-    let config = match (&cli.settings, config::default_path()) {
-        (Some(path), _) => Config::load_for(Program::Server, path, true),
-        (None, Some(path)) => Config::load_for(Program::Server, &path, false),
-        (None, None) => Ok(Config::default()),
-    }?;
     let player = Player::new(cli.device.as_deref().or(config.settings.device.as_deref()))
         .map_err(|e| fail(&e))?;
     let mut model = Model::new(conn, player, Vec::new(), config);
@@ -127,7 +149,7 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
     let latest = Arc::new(Latest::default());
     let server = http::Config {
         token,
-        hosts: cli.hosts,
+        hosts: flags.hosts,
         // Read once: `playr scan` cannot run while the server holds the lock.
         rescan: !model.session().roots().is_empty(),
         timeout: http::TIMEOUT,
@@ -135,7 +157,7 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
     };
     let terminal = std::io::IsTerminal::is_terminal(&std::io::stdout());
     let address = token::address(
-        cli.listen,
+        flags.listen,
         server.token.as_deref(),
         terminal,
         &token::default_path(),

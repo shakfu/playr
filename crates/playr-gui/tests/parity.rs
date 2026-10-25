@@ -53,6 +53,10 @@ fn every_action() -> Vec<Action> {
         Action::FixTempo(playr_core::analysis::TempoFix::Double),
         Action::ShowRoots,
         Action::ShowInfo,
+        Action::ShowMessages,
+        Action::ToggleAll,
+        Action::Filter(playr_app::action::FilterBy::Album),
+        Action::Filter(playr_app::action::FilterBy::Artist),
         Action::ShowDevice,
         Action::ForgetRoot("/m".into()),
         Action::Prune(Some("/m".into())),
@@ -72,6 +76,7 @@ fn every_action() -> Vec<Action> {
         Action::SetSpeed(0),
         Action::Tempo(128.0),
         Action::Fade(Duration::from_secs(2)),
+        Action::Crossfade(Duration::from_secs(2)),
         Action::Interp(None),
         Action::SetEq(Band::Bass, 1.0),
         Action::EqBy(Band::Bass, 1.0),
@@ -176,6 +181,9 @@ fn every_action() -> Vec<Action> {
             | Action::FixTempo(_)
             | Action::ShowRoots
             | Action::ShowInfo
+            | Action::ShowMessages
+            | Action::Filter(_)
+            | Action::ToggleAll
             | Action::ShowDevice
             | Action::ForgetRoot(_)
             | Action::Prune(_)
@@ -195,6 +203,7 @@ fn every_action() -> Vec<Action> {
             | Action::SetSpeed(_)
             | Action::Tempo(_)
             | Action::Fade(_)
+            | Action::Crossfade(_)
             | Action::Interp(_)
             | Action::SetEq(..)
             | Action::EqBy(..)

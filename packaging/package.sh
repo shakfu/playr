@@ -5,8 +5,9 @@
 #   packaging/package.sh TARGET TAG
 #
 # Every archive holds playr, playr-gui and playr-server with README.md,
-# CHANGELOG.md, LICENSE, the guides in docs/, the cheatsheet they link to and
-# the diagrams the sampler guide draws. On macOS playr-gui is inside
+# CHANGELOG.md, LICENSE, the manual, guides and cheatsheet in docs/, the
+# diagrams the sampler guide draws, and on macOS and Linux playr.1 and
+# completions for bash, zsh and fish. On macOS playr-gui is inside
 # playr.app; on Linux playr.desktop, playr.png and playr-server.service come
 # with them.
 set -euo pipefail
@@ -21,8 +22,18 @@ mkdir "$name"
 mkdir -p "$name/docs/media"
 cp "$root/README.md" "$root/CHANGELOG.md" "$root/LICENSE" "$name/"
 # Where README.md links to them; the guides link to the cheatsheet and diagrams.
-cp "$root"/docs/guide-*.md "$root/docs/cheatsheet.md" "$name/docs/"
+cp "$root"/docs/guide-*.md "$root/docs/cheatsheet.md" "$root/docs/manual.md" "$name/docs/"
 cp "$root"/docs/media/sampling-*.svg "$name/docs/media/"
+
+# The man page and completions, from the playr just built: each runner builds
+# for a target it can run, the Intel Mac's under Rosetta.
+generated() {
+  "$release/playr" --man > "$name/playr.1"
+  mkdir "$name/completions"
+  "$release/playr" --completions bash > "$name/completions/playr.bash"
+  "$release/playr" --completions zsh > "$name/completions/_playr"
+  "$release/playr" --completions fish > "$name/completions/playr.fish"
+}
 
 case "$target" in
   *windows*)
@@ -32,12 +43,14 @@ case "$target" in
     ;;
   *apple*)
     cp "$release/playr" "$release/playr-server" "$name/"
+    generated
     "$root/packaging/macos/bundle.sh" "$release" "$name" "$tag"
     tar czf "$name.tar.gz" "$name"
     echo "$name.tar.gz"
     ;;
   *)
     cp "$release/playr" "$release/playr-gui" "$release/playr-server" "$name/"
+    generated
     cp "$root/packaging/linux/playr.desktop" "$root/crates/playr-gui/assets/playr.png" \
       "$root/packaging/linux/playr-server.service" "$name/"
     tar czf "$name.tar.gz" "$name"

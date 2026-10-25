@@ -102,6 +102,25 @@ pub fn draw(app: &Screen<'_>, f: &mut Frame) -> Drawn {
                 app.help_scroll,
             )
         }
+        Input::Messages => {
+            // Newest first, so the one cut off on the bottom line is on top.
+            let shown: Vec<(String, &str)> = app
+                .log
+                .into_iter()
+                .flatten()
+                .rev()
+                .map(|(at, text)| (format!("{} ago", fmt_time(at.elapsed())), text.as_str()))
+                .collect();
+            let rows: Vec<(&str, &str)> = shown.iter().map(|(a, t)| (a.as_str(), *t)).collect();
+            draw_help(
+                app.palette(),
+                f,
+                f.area(),
+                "Messages, newest first",
+                &rows,
+                app.help_scroll,
+            )
+        }
         _ => app.help_scroll,
     };
     if !app.colour {
@@ -1060,6 +1079,7 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
     // The bar takes whatever the indicators leave, less a space before them;
     // a message borrows that space while it shows.
     if let Some(msg) = app.message {
+        let msg = clip(msg, left.width as usize);
         f.render_widget(
             Paragraph::new(Span::styled(msg, Style::default().fg(p.notice))),
             left,
@@ -1072,6 +1092,27 @@ fn draw_bar(app: &Screen<'_>, f: &mut Frame, area: Rect) {
         }
     }
     f.render_widget(Paragraph::new(indicators), right);
+}
+
+/// `text` cut to `cells` columns, ending in `...` when cut, so a cut
+/// message says so; `:messages` shows it whole.
+fn clip(text: &str, cells: usize) -> std::borrow::Cow<'_, str> {
+    let width: usize = text.chars().map(|c| c.width().unwrap_or(0)).sum();
+    if width <= cells {
+        return text.into();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 3 > cells {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push_str("...");
+    out.into()
 }
 
 /// Marks as `^` under the progress bar, each where it falls in the track.

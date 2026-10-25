@@ -43,6 +43,9 @@ pub enum Action {
 
     /// Select or unselect the track under the cursor, or add a playlist's tracks.
     Add,
+    /// Select every track the library view lists, or unselect them all when
+    /// all are selected.
+    ToggleAll,
     /// Queue the track under the cursor, or a playlist's tracks: after the
     /// tracks waiting, or before them when `true`.
     Enqueue(bool),
@@ -83,6 +86,10 @@ pub enum Action {
     ShowRoots,
     /// Show what analysis measured about the track under the cursor.
     ShowInfo,
+    /// Show every message since start, newest first.
+    ShowMessages,
+    /// Search for the row's album or artist, or the playing track's.
+    Filter(FilterBy),
     /// Name the output device the player plays to.
     ShowDevice,
     /// Forget a directory, and the tracks and marks under it, once confirmed.
@@ -119,6 +126,8 @@ pub enum Action {
     Tempo(f32),
     /// Fade each track in and out over this long; zero for none.
     Fade(Duration),
+    /// Overlap consecutive tracks by this long; zero for none.
+    Crossfade(Duration),
     /// How the decks' and the tape's heads read between frames, or the
     /// other one for `None`.
     Interp(Option<playr_dsp::Interp>),
@@ -274,6 +283,13 @@ pub enum SlotOp {
     /// Save the range into the slot, over what it holds.
     Save,
     Clear,
+}
+
+/// What [`Action::Filter`] searches for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterBy {
+    Album,
+    Artist,
 }
 
 /// A zoom step in the sampler view.

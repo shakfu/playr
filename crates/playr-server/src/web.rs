@@ -17,6 +17,7 @@ use playr_app::meter;
 use playr_app::model::{Input, Model};
 use playr_app::View;
 use playr_core::audio::{speed_at, Mode, State};
+use playr_core::columns::cell;
 use playr_core::db::Track;
 use serde_json::{json, Value};
 
@@ -83,6 +84,9 @@ pub fn allowed(action: &Action) -> bool {
         | LoopLib(_)
         | Dj(_)
         | Interp(_) => false,
+        // The page draws no message list.
+        ShowMessages => false,
+        Filter(_) | ToggleAll => true,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection
@@ -90,7 +94,7 @@ pub fn allowed(action: &Action) -> bool {
         | SaveSearch(_) | Sql(_) | StartRename | Analyze(None) | ShowInfo | ShowDevice | SetColumns(_)
         | SetSort(_) | RenameTo(_) | PlayPlaylist(_) | Rescan | ShowRoots | Prune(None)
         | TogglePause | Restart | Next | Prev | Stop | SeekBy(_) | SeekTo(_) | StopAfter
-        | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | Tempo(_) | Fade(_) | SetEq(..)
+        | StopIn(_) | VolumeBy(_) | SetVolume(_) | SpeedBy(_) | SetSpeed(_) | Tempo(_) | Fade(_) | Crossfade(_) | SetEq(..)
         | EqBy(..) | FlatEq | BypassEq | CycleMode(_) | SetMode(_) | SetReplayGain(_) | Mark | MarkAt(_)
         | UndoMark | Undo | Redo | ClearMarks | NextMark | PrevMark | Theme(_) | Mix(_) => true,
     }
@@ -129,6 +133,11 @@ pub fn screen(model: &Model) -> Value {
             "queue": model.queue().len(),
         },
         "searching": model.results().is_some(),
+        "columns": model.columns().iter().map(|c| json!({
+            "name": c.name(),
+            "heading": c.heading(),
+            "numeric": c.numeric(),
+        })).collect::<Vec<_>>(),
         "editing": model.session().editing().map(|p| p.name.clone()),
         "cursors": {
             "library": cursors.library,
@@ -187,6 +196,10 @@ fn lists_revision(model: &Model) -> u64 {
     for key in model.session().sort() {
         (key.column as u8, key.descending).hash(&mut hasher);
     }
+    // Rows carry a cell per column, so new columns are new rows.
+    for c in model.columns() {
+        (*c as u8).hash(&mut hasher);
+    }
     for t in model.session().selection() {
         t.path.hash(&mut hasher);
     }
@@ -210,7 +223,7 @@ fn search_key(search: &playr_core::db::query::SavedSearch) -> String {
 /// The prompt, question or list open, as the page draws it.
 fn input(model: &Model) -> Value {
     match model.input() {
-        Input::None => json!({ "kind": "none" }),
+        Input::None | Input::Messages => json!({ "kind": "none" }),
         Input::Search(query) => json!({ "kind": "search", "text": query }),
         Input::SavePlaylist(name) => {
             json!({ "kind": "save", "text": name, "title": model.save_title() })
@@ -293,6 +306,8 @@ pub fn rows(model: &Model, view: View, start: usize, count: usize) -> Value {
                 "artist": t.display_artist(),
                 "album": t.display_album(),
                 "time": t.duration_ms.map(|ms| fmt_time(Duration::from_millis(ms.max(0) as u64))),
+                // One per column of the `columns` state, for rows wide enough.
+                "cells": model.columns().iter().map(|&c| cell(t, model.measures(t), c).text(c)).collect::<Vec<_>>(),
                 "selected": selected.contains(t.path.as_str()),
             })
         })

@@ -179,6 +179,74 @@ impl Backend for Cpal {
     }
 }
 
+/// The device ID that names [`Null`]. ALSA's own `null` device is a real one.
+pub const NONE: &str = "none";
+
+/// No device: a thread renders 10 ms every 10 ms and discards it, so
+/// playback runs in real time on a machine with no audio, as CI runners are.
+pub struct Null;
+
+/// Stops a [`Null`] stream's thread when dropped.
+struct NullStream(Arc<AtomicBool>);
+
+impl Drop for NullStream {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
+impl Backend for Null {
+    fn negotiate(&self, src: Spec) -> Result<Plan, OutputError> {
+        Ok(Plan {
+            rate: if src.rate == 0 { 48_000 } else { src.rate },
+            channels: 2,
+            format: SampleFormat::F32,
+        })
+    }
+
+    fn start(
+        &self,
+        plan: Plan,
+        mut consumer: rtrb::Consumer<f32>,
+        mut bus: Bus,
+        shared: Arc<Shared>,
+        _events: Sender<DeviceEvent>,
+    ) -> Result<Box<dyn Any>, OutputError> {
+        use std::time::{Duration, Instant};
+        const CHUNK: Duration = Duration::from_millis(10);
+        let running = Arc::new(AtomicBool::new(true));
+        let alive = running.clone();
+        std::thread::Builder::new()
+            .name("playr-null-output".into())
+            .spawn(move || {
+                let channels = plan.channels as usize;
+                let mut buf = vec![0.0f32; (plan.rate / 100) as usize * channels];
+                let mut eq = Eq::new(plan.rate, plan.channels);
+                let mut meter = Meter::new(plan.rate, plan.channels);
+                // Due by the clock, so late wakes do not slow playback.
+                let mut due = Instant::now();
+                while alive.load(Ordering::Relaxed) {
+                    while due <= Instant::now() {
+                        render(
+                            &mut buf,
+                            &mut consumer,
+                            &mut bus,
+                            &shared,
+                            &mut eq,
+                            &mut meter,
+                            plan.channels as u64,
+                            |v| v,
+                        );
+                        due += CHUNK;
+                    }
+                    std::thread::sleep(due.saturating_duration_since(Instant::now()));
+                }
+            })
+            .map_err(|e| OutputError::Build(e.to_string()))?;
+        Ok(Box::new(NullStream(running)))
+    }
+}
+
 /// The format the device will actually be opened in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Plan {

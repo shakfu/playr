@@ -24,7 +24,15 @@ playr-core.workspace = true
 playr-app.workspace = true
 playr-dsp.workspace = true
 playr-looper.workspace = true
-eframe = "0.36.2"
+# Without `default_fonts`, whose two emoji fonts were 726 KB of the binary
+# for six symbols; `fonts::definitions` bundles what is drawn. The rest are
+# eframe's defaults.
+eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "links", "wayland", "web_screen_reader", "wgpu", "x11"] }
+# eframe's `winit/default`, which a dependent cannot name: client-side
+# decorations and Wayland loaded at run time.
+winit = "0.30.13"
+# Ubuntu Light and Hack, egui's own text fonts, without the emoji fonts.
+epaint_default_fonts = "0.36.2"
 egui_extras = "0.36.2"
 clap = { version = "4.6", features = ["derive"] }
 rusqlite.workspace = true

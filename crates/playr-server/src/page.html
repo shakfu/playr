@@ -97,6 +97,13 @@ main { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minma
 .row.playing .title { color: var(--accent); }
 .row.played .title { color: var(--dim); }
 .row.loading { color: var(--dim); }
+/* The columns setting, on rows wider than a phone's; the page sets --cols. */
+.row.cols { grid-template-areas: none; grid-template-columns: var(--cols); }
+.row.cols > * { grid-area: auto; }
+.row .num { color: var(--dim); text-align: right; }
+.row .aside { color: var(--dim); }
+.row .grip { color: var(--dim); text-align: center; touch-action: none; cursor: grab; }
+.row.dragging { z-index: 1; background: var(--selected-bg); opacity: 0.9; cursor: grabbing; }
 .empty { padding: 16px 12px; color: var(--dim); margin: 0; }
 
 /* The transport, as the terminal's bottom lines. */
@@ -393,6 +400,7 @@ const list = {
   pages: new Map(),     // first row of a page -> its rows, or "loading"
   cursor: null,         // the cursor followed last
   clicked: false,       // the page moved the cursor, so it is not scrolled to
+  dragged: false,       // a drag just ended, so its click is not a tap
 };
 
 function rowHeight() {
@@ -425,9 +433,9 @@ function drawRows() {
   const last = Math.min(total, Math.ceil((box.scrollTop + box.clientHeight) / h) + 5);
   for (let p = Math.floor(first / PAGE) * PAGE; p < last; p += PAGE) loadPage(p);
 
-  const cursor = state.cursors[list.view];
+  const cursor = state.cursors[list.view], columns = shownColumns();
   const rows = [];
-  for (let i = first; i < last; i++) rows.push(drawRow(i, rowAt(i), cursor, h));
+  for (let i = first; i < last; i++) rows.push(drawRow(i, rowAt(i), cursor, h, columns));
   spacer.replaceChildren(...rows);
 
   const empty = $("empty");
@@ -441,7 +449,7 @@ function drawRows() {
   }
 }
 
-function drawRow(i, row, cursor, h) {
+function drawRow(i, row, cursor, h, columns) {
   const el = document.createElement("div");
   el.className = "row";
   el.style.top = i * h + "px";
@@ -472,9 +480,19 @@ function drawRow(i, row, cursor, h) {
       b.setAttribute("aria-label", row.selected ? "Unselect" : "Select");
       b.dataset.rowCommand = "toggle";
       sel.append(b);
+    } else if (list.view === "selection" || list.view === "queue") {
+      // Touch drags by this alone, so the list still scrolls under a finger.
+      sel.classList.add("grip");
+      sel.textContent = "::";
+      sel.setAttribute("aria-hidden", "true");
     }
-    el.append(sel, span("artist", row.artist), span("album", row.album),
-      span("title", row.title), span("time", row.time || "-"));
+    if (columns && row.cells) {
+      el.classList.add("cols");
+      el.append(sel, ...columns.map(([c, at]) => span(CELL_CLASS[c.name] || (c.numeric ? "num" : ""), row.cells[at])));
+    } else {
+      el.append(sel, span("artist", row.artist), span("album", row.album),
+        span("title", row.title), span("time", row.time || "-"));
+    }
     // A track queued twice is two rows, so the queue marks one by its index.
     if (list.view === "queue" ? i === state.queue_playing : row.key === state.path) el.classList.add("playing");
     if (list.view === "queue" && i < state.queue_played) el.classList.add("played");
@@ -486,6 +504,26 @@ function drawRow(i, row, cursor, h) {
   menu.dataset.rowMenu = "1";
   el.append(menu);
   return el;
+}
+
+// The columns setting's look: names in the name colour, the rest of the text dim.
+const CELL_CLASS = { title: "title", artist: "artist", album_artist: "artist",
+  album: "aside", genre: "aside", path: "aside" };
+// Left out on a tablet, as the album was before the setting was read.
+const TABLET_DROPS = new Set(["album", "album_artist", "genre", "path"]);
+
+// The columns this width shows, each with its index into a row's cells; null
+// on a phone, whose two-line rows keep title, artist, album and time.
+function shownColumns() {
+  if (!state || !state.columns || matchMedia("(max-width: 640px)").matches) return null;
+  let shown = state.columns.map((c, at) => [c, at]);
+  if (matchMedia("(max-width: 1000px)").matches) {
+    const kept = shown.filter(([c]) => !TABLET_DROPS.has(c.name));
+    if (kept.some(([c]) => !c.numeric)) shown = kept;
+  }
+  const widths = shown.map(([c]) => c.numeric ? "4.5em" : c.name === "title" ? "minmax(0, 1.6fr)" : "minmax(0, 1fr)");
+  $("list").style.setProperty("--cols", ["1.5em 2em", ...widths, "2.5em"].join(" "));
+  return shown;
 }
 
 // A cursor moved by a key or a command is scrolled into view.
@@ -524,7 +562,7 @@ async function onRow(i, command) {
 $("list").addEventListener("scroll", () => requestAnimationFrame(drawRows));
 $("list").addEventListener("click", e => {
   const el = e.target.closest(".row");
-  if (!el) return;
+  if (!el || list.dragged) return;
   const i = Number(el.dataset.index);
   const toggle = e.target.closest("[data-row-command]");
   if (toggle) return onRow(i, toggle.dataset.rowCommand);
@@ -534,6 +572,44 @@ $("list").addEventListener("click", e => {
   if (touch && state.cursors[list.view] === i) return onRow(i, "play");
   onRow(i, null);
 });
+// A selection or queue row dragged up or down moves there once released, as
+// the window's rows do: a mouse from anywhere on the row, touch by its grip.
+let reorder = null;
+$("list").addEventListener("pointerdown", e => {
+  if ((list.view !== "selection" && list.view !== "queue") || e.button !== 0) return;
+  const el = e.target.closest(".row");
+  if (!el || el.classList.contains("loading") || e.target.closest("button")) return;
+  if (e.pointerType === "touch" && !e.target.closest(".grip")) return;
+  reorder = { el, id: e.pointerId, from: Number(el.dataset.index), y0: e.clientY, to: null };
+});
+$("list").addEventListener("pointermove", e => {
+  if (!reorder || e.pointerId !== reorder.id) return;
+  const h = rowHeight(), dy = e.clientY - reorder.y0;
+  if (reorder.to === null) {
+    if (Math.abs(dy) < h / 2) return;
+    $("list").setPointerCapture(e.pointerId);
+    reorder.el.classList.add("dragging");
+  }
+  const last = state.counts[list.view] - 1;
+  reorder.to = Math.max(0, Math.min(last, reorder.from + Math.round(dy / h)));
+  reorder.el.style.transform = `translateY(${(reorder.to - reorder.from) * h}px)`;
+});
+function endReorder(e, send) {
+  if (!reorder || e.pointerId !== reorder.id) return;
+  const { el, from, to } = reorder;
+  reorder = null;
+  if (to === null) return;
+  el.classList.remove("dragging");
+  el.style.transform = "";
+  // The click that ends a drag is not a click on the row.
+  list.dragged = true;
+  setTimeout(() => { list.dragged = false; }, 0);
+  const by = to - from;
+  if (send && by !== 0) onRow(from, "move " + (by > 0 ? "+" + by : String(by)));
+}
+$("list").addEventListener("pointerup", e => endReorder(e, true));
+$("list").addEventListener("pointercancel", e => endReorder(e, false));
+
 $("list").addEventListener("dblclick", e => {
   const el = e.target.closest(".row");
   if (el && !e.target.closest("button")) onRow(Number(el.dataset.index), "play");

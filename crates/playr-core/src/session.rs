@@ -67,6 +67,9 @@ pub const PEAKS_CACHE: usize = 100_000_000;
 /// A track's loops by slot, from 1 at index 0, as source frames, end exclusive.
 pub type Loops = [Option<(u64, u64)>; LOOP_SLOTS as usize];
 
+/// How long files must be still before a watched change rescans.
+pub const WATCH_QUIET: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub struct Session {
     conn: Connection,
     player: Player,
@@ -127,12 +130,16 @@ pub struct Session {
     next_job: JobId,
     /// Stops the peaks read in progress, which a newer read replaces.
     reading: Option<Arc<AtomicBool>>,
+    /// Stops the read ahead in progress; see [`Session::read_ahead`].
+    ahead: Option<Arc<AtomicBool>>,
     /// Peaks read recently, so a return to a track does not decode it again.
     peaks: Arc<Mutex<crate::wave::Cache>>,
     /// The library file a scan writes to.
     library: Option<PathBuf>,
     /// Set while a scan or a prune runs.
     scanning: Arc<AtomicBool>,
+    /// Watches the roots while the `watch` setting is on; see [`Session::watch`].
+    watcher: Option<notify::RecommendedWatcher>,
     /// Set while an analysis runs. Separate from `scanning`: an analysis
     /// writes only its own tables, so the two may run together.
     analysing: Arc<AtomicBool>,
@@ -188,9 +195,11 @@ impl Session {
             events,
             next_job: 1,
             reading: None,
+            ahead: None,
             peaks: Arc::new(Mutex::new(crate::wave::Cache::new(PEAKS_CACHE))),
             library,
             scanning: Arc::default(),
+            watcher: None,
             analysing: Arc::default(),
             tempo_rev: 0,
             replaygain: ReplayGain::Off,
@@ -1129,6 +1138,22 @@ impl Session {
         Some(Outcome::AddedToSelection)
     }
 
+    /// Selects `listed`, or unselects every copy of each when all are
+    /// selected already. Nothing for an empty list.
+    pub fn toggle_all_selected(&mut self, listed: Vec<Track>) -> Option<Outcome> {
+        let selected: HashSet<&str> = self.selection.iter().map(|t| t.path.as_str()).collect();
+        if !listed.iter().all(|t| selected.contains(t.path.as_str())) {
+            return self.add_all_to_selection(listed);
+        }
+        if listed.is_empty() {
+            return None;
+        }
+        let gone: HashSet<&str> = listed.iter().map(|t| t.path.as_str()).collect();
+        self.selection.retain(|t| !gone.contains(t.path.as_str()));
+        self.selection_changed();
+        Some(Outcome::RemovedFromSelection)
+    }
+
     /// Removes the track at `index`, or nothing if there is none.
     pub fn remove_from_selection(&mut self, index: usize) -> Option<Outcome> {
         let track = (index < self.selection.len()).then(|| self.selection.remove(index))?;
@@ -1831,6 +1856,39 @@ impl Session {
         })
     }
 
+    /// Reads `track`'s peaks into the cache in the background, so a later
+    /// [`Session::read_peaks`] of it finds them. Stops the read ahead still
+    /// running. Sends nothing.
+    pub fn read_ahead(&mut self, track: PathBuf) {
+        if let Some(cancel) = self.ahead.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        if self.has_peaks(&track) {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.ahead = Some(cancel.clone());
+        let cache = self.peaks.clone();
+        std::thread::spawn(move || {
+            let stamp = crate::wave::stamp(&track);
+            if let (Ok(Some(peaks)), Some(stamp)) = (Peaks::read(&track, &cancel), stamp) {
+                if let Ok(mut c) = cache.lock() {
+                    c.put(track, stamp, Arc::new(peaks));
+                }
+            }
+        });
+    }
+
+    /// Whether the cache holds `track`'s peaks, read since it last changed.
+    pub fn has_peaks(&self, track: &Path) -> bool {
+        let Some(stamp) = crate::wave::stamp(track) else {
+            return false;
+        };
+        self.peaks
+            .lock()
+            .is_ok_and(|mut c| c.get(track, stamp).is_some())
+    }
+
     /// Decodes frames `start..end` of `track`, which counts frames at `rate`,
     /// for a view too close for its peaks. Finishes with [`Event::Detail`].
     pub fn read_detail(&mut self, track: PathBuf, rate: u32, start: u64, end: u64) -> JobId {
@@ -1961,6 +2019,62 @@ impl Session {
                 result,
             })
         }))
+    }
+
+    /// Watches the library's roots, or stops for `false`. A change sends
+    /// [`Event::FilesChanged`] once files have been still for [`WATCH_QUIET`],
+    /// so a copy of an album is one rescan. Without a library file or roots
+    /// nothing is watched. Called again after a scan, which may add a root.
+    pub fn watch(&mut self, on: bool) -> Result<(), String> {
+        use notify::Watcher;
+        self.watcher = None;
+        let roots = db::roots(&self.conn).unwrap_or_default();
+        if !on || !self.has_library_file() || roots.is_empty() {
+            return Ok(());
+        }
+        let (changed, quiet) = std::sync::mpsc::channel::<()>();
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else { return };
+                let relevant = !event.kind.is_access()
+                    && event
+                        .paths
+                        .iter()
+                        .any(|p| scan::is_audio(p) || p.extension().is_none());
+                if relevant {
+                    let _ = changed.send(());
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        for root in &roots {
+            watcher
+                .watch(root, notify::RecursiveMode::Recursive)
+                .map_err(|e| format!("{}: {e}", root.display()))?;
+        }
+        // Ends when the watcher, and with it the sender, is dropped.
+        let events = self.events.clone();
+        std::thread::Builder::new()
+            .name("playr-watch".into())
+            .spawn(move || {
+                while quiet.recv().is_ok() {
+                    loop {
+                        match quiet.recv_timeout(WATCH_QUIET) {
+                            Ok(()) => continue,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                            Err(_) => return,
+                        }
+                    }
+                    events(Event::FilesChanged);
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        self.watcher = Some(watcher);
+        Ok(())
+    }
+
+    /// Whether [`Session::watch`] is watching.
+    pub fn watching(&self) -> bool {
+        self.watcher.is_some()
     }
 
     /// Re-scans every directory previously given to [`Session::scan`] or

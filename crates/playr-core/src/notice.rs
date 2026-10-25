@@ -205,6 +205,8 @@ pub enum Outcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Refusal {
     NothingPlaying,
+    /// The track has no tag of this name to search for.
+    NoTag(&'static str),
     SelectionEmpty,
     /// Nothing has played from the queue, nor waits in it.
     QueueEmpty,
@@ -287,6 +289,7 @@ pub enum Task {
     Prune,
     Open,
     FixTempo,
+    Watch,
 }
 
 impl From<Outcome> for Notice {

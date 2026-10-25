@@ -2,7 +2,7 @@
 # settings.toml.
 #
 # The rest of the defaults are in crates/playr-core/src/settings.toml. The
-# format is described in README.md, under Configuration.
+# format is described in docs/manual.md, under Configuration.
 
 # system, light or dark.
 theme = "dark"

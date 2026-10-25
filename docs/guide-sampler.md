@@ -2,7 +2,7 @@
 
 playr marks passages of the track it is playing and cuts them into WAV files, for [rtrack](https://github.com/shakfu/rtrack) or any sampler. It does not play or trigger samples itself.
 
-The keys and commands are listed in the README under [Marks](../README.md#marks), [Samples](../README.md#samples) and [Sampler view](../README.md#sampler-view). This page explains how the parts fit together, what an export writes, how precise it is, and what is not built yet.
+The keys and commands are listed in the manual under [Marks](manual.md#marks), [Samples](manual.md#samples) and [Sampler view](manual.md#sampler-view). This page explains how the parts fit together, what an export writes, how precise it is, and what is not built yet.
 
 ![From a playing track to a sample bank](media/sampling-workflow.svg)
 
@@ -56,7 +56,7 @@ Without `S`, `onset_sensitivity` from `settings.toml` applies, 0.5 by default. I
 
 - **Peaks.** The waveform is read from the file on a background thread while the view is open, the first time the view opens for a track. playr keeps the minimum, maximum and mean square of every 32 frames, and coarser levels built from them, so any zoom draws from exact values. The same pass keeps the spectrogram: 128 bands for every 512 frames, about 2.6 MB for a 4-minute track at 44.1 kHz, and adds about 90 ms to the read (one machine, release build). The peaks of tracks read recently stay in memory, up to 100 MB, so returning to one draws at once; a file changed since is read again.
 
-- **Displays.** `w` switches between four: an envelope (RMS inside peak, in eighth blocks), the same bars on a dB scale from -48 dBFS, a spectrogram, and a Braille waveform around a centre line. The README describes when each helps.
+- **Displays.** `w` switches between four: an envelope (RMS inside peak, in eighth blocks), the same bars on a dB scale from -48 dBFS, a spectrogram, and a Braille waveform around a centre line. The manual describes when each helps.
 
 - **Zoom.** `z` and `Z` zoom around the playhead, or around the range with `:fit on`, down to a frame a cell, or 16 points a frame in the window; `0` shows the whole track. Down to 64 frames a column, columns start on 32-frame boundaries, so a hit never shows in the column before it. Closer, the view decodes the frames it shows in the background.
 
@@ -84,7 +84,7 @@ Each export makes a new directory under `samples` in `settings.toml`, `~/Music/p
     amen.ot
 ```
 
-`amen.sfz` maps each slice to a key, from C1 (36), for samplers that read SFZ and for `:convert`, which the README's Samples section describes. It is named after the directory, so a second export's kit is `amen-2.sfz`. A looped range is written with `loop_mode=loop_continuous`.
+`amen.sfz` maps each slice to a key, from C1 (36), for samplers that read SFZ and for `:convert`, which the manual's Samples section describes. It is named after the directory, so a second export's kit is `amen-2.sfz`. A looped range is written with `loop_mode=loop_continuous`.
 
 `sliced/amen.wav` is the span from the first slice's start to the last one's end as one file, with a `cue ` chunk holding a point at each slice's start, in frames from the file's start. A range cut whole while it loops also gets a `smpl` chunk, in this file and in its slice file, looping the whole file forward, with middle C as its root note. With `slice_ot_file = true`, `sliced/amen.ot` gives an Octatrack the same slices, each with its start and end, when there are 64 or fewer. Both take the directory's name. They sit in their own directory so that the export's own holds only what rtrack loads.
 
@@ -109,7 +109,7 @@ A range cut whole while it loops also carries rtrack's loop fields, counted in t
          "loop_enabled": true, "loop_start": 0, "loop_end": 110250 }
 ```
 
-- **Edges.** `slice_edges` chooses `exact`, `zero` or `fade`; the README's Samples section compares them. `zero` moves edges while planning, so the `+` drawn are the edges written, and `start_frame` and `end_frame` record where they landed.
+- **Edges.** `slice_edges` chooses `exact`, `zero` or `fade`; the manual's Samples section compares them. `zero` moves edges while planning, so the `+` drawn are the edges written, and `start_frame` and `end_frame` record where they landed.
 
 - **Source, not output.** Slices are read from the file, so volume and varispeed do not reach them.
 

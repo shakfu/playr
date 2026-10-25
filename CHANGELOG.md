@@ -12,11 +12,49 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - The Loops view has an ID column, the ID `:tape N loop ID` takes. Library API: `loops::HEADINGS` and `loops::cells` have 9 cells.
 
+- `playr dedupe` lists byte-identical copies of tracks, and `--apply` keeps one row of each, moving the others' playlist places to it. Only rows go: the files stay, and their paths are excluded from later scans until `--restore`. Name-only matches, as `is:duplicate` finds, are left alone, since they may be different masters. Library API: `db::dedupe`.
+
+- `:messages` lists every message since start, newest first; in the window it opens the Messages window. A message too long for the terminal's bottom line ends in `...`. The line shares its width with the indicators, so at 100 columns a ConvertWithMoss warning lost its last words with no sign it had. Library API: `Action::ShowMessages`, `Presentation::MessageList`, `Input::Messages`.
+
+- `playr --man` prints a man page and `playr --completions SHELL` a completion script for bash, zsh, fish, elvish or PowerShell, both generated from the parser, so they cannot drift from `--help`. The macOS and Linux archives hold `playr.1` and the bash, zsh and fish scripts.
+
+- `[server]` in `settings.toml` takes playr-server's `listen`, `open`, `hosts`, `osc` and `osc_reply`, so a systemd unit need not carry them. A flag wins over its setting. Library API: `config::ServerSettings`, `Config::server`, `config::is_host_port`, `flags::Flags`.
+
+- `--osc-reply` takes a host name, as `ipad.local:9001`, resolved at startup to an IPv4 address where the name has one, since a `.local` name's IPv6 address is often link-local and needs a scope. It took an IP address only, so the tablet needed a fixed one. Library API: `osc::resolve`.
+
+- `--device none`, or `device = "none"`, plays to no device, in real time. The page's browser tests use it, and run in CI since; they needed an audio device, which runners lack. `none` over ALSA's `null`, which is a real device ID. Library API: `output::Null`, `output::NONE`.
+
+- The page moves a selection or queue row by dragging it, as the window does: a mouse from anywhere on the row, touch by a `::` grip, so a finger elsewhere still scrolls the list. The row menu's Move up and Move down remain.
+
+- The page shows the `columns` setting, `[server] columns`, and `:columns`, on rows wider than a phone. It read them and showed a fixed four. A phone keeps its two-line rows of title, artist, album and time, which no column list fits at that width, and a tablet leaves out album, album artist, genre and file, as it left out the album.
+
+- `watch = true` rescans 2 s after files under the library's directories stop changing, in all three programs, so a copied album is one rescan. A watched rescan asks nothing about missing tracks and prunes them only with `auto_prune`; nobody asked for it, and a stray key would answer the question. Off by default: Linux caps inotify watches, one per directory. Library API: `Session::watch`, `Session::watching`, `Event::FilesChanged`, `session::WATCH_QUIET`, `Task::Watch`, `Settings::watch`.
+
+- The Sampler view reads the next track's waveform ahead while one plays, in normal and repeat modes, so a change of track shows its waveform at once; a first visit decoded for 0.35 to 2.7 s on one machine. Only the next track: the waveform cache holds about six, so reading a whole selection ahead would push out what was just read. Library API: `Session::read_ahead`, `Session::has_peaks`.
+
+- `:filter album` and `:filter artist` search for the row's album or artist, or the playing track's, as a search the box shows and can change; Same album and Same artist in the window's row menu. A first step toward grouping, which needs a view of its own in three frontends. Library API: `Action::Filter`, `FilterBy`, `Refusal::NoTag`.
+
+- `:toggle all` selects every track the library view lists, such as search results, or unselects them all when all are selected; Select or unselect all above the window's results. A first step toward selecting several rows, which needs more than one cursor row per view. Library API: `Action::ToggleAll`, `Session::toggle_all_selected`.
+
+- `:crossfade 2`, or `crossfade = 2`, overlaps each track's last 2 s with the next one's first, on equal-power curves after each side's ReplayGain; Playback > Crossfade over 2 s in the window. The next track is decoded alongside and mixed before conversion, so the one stream and ring stay. Tracks at different sample rates or channel counts join gaplessly instead, over resampling one side, which the gapless join already declines to do for the same reason. At a join it replaces `:fade`. Library API: `Cmd::SetCrossfade`, `Action::Crossfade`, `Message::Crossfade`, `Settings::crossfade`.
+
+- Surround Opus decodes, up to 7.1, through libopus's multistream decoder. Its channels are reordered from Vorbis order to WAVE order, as the other decoders give them, so a stereo device plays front left and right; in Vorbis order the second channel is the centre. It was refused at open.
+
+- CAF, MKV and WebM files are indexed with their tags and, for MKV and WebM, their length. lofty reads none of the three. A CAF's `info` chunk is read by playr, since Symphonia skips it. Matroska's tags come through Symphonia, read by their raw `TARGET@NAME` keys: ffmpeg writes no target, so every tag reads as the album's, which Symphonia's own mapping turns into album artist or drops. The length is the segment's, where Matroska keeps it, over decoding each file at scan time. The next scan reads such files already in the library again, once. Library API: `AudioStream::tags`, `decode::Tags`.
+
 ### Changed
+
+- macOS keeps the library and settings in `~/Library/Application Support/playr`, and Windows the library in `%LOCALAPPDATA%\playr` and settings in `%APPDATA%\playr`. Linux keeps the XDG directories, and an `XDG_DATA_HOME` or `XDG_CONFIG_HOME` still wins everywhere. A file in the old `~/.local/share/playr` or `~/.config/playr` is used while the new place holds none, over moving it, which a failed move could lose. Library API: `paths`.
+
+- The window bundles egui's Ubuntu Light and Hack and a 1 KB cut of its icon font, not its two emoji fonts, 726 KB of the binary for six symbols. Emoji in tags now draw as boxes: no system fallback here draws colour glyphs. The icon cut keeps egui's submenu arrow, U+23F5, which painting the transport's symbols would not have covered; `crates/playr-gui/assets/fonts/README.md` says how it was made.
 
 - `playr loops scan DIR` refuses a directory holding tracks in the audio library, and says how many, unless `--move` is given. It took them out unasked, with their playlist places and marks, so a mistyped directory lost them. Library API: `loops::scan_dir` takes `move_tracks`; `Refused::HoldsTracks`.
 
 ### Fixed
+
+- `:convert opxy` of an export at 48 or 96 kHz writes frame counts that match its samples. ConvertWithMoss 20.3.0 resamples OP-XY samples to 44.1 kHz but keeps the source rate's `framecount`, `sample.end` and loop points in `patch.json`: 24,000 for a file of 22,050 frames. playr rewrites them from each WAV, scaling the positions by the same ratio, over resampling before conversion, which would decode and write every slice a second time.
+
+- A scan repairs the relative rows a playr 0.1.0 scan stored. A rescan added absolute duplicates beside them, and prune never matched them. A row merges into the one absolute row whose path ends with its own, keeping its playlist places, or takes the absolute path when its file lies under exactly one root; an ambiguous row is kept.
 
 - `playr prune` and `playr loops prune` remove nothing under a directory that reads empty, and say why: that is how an unmounted drive's mount point reads. Pruning a root whose drive was unmounted removed every track under it, with its marks and playlist places. A file counts as gone only when its directory is there, or when the nearest directory above it that is there holds something, so a drive unmounted below a root keeps its tracks too. `playr scan` names an empty root rather than suggesting prune. Library API: `db::empty_dir`.
 

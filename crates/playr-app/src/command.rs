@@ -5,7 +5,7 @@ use playr_core::analysis::TempoFix;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::action::{Action, Key, Keymap, LoopAction, Nudge, Slicing, Zoom};
+use crate::action::{Action, FilterBy, Key, Keymap, LoopAction, Nudge, Slicing, Zoom};
 use crate::{Display, Theme, View};
 use playr_core::audio::eq::{Band, RANGE_DB};
 use playr_core::audio::{Mode, MAX_CENTS};
@@ -106,6 +106,12 @@ pub const COMMANDS: &[Command] = &[
     ),
     any("prune", "[DIR]", "remove tracks and marks of missing files"),
     any("info", "", "what analysis measured about this track"),
+    any("messages", "", "every message since playr started"),
+    any(
+        "filter",
+        "album | artist",
+        "search for the row's album or artist",
+    ),
     any("device", "", "name the output device playr plays to"),
     any("preview", "", "show the row's waveform without playing it"),
     any(
@@ -150,6 +156,11 @@ pub const COMMANDS: &[Command] = &[
     ),
     any("tempo", "BPM", "varispeed to this tempo, once analysed"),
     any("fade", "SECONDS | off", "fade each track in and out"),
+    any(
+        "crossfade",
+        "SECONDS | off",
+        "overlap each track with the next",
+    ),
     any(
         "interp",
         "[sinc|hermite]",
@@ -220,7 +231,12 @@ pub const COMMANDS: &[Command] = &[
     ),
     any("unmap", "[VIEW] KEY", "remove a key binding"),
     any("theme", "THEME", "system, light or dark colours"),
-    only(Library, "toggle", "", "select or unselect the track"),
+    only(
+        Library,
+        "toggle",
+        "[all]",
+        "select or unselect the track, or all listed",
+    ),
     only(Library, "search-clear", "", "show the whole library again"),
     only(
         Selection,
@@ -559,6 +575,7 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Activate => "play".into(),
         Add if view == Some(Library) => "toggle".into(),
         Add => "add".into(),
+        ToggleAll => "toggle all".into(),
         Enqueue(false) => "enqueue".into(),
         Enqueue(true) => "enqueue next".into(),
         EnqueueAll => "enqueue all".into(),
@@ -590,6 +607,9 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Analyze(Some(dir)) => format!("analyze {}", dir.display()),
         ShowRoots => "roots".into(),
         ShowInfo => "info".into(),
+        ShowMessages => "messages".into(),
+        Filter(FilterBy::Album) => "filter album".into(),
+        Filter(FilterBy::Artist) => "filter artist".into(),
         ShowDevice => "device".into(),
         ForgetRoot(dir) => format!("roots rm {}", dir.display()),
         Prune(Some(dir)) => format!("prune {}", dir.display()),
@@ -622,6 +642,8 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Interp(Some(i)) => format!("interp {}", i.name()),
         Fade(d) if d.is_zero() => "fade off".into(),
         Fade(d) => format!("fade {}", number(d.as_secs_f64())),
+        Crossfade(d) if d.is_zero() => "crossfade off".into(),
+        Crossfade(d) => format!("crossfade {}", number(d.as_secs_f64())),
         SetEq(band, db) => format!("eq {} ={}", band.name(), number(f64::from(*db))),
         EqBy(band, db) => format!(
             "eq {} {}{}",
@@ -1518,6 +1540,12 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             _ => Err(usage()),
         },
         "info" => nothing(Action::ShowInfo),
+        "messages" => nothing(Action::ShowMessages),
+        "filter" => match rest {
+            "album" => Ok(Action::Filter(FilterBy::Album)),
+            "artist" => Ok(Action::Filter(FilterBy::Artist)),
+            _ => Err(usage()),
+        },
         "device" => nothing(Action::ShowDevice),
         "preview" => nothing(Action::Preview),
         "columns" if rest.is_empty() => Err(usage()),
@@ -1613,6 +1641,16 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
                     Ok(Action::Fade(Duration::from_secs_f64(n)))
                 }
                 _ => Err("fade is 0 to 10 seconds, or off".into()),
+            },
+        },
+        "crossfade" => match rest {
+            "" => Err(usage()),
+            "off" => Ok(Action::Crossfade(Duration::ZERO)),
+            _ => match rest.parse::<f64>() {
+                Ok(n) if (0.0..=playr_core::settings::MAX_FADE_SECS).contains(&n) => {
+                    Ok(Action::Crossfade(Duration::from_secs_f64(n)))
+                }
+                _ => Err("crossfade is 0 to 10 seconds, or off".into()),
             },
         },
         "tempo" => match rest.parse::<f32>() {
@@ -1831,6 +1869,7 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             (view, key, "") => Ok(Action::Unmap { view, key }),
             _ => Err(usage()),
         },
+        "toggle" if rest == "all" => Ok(Action::ToggleAll),
         "toggle" | "add" => nothing(Action::Add),
         "search-clear" => nothing(Action::ClearSearch),
         "remove" => nothing(Action::Remove),

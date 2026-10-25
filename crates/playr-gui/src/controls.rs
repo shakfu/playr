@@ -7,7 +7,7 @@
 use playr_core::analysis::TempoFix;
 use std::time::Duration;
 
-use playr_app::action::{Action, Nudge, Slicing, Zoom};
+use playr_app::action::{Action, FilterBy, Nudge, Slicing, Zoom};
 use playr_app::dj::{DjAction, GridEdit, Side};
 use playr_app::sampler::Edge;
 use playr_app::tape::TapeAction;
@@ -51,6 +51,7 @@ pub const VIEW_MENU: &[Control] = &[
     control("Next view", Action::NextView),
     control("Search", Action::StartSearch),
     control("Clear search", Action::ClearSearch),
+    control("Messages...", Action::ShowMessages),
 ];
 
 /// View, Theme.
@@ -76,6 +77,11 @@ pub const PLAYBACK_MENU: &[Control] = &[
     control("Normal speed", Action::SetSpeed(0)),
     control("Fade tracks over 2 s", Action::Fade(Duration::from_secs(2))),
     control("No fades", Action::Fade(Duration::ZERO)),
+    control(
+        "Crossfade over 2 s",
+        Action::Crossfade(Duration::from_secs(2)),
+    ),
+    control("No crossfade", Action::Crossfade(Duration::ZERO)),
     control("Output device", Action::ShowDevice),
 ];
 
@@ -113,6 +119,8 @@ pub const LIBRARY_ROW: &[Control] = &[
     control("Play next", Action::Enqueue(true)),
     control("Add to queue", Action::Enqueue(false)),
     control("Track info", Action::ShowInfo),
+    control("Same album", Action::Filter(FilterBy::Album)),
+    control("Same artist", Action::Filter(FilterBy::Artist)),
     control("Preview in sampler", Action::Preview),
     control("Load to deck A", Action::Dj(DjAction::Load(Side::A))),
     control("Load to deck B", Action::Dj(DjAction::Load(Side::B))),
@@ -157,6 +165,7 @@ pub const QUEUE_BAR: &[Control] = &[
 /// Buttons above search results.
 pub const RESULTS_BAR: &[Control] = &[
     control("Queue all results", Action::EnqueueAll),
+    control("Select or unselect all", Action::ToggleAll),
     control("Save search", Action::StartSaveSearch),
 ];
 

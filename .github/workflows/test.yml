@@ -72,6 +72,29 @@ jobs:
       - name: Test
         run: cargo test --workspace --no-fail-fast
 
+  # playr-server's page in Chromium. The server plays to no device,
+  # `--device none`, since runners have none.
+  page:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: astral-sh/setup-uv@v10.1.0
+
+      - name: Install Chromium
+        run: uv run --with playwright==1.62.0 playwright install --with-deps chromium
+
+      - name: Page tests
+        run: make page-test
+
   # The rust-version in Cargo.toml, for every crate but playr-gui, which
   # declares egui's own. Keep the toolchain below equal to it.
   msrv:

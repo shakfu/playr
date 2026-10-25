@@ -574,3 +574,50 @@ fn reseat_ogg_crc(bytes: &mut [u8], at: usize) {
     }
     bytes[at + 22..at + 26].copy_from_slice(&crc.to_le_bytes());
 }
+
+/// 5.1 Opus is several streams; it decodes, and its channels come out in
+/// WAVE order, as other decoders give them, so a stereo device takes the
+/// front left and right, not front left and centre.
+#[cfg(feature = "opus")]
+#[test]
+fn surround_opus_decodes_in_wave_order() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("51.opus");
+    // FL FR FC LFE BL BR, each at its own level.
+    let levels = [0.1, 0.2, 0.3, 0.05, 0.4, 0.5];
+    let expr: Vec<String> = levels
+        .iter()
+        .map(|l| format!("{l}*sin(2*PI*440*t)"))
+        .collect();
+    let ok = Command::new("ffmpeg")
+        .args(["-y", "-v", "error", "-f", "lavfi", "-i"])
+        .arg(format!("aevalsrc={}:s=48000:c=5.1:d=1", expr.join("|")))
+        .args(["-c:a", "libopus", "-b:a", "256k"])
+        .arg(&path)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        skip("PLAYR_REQUIRE_FFMPEG", "this ffmpeg cannot encode 5.1 Opus");
+        return;
+    }
+    let mut s = AudioStream::open(&path).expect("5.1 Opus opens");
+    assert_eq!(s.spec().channels, 6);
+    let mut peaks = [0f32; 6];
+    while let Ok(Some(c)) = s.next_chunk() {
+        for frame in c.as_chunks::<6>().0 {
+            for (p, v) in peaks.iter_mut().zip(frame) {
+                *p = p.max(v.abs());
+            }
+        }
+    }
+    // The LFE stream keeps only the low band, so 440 Hz is not compared.
+    for i in [0, 1, 2, 4, 5] {
+        assert!(
+            (peaks[i] / levels[i] as f32 - 1.0).abs() < 0.15,
+            "channel {i}: {peaks:?}"
+        );
+    }
+}

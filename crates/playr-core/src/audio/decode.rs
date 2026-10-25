@@ -81,6 +81,19 @@ impl From<SymphError> for DecodeError {
     }
 }
 
+/// The tags [`AudioStream::tags`] reads, for containers lofty cannot parse.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Tags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub genre: Option<String>,
+    pub track: Option<u32>,
+    pub disc: Option<u32>,
+    pub year: Option<i32>,
+}
+
 /// A decoded audio file, pulled one packet at a time.
 pub struct AudioStream {
     reader: Box<dyn FormatReader>,
@@ -127,6 +140,85 @@ fn pre_roll(codec: symphonia::core::codecs::audio::AudioCodecId, rate: u32) -> D
 }
 
 impl AudioStream {
+    /// The container's tags as Symphonia reads them: the latest revision's,
+    /// the file's and then each track's.
+    pub fn tags(&mut self) -> Tags {
+        use symphonia::core::meta::StandardTag as S;
+        let mut tags = Tags::default();
+        let mut meta = self.reader.metadata();
+        let Some(rev) = meta.skip_to_latest() else {
+            return tags;
+        };
+        // Matroska names a track by its UID, which the stream does not keep;
+        // an audio file has one.
+        let tracks = rev.per_track.iter().flat_map(|t| t.metadata.tags.iter());
+        let all = (rev.media.tags.iter().map(|t| (t, false))).chain(tracks.map(|t| (t, true)));
+        let text = |v: &str| Some(v.trim().to_string()).filter(|v| !v.is_empty());
+        // Matroska keys are TARGET@NAME. ffmpeg writes no target, so every
+        // tag reads as the album's, which Symphonia maps to album fields or
+        // to nothing; those keys are read here instead, a track's own as
+        // TRACK whatever its target says.
+        let mut keyed: Vec<(String, String, String)> = Vec::new();
+        for (tag, of_track) in all {
+            if let (Some((target, name)), symphonia::core::meta::RawValue::String(v)) =
+                (tag.raw.key.split_once('@'), &tag.raw.value)
+            {
+                let target = if of_track {
+                    "TRACK".into()
+                } else {
+                    target.to_uppercase()
+                };
+                keyed.push((target, name.to_uppercase(), v.to_string()));
+                continue;
+            }
+            match &tag.std {
+                Some(S::TrackTitle(v)) => tags.title = tags.title.take().or(text(v)),
+                Some(S::Artist(v)) => tags.artist = tags.artist.take().or(text(v)),
+                Some(S::Album(v)) => tags.album = tags.album.take().or(text(v)),
+                Some(S::AlbumArtist(v)) => tags.album_artist = tags.album_artist.take().or(text(v)),
+                Some(S::Genre(v)) => tags.genre = tags.genre.take().or(text(v)),
+                Some(S::TrackNumber(n)) => tags.track = tags.track.or(u32::try_from(*n).ok()),
+                Some(S::DiscNumber(n)) => tags.disc = tags.disc.or(u32::try_from(*n).ok()),
+                Some(S::RecordingDate(v) | S::ReleaseDate(v)) => {
+                    tags.year = tags.year.or(v.get(..4).and_then(|y| y.parse().ok()))
+                }
+                _ => {}
+            }
+        }
+        let find = |target: Option<&str>, name: &str| {
+            keyed
+                .iter()
+                .find(|(t, n, _)| n == name && target.is_none_or(|w| t == w))
+                .and_then(|(.., v)| text(v))
+        };
+        let number = |v: String| v.split('/').next()?.trim().parse::<u32>().ok();
+        let k = Tags {
+            title: find(Some("TRACK"), "TITLE"),
+            artist: find(Some("TRACK"), "ARTIST").or_else(|| find(None, "ARTIST")),
+            album: find(None, "ALBUM").or_else(|| find(Some("ALBUM"), "TITLE")),
+            album_artist: find(Some("ALBUM"), "ARTIST"),
+            genre: find(None, "GENRE"),
+            track: find(Some("TRACK"), "PART_NUMBER")
+                .or_else(|| find(None, "PART_NUMBER"))
+                .and_then(number),
+            disc: None,
+            year: ["DATE_RELEASED", "DATE_RECORDED", "DATE"]
+                .iter()
+                .find_map(|n| find(None, n))
+                .and_then(|v| v.get(..4)?.parse().ok()),
+        };
+        Tags {
+            title: tags.title.or(k.title),
+            artist: tags.artist.or(k.artist),
+            album: tags.album.or(k.album),
+            album_artist: tags.album_artist.or(k.album_artist),
+            genre: tags.genre.or(k.genre),
+            track: tags.track.or(k.track),
+            disc: tags.disc,
+            year: tags.year.or(k.year),
+        }
+    }
+
     /// Opens `path` and prepares a decoder for its default audio track.
     pub fn open(path: &Path) -> Result<Self, DecodeError> {
         Self::open_with(path, false)
@@ -161,9 +253,10 @@ impl AudioStream {
         let track_id = track.id;
         let time_base = track.time_base;
         let header_frames = track.num_frames;
-        let duration = track
-            .duration
-            .zip(time_base)
+        // Matroska gives no track duration, only the segment's.
+        let media = reader.media_info();
+        let duration = (track.duration.zip(time_base))
+            .or(media.duration.zip(media.time_base))
             .and_then(|(d, tb)| tb.calc_duration(d))
             .map(|t| Duration::from_secs_f64(t.as_secs_f64().max(0.0)));
 

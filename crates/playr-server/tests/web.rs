@@ -141,6 +141,8 @@ fn rows_carry_what_each_view_draws() {
         json!({
             "key": "/m/b.flac", "title": "Monk tune", "artist": "Monk",
             "album": "Unknown Album", "time": "1:23", "selected": true,
+            // The columns setting's: artist, album, title, time.
+            "cells": ["Monk", "-", "Monk tune", "1:23"],
         })
     );
     assert_eq!(library["rows"][0]["selected"], false);

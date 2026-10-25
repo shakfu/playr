@@ -137,6 +137,9 @@ pub fn convert(program: &Path, kit: &Path, format: &str) -> Result<Converted, St
         for k in &kits {
             warnings.extend(run(program, k, format, &dest)?);
         }
+        if format == "opxy" {
+            fix_opxy_presets(&dest)?;
+        }
         Ok((kits.len(), warnings))
     });
     // The parts are written beside the kit, so their samples are found; only
@@ -235,4 +238,88 @@ fn run(program: &Path, kit: &Path, format: &str, dest: &Path) -> Result<Vec<Stri
         Some(line) => format!("ConvertWithMoss: {}", line.trim()),
         None => "ConvertWithMoss wrote nothing".into(),
     })
+}
+
+/// Rewrites each `*.preset/patch.json` under `dest` whose counts disagree
+/// with its WAVs. ConvertWithMoss 20.3.0 resamples OP-XY samples to 44.1 kHz
+/// but keeps the source rate's `framecount` and positions; see
+/// `docs/dev/issues/convertwithmoss-issue.md`. A fixed release makes this a no-op.
+fn fix_opxy_presets(dest: &Path) -> Result<(), String> {
+    let Ok(entries) = fs::read_dir(dest) else {
+        return Ok(());
+    };
+    for preset in entries.flatten().map(|e| e.path()) {
+        let patch = preset.join("patch.json");
+        let Ok(text) = fs::read_to_string(&patch) else {
+            continue;
+        };
+        let frames = |name: &str| {
+            hound::WavReader::open(preset.join(name))
+                .ok()
+                .map(|r| r.duration())
+        };
+        if let Some(fixed) = opxy_counts(&text, frames) {
+            fs::write(&patch, fixed)
+                .map_err(|e| format!("cannot write {}: {e}", patch.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// `patch.json` text with each region's `framecount` set to its sample's
+/// frames, as `frames` reads them, and its start, end and loop points scaled
+/// by the same ratio; `None` when every count already matches.
+///
+/// Line by line, as ConvertWithMoss writes one field a line with `sample`
+/// before `framecount` before the positions. Text in another layout is left
+/// as it is, and other fields keep their order and spelling.
+pub fn opxy_counts(text: &str, frames: impl Fn(&str) -> Option<u32>) -> Option<String> {
+    let field = |line: &str| -> Option<(String, String)> {
+        let (key, value) = line.trim().split_once(':')?;
+        let key = key.trim().strip_prefix('"')?.strip_suffix('"')?;
+        Some((
+            key.to_string(),
+            value.trim().trim_end_matches(',').to_string(),
+        ))
+    };
+    let mut actual: Option<u32> = None;
+    let mut ratio: Option<f64> = None;
+    let mut changed = false;
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let Some((key, value)) = field(line) else {
+            out.push_str(line);
+            continue;
+        };
+        let replace = |n: u64| {
+            let at = line.rfind(value.as_str()).expect("value is in its line");
+            format!("{}{n}{}", &line[..at], &line[at + value.len()..])
+        };
+        match key.as_str() {
+            "sample" => {
+                actual = frames(value.trim_matches('"'));
+                ratio = None;
+            }
+            "framecount" => {
+                if let (Some(a), Ok(n)) = (actual, value.parse::<u64>()) {
+                    if n > 0 && n != u64::from(a) {
+                        ratio = Some(f64::from(a) / n as f64);
+                        changed = true;
+                        out.push_str(&replace(u64::from(a)));
+                        continue;
+                    }
+                }
+            }
+            "sample.start" | "sample.end" | "loop.start" | "loop.end" => {
+                if let (Some(r), Some(a), Ok(n)) = (ratio, actual, value.parse::<u64>()) {
+                    let scaled = ((n as f64 * r).round() as u64).min(u64::from(a));
+                    out.push_str(&replace(scaled));
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        out.push_str(line);
+    }
+    changed.then_some(out)
 }

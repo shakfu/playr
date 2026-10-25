@@ -209,6 +209,11 @@ pub enum Cmd {
     /// Fade each track in over its first stretch this long and out over its
     /// last, or not at all for zero. Not on a loop or a one-shot.
     SetFade(Duration),
+    /// Overlap each track's last stretch this long with the next one's first,
+    /// or not at all for zero. Only where the two share a sample rate,
+    /// channels and output, and the track's length is known; elsewhere the
+    /// join stays gapless. It replaces `SetFade`'s fades at a join.
+    SetCrossfade(Duration),
     /// Stop once the track playing ends, or no longer. Ignored while
     /// stopped, and cleared once playback stops. See [`Status::stop_after`].
     StopAfter(bool),
@@ -441,6 +446,15 @@ impl Player {
     /// Starts the engine thread on the output device `device` names, or the
     /// default for `None`. See [`output::device`].
     pub fn new(device: Option<&str>) -> Result<Self, output::OutputError> {
+        if device == Some(output::NONE) {
+            let mut player = Self::with_backend(output::Null)?;
+            player.device = Some(output::DeviceInfo {
+                id: output::NONE.into(),
+                name: "no device; nothing is heard".into(),
+                default: false,
+            });
+            return Ok(player);
+        }
         let device = output::device(device)?;
         let info = output::info(&device);
         let mut player = Self::with_backend(output::Cpal(device))?;
@@ -772,6 +786,25 @@ struct Loop {
     fades: (u64, u64),
 }
 
+/// The next track, decoding early into the current one's last frames, which
+/// it is mixed with. See [`Cmd::SetCrossfade`].
+struct Incoming {
+    stream: AudioStream,
+    index: usize,
+    duration: Option<Duration>,
+    /// Decoded and not yet mixed.
+    buf: Vec<f32>,
+    /// Source frames of it mixed or carried so far.
+    decoded: u64,
+    /// The stream has ended.
+    done: bool,
+    /// The current track's frame where the overlap starts, and its length.
+    start: u64,
+    frames: u64,
+    /// The mark at the overlap's start is placed.
+    marked: bool,
+}
+
 /// A track queued behind the current one whose format needs a new stream.
 struct Staged {
     stream: AudioStream,
@@ -820,6 +853,13 @@ struct Engine {
     after_queue: AfterQueue,
     /// How long each track fades in and out; zero for none.
     fade: Duration,
+    /// How long consecutive tracks overlap; zero for none.
+    crossfade: Duration,
+    incoming: Option<Incoming>,
+    /// `stream` came in under a crossfade, so `fade` does not fade it in.
+    crossfaded_in: bool,
+    /// The queue index a crossfade was tried for, so it is tried once.
+    crossfade_tried: Option<usize>,
     /// Stop once the audible track ends. See [`Cmd::StopAfter`].
     stop_after: bool,
     /// Which track follows which, for the current mode.
@@ -889,6 +929,10 @@ impl Engine {
             queued: Arc::default(),
             after_queue: AfterQueue::default(),
             fade: Duration::ZERO,
+            crossfade: Duration::ZERO,
+            incoming: None,
+            crossfaded_in: false,
+            crossfade_tried: None,
             stop_after: false,
             order: Order::new(0, Mode::Normal, 0, order::random_seed()),
             index: 0,
@@ -1121,6 +1165,11 @@ impl Engine {
             }
             // From what is decoded next: the ring's 2 s play as they were.
             Cmd::SetFade(fade) => self.fade = fade,
+            Cmd::SetCrossfade(crossfade) => {
+                self.crossfade = crossfade;
+                // A crossfade under way, or a join already decoded, changes.
+                self.discard_chosen();
+            }
             Cmd::StopAfter(on) => {
                 self.stop_after = on && self.state != State::Stopped;
                 // As a mode change: drops or restores the next track chosen.
@@ -1278,12 +1327,18 @@ impl Engine {
         if let Some(s) = &mut self.staged {
             s.index = map(s.index);
         }
+        if let Some(i) = &mut self.incoming {
+            i.index = map(i.index);
+        }
     }
 
     /// Drops a next track already chosen, whether decoding into the ring or
     /// staged, by seeking to the current position, as a mode change does.
     fn discard_chosen(&mut self) {
-        let chosen = self.marks.len() > 1 || self.staged.is_some() || self.stream.is_none();
+        let chosen = self.marks.len() > 1
+            || self.staged.is_some()
+            || self.incoming.is_some()
+            || self.stream.is_none();
         if chosen && !self.marks.is_empty() {
             self.seek(self.elapsed());
         }
@@ -1303,6 +1358,7 @@ impl Engine {
         self.looping = None;
         self.pause_at = None;
         self.stream = None;
+        self.drop_incoming();
         self.conv = None;
         self.staged = None;
         self.flush = None;
@@ -1368,6 +1424,7 @@ impl Engine {
         self.conv = Some(Converter::new(spec, plan, self.speed()));
         let duration = stream.duration();
         self.stream = Some(stream);
+        self.crossfaded_in = false;
         self.decoded = (first.len() / spec.channels.max(1) as usize) as u64;
         self.reset_marks(i, duration);
         self.shared.track_start.store(0, Ordering::Relaxed);
@@ -1660,7 +1717,10 @@ impl Engine {
         }
         let current = self.marks.front().map_or(self.index, |m| m.1);
         self.order.set_mode(mode, current);
-        let chosen = self.marks.len() > 1 || self.staged.is_some() || self.stream.is_none();
+        let chosen = self.marks.len() > 1
+            || self.staged.is_some()
+            || self.incoming.is_some()
+            || self.stream.is_none();
         if chosen && !self.marks.is_empty() {
             self.seek(self.elapsed());
         }
@@ -1760,6 +1820,8 @@ impl Engine {
         }
         self.carry.clear();
         self.staged = None;
+        self.drop_incoming();
+        self.crossfaded_in = false;
 
         let dur = self.stream.as_ref().and_then(|s| s.duration());
         let idx = self.index;
@@ -1947,6 +2009,7 @@ impl Engine {
                     let l = self.loop_here().expect("checked");
                     self.wrap(l);
                 }
+                Ok(None) if self.incoming.is_some() => self.promote_incoming(),
                 Ok(None) => {
                     // `stage_from` ends the conversion, unless the next track continues it.
                     self.stream = None;
@@ -2015,6 +2078,7 @@ impl Engine {
             }
             self.push_mark(self.written, next, duration, 0);
             self.stream = Some(stream);
+            self.crossfaded_in = false;
             self.decoded = (first.len() / spec.channels.max(1) as usize) as u64;
             self.carry_faded(&first, 0);
         } else {
@@ -2043,6 +2107,7 @@ impl Engine {
             self.conv = Some(Converter::new(staged.spec, plan, self.speed()));
             self.push_mark(self.written, staged.index, duration, 0);
             self.stream = Some(staged.stream);
+            self.crossfaded_in = false;
             self.decoded = (staged.first.len() / staged.spec.channels.max(1) as usize) as u64;
             self.carry_faded(&staged.first, 0);
             return;
@@ -2058,6 +2123,7 @@ impl Engine {
         self.conv = Some(Converter::new(staged.spec, plan, self.speed()));
         self.index = staged.index;
         self.stream = Some(staged.stream);
+        self.crossfaded_in = false;
         self.decoded = (staged.first.len() / staged.spec.channels.max(1) as usize) as u64;
         self.written = 0;
         self.reset_marks(staged.index, duration);
@@ -2108,12 +2174,185 @@ impl Engine {
                     self.wrap(l);
                 }
             }
-            _ => {
+            Some(_) => {
                 let from = self.decoded;
                 self.decoded += frames;
                 self.carry_faded(chunk, from);
             }
+            None => {
+                let from = self.decoded;
+                self.decoded += frames;
+                if self.incoming.is_none() {
+                    self.begin_crossfade(from, frames);
+                }
+                match self.incoming.is_some() {
+                    true => self.carry_crossfaded(chunk, from),
+                    false => self.carry_faded(chunk, from),
+                }
+            }
         }
+    }
+
+    /// Opens the next track to overlap the current one's last frames, once
+    /// the chunk at `from` reaches them. Tried once per track: a track that
+    /// cannot be crossfaded joins gaplessly, as with no crossfade.
+    fn begin_crossfade(&mut self, from: u64, frames: u64) {
+        if self.crossfade.is_zero() || self.pause_at.is_some() {
+            return;
+        }
+        let (Some(conv), Some(stream), Some(plan)) = (
+            self.conv.as_ref(),
+            self.stream.as_ref(),
+            self.out.as_ref().map(|o| o.plan),
+        ) else {
+            return;
+        };
+        let spec = conv.src();
+        let at_rate = |d: Duration| (d.as_secs_f64() * f64::from(spec.rate)) as u64;
+        let Some(len) = stream.duration().map(at_rate) else {
+            return;
+        };
+        let wanted = at_rate(self.crossfade).min(len / 2);
+        if from + frames <= len.saturating_sub(wanted) {
+            return;
+        }
+        let current = self.marks.back().map_or(self.index, |m| m.1);
+        if self.crossfade_tried.replace(current) == Some(current) {
+            return;
+        }
+        let Some(next) = self.following(current, false) else {
+            return;
+        };
+        // Opened quietly: a file that fails is reported when its turn comes.
+        let Some(path) = self.queue.get(next) else {
+            return;
+        };
+        let Ok(mut next_stream) = AudioStream::open(path) else {
+            return;
+        };
+        let Ok(Some(first)) = next_stream.next_chunk().map(|c| c.map(<[f32]>::to_vec)) else {
+            return;
+        };
+        let speed = self.speed();
+        let joins = next_stream.spec() == spec
+            && self.plan_for(spec).ok() == Some(plan)
+            && self
+                .conv
+                .as_ref()
+                .is_some_and(|c| c.continues(spec, plan, speed));
+        if !joins {
+            return;
+        }
+        let duration = next_stream.duration();
+        let n = duration.map_or(wanted, |d| wanted.min(at_rate(d) / 2));
+        self.incoming = Some(Incoming {
+            stream: next_stream,
+            index: next,
+            duration,
+            buf: first,
+            decoded: 0,
+            done: false,
+            start: len - n,
+            frames: n.max(1),
+            marked: false,
+        });
+    }
+
+    /// Carries `chunk`, at frame `from` of the outgoing track, mixed with the
+    /// incoming track past the overlap's start. Each side takes its own gain
+    /// first, then an equal-power curve, so the level holds across the join
+    /// for uncorrelated music.
+    fn carry_crossfaded(&mut self, chunk: &[f32], from: u64) {
+        let channels = self
+            .conv
+            .as_ref()
+            .map_or(1, |c| c.src().channels.max(1) as usize);
+        let frames = chunk.len() / channels;
+        let Some(start) = self.incoming.as_ref().map(|i| i.start) else {
+            return;
+        };
+        let before = (start.saturating_sub(from) as usize).min(frames);
+        if before > 0 {
+            self.carry_faded(&chunk[..before * channels], from);
+        }
+        if before == frames {
+            return;
+        }
+        let outgoing = self.marks.back().map_or(self.index, |m| m.1);
+        self.mark_incoming();
+        let Some(mut inc) = self.incoming.take() else {
+            return;
+        };
+        let mixed_frames = frames - before;
+        while inc.buf.len() < mixed_frames * channels && !inc.done {
+            match inc.stream.next_chunk() {
+                Ok(Some(c)) => inc.buf.extend_from_slice(c),
+                _ => inc.done = true,
+            }
+        }
+        let (g_out, g_in) = (self.gain_at(outgoing), self.gain_at(inc.index));
+        let mut mixed = Vec::with_capacity(mixed_frames * channels);
+        for k in 0..mixed_frames {
+            let into = (from + (before + k) as u64).saturating_sub(inc.start);
+            let t = ((into as f32 + 0.5) / inc.frames as f32).min(1.0);
+            let angle = t * std::f32::consts::FRAC_PI_2;
+            let (a, b) = (angle.cos() * g_out, angle.sin() * g_in);
+            for c in 0..channels {
+                let out = chunk[(before + k) * channels + c];
+                let incoming = inc.buf.get(k * channels + c).copied().unwrap_or(0.0);
+                mixed.push(out * a + incoming * b);
+            }
+        }
+        let used = inc.buf.len().min(mixed_frames * channels);
+        inc.buf.drain(..used);
+        inc.decoded += (used / channels) as u64;
+        self.incoming = Some(inc);
+        // The gains are in already.
+        if let Some(conv) = self.conv.as_mut() {
+            conv.push(&mixed, &mut self.carry);
+        }
+    }
+
+    /// Places the mark where the incoming track starts to be heard: after
+    /// what is converted so far, as a gapless join places it.
+    fn mark_incoming(&mut self) {
+        let channels = self
+            .out
+            .as_ref()
+            .map_or(1, |o| o.plan.channels.max(1) as usize);
+        let at = self.written + (self.carry.len() / channels) as u64;
+        let Some(inc) = self.incoming.as_mut().filter(|i| !i.marked) else {
+            return;
+        };
+        inc.marked = true;
+        let (index, duration) = (inc.index, inc.duration);
+        self.push_mark(at, index, duration, 0);
+    }
+
+    /// Makes the incoming track the one decoded, once the outgoing one ends.
+    /// What it decoded past the mix is carried at its own gain.
+    fn promote_incoming(&mut self) {
+        self.mark_incoming();
+        let Some(inc) = self.incoming.take() else {
+            return;
+        };
+        self.stream = Some(inc.stream);
+        self.crossfaded_in = true;
+        self.decoded = inc.decoded;
+        if !inc.buf.is_empty() {
+            let channels = self
+                .conv
+                .as_ref()
+                .map_or(1, |c| c.src().channels.max(1) as usize);
+            self.decoded += (inc.buf.len() / channels) as u64;
+            self.convert_and_carry(&inc.buf);
+        }
+    }
+
+    /// Forgets a crossfade under way, as a seek or a stop does.
+    fn drop_incoming(&mut self) {
+        self.incoming = None;
+        self.crossfade_tried = None;
     }
 
     /// Converts `chunk`, whose first frame is frame `from` of the track, as
@@ -2131,7 +2370,11 @@ impl Engine {
             .duration()
             .map_or(u64::MAX, |d| (d.as_secs_f64() * f64::from(rate)) as u64);
         let frames = (chunk.len() / channels) as u64;
-        let inside = from >= n && from + frames <= len.saturating_sub(n);
+        // A crossfade replaces both fades at a join: the incoming track is
+        // faded in by it, and a fade out would dip before it starts.
+        let fade_in = if self.crossfaded_in { 0 } else { n };
+        let fade_out = if self.crossfade.is_zero() { n } else { 0 };
+        let inside = from >= fade_in && from + frames <= len.saturating_sub(fade_out);
         if n == 0 || inside || self.loop_here().is_some() {
             return self.convert_and_carry(chunk);
         }
@@ -2142,7 +2385,7 @@ impl Engine {
                 // Past a length estimated short, the frames play unfaded
                 // rather than silent.
                 let gain = match f < len {
-                    true => crate::samples::fade_gain(f, len, (n, n)),
+                    true => crate::samples::fade_gain(f, len, (fade_in, fade_out)),
                     false => 1.0,
                 };
                 frame.iter().map(move |&s| s * gain)
@@ -2219,6 +2462,10 @@ impl Engine {
         }
         // A range set again replaces any pause the last one scheduled.
         self.pause_at = None;
+        // A loop plays on, so the track it loops is not about to end.
+        if bounds.is_some() {
+            self.drop_incoming();
+        }
         let (Some(&(_, audible, duration, _)), Some(conv)) = (self.marks.front(), &self.conv)
         else {
             self.looping = None;

@@ -105,6 +105,7 @@ pub enum Message {
     Interp(playr_dsp::Interp),
     /// Tracks fade in and out over this long from now; zero for none.
     Fade(std::time::Duration),
+    Crossfade(std::time::Duration),
     /// `:tempo` asked for more than an octave from the track's tempo.
     TempoOutOfReach {
         bpm: f32,
@@ -216,6 +217,7 @@ pub fn text(message: &Message) -> String {
                 Task::Prune => "prune failed",
                 Task::Open => "could not open",
                 Task::FixTempo => "could not correct the tempo",
+                Task::Watch => "not watching the library",
             };
             format!("{what}: {error}")
         }
@@ -364,6 +366,11 @@ pub fn text(message: &Message) -> String {
         }
         Message::PreviewEnded => "preview ended".into(),
         Message::Interp(i) => format!("read heads: {}", i.name()),
+        Message::Crossfade(d) if d.is_zero() => "crossfade off: tracks join gaplessly".into(),
+        Message::Crossfade(d) => format!(
+            "each track overlaps the next by {} s, where they share a sample rate",
+            (d.as_secs_f64() * 100.0).round() / 100.0
+        ),
         Message::Fade(d) if d.is_zero() => "fades off: tracks play as they are".into(),
         Message::Fade(d) => format!(
             "each track fades in and out over {} s",
@@ -619,6 +626,7 @@ fn refusal_text(refusal: &Refusal) -> String {
         Refusal::NoLibraryPath => "no library file to scan into".into(),
         Refusal::NotADirectory(path) => format!("not a directory: {}", home_as_tilde(path)),
         Refusal::ScanRunning => "a scan or prune is already running".into(),
+        Refusal::NoTag(tag) => format!("the track has no {tag} tag"),
         Refusal::AnalysisRunning => "an analysis is already running".into(),
         Refusal::NoRoots => "no directories recorded; :scan DIR adds one".into(),
         Refusal::NoMarkHere => "no mark selected; { and } select one".into(),

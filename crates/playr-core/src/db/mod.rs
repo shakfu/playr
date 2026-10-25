@@ -4,6 +4,7 @@
 //! skips files whose `(mtime, size)` are unchanged, avoiding a tag re-read.
 
 pub mod analysis;
+pub mod dedupe;
 pub mod loops;
 pub mod query;
 pub mod sql;
@@ -62,14 +63,11 @@ impl Track {
     }
 }
 
-/// Default library path: `$XDG_DATA_HOME/playr/library.db`, else `~/.local/share`.
+/// Default library path, under [`crate::paths::data_dir`]; `./playr` without a home.
 pub fn default_path() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::home_dir().map(|h| h.join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("playr").join("library.db")
+    crate::paths::data_dir(&crate::paths::Env::current())
+        .unwrap_or_else(|| PathBuf::from("playr"))
+        .join(crate::paths::LIBRARY)
 }
 
 /// Opens (creating if needed) the library at `path` and applies the schema.
@@ -164,6 +162,22 @@ fn init(conn: &Connection) -> Result<()> {
         }
     }
     loops::migrate_slots(&tx)?;
+    // CAF and Matroska rows from before their tags and lengths were read
+    // are read again by the next scan, once: their files have not changed,
+    // so a scan would skip them. A state key, as no schema version is needed.
+    let reread: bool = tx.query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM state WHERE key = 'reread_caf_mkv')",
+        [],
+        |r| r.get(0),
+    )?;
+    if reread {
+        tx.execute_batch(
+            "UPDATE tracks SET mtime = 0
+               WHERE lower(substr(path, -4)) IN ('.caf', '.mkv', '.mka')
+                  OR lower(substr(path, -5)) = '.webm';
+             INSERT INTO state (key, value) VALUES ('reread_caf_mkv', '1');",
+        )?;
+    }
     if old_index || old_triggers {
         // Updating every row in place fires the new trigger, which indexes it.
         tx.execute_batch("UPDATE tracks SET path = path;")?;
@@ -440,6 +454,10 @@ pub fn forget_root(conn: &Connection, root: &Path) -> Result<Option<Pruned>> {
     )?;
     tx.execute(
         "DELETE FROM hot_cues WHERE substr(path, 1, length(?1)) = ?1",
+        [&prefix],
+    )?;
+    tx.execute(
+        "DELETE FROM excluded WHERE substr(path, 1, length(?1)) = ?1",
         [&prefix],
     )?;
     let mut marks = 0;

@@ -72,6 +72,8 @@ fn main() -> eframe::Result {
                 "playr",
                 options,
                 Box::new(move |cc| {
+                    // Before the first frame: egui sets fonts at the next one.
+                    cc.egui_ctx.set_fonts(playr_gui::fonts::definitions());
                     let ctx = cc.egui_ctx.clone();
                     let mut model = Model::waking(
                         start.conn,
@@ -87,9 +89,14 @@ fn main() -> eframe::Result {
                 }),
             )
         }
-        Err(errors) => {
-            eframe::run_native("playr", options, Box::new(|_| Ok(Box::new(Errors(errors)))))
-        }
+        Err(errors) => eframe::run_native(
+            "playr",
+            options,
+            Box::new(|cc| {
+                cc.egui_ctx.set_fonts(playr_gui::fonts::definitions());
+                Ok(Box::new(Errors(errors)))
+            }),
+        ),
     }
 }
 

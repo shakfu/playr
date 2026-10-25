@@ -637,6 +637,9 @@ fn fade_takes_seconds_or_off() {
     assert_eq!(lib("fade 2"), Ok(Action::Fade(secs(2.0))));
     assert_eq!(lib("fade 0.5"), Ok(Action::Fade(secs(0.5))));
     assert_eq!(lib("fade off"), Ok(Action::Fade(Duration::ZERO)));
+    assert_eq!(lib("crossfade 2"), Ok(Action::Crossfade(secs(2.0))));
+    assert_eq!(lib("crossfade off"), Ok(Action::Crossfade(Duration::ZERO)));
+    assert!(lib("crossfade 11").is_err());
     for bad in ["fade", "fade 11", "fade -1", "fade x"] {
         assert!(lib(bad).is_err(), "{bad:?} parsed");
     }

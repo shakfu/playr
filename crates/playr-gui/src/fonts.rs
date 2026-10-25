@@ -1,4 +1,7 @@
-//! System fonts for the scripts egui's own fonts lack, as CJK, Arabic or Thai.
+//! The window's fonts: egui's Ubuntu Light and Hack, five icons, and system
+//! fonts for the scripts those lack, as CJK, Arabic or Thai.
+//!
+//! egui's emoji fonts are left out; see [`definitions`].
 //!
 //! egui's fonts cover Latin, Greek and Cyrillic, and draw anything else as a
 //! box. When the library's text changes, the characters egui cannot draw are
@@ -10,6 +13,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use eframe::egui;
 use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
@@ -23,6 +27,47 @@ const QUERY: usize = 256;
 
 /// A font file, and the face in it for a collection.
 type Face = (PathBuf, u32);
+
+/// The fonts every frame starts from. Proportional text is Ubuntu Light,
+/// with Hack behind it for arrows such as the zoom button's U+2194, and the
+/// icons behind both: the transport's and egui's submenu arrow, U+23F5.
+/// Emoji in tags draw as boxes, since no system fallback here draws colour.
+pub fn definitions() -> egui::FontDefinitions {
+    use egui::{FontData, FontFamily, FontTweak};
+    let mut fonts = egui::FontDefinitions::empty();
+    for (name, data) in [
+        (
+            "Ubuntu-Light",
+            FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT),
+        ),
+        (
+            "Hack",
+            FontData::from_static(epaint_default_fonts::HACK_REGULAR),
+        ),
+        // egui draws its icon font at this scale.
+        (
+            "icons",
+            FontData::from_static(include_bytes!("../assets/fonts/playr-icons.ttf")).tweak(
+                FontTweak {
+                    scale: 0.90,
+                    ..Default::default()
+                },
+            ),
+        ),
+    ] {
+        fonts.font_data.insert(name.into(), Arc::new(data));
+    }
+    let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect();
+    fonts.families.insert(
+        FontFamily::Proportional,
+        names(&["Ubuntu-Light", "Hack", "icons"]),
+    );
+    fonts.families.insert(
+        FontFamily::Monospace,
+        names(&["Hack", "Ubuntu-Light", "icons"]),
+    );
+    fonts
+}
 
 /// What has been looked for, so a change to the library looks only for new characters.
 #[derive(Default)]
@@ -48,6 +93,14 @@ impl Fallbacks {
             chars.extend(text.chars().filter(|&c| !c.is_ascii() && !invisible(c)));
         }
         chars.retain(|c| !self.hopeless.contains(c));
+        // By charmap first: egui's `has_glyph` is false for what Hack draws,
+        // Hack holding the replacement glyph.
+        let bundled = [
+            epaint_default_fonts::UBUNTU_LIGHT,
+            epaint_default_fonts::HACK_REGULAR,
+        ]
+        .map(|bytes| skrifa::FontRef::new(bytes).map(|f| f.charmap()));
+        chars.retain(|&c| !bundled.iter().flatten().any(|map| map.map(c).is_some()));
         if chars.is_empty() {
             return;
         }
@@ -331,9 +384,25 @@ fn candidates(missing: &BTreeSet<char>) -> Vec<Face> {
 mod tests {
     use super::*;
 
+    /// The transport's icons, egui's submenu arrow and the zoom-all arrow.
+    /// Read from the charmaps: egui's `has_glyph` is false for whatever the
+    /// face holding its replacement glyph, here Hack, draws.
+    #[test]
+    fn the_bundled_fonts_draw_every_symbol_the_window_uses() {
+        let fonts = definitions();
+        let want = BTreeSet::from([
+            '\u{23F5}', '\u{23F8}', '\u{23EE}', '\u{23F9}', '\u{23ED}', '\u{2194}', 'a',
+        ]);
+        let mut found = BTreeSet::new();
+        for name in &fonts.families[&egui::FontFamily::Proportional] {
+            found.extend(covered(&fonts.font_data[name].font, 0, &want));
+        }
+        assert_eq!(found, want);
+    }
+
     /// egui's own Latin font, as a face on disk.
     fn latin(dir: &std::path::Path) -> Face {
-        let fonts = egui::FontDefinitions::default();
+        let fonts = definitions();
         let path = dir.join("latin.ttf");
         std::fs::write(&path, &*fonts.font_data["Ubuntu-Light"].font).unwrap();
         (path, 0)

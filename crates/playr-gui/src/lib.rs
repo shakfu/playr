@@ -7,7 +7,7 @@
 
 pub mod controls;
 mod dj;
-mod fonts;
+pub mod fonts;
 mod fx;
 pub mod keys;
 mod mixer;
@@ -204,9 +204,11 @@ impl Gui {
                 // As in the terminal: anything but an answer leaves the draft alone.
                 Input::Draft(_) => self.model.answer_draft(DraftAnswer::of_key(key)),
                 // Any key closes a list, as in the terminal.
-                Input::Help | Input::CommandHelp | Input::Roots(_) | Input::Info(_) => {
-                    self.model.set_input(Input::None)
-                }
+                Input::Help
+                | Input::CommandHelp
+                | Input::Roots(_)
+                | Input::Info(_)
+                | Input::Messages => self.model.set_input(Input::None),
                 _ => match self.model.keymap().lookup(key, self.model.view()).cloned() {
                     Some(action) => self.perform(action),
                     // An unbound key stays for egui, as Escape closing a menu.
@@ -301,10 +303,6 @@ impl Gui {
             ui.menu_button("View", |ui| {
                 items(ui, controls::VIEW_MENU, &mut chosen);
                 ui.separator();
-                if ui.button("Messages...").clicked() {
-                    self.messages = true;
-                    ui.close();
-                }
                 ui.menu_button("Theme", |ui| {
                     for control in controls::THEME_MENU {
                         if ui.radio(control.action == theme, control.label).clicked() {
@@ -635,6 +633,11 @@ impl Gui {
             }
             Input::Roots(roots) => self.roots_dialog(ctx, &roots),
             Input::Info(info) => self.info_dialog(ctx, &info),
+            // The Messages window has its own flag, so it stays open beside a prompt.
+            Input::Messages => {
+                self.messages = true;
+                self.model.set_input(Input::None);
+            }
             _ => {}
         }
     }

@@ -15,6 +15,7 @@ pub mod labels;
 pub mod loops;
 pub mod m3u;
 pub mod notice;
+pub mod paths;
 pub mod samples;
 pub mod scan;
 pub mod session;

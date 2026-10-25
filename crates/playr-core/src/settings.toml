@@ -1,7 +1,8 @@
 # playr's default settings.
 #
-# ~/.config/playr/settings.toml is read on top of these, so it only needs the
-# lines it changes. The format is described in README.md, under Configuration.
+# Your settings.toml, in ~/.config/playr on Linux, is read on top of these, so
+# it only needs the lines it changes. The format is described in docs/manual.md, under
+# Configuration.
 # The theme and key bindings are in crates/playr-app/src/keys.toml.
 
 # The master volume's fader position, in percent, 0 to 100; unset is 100.
@@ -16,6 +17,10 @@ speed = 0
 # Seconds each track fades in at its start and out at its end, 0 to 10; 0
 # plays tracks as they are, gapless. :fade changes it for the session.
 fade = 0
+# Seconds each track overlaps the next, 0 to 10, where the two share a sample
+# rate and channels; elsewhere they join gaplessly. At a join it replaces fade.
+# :crossfade changes it for the session.
+crossfade = 0
 # How readily :slice onsets finds hits, 0 to 1; higher finds more.
 onset_sensitivity = 0.5
 # The levels, in dBFS from -24 to -0.1, below which a soft clip passes the
@@ -40,6 +45,9 @@ slice_fade_out = 5
 slice_ot_file = false
 # After a scan, remove tracks whose files are gone, without asking.
 auto_prune = false
+# Rescan, 2 s after files under the library's directories stop changing.
+# Missing tracks are then pruned only with auto_prune; nothing asks.
+watch = false
 # After a scan, analyse what it added or found changed, in the background.
 # Without it, gains and tempos wait for `playr analyze` or `:analyze`.
 analyze_on_scan = false
@@ -85,9 +93,17 @@ persist = []
 convert-with-moss.enable = false
 convert-with-moss.path = ""
 
-# The window has room for the title first, and the page's columns are fixed
-# for now. A program's table wins over the keys above.
+# The window has room for the title first. A program's table wins over the
+# keys above; [server] columns set the page's, wider than a phone.
 [gui]
 columns = ["title", "artist", "album", "time"]
 # The transport's buttons as words, such as Prev and Play, not symbols.
 transport_text_buttons = false
+
+# playr-server's flags, which win over these; docs/guide-server.md has them.
+# [server]
+# listen = "127.0.0.1:8080"
+# open = false
+# hosts = []
+# osc = "0.0.0.0:9000"
+# osc_reply = "ipad.local:9001"

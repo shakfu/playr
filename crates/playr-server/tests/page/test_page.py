@@ -3,7 +3,8 @@
     make page-test
 
 The server runs on a library of generated WAV files, at volume 0, with its
-data and settings in a temporary directory. It opens the default audio device.
+data and settings in a temporary directory. It plays to no device, `--device
+none`, so it runs where there is none, as on CI runners.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ def server(tmp_path_factory):
     subprocess.run([target / "playr", "scan", str(music)], env=env, check=True, capture_output=True)
     port = free_port()
     proc = subprocess.Popen(
-        [target / "playr-server", "--listen", f"127.0.0.1:{port}"],
+        [target / "playr-server", "--listen", f"127.0.0.1:{port}", "--device", "none"],
         env=env, stdout=subprocess.PIPE, text=True,
     )
     # Into a pipe the server prints the token as `...`; it is written beside
@@ -183,6 +184,31 @@ def test_a_selection_is_saved_and_the_playlist_deleted(open_page):
     assert errors == []
 
 
+def test_a_selection_row_is_dragged_to_a_new_place(open_page):
+    page, errors = open_page(viewport={"width": 1280, "height": 800})
+    for title in ["One", "Two", "Three"]:
+        page.locator(".row", has_text=title).locator("[data-row-command]").click()
+    until(page, lambda s: s["counts"]["selection"] == 3, "three selected")
+    page.click(".tab[data-view=selection]")
+    first = page.locator("#row-0")
+    expect(first).to_contain_text("One")
+    box = first.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x, y + box["height"], steps=4)
+    page.mouse.move(x, y + 2 * box["height"], steps=4)
+    page.mouse.up()
+    # One moves two places down, and the cursor goes with it.
+    until(page, lambda s: s["cursors"]["selection"] == 2, "moved")
+    expect(page.locator("#row-2")).to_contain_text("One")
+    expect(page.locator("#row-0")).to_contain_text("Two")
+    page.click("#selection-bar [data-command=clear]")
+    page.click("#yes")
+    until(page, lambda s: s["counts"]["selection"] == 0, "cleared")
+    assert errors == []
+
+
 def test_search_and_the_command_line(open_page):
     page, errors = open_page(viewport={"width": 1280, "height": 800})
     page.focus("#list")
@@ -256,4 +282,19 @@ def test_a_phone_taps_to_play_and_opens_row_menus(open_page):
     until(page, lambda s: s["input"]["kind"] == "confirm", "clear question")
     page.click("#yes")
     until(page, lambda s: s["counts"]["selection"] == 0, "cleared")
+    assert errors == []
+
+
+def test_rows_show_the_columns_setting_wider_than_a_phone(open_page):
+    page, errors = open_page(viewport={"width": 1280, "height": 800})
+    first = page.locator("#row-0")
+    expect(first).to_have_class(re.compile(r"\bcols\b"))
+    # The page's settings name no columns, so the defaults: artist, album, title, time.
+    expect(first.locator("span")).to_have_count(6)
+    page.evaluate("call('/command', 'columns title path')")
+    until(page, lambda s: [c["name"] for c in s["columns"]] == ["title", "path"], "new columns")
+    expect(page.locator("#row-0 span").nth(3)).to_contain_text("/music/")
+    expect(page.locator("#row-0 span")).to_have_count(4)
+    page.evaluate("call('/command', 'columns artist album title time')")
+    until(page, lambda s: len(s["columns"]) == 4, "columns back")
     assert errors == []

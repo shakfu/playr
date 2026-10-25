@@ -264,7 +264,7 @@ impl Errors<'_> {
 
 - The defaults are settings files too: `crates/playr-core/src/settings.toml` and `crates/playr-app/src/keys.toml`.
 
-- `settings::default_path` gives `$XDG_CONFIG_HOME/playr/settings.toml`, else `~/.config/playr/settings.toml`.
+- `settings::default_path` and `db::default_path` take their directories from `paths`: XDG on Linux, Application Support on macOS, `%APPDATA%` and `%LOCALAPPDATA%` on Windows, with the old XDG files used until the new place holds one.
 
 ## playr-app
 

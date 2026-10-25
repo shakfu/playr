@@ -28,6 +28,8 @@ lofty = "0.25.1"
 walkdir.workspace = true
 hound.workspace = true
 toml.workspace = true
+# `watch`: the library roots, through inotify, FSEvents or ReadDirectoryChangesW.
+notify = "8.2"
 
 [dev-dependencies]
 tempfile.workspace = true

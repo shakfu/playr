@@ -36,6 +36,7 @@ struct Case<'a> {
     playlists: &'a [Playlist],
     input: &'a Input,
     message: Option<&'a str>,
+    log: Option<&'a std::collections::VecDeque<(std::time::Instant, String)>>,
     width: u16,
     height: u16,
     /// Cursor row in each list; the first row when unset.
@@ -65,6 +66,7 @@ impl<'a> Case<'a> {
             playlists: &[],
             input: &Input::None,
             message: None,
+            log: None,
             width: 100,
             height: 20,
             selected: None,
@@ -116,6 +118,11 @@ impl<'a> Case<'a> {
 
     fn input(mut self, v: &'a Input) -> Self {
         self.input = v;
+        self
+    }
+
+    fn log(mut self, v: &'a std::collections::VecDeque<(std::time::Instant, String)>) -> Self {
+        self.log = Some(v);
         self
     }
 
@@ -210,6 +217,7 @@ impl<'a> Case<'a> {
             bpm: self.bpm,
             help_scroll: self.help_scroll,
             message: self.message,
+            log: self.log,
             colour: self.colour,
             theme: self.theme,
             extensions: self.extensions,
@@ -693,6 +701,38 @@ fn a_message_shares_the_bottom_line_with_the_indicators() {
         "message missing: {last:?}"
     );
     assert!(last.contains("? help"), "indicators missing: {last:?}");
+}
+
+#[test]
+fn a_message_too_wide_for_the_bottom_line_ends_in_dots() {
+    let long = "The preset has 40 regions but the device takes at most 24, so 16 are left out";
+    let joined = Case::new(View::Library, &stopped())
+        .message(long)
+        .size(100, 20)
+        .text();
+    let last = joined.lines().rev().find(|l| !l.trim().is_empty()).unwrap();
+    assert!(last.contains("The preset has 40 regions"), "{last:?}");
+    assert!(last.contains("..."), "a cut message says so: {last:?}");
+    assert!(!last.contains("left out"), "{last:?}");
+}
+
+#[test]
+fn messages_list_the_log_newest_first() {
+    let now = std::time::Instant::now();
+    let log: std::collections::VecDeque<_> = [
+        (now, "first said".to_string()),
+        (now, "then the long warning with at most 24".to_string()),
+    ]
+    .into();
+    let joined = Case::new(View::Library, &stopped())
+        .input(&Input::Messages)
+        .log(&log)
+        .size(100, 20)
+        .text();
+    assert!(joined.contains("Messages, newest first"), "{joined}");
+    let newest = joined.find("at most 24").expect("whole message shown");
+    let oldest = joined.find("first said").expect("older message shown");
+    assert!(newest < oldest, "{joined}");
 }
 
 #[test]

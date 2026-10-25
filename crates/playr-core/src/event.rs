@@ -75,6 +75,9 @@ pub enum Event {
         seen: usize,
         added: usize,
     },
+    /// Files under the library's roots changed, and have been still for
+    /// [`crate::session::WATCH_QUIET`]. Sent only while watching.
+    FilesChanged,
     /// A scan of `dir` finished, or of every recorded root when `dir` is
     /// `None`. The session reads the library again once told with
     /// `Session::scanned`.

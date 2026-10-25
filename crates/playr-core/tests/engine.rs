@@ -412,6 +412,30 @@ fn the_default_output_device_plays() {
     );
 }
 
+/// `none` names no device: playback runs in real time and is heard nowhere,
+/// on a machine with no audio as on any other.
+#[test]
+fn the_none_device_plays_in_real_time() {
+    let player = Player::new(Some(playr_core::audio::output::NONE)).unwrap();
+    assert_eq!(player.device().map(|d| d.id.as_str()), Some("none"));
+    let dir = tempfile::tempdir().unwrap();
+    let track = dir.path().join("a.wav");
+    silence(&track, 44100, 30.0);
+    let started = Instant::now();
+    player.send(Cmd::Play(vec![track], 0));
+    let deadline = started + Duration::from_secs(15);
+    while player.position() < Duration::from_millis(300) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(player.status().state, State::Playing);
+    let (pos, took) = (player.position(), started.elapsed());
+    assert!(pos >= Duration::from_millis(300), "did not play: {pos:?}");
+    assert!(
+        pos <= took + Duration::from_millis(100),
+        "{pos:?} in {took:?}"
+    );
+}
+
 #[test]
 fn playing_an_empty_queue_stops() {
     let player = player();
@@ -1024,4 +1048,72 @@ fn a_fade_ramps_each_track_in_and_out() {
         .map(|w| (w[1] - w[0]).abs())
         .fold(0.0, f32::max);
     assert!(step < 0.01, "a step of {step}");
+}
+
+/// With a crossfade set, a track's last stretch overlaps the next one's
+/// first, each on an equal-power curve, so the two play shorter than end to
+/// end, and the track changes where the overlap starts.
+#[test]
+fn a_crossfade_overlaps_the_end_of_one_track_with_the_start_of_the_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.wav"), dir.path().join("b.wav"));
+    levels(&a, 8000, &[(2.0, 0.5)]);
+    levels(&b, 8000, &[(2.0, -0.5)]);
+    let (player, control) = fake_player();
+    player.send(Cmd::SetCrossfade(Duration::from_millis(500)));
+    player.send(Cmd::Play(vec![a, b], 0));
+    wait_for(&player, |s| s.index == 1);
+    // The change is reported at the overlap's start, 1.5 s in.
+    let at = player.position();
+    assert!(at < Duration::from_millis(400), "b at {at:?} when reported");
+    wait_for(&player, |s| s.state == State::Stopped);
+    let played = control.played.lock().unwrap();
+    let left: Vec<f32> = played.iter().step_by(2).copied().collect();
+    let first = left.iter().position(|&s| s != 0.0).unwrap();
+    let last = left.iter().rposition(|&s| s != 0.0).unwrap();
+    let left = &left[first..=last];
+    let (n, start) = (4_000, 12_000);
+    assert!(
+        (left.len() as i64 - 28_000).abs() <= 1,
+        "{} frames",
+        left.len()
+    );
+    assert!((left[start - 1] - 0.5).abs() < 1e-3, "{}", left[start - 1]);
+    // Halfway, cos and sin are equal, and the two levels cancel.
+    assert!(left[start + n / 2].abs() < 1e-3, "{}", left[start + n / 2]);
+    let quarter = (std::f32::consts::FRAC_PI_8.cos() - std::f32::consts::FRAC_PI_8.sin()) * 0.5;
+    assert!(
+        (left[start + n / 4] - quarter).abs() < 2e-3,
+        "{}",
+        left[start + n / 4]
+    );
+    assert!((left[start + n] + 0.5).abs() < 1e-3, "{}", left[start + n]);
+    assert!((left[24_000] + 0.5).abs() < 1e-3);
+    let step = left
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0, f32::max);
+    assert!(step < 0.01, "a step of {step}");
+}
+
+/// Tracks at different rates cannot share a stream, so they join as they
+/// would with no crossfade: whole, and without a fade out.
+#[test]
+fn a_crossfade_between_sample_rates_leaves_the_join_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.wav"), dir.path().join("b.wav"));
+    levels(&a, 8000, &[(1.0, 0.5)]);
+    levels(&b, 16000, &[(1.0, -0.5)]);
+    let (player, control) = fake_player();
+    player.send(Cmd::SetCrossfade(Duration::from_millis(500)));
+    player.send(Cmd::Play(vec![a, b], 0));
+    wait_for(&player, |s| s.state == State::Stopped && s.index == 1);
+    let played = control.played.lock().unwrap();
+    let left: Vec<f32> = played.iter().step_by(2).copied().collect();
+    let first = left.iter().position(|&s| s != 0.0).unwrap();
+    // a plays to its end at full level.
+    assert!(left[first..first + 8_000]
+        .iter()
+        .all(|&s| (s - 0.5).abs() < 1e-3));
+    assert!(left.iter().any(|&s| (s + 0.5).abs() < 1e-3), "b played");
 }

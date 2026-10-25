@@ -232,7 +232,7 @@ Run on 2026-10-01 with version 20.3.0 on macOS, for the formats added to `FORMAT
 | `s2400` | `break/break.kit`, `break/*.wav` | pads, by name | in each WAV's `smpl` chunk | made 16-bit |
 | `polyendtracker` | `break.pti` | **the first only** | | made 16-bit |
 
-- **The OP-XY keeps frame counts from before resampling.** A 48 or 96 kHz slice is made 44.1 kHz, but `patch.json` keeps its old `framecount`, `sample.end` and `loop.end`: 24,000 or 48,000 for 22,050 frames. At 44.1 kHz they match. Test X6 in `docs/dev/device_tests.md` checks what the device does; `TODO.md` has it, and the upstream report is drafted in `docs/dev/issues/convertwithmoss-issue.md`.
+- **The OP-XY keeps frame counts from before resampling.** A 48 or 96 kHz slice is made 44.1 kHz, but `patch.json` keeps its old `framecount`, `sample.end` and `loop.end`: 24,000 or 48,000 for 22,050 frames. At 44.1 kHz they match. Since 2026-10-25 `:convert opxy` rewrites them from each WAV's frame count. The upstream report is drafted in `docs/dev/issues/convertwithmoss-issue.md`; test X6 in `docs/dev/device_tests.md` would show what the device made of the old counts.
 
 - **The OP-XY takes 24 zones.** A 40-slice kit, converted on 2026-10-01, kept slices 1-24 on keys 36-59. ConvertWithMoss says so on its output, unmarked among the progress: "The preset has 40 regions but the device plays at most 24, the rest is dropped." It exits 0. `:convert` shows such lines in its message since that day; before, a conversion that dropped slices said only "converted to". ConvertWithMoss's source, `OpXyCreator.java`, holds the limit as `MAX_REGIONS`.
 

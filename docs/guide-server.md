@@ -80,11 +80,11 @@ location / {
 
 ## The page
 
-- **Desktop:** click a row to move the cursor, double-click to play, right-click for its menu. Your key bindings work, `:` opens the command line with Tab completion, and `?` lists the keys. Shift-click on the progress bar adds a mark there.
+- **Desktop:** click a row to move the cursor, double-click to play, right-click for its menu. Your key bindings work, `:` opens the command line with Tab completion, and `?` lists the keys. Shift-click on the progress bar adds a mark there. Drag a selection or queue row up or down to move it.
 
 - **Tablet:** the same, without the album column.
 
-- **Phone:** tap a row to move the cursor, tap it again to play. `...` opens a row's menu, `-` or `+` selects a track, and More shows volume and its mute, speed and mode.
+- **Phone:** tap a row to move the cursor, tap it again to play. `...` opens a row's menu, `-` or `+` selects a track, and More shows volume and its mute, speed and mode. In the selection and queue, drag a row by its `::` grip to move it.
 
 ## OSC and TouchOSC
 
@@ -94,7 +94,7 @@ playr-server --listen 0.0.0.0:8080 --osc 0.0.0.0:9000 --osc-reply 192.168.1.30:9
 
 - `--osc` receives OSC on that address. It controls playback and plays playlists by index, oldest first. OSC has no authentication.
 
-- `--osc-reply` sends title, position, level and the rest to that address, such as the tablet's.
+- `--osc-reply` sends title, position, level and the rest to that address, such as the tablet's. The host may be a name, as `ipad.local:9001`, resolved once at startup, to its IPv4 address where it has one. A `.local` name resolves on Linux only with mDNS in the name service, as Avahi's `nss-mdns` adds.
 
 - `playr-server osc-schema` prints every address as JSON.
 
@@ -156,7 +156,18 @@ systemctl --user start playr-server
 | `--open` | off | serve the page without a token |
 | `--host NAME` | none | a name the page may be opened by; repeatable |
 | `--osc ADDR:PORT` | off | receive OSC |
-| `--osc-reply ADDR:PORT` | off | send the state as OSC |
-| `--db PATH` | `~/.local/share/playr/library.db` | the library |
-| `--settings PATH` | `~/.config/playr/settings.toml` | the settings |
+| `--osc-reply HOST:PORT` | off | send the state as OSC |
+| `--db PATH` | `~/.local/share/playr/library.db` on Linux | the library |
+| `--settings PATH` | `~/.config/playr/settings.toml` on Linux | the settings |
 | `--device ID` | the default device | the output device, as `playr devices` lists it |
+
+`[server]` in `settings.toml` sets the first five, so the systemd unit need not; a flag wins over its setting. `--host` given once replaces the setting's list, and `--open` cannot turn off `open = true`.
+
+```toml
+[server]
+listen = "0.0.0.0:8080"
+open = false
+hosts = ["music.example.com"]
+osc = "0.0.0.0:9000"
+osc_reply = "ipad.local:9001"
+```

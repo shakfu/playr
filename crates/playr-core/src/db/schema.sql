@@ -115,6 +115,13 @@ CREATE TABLE IF NOT EXISTS roots (
   path TEXT NOT NULL PRIMARY KEY
 );
 
+-- Paths a scan passes over: copies `playr dedupe` dropped as byte-identical
+-- to a kept row. Compatible with older libraries: CREATE IF NOT EXISTS needs
+-- no version bump.
+CREATE TABLE IF NOT EXISTS excluded (
+  path TEXT NOT NULL PRIMARY KEY
+);
+
 -- The track playing when playr last closed, so it can be offered again. One
 -- row, keyed by a constant. Compatible with older libraries: CREATE IF NOT
 -- EXISTS needs no version bump.

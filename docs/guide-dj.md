@@ -1,6 +1,6 @@
 # DJing with playr
 
-playr has two decks and a mixer. Each deck plays a library track at its own rate. A beat grid per track lets one deck follow the other's tempo and phase. The window shows them in the **DJ** tab; the terminal has the `:dj` commands only, listed under [DJ](../README.md#dj) in the README. `:dj` alone lists them all. This page explains the tab and how to mix with it. The design is in [`docs/dev/dj-engine.md`](https://github.com/shakfu/playr/blob/main/docs/dev/dj-engine.md).
+playr has two decks and a mixer. Each deck plays a library track at its own rate. A beat grid per track lets one deck follow the other's tempo and phase. The window shows them in the **DJ** tab; the terminal has the `:dj` commands only, listed under [DJ](manual.md#dj) in the manual. `:dj` alone lists them all. This page explains the tab and how to mix with it. The design is in [`docs/dev/dj-engine.md`](https://github.com/shakfu/playr/blob/main/docs/dev/dj-engine.md).
 
 ## Before you start
 
@@ -191,7 +191,7 @@ The **mixer**:
 
 - **Curve Smooth, Sharp.** Smooth keeps the level constant across the crossfader's travel, for blends. Sharp holds both decks at full level and fades one out only over the last 5% of the travel, for cuts.
 
-The main mix passes a soft clip, which leaves levels under `dj_knee` in `settings.toml`, -0.9 dBFS by default, untouched. playr's master volume and the decks' fader in the mixer apply after the clip, to the main mix only. The headphone cue has its own fader, `:mix headphones`, which the master leaves alone; see Mixer in the README.
+The main mix passes a soft clip, which leaves levels under `dj_knee` in `settings.toml`, -0.9 dBFS by default, untouched. playr's master volume and the decks' fader in the mixer apply after the clip, to the main mix only. The headphone cue has its own fader, `:mix headphones`, which the master leaves alone; see Mixer in the manual.
 
 ### Delay and reverb
 

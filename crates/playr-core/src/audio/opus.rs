@@ -64,6 +64,29 @@ fn output_gain(extra_data: Option<&[u8]>) -> f32 {
     }
 }
 
+/// The multistream layout of a channel mapping family 1 header: stream
+/// count, coupled stream count, and each output channel's stream channel,
+/// from offset 19. `None` for family 0, mono or stereo in one stream.
+fn multistream(extra_data: Option<&[u8]>) -> Option<(u8, u8, Vec<u8>)> {
+    let d = opus_head(extra_data)?;
+    let channels = d[9] as usize;
+    (d[18] == 1 && d.len() >= 21 + channels).then(|| (d[19], d[20], d[21..21 + channels].to_vec()))
+}
+
+/// For each plane Symphonia orders by position, as WAVE does, the channel of
+/// libopus's output in Vorbis order that fills it; RFC 7845 section 5.1.1.2
+/// gives that order. FFmpeg's `ff_vorbis_channel_layout_offsets`.
+const VORBIS_TO_WAVE: [&[usize]; 8] = [
+    &[0],
+    &[0, 1],
+    &[0, 2, 1],
+    &[0, 1, 2, 3],
+    &[0, 2, 1, 3, 4],
+    &[0, 2, 1, 5, 3, 4],
+    &[0, 2, 1, 6, 5, 3, 4],
+    &[0, 2, 1, 7, 5, 6, 3, 4],
+];
+
 /// libopus decoder state, marked `Sync`.
 ///
 /// `opus::Decoder` declares `Send` but not `Sync`, while Symphonia's
@@ -72,10 +95,30 @@ fn output_gain(extra_data: Option<&[u8]>) -> f32 {
 /// (`get_nb_samples`) hands the decoder to libopus as a `const` pointer and only
 /// parses the packet. A shared `&Decoder` therefore cannot reach mutable libopus
 /// state from any thread.
-struct SyncDecoder(opus::Decoder);
+enum SyncDecoder {
+    One(opus::Decoder),
+    /// Surround: several streams, each mono or a coupled pair.
+    Multi(opus::MSDecoder),
+}
 
-// SAFETY: see the type comment above.
+// SAFETY: see the type comment above; `MSDecoder` is the same shape.
 unsafe impl Sync for SyncDecoder {}
+
+impl SyncDecoder {
+    fn decode_float(&mut self, packet: &[u8], out: &mut [f32]) -> opus::Result<usize> {
+        match self {
+            SyncDecoder::One(d) => d.decode_float(packet, out, false),
+            SyncDecoder::Multi(d) => d.decode_float(packet, out, false),
+        }
+    }
+
+    fn reset_state(&mut self) -> opus::Result<()> {
+        match self {
+            SyncDecoder::One(d) => d.reset_state(),
+            SyncDecoder::Multi(d) => d.reset_state(),
+        }
+    }
+}
 
 pub struct OpusDecoder {
     inner: SyncDecoder,
@@ -88,6 +131,8 @@ pub struct OpusDecoder {
     skip_left: usize,
     /// The header's output gain as a factor; 1.0 leaves samples untouched.
     gain: f32,
+    /// The decoder's channel for each plane; see [`VORBIS_TO_WAVE`].
+    order: &'static [usize],
 }
 
 impl OpusDecoder {
@@ -96,19 +141,29 @@ impl OpusDecoder {
             Some(ch) => ch.count(),
             None => return unsupported_error("opus: channel layout is missing"),
         };
-        // libopus handles mono and stereo here. Surround Opus uses the
-        // multistream extension, which is out of scope here.
-        if channels == 0 || channels > 2 {
-            return unsupported_error("opus: only mono and stereo are supported");
+        if channels == 0 || channels > VORBIS_TO_WAVE.len() {
+            return unsupported_error("opus: 1 to 8 channels are supported");
         }
-
-        let layout = match channels {
-            1 => opus::Channels::Mono,
-            _ => opus::Channels::Stereo,
+        let failed = |_| symphonia::core::errors::Error::Unsupported("opus: decoder setup failed");
+        let (inner, order) = match multistream(params.extra_data.as_deref()) {
+            Some((streams, coupled, mapping)) if mapping.len() == channels => (
+                SyncDecoder::Multi(
+                    opus::MSDecoder::new(OPUS_RATE, streams, coupled, &mapping).map_err(failed)?,
+                ),
+                VORBIS_TO_WAVE[channels - 1],
+            ),
+            _ if channels > 2 => {
+                return unsupported_error("opus: surround without a multistream header")
+            }
+            _ => {
+                let layout = match channels {
+                    1 => opus::Channels::Mono,
+                    _ => opus::Channels::Stereo,
+                };
+                let one = opus::Decoder::new(OPUS_RATE, layout).map_err(failed)?;
+                (SyncDecoder::One(one), VORBIS_TO_WAVE[channels - 1])
+            }
         };
-        let inner = SyncDecoder(opus::Decoder::new(OPUS_RATE, layout).map_err(|_| {
-            symphonia::core::errors::Error::Unsupported("opus: decoder setup failed")
-        })?);
 
         // Reuse the layout the demuxer reported rather than inventing one.
         let spec = AudioSpec::new(OPUS_RATE, params.channels.clone().unwrap());
@@ -123,6 +178,7 @@ impl OpusDecoder {
             channels,
             skip_left: pre_skip(params.extra_data.as_deref()),
             gain: output_gain(params.extra_data.as_deref()),
+            order,
             params,
         })
     }
@@ -130,8 +186,7 @@ impl OpusDecoder {
     fn decode_inner(&mut self, packet: &PacketRef<'_>) -> Result<()> {
         let frames = self
             .inner
-            .0
-            .decode_float(packet.data, &mut self.scratch, false)
+            .decode_float(packet.data, &mut self.scratch)
             .map_err(|_| symphonia::core::errors::Error::DecodeError("opus: malformed packet"))?;
 
         if frames > MAX_FRAME {
@@ -141,15 +196,16 @@ impl OpusDecoder {
         self.buf.clear();
         self.buf.render_uninit(Some(frames));
 
-        // libopus returns interleaved samples; Symphonia buffers are planar.
+        // libopus returns interleaved samples in Vorbis order; Symphonia
+        // buffers are planar, by position.
         let channels = self.channels;
-        for ch in 0..channels {
+        for (ch, &from) in self.order.iter().enumerate() {
             let plane = match self.buf.plane_mut(ch) {
                 Some(p) => p,
                 None => return decode_error("opus: audio buffer has too few planes"),
             };
             for (i, sample) in plane.iter_mut().enumerate().take(frames) {
-                *sample = self.scratch[i * channels + ch] * self.gain;
+                *sample = self.scratch[i * channels + from] * self.gain;
             }
         }
 
@@ -174,7 +230,7 @@ impl AudioDecoder for OpusDecoder {
     fn reset(&mut self) {
         // Failure here would mean the decoder handle is gone, which cannot
         // happen while `self` is alive.
-        let _ = self.inner.0.reset_state();
+        let _ = self.inner.reset_state();
         // Reset follows a seek, so the stream start is behind us and the
         // pre-skip has either been applied already or no longer applies.
         self.skip_left = 0;

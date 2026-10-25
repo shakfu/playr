@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use playr_core::audio::eq::Band;
-use playr_core::audio::{Cmd, Player, State, Status};
+use playr_core::audio::{Cmd, Mode, Player, State, Status};
 use playr_core::columns::{Column, Measures};
 use playr_core::db::query::{Mark, Playlist};
 use playr_core::db::Track;
@@ -74,6 +74,8 @@ pub enum Input {
     Roots(Vec<PathBuf>),
     /// What analysis measured about one track is open.
     Info(TrackInfo),
+    /// The messages since start are open; [`Model::log`] holds them.
+    Messages,
     /// A `:` command being typed.
     Command(CommandLine),
 }
@@ -193,6 +195,12 @@ pub struct Model {
     onset_sensitivity: f32,
     /// After a scan, remove missing tracks without asking.
     auto_prune: bool,
+    /// The `watch` setting: rescan as files under the roots change.
+    watch: bool,
+    /// The rescan a watched change started, whose missing tracks ask nothing.
+    watched_scan: Option<playr_core::event::JobId>,
+    /// Files changed again while a scan ran; rescan once it ends.
+    rescan_pending: bool,
     analyze_on_scan: bool,
     /// The columns a track list shows, from the settings or `:columns`.
     columns: Vec<Column>,
@@ -316,6 +324,9 @@ impl Model {
             keys: config.keys,
             onset_sensitivity: config.settings.onset_sensitivity,
             auto_prune: config.settings.auto_prune,
+            watch: config.settings.watch,
+            watched_scan: None,
+            rescan_pending: false,
             analyze_on_scan: config.settings.analyze_on_scan,
             columns: values.columns.clone(),
             events,
@@ -353,6 +364,9 @@ impl Model {
             .session
             .send(Cmd::SetCents(config.settings.speed * 100));
         model.session.send(Cmd::SetFade(config.settings.fade));
+        model
+            .session
+            .send(Cmd::SetCrossfade(config.settings.crossfade));
         for (band, db) in Band::ALL.into_iter().zip(values.eq) {
             model.session.send(Cmd::SetEq(band, db));
         }
@@ -372,6 +386,14 @@ impl Model {
             // Only when nothing was handed over: a command line that named
             // tracks has already said what to play.
             model.input = Input::Confirm(Confirm::Resume { path, at, queue });
+        }
+        if model.watch {
+            if let Err(error) = model.session.watch(true) {
+                model.notify(Notice::Failed {
+                    task: Task::Watch,
+                    error,
+                });
+            }
         }
         model.reload();
         model
@@ -988,6 +1010,7 @@ impl Model {
                 Event::TrackChanged { .. } => {
                     self.session.drop_played();
                     self.remember_position();
+                    self.read_next_ahead();
                 }
                 Event::StateChanged(_) => {}
                 // Only the latest statement's: an earlier one was replaced.
@@ -1167,8 +1190,19 @@ impl Model {
                         }),
                     }
                 }
-                Event::Scanned { dir, result, .. } => {
+                Event::FilesChanged => self.rescan_watched(),
+                Event::Scanned { job, dir, result } => {
                     self.session.scanned();
+                    let watched = self.watched_scan.take_if(|j| *j == job).is_some();
+                    if self.watch {
+                        // A scan of a new directory adds a root to watch.
+                        if let Err(error) = self.session.watch(true) {
+                            self.notify(Notice::Failed {
+                                task: Task::Watch,
+                                error,
+                            });
+                        }
+                    }
                     self.choose_first_rows();
                     match result {
                         Ok(report) => {
@@ -1188,7 +1222,8 @@ impl Model {
                                     Err(refusal) => self.notify(refusal),
                                 }
                             }
-                            if missing > 0 {
+                            // Nobody asked for a watched rescan, so it asks nothing.
+                            if missing > 0 && (!watched || self.auto_prune) {
                                 after_missing(self, dir, unavailable == 0);
                             }
                         }
@@ -1196,6 +1231,9 @@ impl Model {
                             task: Task::Scan,
                             error,
                         }),
+                    }
+                    if std::mem::take(&mut self.rescan_pending) {
+                        self.rescan_watched();
                     }
                 }
                 Event::Pruned { dir, result, .. } => {
@@ -1445,6 +1483,7 @@ impl Frontend for Model {
 
     fn set_view(&mut self, view: View) {
         self.view = view;
+        self.read_next_ahead();
         // The queue opens on its first row: the track playing, if queued.
         if view == View::Queue && self.cursors.queue.is_none() && !self.queue.is_empty() {
             self.cursors.queue = Some(0);
@@ -1530,6 +1569,7 @@ impl Frontend for Model {
             Presentation::KeyList => self.input = Input::Help,
             Presentation::CommandList => self.input = Input::CommandHelp,
             Presentation::RootList => self.input = Input::Roots(self.session.roots()),
+            Presentation::MessageList => self.input = Input::Messages,
             Presentation::TrackInfo => {
                 self.input = match self.info_for_cursor() {
                     Some(info) => Input::Info(info),
@@ -1603,6 +1643,36 @@ fn master(config: &Config) -> f32 {
 /// could not, `auto_prune` steps aside and the question is asked instead: an
 /// unmounted drive counts every track under it as missing, and nobody is
 /// watching a machine that prunes on its own.
+impl Model {
+    /// In the sampler, reads the next track's peaks ahead, so its waveform
+    /// shows at once when it plays. Only the next: the cache holds about six
+    /// tracks, and a shuffle's next is not known.
+    fn read_next_ahead(&mut self) {
+        if self.view != View::Sampler {
+            return;
+        }
+        let status = self.session.player().status();
+        let next = match status.mode {
+            Mode::Normal => status.index + 1,
+            Mode::Repeat if !status.queue.is_empty() => (status.index + 1) % status.queue.len(),
+            _ => return,
+        };
+        if let Some(track) = status.queue.get(next) {
+            self.session.read_ahead(track.clone());
+        }
+    }
+
+    /// Rescans for a watched change, or once the scan running ends.
+    fn rescan_watched(&mut self) {
+        match self.session.rescan() {
+            Ok(job) => self.watched_scan = Some(job),
+            Err(Refusal::ScanRunning) => self.rescan_pending = true,
+            // No roots or no library: nothing being watched either.
+            Err(_) => {}
+        }
+    }
+}
+
 fn after_missing(model: &mut Model, dir: Option<PathBuf>, read: bool) {
     if model.session.check_prune(dir.as_deref()).is_err() {
         return;

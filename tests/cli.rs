@@ -648,3 +648,27 @@ fn output_into_a_closed_pipe_ends_quietly() {
     assert_eq!(out.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
 }
+
+#[test]
+fn completions_and_the_man_page_come_from_the_parser() {
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_playr"))
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    for shell in ["bash", "zsh", "fish"] {
+        let out = run(&["--completions", shell]);
+        assert!(out.status.success(), "{shell}: {out:?}");
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains("dedupe"), "{shell} completes subcommands");
+    }
+    let out = run(&["--man"]);
+    assert!(out.status.success(), "{out:?}");
+    let page = String::from_utf8(out.stdout).unwrap();
+    assert!(page.contains(".TH playr 1"), "{page}");
+    assert!(page.contains("analyze"), "subcommands are listed");
+    assert_eq!(run(&["--completions", "tcsh"]).status.code(), Some(2));
+    assert_eq!(run(&["--man", "scan"]).status.code(), Some(1));
+}
