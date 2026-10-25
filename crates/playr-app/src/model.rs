@@ -29,7 +29,7 @@ use rusqlite::Connection;
 use crate::action::{Action, Keymap, Zoom};
 use crate::command::{self, CommandLine, History};
 use crate::config::{Config, Program};
-use crate::dispatch::{self, Confirm, Frontend, Presentation, Prompt};
+use crate::dispatch::{self, Confirm, Frontend, Picks, Presentation, Prompt};
 use crate::media::Media;
 use crate::message::{self, Message};
 use crate::mix::{Mix, Strip};
@@ -230,6 +230,11 @@ pub struct Model {
     log: VecDeque<(Instant, String)>,
     quit: bool,
 
+    /// The track whose play [`Model::count_play`] has recorded, until it
+    /// changes or plays from before the point that counts again.
+    counted: Option<PathBuf>,
+    /// Rows picked for the next add, enqueue, remove or move.
+    picks: Picks,
     /// The peak shown, as a sample magnitude, and when it was reached.
     peak_hold: Option<(f32, Instant)>,
     /// The mixer's meters, as `Snapshot::meters`, as magnitudes.
@@ -343,6 +348,8 @@ impl Model {
             message: None,
             log: VecDeque::new(),
             quit: false,
+            counted: None,
+            picks: Picks::default(),
             peak_hold: None,
             meter_holds: [None; 5],
             bpm: None,
@@ -378,6 +385,7 @@ impl Model {
             model.notify(Message::Output {
                 device: Some(device),
                 sink: None,
+                inexact: None,
             });
         }
         if !tracks.is_empty() {
@@ -469,6 +477,7 @@ impl Model {
             self.bpm_for = bpm_for;
         }
         self.drain_events(current.as_ref());
+        self.count_play(current.as_ref());
         crate::tape::poll(self);
         crate::mix::poll(self);
         crate::dj::poll(self);
@@ -540,6 +549,7 @@ impl Model {
         self.input = Input::None;
         if !keep {
             self.results = None;
+            self.picks.library.clear();
             self.session.set_shown(None);
         } else if self.listed().is_empty() {
             self.notify(Message::NoMatches);
@@ -674,6 +684,28 @@ impl Model {
     /// every frame: the position is worth a database write twice a session,
     /// not sixty times a second, and a track change leaves something useful
     /// behind if playr is killed rather than closed.
+    /// Records a play of `current` once it has played to half its length or
+    /// 4 minutes, whichever is sooner, as Last.fm counts a scrobble. Playing
+    /// it again from before that point counts again, except round a loop,
+    /// which would count each pass.
+    fn count_play(&mut self, current: Option<&PathBuf>) {
+        const ENOUGH: Duration = Duration::from_secs(240);
+        let Some(path) = current else {
+            self.counted = None;
+            return;
+        };
+        let status = &self.snapshot.status;
+        let enough = status.duration.map_or(ENOUGH, |d| (d / 2).min(ENOUGH));
+        if self.snapshot.position < enough {
+            if status.looping.is_none() {
+                self.counted = None;
+            }
+        } else if self.counted.as_ref() != Some(path) && status.state == State::Playing {
+            self.session.record_play(path);
+            self.counted = Some(path.clone());
+        }
+    }
+
     fn remember_position(&mut self) {
         match self.snapshot.status.current() {
             Some(path) => self.session.remember(path, self.snapshot.position),
@@ -1461,6 +1493,14 @@ impl Frontend for Model {
         &mut self.mix
     }
 
+    fn picks(&self) -> &Picks {
+        &self.picks
+    }
+
+    fn picks_mut(&mut self) -> &mut Picks {
+        &mut self.picks
+    }
+
     fn session(&self) -> &Session {
         &self.session
     }
@@ -1518,6 +1558,8 @@ impl Frontend for Model {
     }
 
     fn set_results(&mut self, results: Option<Vec<Track>>) -> Option<Vec<Track>> {
+        // Picks of a list no longer shown would act unseen.
+        self.picks.library.clear();
         std::mem::replace(&mut self.results, results)
     }
 

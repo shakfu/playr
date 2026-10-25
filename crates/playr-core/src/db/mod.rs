@@ -34,6 +34,12 @@ pub struct Track {
     pub bit_depth: Option<u8>,
     pub mtime: i64,
     pub size: i64,
+    /// When a scan first added the track, in seconds since the Unix epoch.
+    pub added_at: Option<i64>,
+    /// When it last played, from `plays`; read only.
+    pub played_at: Option<i64>,
+    /// How often it has played, from `plays`; read only.
+    pub plays: u32,
 }
 
 impl Track {
@@ -151,6 +157,7 @@ fn init(conn: &Connection) -> Result<()> {
         ("analysis", "grid_bpm", "REAL"),
         ("analysis", "grid_t0", "REAL"),
         ("marks", "label", "TEXT"),
+        ("tracks", "added_at", "INTEGER"),
     ] {
         let has: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
@@ -162,21 +169,28 @@ fn init(conn: &Connection) -> Result<()> {
         }
     }
     loops::migrate_slots(&tx)?;
-    // CAF and Matroska rows from before their tags and lengths were read
-    // are read again by the next scan, once: their files have not changed,
-    // so a scan would skip them. A state key, as no schema version is needed.
-    let reread: bool = tx.query_row(
-        "SELECT NOT EXISTS (SELECT 1 FROM state WHERE key = 'reread_caf_mkv')",
-        [],
-        |r| r.get(0),
-    )?;
-    if reread {
-        tx.execute_batch(
-            "UPDATE tracks SET mtime = 0
-               WHERE lower(substr(path, -4)) IN ('.caf', '.mkv', '.mka')
-                  OR lower(substr(path, -5)) = '.webm';
-             INSERT INTO state (key, value) VALUES ('reread_caf_mkv', '1');",
+    // Rows from before a reader was added are read again by the next scan,
+    // once: their files have not changed, so a scan would skip them. A state
+    // key per reader, as no schema version is needed. `reread_caf_mkv` is
+    // CAF and Matroska tags and lengths; `reread_mkv_title`, Matroska titles.
+    const MKV: &str = "lower(substr(path, -4)) IN ('.mkv', '.mka')
+                       OR lower(substr(path, -5)) = '.webm'";
+    for (key, which) in [
+        (
+            "reread_caf_mkv",
+            format!("{MKV} OR lower(substr(path, -4)) = '.caf'"),
+        ),
+        ("reread_mkv_title", MKV.to_string()),
+    ] {
+        let reread: bool = tx.query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM state WHERE key = ?1)",
+            [key],
+            |r| r.get(0),
         )?;
+        if reread {
+            tx.execute(&format!("UPDATE tracks SET mtime = 0 WHERE {which}"), [])?;
+            tx.execute("INSERT INTO state (key, value) VALUES (?1, '1')", [key])?;
+        }
     }
     if old_index || old_triggers {
         // Updating every row in place fires the new trigger, which indexes it.
@@ -198,13 +212,15 @@ pub fn stat_of(conn: &Connection, path: &str) -> Result<Option<(i64, i64)>> {
     .optional()
 }
 
-/// Inserts `t`, or replaces the existing row for the same path. Returns the row id.
+/// Inserts `t`, or replaces the existing row for the same path. Returns the
+/// row id. A new row's `added_at` is `t`'s, or now; an existing row keeps its own.
 pub fn upsert(conn: &Connection, t: &Track) -> Result<i64> {
     conn.execute(
         "INSERT INTO tracks
            (path, title, artist, album, album_artist, track_no, disc_no, year,
-            genre, duration_ms, sample_rate, channels, bit_depth, mtime, size)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+            genre, duration_ms, sample_rate, channels, bit_depth, mtime, size,
+            added_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
          ON CONFLICT(path) DO UPDATE SET
            title=excluded.title, artist=excluded.artist, album=excluded.album,
            album_artist=excluded.album_artist, track_no=excluded.track_no,
@@ -228,11 +244,28 @@ pub fn upsert(conn: &Connection, t: &Track) -> Result<i64> {
             t.bit_depth,
             t.mtime,
             t.size,
+            t.added_at.unwrap_or_else(now),
         ],
     )?;
     conn.query_row("SELECT id FROM tracks WHERE path = ?1", [&t.path], |r| {
         r.get(0)
     })
+}
+
+/// Seconds since the Unix epoch.
+pub fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// Records that `path` played, at `at` seconds since the Unix epoch.
+pub fn record_play(conn: &Connection, path: &str, at: i64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO plays (path, at) VALUES (?1, ?2)",
+        rusqlite::params![path, at],
+    )?;
+    Ok(())
 }
 
 /// What [`prune_missing`] removed.
@@ -435,6 +468,7 @@ pub fn forget_root(conn: &Connection, root: &Path) -> Result<Option<Pruned>> {
     let tx = conn.unchecked_transaction()?;
     for t in &tracks {
         tx.execute("DELETE FROM tracks WHERE id = ?1", [t.id])?;
+        tx.execute("DELETE FROM plays WHERE path = ?1", [&t.path])?;
     }
     tx.execute(
         "DELETE FROM analysis WHERE substr(path, 1, length(?1)) = ?1",
@@ -514,7 +548,7 @@ pub fn missing_under(conn: &Connection, root: &Path) -> Result<Vec<Track>> {
 }
 
 /// Removes the tracks [`missing_under`] finds, which also removes them from
-/// playlists, and the marks, loops and analysis of every file under `root` that is
+/// playlists and their plays, and the marks, loops and analysis of every file under `root` that is
 /// gone, in the library or not.
 ///
 /// Files are checked before the transaction opens, so the write lock is held

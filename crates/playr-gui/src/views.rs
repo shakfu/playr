@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder, TableRow};
-use playr_app::action::Action;
+use playr_app::action::{Action, Pick};
 use playr_app::dispatch::Frontend;
 use playr_app::model::Model;
 use playr_app::View;
@@ -76,6 +76,9 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
         View::Queue => model.queue_played(),
         _ => 0,
     };
+    // Picked rows show as the cursor row does, as a file manager shows
+    // several chosen at once.
+    let picks = model.picks().of(view).cloned().unwrap_or_default();
     let selected: HashSet<&str> = match view {
         View::Library => model
             .session()
@@ -115,6 +118,7 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
         .or_else(|| shown.iter().rposition(|c| !c.numeric()));
     for (i, column) in shown.iter().enumerate() {
         table = match (column.numeric(), Some(i) == fill) {
+            (true, _) if column.date() => table.column(Column::exact(84.0)),
             (true, _) => table.column(Column::exact(64.0)),
             (false, true) => table.column(Column::remainder().at_least(160.0).clip(true)),
             (false, false) => table.column(Column::initial(200.0).clip(true).resizable(true)),
@@ -155,7 +159,7 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
             body.rows(ROW, tracks.len(), |mut row| {
                 let i = row.index();
                 let t = &tracks[i];
-                row.set_selected(cursor == Some(i));
+                row.set_selected(cursor == Some(i) || picks.contains(&t.path));
                 if view == View::Library {
                     row.col(|ui| {
                         let mut ticked = selected.contains(t.path.as_str());
@@ -192,8 +196,20 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                         }
                     });
                 }
-                if let Some(picked) = respond(&row, menu) {
-                    result = Some(picked);
+                if let Some(clicked) = respond(&row, menu) {
+                    // Ctrl or Command picks the row, Shift the rows from the cursor.
+                    let held = row.response().ctx.input(|i| i.modifiers);
+                    result = Some(match clicked {
+                        (Some(r), None) if held.command => {
+                            (None, Some(Action::Pick(Pick::Rows(r, r))))
+                        }
+                        (Some(r), None) if held.shift => {
+                            let from = cursor.unwrap_or(r);
+                            let range = Pick::Rows(from.min(r), from.max(r));
+                            (Some(r), Some(Action::Pick(range)))
+                        }
+                        clicked => clicked,
+                    });
                 }
                 if matches!(view, View::Selection | View::Queue) {
                     let response = row.response();

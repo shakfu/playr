@@ -2586,3 +2586,45 @@ fn a_loaded_tape_with_every_lane_and_the_fx_lane_open_fits_800_by_648() {
     harness.get_by_label("Voice 1 drawer");
     assert_fits(&harness, window, "a loaded tape, FX open");
 }
+
+/// Mod shows the LFOs and the routes in the FX lane's place, and a route
+/// picked there reaches the tape.
+#[test]
+fn the_fx_lane_shows_modulation_under_mod_and_fits_800_by_648() {
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 648.0));
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = sized(dir.path(), "1", false, 648.0);
+    harness
+        .state_mut()
+        .model_mut()
+        .set_deck(playr_app::tape::Deck::manual());
+    harness
+        .state_mut()
+        .model_mut()
+        .perform(playr_app::action::Action::SetRange(Some((
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(6),
+        ))));
+    harness.get_by_label("Tape").click();
+    harness.run_steps(2);
+    harness.get_by_label("Load range").click();
+    wait(&mut harness, |m| m.deck().loaded().is_some());
+    let layout = playr_app::tape::Layout {
+        folded: [Some(false); 4],
+        fx: true,
+        ..Default::default()
+    };
+    harness.state_mut().model_mut().set_tape_layout(layout);
+    harness.run_steps(2);
+    harness.get_by_label("Modulation").click();
+    harness.run_steps(2);
+    harness.get_by_label("LFO a Hz");
+    assert!(harness.query_by_label("Delay time").is_none());
+    assert_fits(&harness, window, "a loaded tape, Mod open");
+    harness
+        .state_mut()
+        .model_mut()
+        .run_command("tape mod 2 b level 1 0.5");
+    harness.run_steps(2);
+    harness.get_by_label("Mod 2 depth");
+}

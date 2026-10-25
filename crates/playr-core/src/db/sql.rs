@@ -132,7 +132,9 @@ fn open(library: &Path) -> rusqlite::Result<Connection> {
                 CASE WHEN a.error IS NULL THEN a.loudness END AS loudness,
                 CASE WHEN a.error IS NULL THEN a.peak END AS peak,
                 a.path IS NOT NULL AS analysed, a.error, a.lossless, a.cutoff_hz,
-                a.bits_used, a.md5, a.skipped
+                a.bits_used, a.md5, a.skipped, t.added_at AS added,
+                (SELECT max(at) FROM main.plays p WHERE p.path = t.path) AS played,
+                (SELECT count(*) FROM main.plays p WHERE p.path = t.path) AS plays
            FROM main.tracks t LEFT JOIN main.analysis a
              ON a.path = t.path AND a.mtime = t.mtime AND a.size = t.size
             AND a.version = {VERSION};

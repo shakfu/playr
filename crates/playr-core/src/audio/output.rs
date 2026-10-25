@@ -145,21 +145,16 @@ impl Backend for Cpal {
             SampleFormat::F64 => {
                 build::<f64>(device, &config, consumer, bus, shared, events, |v| v as f64)
             }
-            // Scaled in f64 by the positive maximum, so full scale cannot wrap.
             SampleFormat::I32 => {
-                build::<i32>(device, &config, consumer, bus, shared, events, |v| {
-                    (v.clamp(-1.0, 1.0) as f64 * i32::MAX as f64) as i32
-                })
+                build::<i32>(device, &config, consumer, bus, shared, events, to_i32)
             }
             SampleFormat::I24 => {
                 build::<cpal::I24>(device, &config, consumer, bus, shared, events, |v| {
-                    cpal::I24::new_unchecked((v.clamp(-1.0, 1.0) as f64 * 8_388_607.0) as i32)
+                    cpal::I24::new_unchecked(to_i24(v))
                 })
             }
             SampleFormat::I16 => {
-                build::<i16>(device, &config, consumer, bus, shared, events, |v| {
-                    (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
-                })
+                build::<i16>(device, &config, consumer, bus, shared, events, to_i16)
             }
             SampleFormat::U16 => {
                 build::<u16>(device, &config, consumer, bus, shared, events, |v| {
@@ -977,6 +972,85 @@ fn handover_frame(bus: &mut Bus, shared: &Shared, frames: usize) -> Option<usize
 /// Mono fans out to every channel; extra source channels beyond the device's
 /// count are dropped. Downmixing properly would need per-layout coefficients,
 /// which is not worth it until something actually plays 5.1.
+/// What may change a sample between the file and the device, in words;
+/// empty when the device receives the file's samples exactly. `device` is
+/// the ID played to, `bits` the file's integer width, `None` for a lossy
+/// or float file, and `shared` whether the tape or the decks mix into the
+/// same output.
+pub fn inexact(
+    device: &str,
+    status: &super::Status,
+    volume: f32,
+    eq: [f32; 3],
+    bits: Option<u8>,
+    shared: bool,
+) -> Vec<&'static str> {
+    let mut why = Vec::new();
+    // Only ALSA's `hw:` bypasses every conversion; `plughw:`, `default` and
+    // the other hosts' shared modes reach a mixer or a converter.
+    let direct = device
+        .strip_prefix("alsa:")
+        .unwrap_or(device)
+        .starts_with("hw:");
+    if !direct {
+        why.push("the device is shared, so the system may convert");
+    }
+    if status.resampling {
+        why.push("resampling");
+    }
+    if status.gain_db.is_some_and(|g| g != 0.0) {
+        why.push("ReplayGain");
+    }
+    if volume != 1.0 {
+        why.push("volume below full");
+    }
+    if eq != [0.0; 3] {
+        why.push("EQ");
+    }
+    if status.fading {
+        why.push("fades");
+    }
+    if shared {
+        why.push("the tape or decks share the output");
+    }
+    let width = match status.output_format {
+        Some(SampleFormat::I16) => Some(16),
+        Some(SampleFormat::I24 | SampleFormat::F32) => Some(24),
+        Some(SampleFormat::I32) => Some(32),
+        Some(SampleFormat::F64) => Some(53),
+        _ => None,
+    };
+    match (width, bits) {
+        (None, _) => why.push("an output format playr cannot pass through exactly"),
+        (Some(w), Some(b)) if u32::from(b) > w => why.push("fewer bits than the file"),
+        _ => {}
+    }
+    why
+}
+
+// The integer formats scale by a power of two, as decoders divide by one,
+// so an integer source within the format's width plays exactly as stored.
+// The positive full scale, which no integer reaches, clips to the maximum.
+
+/// A sample as 16-bit PCM.
+pub fn to_i16(v: f32) -> i16 {
+    (v * 32_768.0).round().clamp(-32_768.0, 32_767.0) as i16
+}
+
+/// A sample as 24-bit PCM, in an `i32`.
+pub fn to_i24(v: f32) -> i32 {
+    (f64::from(v) * 8_388_608.0)
+        .round()
+        .clamp(-8_388_608.0, 8_388_607.0) as i32
+}
+
+/// A sample as 32-bit PCM; a 16- or 24-bit source fills its top bits.
+pub fn to_i32(v: f32) -> i32 {
+    (f64::from(v) * 2_147_483_648.0)
+        .round()
+        .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
+}
+
 pub fn remap_channels(input: &[f32], src_ch: usize, dst_ch: usize, out: &mut Vec<f32>) {
     if src_ch == dst_ch {
         out.extend_from_slice(input);

@@ -6,6 +6,7 @@
 //! every frontend, calling the session for what changes the library or
 //! playback and the frontend for what changes only the interface.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -245,6 +246,103 @@ pub trait Frontend {
     fn dj(&mut self) -> &mut crate::dj::Decks;
     /// The mixer's faders.
     fn mix(&mut self) -> &mut crate::mix::Mix;
+    /// The rows picked in each view.
+    fn picks(&self) -> &Picks;
+    fn picks_mut(&mut self) -> &mut Picks;
+}
+
+/// The rows [`Action::Pick`] picked, by track path in each view, so a pick
+/// holds while a list is sorted or edited. A path queued twice is picked
+/// in both rows. The library's are dropped when its list is replaced.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Picks {
+    pub library: HashSet<String>,
+    pub selection: HashSet<String>,
+    pub queue: HashSet<String>,
+}
+
+impl Picks {
+    /// The picks of `view`, which has none unless it lists tracks.
+    pub fn of(&self, view: View) -> Option<&HashSet<String>> {
+        match view {
+            View::Library | View::Dj => Some(&self.library),
+            View::Selection => Some(&self.selection),
+            View::Queue => Some(&self.queue),
+            _ => None,
+        }
+    }
+
+    fn of_mut(&mut self, view: View) -> Option<&mut HashSet<String>> {
+        match view {
+            View::Library | View::Dj => Some(&mut self.library),
+            View::Selection => Some(&mut self.selection),
+            View::Queue => Some(&mut self.queue),
+            _ => None,
+        }
+    }
+}
+
+/// The tracks `view` lists, as its rows are numbered.
+fn rows_of(f: &impl Frontend, view: View) -> Vec<Track> {
+    match view {
+        View::Library | View::Dj => f.listed().to_vec(),
+        View::Selection => f.session().selection().to_vec(),
+        View::Queue => f.session().queue_tracks(),
+        _ => Vec::new(),
+    }
+}
+
+/// The rows picked in `view`, with their indices, in list order; `None`
+/// when none is, so the action falls back to the cursor row.
+fn picked(f: &impl Frontend, view: View) -> Option<Vec<(usize, Track)>> {
+    let picks = f.picks().of(view).filter(|p| !p.is_empty())?;
+    let rows: Vec<(usize, Track)> = rows_of(f, view)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, t)| picks.contains(&t.path))
+        .collect();
+    (!rows.is_empty()).then_some(rows)
+}
+
+/// Does [`Action::Pick`] in the view shown.
+fn pick(f: &mut impl Frontend, which: crate::action::Pick) {
+    use crate::action::Pick;
+    let view = f.view();
+    if f.picks().of(view).is_none() {
+        return;
+    }
+    let rows = rows_of(f, view);
+    let range = match which {
+        Pick::Clear => {
+            if let Some(p) = f.picks_mut().of_mut(view) {
+                p.clear();
+            }
+            return f.notify(Message::Picked(0));
+        }
+        Pick::All => 0..rows.len(),
+        Pick::Rows(from, to) => from.min(rows.len())..(to + 1).min(rows.len()),
+        Pick::Cursor => match f.cursor(view) {
+            Some(i) if i < rows.len() => i..i + 1,
+            _ => return,
+        },
+    };
+    let paths: Vec<String> = rows[range].iter().map(|t| t.path.clone()).collect();
+    let Some(picks) = f.picks_mut().of_mut(view) else {
+        return;
+    };
+    // All picks; :pick all always picks, as :toggle all selects first.
+    let unpick = which != Pick::All && !paths.is_empty() && paths.iter().all(|p| picks.contains(p));
+    for path in paths {
+        match unpick {
+            true => picks.remove(&path),
+            false => picks.insert(path),
+        };
+    }
+    let n = picks.len();
+    if which == Pick::Cursor {
+        move_cursor(f, 1);
+    }
+    f.notify(Message::Picked(n));
 }
 
 /// What to do with the tracks a `:sql` statement names, once it finishes.
@@ -522,12 +620,41 @@ fn act(action: Action, f: &mut impl Frontend) {
         Action::Activate => activate(f),
         Action::LoopLib(a) => loop_lib(f, a),
 
+        Action::Pick(which) => pick(f, which),
+        Action::Add if matches!(f.view(), View::Library | View::Dj | View::Queue) => {
+            let view = f.view();
+            let Some(rows) = picked(f, view) else {
+                return add(f);
+            };
+            let tracks = rows.into_iter().map(|(_, t)| t).collect();
+            if let Some(p) = f.picks_mut().of_mut(view) {
+                p.clear();
+            }
+            if let Some(outcome) = f.session_mut().add_all_to_selection(tracks) {
+                if f.cursor(View::Selection).is_none() && !f.session().selection().is_empty() {
+                    f.set_cursor(View::Selection, Some(0));
+                }
+                f.notify(outcome.into());
+            }
+        }
         Action::Add => add(f),
         Action::ToggleAll => {
             let listed = f.listed().to_vec();
             if let Some(outcome) = f.session_mut().toggle_all_selected(listed) {
                 f.notify(outcome.into());
             }
+        }
+        Action::Enqueue(next) if matches!(f.view(), View::Library | View::Dj | View::Selection) => {
+            let view = f.view();
+            let Some(rows) = picked(f, view) else {
+                return enqueue(f, next);
+            };
+            let tracks: Vec<Track> = rows.into_iter().map(|(_, t)| t).collect();
+            if let Some(p) = f.picks_mut().of_mut(view) {
+                p.clear();
+            }
+            let outcome = f.session_mut().enqueue(&tracks, next);
+            f.notify(outcome.into());
         }
         Action::Enqueue(next) => enqueue(f, next),
         Action::EnqueueAll => {
@@ -560,6 +687,26 @@ fn act(action: Action, f: &mut impl Frontend) {
                 Err(e) => f.notify(Message::LoopFailed(e)),
             }
         }
+        Action::Remove
+            if matches!(f.view(), View::Queue | View::Selection)
+                && picked(f, f.view()).is_some() =>
+        {
+            let view = f.view();
+            let rows = picked(f, view).expect("checked");
+            let first = rows[0].0;
+            // From the last, so each index still names its row.
+            for &(i, _) in rows.iter().rev() {
+                match view {
+                    View::Queue => f.session_mut().dequeue(i),
+                    _ => f.session_mut().remove_from_selection(i),
+                };
+            }
+            if let Some(p) = f.picks_mut().of_mut(view) {
+                p.clear();
+            }
+            select(f, first);
+            f.notify(Message::RemovedPicked(rows.len()));
+        }
         Action::Remove => {
             // The queue's, or else the selection's.
             let view = match f.view() {
@@ -576,6 +723,35 @@ fn act(action: Action, f: &mut impl Frontend) {
             if let Some(outcome) = outcome {
                 select(f, i);
                 f.notify(outcome.into());
+            }
+        }
+        Action::MoveTrack(by)
+            if matches!(f.view(), View::Queue | View::Selection)
+                && picked(f, f.view()).is_some() =>
+        {
+            let view = f.view();
+            let mut rows: Vec<usize> = picked(f, view)
+                .expect("checked")
+                .into_iter()
+                .map(|(i, _)| i)
+                .collect();
+            // The row nearest where they go moves first; when it cannot,
+            // none does, so the picked rows keep their spacing.
+            if by > 0 {
+                rows.reverse();
+            }
+            let cursor = f.cursor(view);
+            for i in rows {
+                let moved = match view {
+                    View::Queue => f.session_mut().move_in_queue(i, by),
+                    _ => f.session_mut().move_in_selection(i, by),
+                };
+                if moved.is_none() {
+                    break;
+                }
+                if cursor == Some(i) {
+                    f.set_cursor(view, moved);
+                }
             }
         }
         Action::MoveTrack(by) => {
@@ -685,7 +861,26 @@ fn act(action: Action, f: &mut impl Frontend) {
             let sink = device
                 .as_ref()
                 .and_then(playr_core::audio::output::pipewire_sink);
-            f.notify(Message::Output { device, sink });
+            let player = f.session().player();
+            let status = player.status();
+            let (volume, eq) = (player.volume(), player.eq());
+            let inexact = match (&device, status.current()) {
+                (Some(d), Some(path)) if status.source.is_some() => {
+                    let bits = f.session().tracks_at(std::slice::from_ref(path));
+                    let bits = bits.first().and_then(|t| t.bit_depth);
+                    let shared = f.tape().status().is_some() || f.dj().status().is_some();
+                    let why = playr_core::audio::output::inexact(
+                        &d.id, &status, volume, eq, bits, shared,
+                    );
+                    Some(why)
+                }
+                _ => None,
+            };
+            f.notify(Message::Output {
+                device,
+                sink,
+                inexact,
+            });
         }
         Action::ForgetRoot(dir) => match f.session().check_forget(&dir) {
             Ok(()) => f.confirm(Confirm::ForgetRoot(dir)),

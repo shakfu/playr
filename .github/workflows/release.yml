@@ -1,8 +1,8 @@
 # Builds playr, playr-gui and playr-server for each platform when a version tag
 # is pushed, packages them with packaging/package.sh, and publishes the
 # archives and the TouchOSC layout to a GitHub release whose notes are that
-# version's CHANGELOG.md section. Tags are
-# bare versions, such as 0.6.0.
+# version's CHANGELOG.md section, then the crates without `publish = false`
+# to crates.io. Tags are bare versions, such as 0.6.0.
 #
 # Run by hand with no tag, it tests, builds and packages the branch chosen and
 # keeps the archives as the run's artifacts, publishing nothing: a way to try
@@ -156,3 +156,26 @@ jobs:
             --verify-tag \
             --title "$TAG" \
             --notes-file dist/notes.md
+
+  # After the GitHub release, so a failed build publishes nothing anywhere.
+  # Needs the CARGO_REGISTRY_TOKEN secret. `--workspace` publishes in
+  # dependency order and skips playr-gui and playr-server.
+  crates:
+    needs: release
+    if: github.event_name == 'push' || inputs.tag != ''
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      # Verification builds playr with Opus, whose libopus build needs cmake.
+      - name: Install ALSA headers and cmake
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev cmake
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --workspace

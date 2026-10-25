@@ -1096,24 +1096,84 @@ fn a_crossfade_overlaps_the_end_of_one_track_with_the_start_of_the_next() {
     assert!(step < 0.01, "a step of {step}");
 }
 
-/// Tracks at different rates cannot share a stream, so they join as they
-/// would with no crossfade: whole, and without a fade out.
+/// A track at another rate overlaps as one at the same rate does, resampled
+/// to the stream's rate, which it keeps to its end: no new stream, no gap.
 #[test]
-fn a_crossfade_between_sample_rates_leaves_the_join_whole() {
+fn a_crossfade_between_sample_rates_overlaps_on_the_first_rate() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = (dir.path().join("a.wav"), dir.path().join("b.wav"));
-    levels(&a, 8000, &[(1.0, 0.5)]);
-    levels(&b, 16000, &[(1.0, -0.5)]);
+    levels(&a, 8000, &[(2.0, 0.5)]);
+    levels(&b, 16000, &[(2.0, -0.5)]);
     let (player, control) = fake_player();
     player.send(Cmd::SetCrossfade(Duration::from_millis(500)));
     player.send(Cmd::Play(vec![a, b], 0));
-    wait_for(&player, |s| s.state == State::Stopped && s.index == 1);
+    let during = wait_for(&player, |s| {
+        s.index == 1 && s.source.is_some_and(|s| s.rate == 16000)
+    });
+    assert_eq!(during.output_rate, 8000);
+    assert!(during.resampling);
+    wait_for(&player, |s| s.state == State::Stopped);
     let played = control.played.lock().unwrap();
     let left: Vec<f32> = played.iter().step_by(2).copied().collect();
     let first = left.iter().position(|&s| s != 0.0).unwrap();
-    // a plays to its end at full level.
-    assert!(left[first..first + 8_000]
-        .iter()
-        .all(|&s| (s - 0.5).abs() < 1e-3));
-    assert!(left.iter().any(|&s| (s + 0.5).abs() < 1e-3), "b played");
+    let last = left.iter().rposition(|&s| s.abs() > 1e-3).unwrap();
+    let left = &left[first..=last];
+    let (n, start) = (4_000, 12_000);
+    // 3.5 s at 8 kHz; the resampler's edges blur b's end by a few frames.
+    assert!(
+        (left.len() as i64 - 28_000).abs() <= 8,
+        "{} frames",
+        left.len()
+    );
+    assert!((left[start - 1] - 0.5).abs() < 1e-3, "{}", left[start - 1]);
+    assert!(left[start + n / 2].abs() < 1e-2, "{}", left[start + n / 2]);
+    assert!((left[start + n] + 0.5).abs() < 1e-2, "{}", left[start + n]);
+    assert!((left[24_000] + 0.5).abs() < 1e-3, "{}", left[24_000]);
+    let step = left[..27_900]
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0, f32::max);
+    assert!(step < 0.01, "a step of {step}");
+}
+
+/// With nothing set that changes a sample, a 16- or 24-bit file reaches the
+/// device as it is stored: what plays converts back to its integers.
+#[test]
+fn an_integer_file_reaches_the_device_unchanged() {
+    use playr_core::audio::output::{to_i16, to_i24};
+    let dir = tempfile::tempdir().unwrap();
+    for bits in [16u16, 24] {
+        let path = dir.path().join(format!("{bits}.wav"));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 8000,
+            bits_per_sample: bits,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let full = 1i32 << (bits - 1);
+        // Never 0, so the first sample marks where the file starts.
+        let stored: Vec<i32> = (0..8000i64)
+            .map(|i| (((i * 7919 + 13) % (2 * full as i64 - 2)) - full as i64 + 1) as i32)
+            .map(|v| if v == 0 { 1 } else { v })
+            .collect();
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for &v in &stored {
+            w.write_sample(v).unwrap();
+        }
+        w.finalize().unwrap();
+        let (player, control) = fake_player();
+        player.send(Cmd::Play(vec![path], 0));
+        wait_for(&player, |s| s.state == State::Playing);
+        wait_for(&player, |s| s.state == State::Stopped);
+        let played = control.played.lock().unwrap().clone();
+        let first = played.iter().position(|&s| s != 0.0).unwrap();
+        let back: Vec<i32> = played[first..first + stored.len()]
+            .iter()
+            .map(|&s| match bits {
+                16 => i32::from(to_i16(s)),
+                _ => to_i24(s),
+            })
+            .collect();
+        assert_eq!(back, stored, "{bits}-bit");
+    }
 }

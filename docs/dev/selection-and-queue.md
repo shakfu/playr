@@ -1,6 +1,6 @@
 # Selection and queue
 
-Status: option A adopted and done, unreleased; option B deferred. `TODO.md` links here from "Selection and queue overlap". The sections up to "Questions" describe the state before A.
+Status: option A adopted and done; option B declined 2026-10-25. `TODO.md` links here from "Selection and queue overlap". The sections up to "Questions" describe the state before A.
 
 Since 0.13.0, `:save` works in both the Selection and Queue views. The two lists now do much the same job. This file compares them and weighs four ways to resolve the overlap.
 
@@ -99,3 +99,7 @@ If both land, the name "selection" means two things. Settling A, the playlist ed
 - `a` in the Queue view adds the track to the selection.
 
 - The queue's commands are `:remove`, `:move` and `:clear`; the old names are aliases.
+
+## B declined
+
+Declined on 2026-10-25. With kept rows held apart from waiting ones, B is A in one view, at the cost of the 74 sites above. "Multi-row selection" calls the rows it picks "picked", so "selection" keeps one meaning.

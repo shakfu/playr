@@ -239,6 +239,24 @@ pub const COMMANDS: &[Command] = &[
     ),
     only(Library, "search-clear", "", "show the whole library again"),
     only(
+        Library,
+        "pick",
+        "[all | none | N..M]",
+        "pick rows to add or enqueue at once",
+    ),
+    only(
+        Selection,
+        "pick",
+        "[all | none | N..M]",
+        "pick rows to enqueue, remove or move",
+    ),
+    only(
+        View::Queue,
+        "pick",
+        "[all | none | N..M]",
+        "pick rows to add, remove or move",
+    ),
+    only(
         Selection,
         "remove",
         "",
@@ -576,6 +594,10 @@ pub fn line(action: &Action, view: Option<View>) -> String {
         Add if view == Some(Library) => "toggle".into(),
         Add => "add".into(),
         ToggleAll => "toggle all".into(),
+        Pick(crate::action::Pick::Cursor) => "pick".into(),
+        Pick(crate::action::Pick::All) => "pick all".into(),
+        Pick(crate::action::Pick::Clear) => "pick none".into(),
+        Pick(crate::action::Pick::Rows(from, to)) => format!("pick {}..{}", from + 1, to + 1),
         Enqueue(false) => "enqueue".into(),
         Enqueue(true) => "enqueue next".into(),
         EnqueueAll => "enqueue all".into(),
@@ -775,7 +797,10 @@ const TAPE_USAGE: &str = "usage: :tape load [N] | take | play | stop | reset | s
      reverb model freeverb|zita|jp|plate|size S|decay SEC|damp D|return R | \
      V on|off | V clear|eject|share|fold|more | V loop ID | V rate R|window A B|level L|pan P|send S|wear W|fade MS|\
      ping on|off|slew MS|drive D|hp HZ|off|lp HZ|off|bell HZ|bell-gain DB|bell-q Q|\
-     solo on|off|mute on|off|delay S|reverb S";
+     solo on|off|mute on|off|delay S|reverb S | \
+     lfo a|b sine|triangle|square|hold|HZ|sync 1/1|1/2|1/4|1/8|3/16|1/16 | \
+     mod N a|b DEST [V] DEPTH|off, DEST rate|start|pan|level|send|hp|lp|bell|bell-gain|delay|reverb V, \
+     or delay-time|delay-feedback|delay-tone|reverb-damp|print-fx";
 
 /// Parses the words of `:tape` or `:dj` that set the delay or the reverb:
 /// `delay model|time|sync|feedback|tone|wow|return` and
@@ -844,6 +869,15 @@ fn fx_line(f: &crate::fx::FxSetting) -> String {
     }
 }
 
+/// LFO `a` or `b`, as 0 or 1.
+fn lfo_index(word: &str) -> Result<u8, String> {
+    match word {
+        "a" => Ok(0),
+        "b" => Ok(1),
+        _ => Err("LFOs are a and b".into()),
+    }
+}
+
 /// Parses what follows `:tape`. Voices count from 1; windows take a time or
 /// a percentage of the loop at each end.
 fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
@@ -885,6 +919,43 @@ fn tape(rest: &str) -> Result<crate::tape::TapeAction, String> {
         ["print-fx", v] => value(v, "print-fx", 0.0, 1.0).map(|v| T::Fx(F::Print(v))),
         ["delay" | "reverb", ..] => fx(&words).map(T::Fx),
         ["fx"] => Ok(T::Fold(None)),
+        ["lfo", k, rest @ ..] => {
+            use crate::tape::{LfoSetting as L, Shape, LFO_HZ};
+            let k = lfo_index(k)?;
+            match rest {
+                ["sync", d] => crate::fx::Division::ALL
+                    .into_iter()
+                    .find(|x| x.name() == *d)
+                    .map(|d| T::Lfo(k, L::Sync(d)))
+                    .ok_or_else(|| "sync is 1/1, 1/2, 1/4, 1/8, 3/16 or 1/16".to_string()),
+                [w] => match Shape::ALL.into_iter().find(|s| s.name() == *w) {
+                    Some(shape) => Ok(T::Lfo(k, L::Shape(shape))),
+                    None => value(w, "an LFO's rate in Hz", LFO_HZ.0, LFO_HZ.1)
+                        .map(|hz| T::Lfo(k, L::Hz(hz))),
+                },
+                _ => Err(usage()),
+            }
+        }
+        ["mod", n, rest @ ..] => {
+            let slot = match n.parse::<u8>() {
+                Ok(n) if (1..=crate::tape::SLOTS as u8).contains(&n) => n,
+                _ => return Err(format!("slots are 1 to {}", crate::tape::SLOTS)),
+            };
+            let (lfo, dest, voice, depth) = match rest {
+                ["off"] => return Ok(T::Route(slot, None)),
+                [lfo, dest, v, depth] => (lfo, dest, v.parse::<u8>().ok(), depth),
+                [lfo, dest, depth] => (lfo, dest, None, depth),
+                _ => return Err(usage()),
+            };
+            let dest = crate::tape::dest_named(dest, voice)
+                .ok_or_else(|| format!("no destination {dest}; see :help"))?;
+            let depth = value(depth, "depth", -1.0, 1.0)?;
+            let lfo = usize::from(lfo_index(lfo)?);
+            Ok(T::Route(
+                slot,
+                Some(crate::tape::Route { lfo, dest, depth }),
+            ))
+        }
         [n, setting @ ..] if n.parse::<u8>().is_ok() => {
             let n: u8 = n.parse().expect("checked");
             if !(1..=playr_looper::VOICES as u8).contains(&n) {
@@ -1278,6 +1349,22 @@ fn tape_line(t: &crate::tape::TapeAction) -> String {
             V::Reverb(v) => format!("{i} reverb {}", n(v)),
         },
         T::Fx(f) => fx_line(f),
+        T::Lfo(k, l) => {
+            let k = crate::tape::lfo_name(usize::from(*k));
+            match l {
+                crate::tape::LfoSetting::Shape(shape) => format!("lfo {k} {}", shape.name()),
+                crate::tape::LfoSetting::Hz(hz) => format!("lfo {k} {}", n(hz)),
+                crate::tape::LfoSetting::Sync(d) => format!("lfo {k} sync {}", d.name()),
+            }
+        }
+        T::Route(slot, None) => format!("mod {slot} off"),
+        T::Route(slot, Some(r)) => {
+            let lfo = crate::tape::lfo_name(r.lfo);
+            match crate::tape::dest_name(r.dest) {
+                (dest, Some(v)) => format!("mod {slot} {lfo} {dest} {v} {}", n(&r.depth)),
+                (dest, None) => format!("mod {slot} {lfo} {dest} {}", n(&r.depth)),
+            }
+        }
     }
 }
 
@@ -1870,6 +1957,21 @@ fn parse_in(line: &str, view: Option<View>, extensions: bool) -> Result<Action, 
             _ => Err(usage()),
         },
         "toggle" if rest == "all" => Ok(Action::ToggleAll),
+        "pick" => {
+            use crate::action::Pick;
+            let row = |t: &str| t.trim().parse::<usize>().ok().filter(|&n| n > 0);
+            match rest {
+                "" => Ok(Action::Pick(Pick::Cursor)),
+                "all" => Ok(Action::Pick(Pick::All)),
+                "none" => Ok(Action::Pick(Pick::Clear)),
+                _ => match rest.split_once("..").map(|(a, b)| (row(a), row(b))) {
+                    Some((Some(a), Some(b))) => {
+                        Ok(Action::Pick(Pick::Rows(a.min(b) - 1, a.max(b) - 1)))
+                    }
+                    _ => Err(usage()),
+                },
+            }
+        }
         "toggle" | "add" => nothing(Action::Add),
         "search-clear" => nothing(Action::ClearSearch),
         "remove" => nothing(Action::Remove),

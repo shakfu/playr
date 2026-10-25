@@ -174,6 +174,31 @@ Switching a model starts it silent. The models are here to be compared; those th
 
 In the terminal: `:tape 1 delay 0.5`, `:tape delay model tape`, `:tape delay sync 3/16`, `:tape reverb decay 4`, `:tape print-fx 0.5`.
 
+## Modulation
+
+Two LFOs, **a** and **b**, move settings over time, through four **Mod** slots. **Mod** in the FX lane's header shows them in place of the effects.
+
+- **An LFO** has a shape (sine, triangle, square, or hold, a new random value each cycle) and a speed: free, 0.01 to 20 Hz, or synced to a part of voice 1's window, 1/1 to 1/16, in phase with voice 1's head, so it repeats with the loop.
+- **A slot** routes one LFO to one setting by a depth from -1 to 1; a negative depth turns the LFO upside down. Several slots may move one setting.
+
+| moves | of | at depth 1 |
+|-|-|-|
+| rate | a voice | an octave either way |
+| start | a voice | its window, the window's length either way; the move applies at the next wrap, as a window dragged does |
+| pan | a voice | the whole width |
+| level, send, delay, reverb | a voice | dips from the setting to silence; never above the setting |
+| hp, lp, bell | a voice | 4 octaves either way; a high-pass or low-pass that is off stays off |
+| bell-gain | a voice | 18 dB either way |
+| delay-time | the effects | an octave either way: the repeats bend in pitch |
+| delay-feedback | the effects | the whole range, 0 to 0.95 |
+| delay-tone | the effects | 4 octaves either way |
+| reverb-damp | the effects | the whole range |
+| print-fx | the effects | dips from the setting |
+
+Values move every 32 frames, smoothed between. Tremolo is `level` from a sine; a wandering filter is `lp` from hold; a tape-wow delay is `delay-time` at a small depth.
+
+In the terminal: `:tape lfo a triangle`, `:tape lfo a 0.5`, `:tape lfo b sync 1/4`, `:tape mod 1 a level 2 0.6`, `:tape mod 2 b delay-time 0.1`, `:tape mod 1 off`. The LFOs and slots are kept with the tape.
+
 ## Some starting points
 
 Voices 2 to 4 start empty.

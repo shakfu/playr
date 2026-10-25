@@ -11,6 +11,7 @@
 //! resamples, and plays [`Looper`] on its stream. The design is in `docs/dev/looper-engine.md`.
 
 mod looper;
+pub mod modulation;
 mod tape;
 
 use std::path::Path;

@@ -141,11 +141,17 @@ fn rows_carry_what_each_view_draws() {
         json!({
             "key": "/m/b.flac", "title": "Monk tune", "artist": "Monk",
             "album": "Unknown Album", "time": "1:23", "selected": true,
+            "picked": false,
             // The columns setting's: artist, album, title, time.
             "cells": ["Monk", "-", "Monk tune", "1:23"],
         })
     );
     assert_eq!(library["rows"][0]["selected"], false);
+    model.run_command("pick 1..1");
+    assert_eq!(
+        web::rows(&model, View::Library, 0, 10)["rows"][0]["picked"],
+        true
+    );
     let selection = web::rows(&model, View::Selection, 0, 10);
     assert_eq!(selection["rows"][0]["key"], "/m/b.flac");
     let playlists = web::rows(&model, View::Playlists, 0, 10);

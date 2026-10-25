@@ -26,18 +26,9 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **Choose the effects' models.** The delay has 3 models and the reverb 4, on the tape and the decks (`docs/dev/fx-buses.md`). Listen, keep those that sound best, and remove the others and their fields.
 
-- [ ] **Modulation on the tape.** Sources that move a setting over time, for the voices, the EQ and the effects. Open questions:
-  - **Sources:** an LFO (sine, triangle, square, sample and hold), synced to voice 1's window as delay Sync is, or free in Hz; an envelope follower on a voice; random walk.
-  - **Destinations:** voice rate, window start, pan, level, sends; HP, LP and bell frequency, bell gain; delay time, feedback, tone; reverb damp; Print FX.
-  - **Where it runs:** on the audio thread at a control rate, such as every 32 frames, with each value smoothed. A Faust parameter recomputes its coefficients in `control()` on each change; its cost at that rate is to measure.
-  - **Controls:** a depth per field, or a small matrix of source to destination. The lanes have little room; the FX lane or a drawer of its own may hold it.
-  - **Kept:** in the saved tape, with the settings.
-
 ### Playlists
 
 ### Playback
-
-- [ ] **Crossfade across sample rates.** `:crossfade` overlaps tracks that share a rate and channel count; others join gaplessly. Overlapping them needs one side resampled to the other's rate; see "Gapless across a sample-rate change".
 
 ### Sampler
 
@@ -45,11 +36,11 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Library
 
-- [ ] **Group, a date added, and play history.** `columns` and `sort` order the library by any column, but there is no grouping, and no date added to sort by: the schema has no `added_at`, and `mtime` is the file's. A column would only be meaningful for tracks added after it. A `plays(path, at)` table would add history; with every column a search field, `added:30d..` and `played:..1y` follow. Album and artist grouping needs a new view in three frontends, and `Frontend` assumes one cursor row per view. `:filter album|artist` is the first step: it searches for the row's album or artist. A buyer of music thinks in releases (decision 2), which argues for grouping (inference about users).
+- [ ] **Group by album or artist.** `columns` and `sort` order the library by any column, and `added`, `played` and `plays` by history, but there is no grouping. It needs a new view in three frontends, and `Frontend` assumes one cursor row per view. `:filter album|artist` is the first step: it searches for the row's album or artist. A buyer of music thinks in releases (decision 2), which argues for grouping (inference about users).
 
 - [ ] **Calibrate the cutoff heuristics.** The two spectral findings were set against ffmpeg's encoders, not files whose provenance is known; a library of lossless files with known sources would settle them. The tempo confidence is calibrated, against librosa; see `docs/dev/analyze.md`.
 
-- [ ] **Tempo above 170 BPM.** The prior still halves it. The reading records the level above as an alternate, which `bpm:` matches, so such a track is found by the tempo it is heard at, but the number playr shows is the halved one. Choosing between the two needs accent or metrical modelling. Until then `:bpm x2` corrects a track by hand.
+- [ ] **Tempo above 170 BPM, untagged.** A fast genre tag now shows the level above a halved reading (`FAST_GENRES`). An untagged track still reads at half; telling 87 from 174 without the tag needs accent or metrical modelling, and labelled tracks to calibrate it. `:bpm x2` corrects one by hand.
 
 - [ ] **A beat grid that follows drift.** The grid is one tempo for the whole track. On the user's library, 23 of the 57 tracks with a clear low-band pulse drift over 35 ms between its first and last quarter, mostly sampled hip hop and music played live (`crates/playr-core/tests/grid_report.rs`; "A beat grid" in `docs/dev/analyze.md`). A loop of a few bars does not notice; slicing a whole track at beats, and DJ decks syncing one, would. Options: beat markers, as Mixxx's variable grids, or a grid per section. Measure on music made to a click first: it may need nothing.
 
@@ -59,29 +50,11 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **System fonts on Windows.** The window draws other scripts with system fonts, tested on macOS and Linux. The Windows list of files is untried there. Right-to-left text may show out of order: egui 0.36 has no bidi algorithm (inference).
 
-- [ ] **One list for the selection and the queue.** Both are hand-edited track lists that save as playlists, in two views. Option B in `docs/dev/selection-and-queue.md` merges them. Weigh it with "Multi-row selection", which uses "selection" for rows picked in any view.
-
-- [ ] **Multi-row selection.** Select several rows at once, in the window especially. `dispatch` assumes one cursor row per view, so `Frontend` grows; see `docs/architecture.md`. `:toggle all` is the first step: it selects or unselects every listed row, keeping one cursor per view.
-
-### Output
-
-- [ ] **Bit-perfect output.** Select a `hw:` ALSA device so PipeWire cannot resample behind us. Today the `default` device accepts every rate and may convert internally, so "no resampling" means playr does not resample, not that nothing does. Negotiation accepts the 32-bit and 24-bit integer formats such devices offer, and `--device` selects one. A `hw:` device PipeWire holds is reported as busy; PipeWire holds only the device it is playing to, and releases an idle card after a few seconds.
-
 ### Server
 
 - [ ] **Tried on a Raspberry Pi.** The arm64 archive's glibc requirement, the ALSA default device from `~/.asoundrc`, the systemd user service with lingering, and the CPU cost of resampling are unchecked on a Pi. `docs/guide-server.md` assumes them.
 
 - [ ] **Tried in TouchOSC.** The generated layout rests on inference for three bindings: a radio sending its segment's index, a received speed scaled back onto the fader, and a dragged fader not moved by the progress sent back. See `docs/dev/server.md`.
-
-- [ ] **The terminal alongside the server.** The lock stops `playr` while `playr-server` runs. A `--tui` mode would drain the server's request channel in the terminal's loop, so both control one playback.
-
-### Formats
-
-- [ ] **Titles of MKV and WebM files from ffmpeg.** ffmpeg writes a file's title into the segment's Info and a stream's into its track entry, neither of which Symphonia 0.6 exposes; such files show their file names. **upstream**, unless playr reads the EBML itself.
-
-### Packaging
-
-- [ ] **Publishing to crates.io.** Manual, with `cargo publish --workspace`. `playr-gui` and `playr-server` have `publish = false`; decide whether they go to crates.io, and whether the release workflow publishes.
 
 ## Low
 
@@ -121,7 +94,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Server
 
-- [ ] **One view and cursor per server.** Every tab and device drives the same `Model`, so two people browsing move each other's cursor and view. Accepted for one user. A fix gives each page its own view and cursors, which `dispatch`'s one cursor per view does not allow; see "Multi-row selection" under Interface.
+- [ ] **One view and cursor per server.** Every tab and device drives the same `Model`, so two people browsing move each other's cursor and view. Accepted for one user. A fix gives each page its own view and cursors, which `dispatch`'s one cursor per view does not allow.
 
 - [ ] **Six open pages per browser.** A browser opens six connections to a host at most, and each page's event stream holds one, so with about six tabs of the same server open, a page's requests wait for a free connection and it stalls. Accepted for one user. Sharing one stream between tabs, with a `SharedWorker`, would lift it.
 
@@ -139,7 +112,7 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **WavPack, WMA, Musepack, APE.** No Rust decoders of any maturity. Each needs either a C binding or an implementation.
 
-- [ ] **DSD (.dsf, .dff).** Three separate pieces: a container reader, a decimation filter to convert 1-bit PDM to PCM, and a decision about DoP. DoP also needs bit-perfect output, which does not exist yet, so this is blocked on that item. SACD rips add DST, a fourth piece.
+- [ ] **DSD (.dsf, .dff).** Three separate pieces: a container reader, a decimation filter to convert 1-bit PDM to PCM, and a decision about DoP. DoP also needs bit-perfect output to a `hw:` device, which `:device` can now confirm. SACD rips add DST, a fourth piece.
 
 - [ ] **AAC gapless.** AAC decodes about 1900 frames long because encoder delay and padding are not trimmed. **upstream**, in Symphonia.
 

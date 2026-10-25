@@ -166,70 +166,7 @@ pub fn run(
             None => requests.recv_timeout(wait),
         };
         match request {
-            Ok(Request::Perform(action)) => model.perform(action),
-            Ok(Request::Command { line, reply }) => {
-                if reply.claim() {
-                    reply.send(run_line(&mut model, &line));
-                }
-            }
-            Ok(Request::Key { name, reply }) => {
-                if reply.claim() {
-                    reply.send(key(&mut model, &name));
-                }
-            }
-            Ok(Request::Row {
-                view,
-                row,
-                key,
-                command,
-                reply,
-            }) => {
-                if reply.claim() {
-                    reply.send(on_row(&mut model, view, row, &key, command.as_deref()));
-                }
-            }
-            Ok(Request::Search { query, done }) => search(&mut model, query, done),
-            Ok(Request::Answer(yes)) => model.answer(yes),
-            Ok(Request::Draft(answer)) => model.answer_draft(answer),
-            Ok(Request::Name(name)) => match model.input().clone() {
-                Input::SavePlaylist(_) => model.save_as(&name),
-                Input::RenamePlaylist { from, .. } => model.rename_to(&from, &name),
-                _ => {}
-            },
-            Ok(Request::Close) => match model.input() {
-                Input::Search(_) => model.end_search(true),
-                _ => model.set_input(Input::None),
-            },
-            Ok(Request::Read { query, reply }) => {
-                if reply.claim() {
-                    reply.send(match query {
-                        Query::Rows { view, start, count } => web::rows(&model, view, start, count),
-                        Query::Keys => web::keys(&model),
-                        Query::Help { commands } => web::help(&model, commands),
-                        Query::Completions(text) => web::completions(&model, &text),
-                    });
-                }
-            }
-            Ok(Request::Seek(mut fraction)) => {
-                for queued in requests.try_iter() {
-                    match queued {
-                        Request::Seek(later) => fraction = later,
-                        other => {
-                            held = Some(other);
-                            break;
-                        }
-                    }
-                }
-                seek(&mut model, fraction);
-            }
-            Ok(Request::PlayPlaylistAt(index)) => {
-                let mut lists = model.session().playlists().to_vec();
-                // Ids follow creation, and replacing a playlist keeps its id.
-                lists.sort_by_key(|p| p.id);
-                if let Some(list) = lists.get(index) {
-                    model.perform(Action::PlayPlaylist(list.name.clone()));
-                }
-            }
+            Ok(request) => held = handle(&mut model, request, &requests),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -246,6 +183,101 @@ pub fn run(
         }
     }
     model
+}
+
+/// Runs every request waiting, for a frontend that owns `model` in its own
+/// loop, as the terminal does under `playr-server --tui`.
+pub fn drain(model: &mut Model, requests: &Receiver<Request>) {
+    let mut next = requests.try_recv().ok();
+    while let Some(request) = next {
+        next = handle(model, request, requests).or_else(|| requests.try_recv().ok());
+    }
+}
+
+/// Runs one request. Returns a request taken from `requests` while merging
+/// seeks, to run next.
+///
+/// A request read in the view shown moves the model off a view the page
+/// lacks, as the terminal's sampler under `--tui`, to the library first.
+pub fn handle(
+    model: &mut Model,
+    request: Request,
+    requests: &Receiver<Request>,
+) -> Option<Request> {
+    if matches!(request, Request::Command { .. } | Request::Key { .. })
+        && !web::VIEWS.contains(&model.view())
+    {
+        model.set_view(View::Library);
+    }
+    match request {
+        Request::Perform(action) => model.perform(action),
+        Request::Command { line, reply } => {
+            if reply.claim() {
+                reply.send(run_line(model, &line));
+            }
+        }
+        Request::Key { name, reply } => {
+            if reply.claim() {
+                reply.send(key(model, &name));
+            }
+        }
+        Request::Row {
+            view,
+            row,
+            key,
+            command,
+            reply,
+        } => {
+            if reply.claim() {
+                reply.send(on_row(model, view, row, &key, command.as_deref()));
+            }
+        }
+        Request::Search { query, done } => search(model, query, done),
+        Request::Answer(yes) => model.answer(yes),
+        Request::Draft(answer) => model.answer_draft(answer),
+        Request::Name(name) => match model.input().clone() {
+            Input::SavePlaylist(_) => model.save_as(&name),
+            Input::RenamePlaylist { from, .. } => model.rename_to(&from, &name),
+            _ => {}
+        },
+        Request::Close => match model.input() {
+            Input::Search(_) => model.end_search(true),
+            _ => model.set_input(Input::None),
+        },
+        Request::Read { query, reply } => {
+            if reply.claim() {
+                reply.send(match query {
+                    Query::Rows { view, start, count } => web::rows(model, view, start, count),
+                    Query::Keys => web::keys(model),
+                    Query::Help { commands } => web::help(model, commands),
+                    Query::Completions(text) => web::completions(model, &text),
+                });
+            }
+        }
+        Request::Seek(mut fraction) => {
+            let mut held = None;
+            for queued in requests.try_iter() {
+                match queued {
+                    Request::Seek(later) => fraction = later,
+                    other => {
+                        held = Some(other);
+                        break;
+                    }
+                }
+            }
+            seek(model, fraction);
+            return held;
+        }
+        Request::PlayPlaylistAt(index) => {
+            let mut lists = model.session().playlists().to_vec();
+            // Ids follow creation, and replacing a playlist keeps its id.
+            lists.sort_by_key(|p| p.id);
+            if let Some(list) = lists.get(index) {
+                model.perform(Action::PlayPlaylist(list.name.clone()));
+            }
+        }
+    }
+    None
 }
 
 /// Seeks to `fraction` of the playing track, short of its end. The player is

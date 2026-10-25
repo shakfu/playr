@@ -54,7 +54,7 @@ playr-server
 
 - **One owner, no `Mutex`.** HTTP and OSC threads send requests over `mpsc`. A request of several steps runs as one message, so nothing lands between them: check a row, set the cursor, run a command.
 
-- **The channel does not know who owns `Model`.** A later `--tui` can drain it from the terminal's loop.
+- **The channel does not know who owns `Model`.** Under `--tui`, the terminal's loop owns it and runs `owner::drain` after each frame's key, polling every `owner::FRAME`. The two share one view: a page request read in the view shown moves the model off a view the page lacks, and `web::screen` reports such a view as the library.
 
 ## HTTP
 
@@ -137,7 +137,7 @@ Sent to `--osc-reply HOST:PORT`:
 
 - The server claims the lock in `playr_app::instance`. While it runs, `playr`, `playr scan` and `playr prune` refuse to start.
 
-- To use the terminal over SSH, stop the service first.
+- To use the terminal over SSH, stop the service first, or run `playr-server --tui`.
 
 - The page's rescan button appears when the library has a recorded root, and re-scans those roots. The directories come from `playr scan DIR`, never from a flag or a setting: a directory named in the server's configuration would be a second place roots live.
 

@@ -93,6 +93,7 @@ main { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minma
 .row .sel button { border: none; padding: 0; min-height: 0; width: 100%; color: var(--dim); }
 .row .sel button[aria-pressed="true"] { color: var(--mark); font-weight: 700; }
 .row.cursor { background: var(--selected-bg); font-weight: 700; }
+.row.picked { background: var(--selected-bg); }
 .row.cursor .album, .row.cursor .time, .row.cursor .tracks { color: var(--dim-selected); }
 .row.playing .title { color: var(--accent); }
 .row.played .title { color: var(--dim); }
@@ -275,6 +276,8 @@ dialog input[type=text] { width: 100%; }
         <option value="artist">artist</option><option value="album">album</option>
         <option value="year">year</option><option value="time">time</option>
         <option value="tempo">tempo</option><option value="loudness">loudness</option>
+        <option value="added">added</option><option value="played">played</option>
+        <option value="plays">plays</option>
       </select></label>
       <label><input type="checkbox" id="sort-desc"> reversed</label>
       <label>replaygain <select id="replaygain">
@@ -458,13 +461,15 @@ function drawRow(i, row, cursor, h, columns) {
   el.dataset.index = i;
   const isCursor = i === cursor;
   el.setAttribute("aria-selected", String(isCursor));
-  el.append(span("cur", isCursor ? ">" : ""));
+  // A picked row is marked as the terminal marks it.
+  el.append(span("cur", isCursor ? ">" : row && row.picked ? "*" : ""));
   if (!row) {
     el.classList.add("loading");
     el.append(span("title", "..."));
     return el;
   }
   if (isCursor) el.classList.add("cursor");
+  if (row.picked) el.classList.add("picked");
   if (list.view === "playlists") {
     el.classList.add("playlist");
     const detail = row.search != null ? "/ " + row.search
@@ -521,7 +526,7 @@ function shownColumns() {
     const kept = shown.filter(([c]) => !TABLET_DROPS.has(c.name));
     if (kept.some(([c]) => !c.numeric)) shown = kept;
   }
-  const widths = shown.map(([c]) => c.numeric ? "4.5em" : c.name === "title" ? "minmax(0, 1.6fr)" : "minmax(0, 1fr)");
+  const widths = shown.map(([c]) => c.date ? "6.5em" : c.numeric ? "4.5em" : c.name === "title" ? "minmax(0, 1.6fr)" : "minmax(0, 1fr)");
   $("list").style.setProperty("--cols", ["1.5em 2em", ...widths, "2.5em"].join(" "));
   return shown;
 }

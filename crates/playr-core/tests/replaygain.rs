@@ -801,3 +801,59 @@ fn a_grid_set_by_hand_is_shown_kept_through_analysis_and_pruned() {
     db::prune_missing(&conn, &root).unwrap();
     assert_eq!(db::analysis::grid_edit(&conn, &t.path).unwrap(), None);
 }
+
+/// A track tagged with a genre played above 170 BPM shows the level above a
+/// halved reading, when the reading recorded it; `:bpm` still corrects it,
+/// and a reset goes back to the doubled level.
+#[test]
+fn a_fast_genre_shows_the_level_above_a_halved_reading() {
+    let conn = db::open_memory().unwrap();
+    let read = |path: &str, genre: Option<&str>| {
+        let mut t = library_track(&conn, path, "X");
+        t.genre = genre.map(Into::into);
+        db::upsert(&conn, &t).unwrap();
+        let a = Analysis {
+            tempo: Some(analysis::tempo::Estimate {
+                bpm: 87.0,
+                confidence: 0.9,
+                alt: Some(174.0),
+            }),
+            ..Default::default()
+        };
+        db::analysis::put(&conn, &t, a).unwrap();
+        t
+    };
+    let dnb = read("/m/dnb.flac", Some("Drum & Bass"));
+    let hiphop = read("/m/hiphop.flac", Some("Hip Hop"));
+    let bpm = |t: &Track| db::analysis::bpm_of(&conn, &t.path).unwrap();
+    assert_eq!(bpm(&dnb), Some(174.0));
+    assert_eq!(bpm(&hiphop), Some(87.0));
+    let measured = db::analysis::measures(&conn, &[dnb.clone(), hiphop.clone()]).unwrap();
+    assert_eq!(measured[&dnb.path].bpm, Some(174.0));
+    assert_eq!(measured[&hiphop.path].bpm, Some(87.0));
+    let found = |q: &str| db::query::search(&conn, q).unwrap().len();
+    // Both match at 174: one as shown, one through the level recorded.
+    assert_eq!(found("bpm:174"), 2);
+    assert_eq!(found("genre:drum bpm:170.."), 1);
+    // Halved by hand, it stays halved; a factor of 2 is the genre's, and removes it.
+    db::analysis::set_tempo_fix(&conn, &dnb.path, 1.0).unwrap();
+    assert_eq!(bpm(&dnb), Some(87.0));
+    db::analysis::set_tempo_fix(&conn, &dnb.path, 2.0).unwrap();
+    assert_eq!(db::analysis::tempo_fix(&conn, &dnb.path).unwrap(), 2.0);
+    assert_eq!(bpm(&dnb), Some(174.0));
+    // A BPM tag is believed as it is.
+    let mut tagged = library_track(&conn, "/m/tagged.flac", "X");
+    tagged.genre = Some("Jungle".into());
+    db::upsert(&conn, &tagged).unwrap();
+    let a = Analysis {
+        bpm_tag: Some(86.0),
+        tempo: Some(analysis::tempo::Estimate {
+            bpm: 86.0,
+            confidence: 0.9,
+            alt: Some(172.0),
+        }),
+        ..Default::default()
+    };
+    db::analysis::put(&conn, &tagged, a).unwrap();
+    assert_eq!(bpm(&tagged), Some(86.0));
+}

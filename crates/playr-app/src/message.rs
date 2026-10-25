@@ -154,6 +154,9 @@ pub enum Message {
     Output {
         device: Option<playr_core::audio::output::DeviceInfo>,
         sink: Option<String>,
+        /// What changes samples on the way, as `output::inexact` gives it;
+        /// `None` when nothing is playing to judge, or not asked.
+        inexact: Option<Vec<&'static str>>,
     },
     Tape(crate::tape::TapeMessage),
     Dj(crate::dj::DjMessage),
@@ -167,6 +170,12 @@ pub enum Message {
     MasterStopping,
     MasterRecorded(playr_core::audio::record::Recorded),
     MasterFailed(String),
+    /// playr-server's page is at this address, said at the start of `--tui`.
+    Serving(String),
+    /// This many rows are picked in the view shown.
+    Picked(usize),
+    /// This many picked rows were removed.
+    RemovedPicked(usize),
 }
 
 impl From<Notice> for Message {
@@ -258,19 +267,23 @@ pub fn text(message: &Message) -> String {
         Message::StopIn(None) => "sleep timer off".into(),
         Message::Slept => "sleep timer ran out; stopped".into(),
         Message::Output { device: None, .. } => "output device unknown".into(),
-        // The sink says more than the ALSA name, which names only PipeWire.
         Message::Output {
             device: Some(d),
-            sink: Some(sink),
-        } => format!("output: {}, PipeWire sink {sink}", d.id),
-        Message::Output {
-            device: Some(d), ..
-        } if d.name.is_empty() => {
-            format!("output: {}", d.id)
+            sink,
+            inexact,
+        } => {
+            // The sink says more than the ALSA name, which names only PipeWire.
+            let named = match sink {
+                Some(sink) => format!("output: {}, PipeWire sink {sink}", d.id),
+                None if d.name.is_empty() => format!("output: {}", d.id),
+                None => format!("output: {} ({})", d.id, d.name),
+            };
+            match inexact.as_deref() {
+                None => named,
+                Some([]) => format!("{named}; bit-perfect"),
+                Some(why) => format!("{named}; not bit-perfect: {}", why.join(", ")),
+            }
         }
-        Message::Output {
-            device: Some(d), ..
-        } => format!("output: {} ({})", d.id, d.name),
         Message::Tape(m) => tape_text(m),
         Message::Dj(m) => dj_text(m),
         Message::Mix(mix) => mix_text(mix),
@@ -291,6 +304,12 @@ pub fn text(message: &Message) -> String {
             }
         }
         Message::MasterFailed(e) => format!("master recording: {e}"),
+        Message::Serving(address) => format!("serving the page at {address}"),
+        Message::Picked(0) => "no rows picked".into(),
+        Message::Picked(1) => "1 row picked".into(),
+        Message::Picked(n) => format!("{n} rows picked"),
+        Message::RemovedPicked(1) => "removed 1 track".into(),
+        Message::RemovedPicked(n) => format!("removed {n} tracks"),
         Message::NoPlaylistUnderCursor => {
             "no playlist under the cursor in the playlists view".into()
         }

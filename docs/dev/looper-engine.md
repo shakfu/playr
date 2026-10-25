@@ -126,6 +126,18 @@ buffer[w] = clip(dc(lowpass(buffer[w] * feedback + sum(send_i * voice_i))))
 
 The callback does not lock or allocate, as the player's `render` does not.
 
+## Modulation
+
+- **Two LFOs, four slots.** Over a source-per-field depth, which would add a control to every field of lanes that have little room; and over envelope followers and random walks, which can follow if the LFOs prove useful.
+
+- **Offsets after the settings.** Each modulated value has its own `Ramp`, applied after the setting's: added for pan, octaves and dB, a factor for gains. A setting still ramps over its own 20 ms, so a modulation tick cannot step it. With no route, the ramps hold their identity, and the tick is skipped, so a tape without routes renders bit for bit as before.
+
+- **Control rate.** Every 32 frames the LFOs advance and every ramp is retargeted over the next 32. A synced LFO takes its phase from voice 1's head in its window, so it stays in phase across rate changes and jumps. The effects' settings are sent to `Buses::set` each tick only while routed, then once more to restore them. Measured in a release build at 48 kHz: 0.72% of one core for a tape with no routes, 1.93% with four voice routes, the EQ retuning each sample, and 0.85% with four effect routes.
+
+- **Gains dip.** A gain's factor is 1 at the LFO's peak and `1 - |depth|` at its trough, so modulation never raises a level above its setting, and a voice at level 1 can still be modulated.
+
+- **Start moves the window.** It shifts the window as set by up to its length, kept inside the loop, through the same path as a drag: a head inside the old window takes the new one at its next wrap.
+
 ## Saving
 
 Two things can be saved:

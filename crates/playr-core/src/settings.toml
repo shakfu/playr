@@ -17,8 +17,9 @@ speed = 0
 # Seconds each track fades in at its start and out at its end, 0 to 10; 0
 # plays tracks as they are, gapless. :fade changes it for the session.
 fade = 0
-# Seconds each track overlaps the next, 0 to 10, where the two share a sample
-# rate and channels; elsewhere they join gaplessly. At a join it replaces fade.
+# Seconds each track overlaps the next, 0 to 10. A next track at another
+# sample rate is resampled to the first's, to its end. At a join it replaces
+# fade.
 # :crossfade changes it for the session.
 crossfade = 0
 # How readily :slice onsets finds hits, 0 to 1; higher finds more.
@@ -58,8 +59,9 @@ device = ""
 # `playr analyze`, else from the files' tags; files are never changed.
 replaygain = "off"
 # The columns a track list shows, in order: title, artist, album_artist,
-# album, genre, disc, track, year, time, tempo, loudness, peak or path. tempo,
-# loudness and peak come from `playr analyze`. A [terminal], [gui] or
+# album, genre, disc, track, year, time, tempo, loudness, peak, path, added,
+# played or plays. tempo, loudness and peak come from `playr analyze`; added
+# and played are UTC days, and plays a count. A [terminal], [gui] or
 # [server] table may name its own list.
 columns = ["artist", "album", "title", "time"]
 # The keys the library is sorted by, most important first; add `desc` to a

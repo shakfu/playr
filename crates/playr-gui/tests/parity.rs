@@ -55,6 +55,7 @@ fn every_action() -> Vec<Action> {
         Action::ShowInfo,
         Action::ShowMessages,
         Action::ToggleAll,
+        Action::Pick(playr_app::action::Pick::Cursor),
         Action::Filter(playr_app::action::FilterBy::Album),
         Action::Filter(playr_app::action::FilterBy::Artist),
         Action::ShowDevice,
@@ -184,6 +185,7 @@ fn every_action() -> Vec<Action> {
             | Action::ShowMessages
             | Action::Filter(_)
             | Action::ToggleAll
+            | Action::Pick(_)
             | Action::ShowDevice
             | Action::ForgetRoot(_)
             | Action::Prune(_)

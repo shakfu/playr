@@ -36,6 +36,7 @@ struct Headless {
     tape: playr_app::tape::Deck,
     dj: playr_app::dj::Decks,
     mix: playr_app::mix::Mix,
+    picks: playr_app::dispatch::Picks,
 }
 
 fn slot(view: View) -> Option<usize> {
@@ -123,6 +124,12 @@ impl Frontend for Headless {
     fn mix(&mut self) -> &mut playr_app::mix::Mix {
         &mut self.mix
     }
+    fn picks(&self) -> &playr_app::dispatch::Picks {
+        &self.picks
+    }
+    fn picks_mut(&mut self) -> &mut playr_app::dispatch::Picks {
+        &mut self.picks
+    }
 }
 
 /// A headless frontend over a library file of tracks a, b and c, and
@@ -166,6 +173,7 @@ fn headless_on(player: playr_core::audio::Player) -> (Headless, tempfile::TempDi
         tape: playr_app::tape::Deck::manual(),
         dj: playr_app::dj::Decks::manual(),
         mix: playr_app::mix::Mix::new(playr_app::mix::Law::Db, 1.0),
+        picks: Default::default(),
     };
     (frontend, dir)
 }
@@ -1933,6 +1941,10 @@ fn the_tape_kept_resumes_its_loops_and_settings_on_a_new_deck() {
         "tape reverb model plate",
         "tape reverb decay 3.5",
         "tape print-fx 0.25",
+        "tape lfo b square",
+        "tape lfo a sync 1/2",
+        "tape mod 1 a pan 2 0.5",
+        "tape mod 3 b delay-time -0.25",
         "tape play",
     ] {
         run(&mut f, line);
@@ -1944,6 +1956,9 @@ fn the_tape_kept_resumes_its_loops_and_settings_on_a_new_deck() {
         (fx.time, fx.sync),
         (375.0, Some(tape::Division::DottedEighth))
     );
+    let state = f.tape.state().unwrap();
+    assert_eq!(state.lfos[0].1, tape::Speed::Sync(0.5));
+    assert_eq!(state.routes.iter().flatten().count(), 2);
     // How the Tape tab shows the lanes is kept with them.
     let layout = tape::Layout {
         folded: [None, Some(true), Some(false), None],

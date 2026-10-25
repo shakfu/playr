@@ -167,7 +167,10 @@ fn search_json_prints_every_match_with_its_columns() {
     assert_eq!(piece["duration_ms"], 393_000);
     assert!(piece["album"].is_null(), "{piece}");
     assert!(piece["id"].as_i64().unwrap() > 0);
-    assert_eq!(piece.as_object().unwrap().len(), 16, "{piece}");
+    assert!(piece["added_at"].as_i64().unwrap() > 0, "{piece}");
+    assert!(piece["played_at"].is_null(), "{piece}");
+    assert_eq!(piece["plays"], 0);
+    assert_eq!(piece.as_object().unwrap().len(), 19, "{piece}");
 
     // No match still prints valid JSON, and fails as a plain search does.
     let (code, stdout, _) = output(&db_path, &["search", "--json", "coltrane"]);

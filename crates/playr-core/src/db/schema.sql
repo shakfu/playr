@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS tracks (
   channels     INTEGER,
   bit_depth    INTEGER,
   mtime        INTEGER NOT NULL,  -- nanoseconds since the Unix epoch
-  size         INTEGER NOT NULL
+  size         INTEGER NOT NULL,
+  added_at     INTEGER            -- seconds since the Unix epoch; NULL if
+                                  -- scanned before playr kept it
 );
 
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
@@ -52,6 +54,16 @@ CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
           COALESCE(NULLIF(rtrim(rtrim(substr((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), length(rtrim((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), replace((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), '/', ''))) + 1), replace(substr((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), length(rtrim((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), replace((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), '/', ''))) + 1), '.', '')), '.'), ''),
                    substr((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), length(rtrim((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), replace((CASE WHEN substr(new.path, 2, 2) = ':\' OR substr(new.path, 1, 2) = '\\' THEN replace(new.path, '\', '/') ELSE new.path END), '/', ''))) + 1)));
 END;
+
+-- Each time a track played far enough to count, as `Model` judges it.
+-- Keyed by path, as marks are. Compatible with older libraries: CREATE IF
+-- NOT EXISTS needs no version bump.
+CREATE TABLE IF NOT EXISTS plays (
+  path TEXT NOT NULL,
+  at   INTEGER NOT NULL  -- seconds since the Unix epoch
+);
+
+CREATE INDEX IF NOT EXISTS idx_plays_path ON plays(path, at);
 
 CREATE TABLE IF NOT EXISTS playlists (
   id         INTEGER PRIMARY KEY,

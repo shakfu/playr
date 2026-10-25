@@ -771,7 +771,7 @@ fn completion_offers_commands_usable_here_then_their_arguments() {
     };
     assert_eq!(
         completions("p", Library, &playlists, &Vec::new, true),
-        ["play", "playlist", "prune", "preview", "pause", "prev",]
+        ["play", "playlist", "prune", "preview", "pause", "prev", "pick"]
     );
     assert_eq!(
         completions("", Library, &playlists, &Vec::new, true).len(),
@@ -835,12 +835,12 @@ fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     assert_eq!(line.text, "play");
     line.complete(true, Library, &[], &Vec::new, true);
     assert_eq!(line.text, "playlist");
-    for _ in 0..5 {
+    for _ in 0..6 {
         line.complete(true, Library, &[], &Vec::new, true);
     }
     assert_eq!(line.text, "play", "the cycle does not wrap");
     line.complete(false, Library, &[], &Vec::new, true);
-    assert_eq!(line.text, "prev");
+    assert_eq!(line.text, "pick");
 
     // Typing ends the cycle, so Tab now completes the new text.
     line.text.clear();
@@ -851,7 +851,7 @@ fn tab_cycles_forward_and_back_and_typing_starts_afresh() {
     let mut back = CommandLine::default();
     back.push('p');
     back.complete(false, Library, &[], &Vec::new, true);
-    assert_eq!(back.text, "prev", "shift-tab does not start from the last");
+    assert_eq!(back.text, "pick", "shift-tab does not start from the last");
 
     let mut none = CommandLine::default();
     none.push('z');
@@ -1536,6 +1536,7 @@ fn bpm_corrects_the_tempo_by_octaves() {
 
 #[test]
 fn tape_commands_parse_in_any_view_and_round_trip() {
+    use playr_app::tape::{Dest, LfoSetting as L, Route, Shape};
     use playr_app::tape::{Division, FxSetting as F, Pos, TapeAction as T, VoiceSetting as V};
     use playr_looper::{DelayModel, ReverbModel};
     let pct = Pos::Percent;
@@ -1631,6 +1632,32 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ("tape reverb damp 0.2", T::Fx(F::Damp(0.2))),
         ("tape reverb return 0.5", T::Fx(F::ReverbReturn(0.5))),
         ("tape print-fx 0.3", T::Fx(F::Print(0.3))),
+        ("tape lfo a triangle", T::Lfo(0, L::Shape(Shape::Triangle))),
+        ("tape lfo b 0.25", T::Lfo(1, L::Hz(0.25))),
+        ("tape lfo a sync 1/4", T::Lfo(0, L::Sync(Division::Quarter))),
+        (
+            "tape mod 1 a pan 2 0.5",
+            T::Route(
+                1,
+                Some(Route {
+                    lfo: 0,
+                    dest: Dest::Pan(1),
+                    depth: 0.5,
+                }),
+            ),
+        ),
+        (
+            "tape mod 4 b delay-time -0.3",
+            T::Route(
+                4,
+                Some(Route {
+                    lfo: 1,
+                    dest: Dest::DelayTime,
+                    depth: -0.3,
+                }),
+            ),
+        ),
+        ("tape mod 2 off", T::Route(2, None)),
     ] {
         let action = Action::Tape(action);
         for view in [Library, Sampler] {
@@ -1681,6 +1708,12 @@ fn tape_commands_parse_in_any_view_and_round_trip() {
         ),
         ("tape reverb decay 30", "decay is 0.1 to 20"),
         ("tape print-fx 2", "print-fx is 0 to 1"),
+        ("tape lfo c sine", "LFOs are a and b"),
+        ("tape lfo a 50", "an LFO's rate in Hz is 0.01 to 20"),
+        ("tape mod 5 a pan 1 0.5", "slots are 1 to 4"),
+        ("tape mod 1 a pan 5 0.5", "no destination pan"),
+        ("tape mod 1 a wobble 0.5", "no destination wobble"),
+        ("tape mod 1 a pan 1 2", "depth is -1 to 1"),
     ] {
         let got = parse(text, Library).unwrap_err();
         assert!(got.contains(error), "{text}: {got}");

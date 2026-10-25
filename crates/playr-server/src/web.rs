@@ -86,7 +86,7 @@ pub fn allowed(action: &Action) -> bool {
         | Interp(_) => false,
         // The page draws no message list.
         ShowMessages => false,
-        Filter(_) | ToggleAll => true,
+        Filter(_) | ToggleAll | Pick(_) => true,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add
         | Enqueue(_) | EnqueueAll | ClearQueue | Remove | MoveTrack(_) | ClearSelection
@@ -125,7 +125,9 @@ pub fn screen(model: &Model) -> Value {
     });
     let cursors = model.cursors();
     json!({
-        "view": view_name(model.view()),
+        // A view the page lacks, as the terminal's under `--tui`, reads as
+        // the library until a request from the page moves the model there.
+        "view": view_name(Some(model.view()).filter(|v| VIEWS.contains(v)).unwrap_or(View::Library)),
         "counts": {
             "library": model.listed().len(),
             "selection": model.session().selection().len(),
@@ -137,6 +139,7 @@ pub fn screen(model: &Model) -> Value {
             "name": c.name(),
             "heading": c.heading(),
             "numeric": c.numeric(),
+            "date": c.date(),
         })).collect::<Vec<_>>(),
         "editing": model.session().editing().map(|p| p.name.clone()),
         "cursors": {
@@ -211,6 +214,13 @@ fn lists_revision(model: &Model) -> u64 {
     }
     for t in model.queue() {
         t.path.hash(&mut hasher);
+    }
+    // Sorted, as a set's order varies between runs of the same picks.
+    let picks = model.picks();
+    for set in [&picks.library, &picks.selection, &picks.queue] {
+        let mut paths: Vec<&String> = set.iter().collect();
+        paths.sort();
+        paths.hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -295,6 +305,7 @@ pub fn rows(model: &Model, view: View, start: usize, count: usize) -> Value {
             .collect(),
         _ => Default::default(),
     };
+    let picks = model.picks().of(view);
     let rows: Vec<Value> = tracks
         .iter()
         .skip(start)
@@ -309,6 +320,7 @@ pub fn rows(model: &Model, view: View, start: usize, count: usize) -> Value {
                 // One per column of the `columns` state, for rows wide enough.
                 "cells": model.columns().iter().map(|&c| cell(t, model.measures(t), c).text(c)).collect::<Vec<_>>(),
                 "selected": selected.contains(t.path.as_str()),
+                "picked": picks.is_some_and(|p| p.contains(&t.path)),
             })
         })
         .collect();

@@ -65,7 +65,7 @@ fn an_empty_file_gives_the_defaults() {
     assert_eq!(config, Config::default());
     assert_eq!(config.keys, Keymap::default());
     assert_eq!(config.settings, Settings::default());
-    assert_eq!(Keymap::default().bindings().len(), 162);
+    assert_eq!(Keymap::default().bindings().len(), 165);
 }
 
 #[test]
@@ -260,7 +260,7 @@ fn a_program_reads_its_own_table_over_the_shared_keys() {
     let bad = "[gui]\ncolumns = ['nope']\n";
     assert_eq!(
         Config::parse_for(Program::Gui, bad).unwrap_err()[0],
-        "line 2: unknown column nope; choices: title, artist, album_artist, album, genre, disc, track, year, time, tempo, loudness, peak, path"
+        "line 2: unknown column nope; choices: title, artist, album_artist, album, genre, disc, track, year, time, tempo, loudness, peak, path, added, played, plays"
     );
     assert_eq!(
         Config::parse_for(Program::Gui, "[gui]\nfrob = 1\n").unwrap_err(),

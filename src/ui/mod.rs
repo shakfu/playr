@@ -130,6 +130,8 @@ pub struct Screen<'a> {
     pub columns: &'a [Column],
     /// What `playr analyze` measured, by path, for the columns that show it.
     pub measures: &'a HashMap<String, Measures>,
+    /// Rows picked in each view, drawn `*`.
+    pub picks: Option<&'a playr_app::dispatch::Picks>,
     pub lists: Lists,
     /// Whether to draw in colour. Without it the cursor row is reversed.
     pub colour: bool,
@@ -167,6 +169,7 @@ impl<'a> Screen<'a> {
             bpm: None,
             columns: DEFAULT_COLUMNS,
             measures: &NO_MEASURES,
+            picks: None,
             keys,
             sampler,
             help_scroll: 0,
@@ -209,7 +212,12 @@ impl App {
         tracks: Vec<Track>,
         config: Config,
     ) -> Self {
-        let mut model = Model::new(conn, player, tracks, config);
+        Self::with_model(Model::new(conn, player, tracks, config))
+    }
+
+    /// Builds the app over a model built elsewhere, as playr-server's `--tui`
+    /// builds it.
+    pub fn with_model(mut model: Model) -> Self {
         // In a terminal the Braille display shows a waveform's shape best.
         model.set_display(playr_app::Display::Braille);
         App {
@@ -271,6 +279,7 @@ impl App {
             bpm: m.bpm(),
             columns: m.columns(),
             measures: m.measures_map(),
+            picks: Some(m.picks()),
             lists: Lists {
                 library: scroll(c.library, o.library),
                 loops: scroll(c.loops, o.loops),
@@ -311,7 +320,20 @@ impl App {
         self.help_scroll = drawn.help_scroll;
     }
 
-    pub fn run(mut self, terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
+    pub fn run(self, terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
+        // A short poll keeps the progress bar moving without busy-waiting.
+        self.run_with(terminal, Duration::from_millis(200), |_| {})
+    }
+
+    /// As [`App::run`], waiting up to `poll` for a key, then calling `each`
+    /// with the model, so another frontend driving it, as playr-server's
+    /// page does under `--tui`, takes its turn every frame.
+    pub fn run_with(
+        mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+        poll: Duration,
+        mut each: impl FnMut(&mut Model),
+    ) -> std::io::Result<()> {
         while !self.model.quitting() {
             self.refresh();
             let mut drawn = None;
@@ -320,14 +342,14 @@ impl App {
                 self.drawn(drawn);
             }
 
-            // A short poll keeps the progress bar moving without busy-waiting.
-            if event::poll(Duration::from_millis(200))? {
+            if event::poll(poll)? {
                 if let TermEvent::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         self.on_key(key);
                     }
                 }
             }
+            each(&mut self.model);
             self.model.expire_message();
         }
         Ok(())

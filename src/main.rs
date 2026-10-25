@@ -588,6 +588,9 @@ fn tracks_json(tracks: &[Track]) -> String {
                 "bit_depth": t.bit_depth,
                 "mtime": t.mtime,
                 "size": t.size,
+                "added_at": t.added_at,
+                "played_at": t.played_at,
+                "plays": t.plays,
             })
         })
         .collect();

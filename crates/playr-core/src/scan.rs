@@ -102,7 +102,7 @@ pub fn read_track(path: &Path) -> Option<Track> {
                 .map(|(_, v)| v.trim().to_string())
                 .filter(|v| !v.is_empty())
         };
-        t.title = t.title.or(get(&["title"]));
+        t.title = t.title.or(get(&["title"])).or_else(|| matroska_title(path));
         t.artist = t.artist.or(get(&["artist"]));
         t.album = t.album.or(get(&["album"]));
         t.genre = t.genre.or(get(&["genre"]));
@@ -185,6 +185,114 @@ fn caf_info(path: &Path) -> Vec<(String, String)> {
         }
     }
     Vec::new()
+}
+
+/// A Matroska file's title, which Symphonia does not expose: the segment
+/// Info's, else the first track entry's name. `None` for any other file.
+/// Reads up to the first Cluster, before which writers put both.
+fn matroska_title(path: &Path) -> Option<String> {
+    use std::io::{BufReader, Read, Seek, SeekFrom};
+    const SEGMENT: u32 = 0x1853_8067;
+    const INFO: u32 = 0x1549_A966;
+    const TRACKS: u32 = 0x1654_AE6B;
+    const TRACK_ENTRY: u32 = 0xAE;
+    const CLUSTER: u32 = 0x1F43_B675;
+    const TITLE: u32 = 0x7BA9;
+    const NAME: u32 = 0x536E;
+
+    /// An EBML variable-length integer: an ID keeps its length marker, a size
+    /// drops it. `Some(None)` is a size of all ones, unknown.
+    fn vint(f: &mut impl Read, keep_marker: bool) -> Option<Option<u64>> {
+        let mut b = [0u8; 1];
+        f.read_exact(&mut b).ok()?;
+        let len = b[0].leading_zeros() as usize + 1;
+        if len > 8 || (keep_marker && len > 4) {
+            return None;
+        }
+        let mask = 0xFFu64 >> len;
+        let mut v = u64::from(b[0]) & if keep_marker { 0xFF } else { mask };
+        let mut ones = v == mask;
+        for _ in 1..len {
+            f.read_exact(&mut b).ok()?;
+            ones &= b[0] == 0xFF;
+            v = v << 8 | u64::from(b[0]);
+        }
+        Some((keep_marker || !ones).then_some(v))
+    }
+    /// The next element's ID and size, with `end` the parent's last byte.
+    fn element<R: Read + Seek>(f: &mut R, end: u64) -> Option<(u32, Option<u64>)> {
+        if f.stream_position().ok()? >= end {
+            return None;
+        }
+        let id = vint(f, true)??;
+        Some((id as u32, vint(f, false)?))
+    }
+    /// A string element's text, if it is short enough to be a title.
+    fn text(f: &mut impl Read, size: u64) -> Option<String> {
+        let mut data = vec![0u8; usize::try_from(size).ok().filter(|&n| n < 4096)?];
+        f.read_exact(&mut data).ok()?;
+        let s = String::from_utf8_lossy(&data);
+        let s = s.trim_matches(char::from(0)).trim();
+        (!s.is_empty()).then(|| s.to_string())
+    }
+
+    let mut f = BufReader::new(std::fs::File::open(path).ok()?);
+    let (0x1A45_DFA3, Some(n)) = element(&mut f, u64::MAX)? else {
+        return None;
+    };
+    f.seek_relative(n as i64).ok()?;
+    let (SEGMENT, size) = element(&mut f, u64::MAX)? else {
+        return None;
+    };
+    let seg_end = size.map_or(u64::MAX, |n| f.stream_position().unwrap_or(0) + n);
+    // Calls `each` on every child of known size in `[pos, end)`, leaving the
+    // reader after the child whatever `each` read; stops when it returns true.
+    fn children<R: Read + Seek>(
+        f: &mut R,
+        end: u64,
+        mut each: impl FnMut(&mut R, u32, u64) -> bool,
+    ) -> Option<()> {
+        while let Some((id, Some(size))) = element(f, end) {
+            let child_end = f.stream_position().ok()?.saturating_add(size);
+            if each(f, id, size) {
+                break;
+            }
+            f.seek(SeekFrom::Start(child_end)).ok()?;
+        }
+        Some(())
+    }
+
+    let (mut title, mut name) = (None, None);
+    children(&mut f, seg_end, |f, id, size| {
+        let end = f.stream_position().unwrap_or(u64::MAX).saturating_add(size);
+        match id {
+            INFO => {
+                children(f, end, |f, id, size| {
+                    if id == TITLE {
+                        title = text(f, size);
+                    }
+                    title.is_some()
+                });
+            }
+            TRACKS if name.is_none() => {
+                children(f, end, |f, id, size| {
+                    if id == TRACK_ENTRY {
+                        let entry_end = f.stream_position().unwrap_or(u64::MAX) + size;
+                        children(f, entry_end, |f, id, size| {
+                            if id == NAME {
+                                name = text(f, size);
+                            }
+                            name.is_some()
+                        });
+                    }
+                    name.is_some()
+                });
+            }
+            _ => {}
+        }
+        title.is_some() || id == CLUSTER
+    })?;
+    title.or(name)
 }
 
 /// `(mtime, size)` as stored in the library, with mtime in nanoseconds.

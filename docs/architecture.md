@@ -378,7 +378,7 @@ Each step left `make test` passing. Only step 7 changed behaviour: the `mode` pr
 
 ## Open issues
 
-- **One cursor per view.** `dispatch` assumes each view has at most one chosen row. An egui app with several panels open at once, or with several rows selected, has to map its selection onto that, or `Frontend` grows. Adding, removing and moving tracks all read the single row.
+- **One cursor per view.** `dispatch` assumes each view has at most one cursor row. Several rows chosen at once are `Picks`, by track path per view, which `Frontend::picks` exposes; adding, enqueueing, removing and moving read them when any are picked, else the cursor row. An egui app with several panels open at once still maps its focus onto one cursor per view.
 
 - **No playback snapshot in the core.** `Model` assembles a `Snapshot` from `Session::player()` and `marks_for`, and holds the peak level. A Tauri backend, which skips `playr-app`, needs the same values on a timer and would repeat that. A `Session::playback()` returning them, and a narrower `Transport` in place of `send(Cmd)`, would serve both.
 

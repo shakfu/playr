@@ -148,6 +148,8 @@ playr                                   # or playr scan, playr prune
 systemctl --user start playr-server
 ```
 
+To use the terminal and the page together, run `playr-server --tui` instead of the service. It shows the terminal's interface on the same playback, with the page's address on its message line. Quitting it stops the server. The two share one view and one cursor per view: a page request moves the terminal off a view the page lacks, such as the sampler, to the library. The terminal shows the columns `[server]` sets.
+
 ## Flags
 
 | flag | default | does |
@@ -160,6 +162,7 @@ systemctl --user start playr-server
 | `--db PATH` | `~/.local/share/playr/library.db` on Linux | the library |
 | `--settings PATH` | `~/.config/playr/settings.toml` on Linux | the settings |
 | `--device ID` | the default device | the output device, as `playr devices` lists it |
+| `--tui` | off | show the terminal interface too; quitting it stops the server |
 
 `[server]` in `settings.toml` sets the first five, so the systemd unit need not; a flag wins over its setting. `--host` given once replaces the setting's list, and `--open` cannot turn off `open = true`.
 

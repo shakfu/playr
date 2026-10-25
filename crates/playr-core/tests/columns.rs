@@ -167,3 +167,26 @@ fn the_library_and_its_searches_come_back_in_the_same_order() {
         ["Blue in Green", "So What"]
     );
 }
+
+#[test]
+fn dates_read_as_utc_days() {
+    use playr_core::columns::{civil, days_from_civil};
+    for (days, ymd) in [
+        (0, (1970, 1, 1)),
+        (20_727, (2026, 10, 1)),
+        (11_016, (2000, 2, 29)),
+        (-1, (1969, 12, 31)),
+    ] {
+        assert_eq!(civil(days), ymd);
+        assert_eq!(days_from_civil(ymd.0, ymd.1, ymd.2), days);
+    }
+    let mut t = track("Peace Piece", "Bill Evans", "Everybody Digs", None);
+    t.added_at = Some(20_727 * 86_400 + 86_399);
+    let added = cell(&t, Measures::default(), Column::Added);
+    assert_eq!(added.text(Column::Added), "2026-10-01");
+    assert_eq!(cell(&t, Measures::default(), Column::Played), Cell::Missing);
+    assert_eq!(
+        cell(&t, Measures::default(), Column::Plays),
+        Cell::Number(0.0)
+    );
+}

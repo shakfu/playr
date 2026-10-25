@@ -1386,3 +1386,127 @@ fn a_voice_prints_into_a_write_loop_of_another_channel_count() {
     let s = sums(&buffer(&t), 1);
     assert!(s[0] > 100.0, "the right channel was dropped: {s:?}");
 }
+
+mod modulation {
+    use super::*;
+    use playr_looper::modulation::{Dest, Route, Shape, Speed};
+
+    fn route(lfo: usize, dest: Dest, depth: f32) -> Setting {
+        Setting::Route(0, Some(Route { lfo, dest, depth }))
+    }
+
+    /// A level routed from a sine dips from its setting to silence and back,
+    /// smoothly, never above it; with the route gone it is the loop again.
+    #[test]
+    fn a_routed_level_dips_and_comes_back_exactly() {
+        let src = vec![0.5; SR as usize];
+        let mut t = tape(
+            src.clone(),
+            1,
+            &[
+                Setting::Fade(0, 0.0),
+                Setting::LfoSpeed(0, Speed::Hz(10.0)),
+                route(0, Dest::Level(0), 1.0),
+            ],
+        );
+        let l = left(&run(&mut t, SR as usize / 2));
+        let (lo, hi) = l[480..]
+            .iter()
+            .fold((1.0f32, 0.0f32), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!(lo < 0.01 && hi <= 0.5 && hi > 0.49, "{lo} {hi}");
+        assert!(max_step(&l) < 0.01, "{}", max_step(&l));
+        t.set(Setting::Route(0, None));
+        run(&mut t, 4800);
+        let l = left(&run(&mut t, 4800));
+        assert!(l.iter().all(|&x| x == 0.5), "back to as set");
+    }
+
+    /// A synced square on the pan holds one side for the first half of
+    /// voice 1's window and the other for the second, in phase with its head.
+    #[test]
+    fn a_synced_lfo_follows_voice_1s_window() {
+        let w = Window::new(0, 4800);
+        let mut t = tape(
+            vec![1.0; 4800],
+            1,
+            &[
+                Setting::Fade(0, 0.0),
+                Setting::Window(0, w),
+                Setting::LfoShape(1, Shape::Square),
+                Setting::LfoSpeed(1, Speed::Sync(1.0)),
+                route(1, Dest::Pan(0), 1.0),
+            ],
+        );
+        for _ in 0..3 {
+            let l = left(&run(&mut t, 4800));
+            assert!(l[1200].abs() < 1e-3, "right in the first half: {}", l[1200]);
+            assert!(
+                (l[3600] - 2f32.sqrt()).abs() < 1e-3,
+                "left after: {}",
+                l[3600]
+            );
+        }
+    }
+
+    /// A rate routed at depth 1 doubles at the LFO's peak.
+    #[test]
+    fn a_routed_rate_moves_by_octaves() {
+        let mut t = tape(
+            vec![0.1; 40_000],
+            1,
+            &[
+                Setting::Fade(0, 0.0),
+                Setting::LfoShape(0, Shape::Square),
+                Setting::LfoSpeed(0, Speed::Hz(0.01)),
+                route(0, Dest::Rate(0), 1.0),
+            ],
+        );
+        run(&mut t, 4800);
+        let at = t.voice(0);
+        assert!((at - 9600.0).abs() < 64.0, "head at {at}");
+    }
+
+    /// Every destination takes a route at full depth and stays finite.
+    #[test]
+    fn every_destination_stays_finite_at_full_depth() {
+        let dests = [
+            Dest::Rate(0),
+            Dest::Start(0),
+            Dest::Pan(0),
+            Dest::Level(0),
+            Dest::Send(0),
+            Dest::HighPass(0),
+            Dest::LowPass(0),
+            Dest::BellHz(0),
+            Dest::BellGain(0),
+            Dest::DelaySend(0),
+            Dest::ReverbSend(0),
+            Dest::DelayTime,
+            Dest::DelayFeedback,
+            Dest::DelayTone,
+            Dest::ReverbDamp,
+            Dest::PrintFx,
+        ];
+        for dest in dests {
+            let mut t = tape(
+                noise(24_000, 0.5),
+                2,
+                &[
+                    Setting::Window(0, Window::new(2000, 8000)),
+                    Setting::DelaySend(0, 0.5),
+                    Setting::ReverbSend(0, 0.5),
+                    Setting::Send(0, 0.5),
+                    Setting::Write(true),
+                    Setting::LfoShape(0, Shape::Hold),
+                    Setting::LfoSpeed(0, Speed::Hz(20.0)),
+                    route(0, dest, 1.0),
+                ],
+            );
+            let out = run(&mut t, 24_000);
+            assert!(
+                out.iter().all(|x| x.is_finite() && x.abs() < 8.0),
+                "{dest:?}"
+            );
+        }
+    }
+}

@@ -814,6 +814,7 @@ fn the_output_device_is_named_by_id_and_by_name_when_it_has_one() {
     let device = |name: &str| Message::Output {
         device: Some(info(name)),
         sink: None,
+        inexact: None,
     };
     assert_eq!(
         text(&device("PipeWire Sound Server")),
@@ -823,7 +824,8 @@ fn the_output_device_is_named_by_id_and_by_name_when_it_has_one() {
     assert_eq!(
         text(&Message::Output {
             device: None,
-            sink: None
+            sink: None,
+            inexact: None,
         }),
         "output device unknown"
     );
@@ -833,7 +835,19 @@ fn the_output_device_is_named_by_id_and_by_name_when_it_has_one() {
                 "Default ALSA Output (currently PipeWire Media Server)"
             )),
             sink: Some("Digital Stereo (HDMI 4)".into()),
+            inexact: None,
         }),
         "output: alsa:default, PipeWire sink Digital Stereo (HDMI 4)"
+    );
+    // Asked while playing, it says whether the device gets the file exactly.
+    let judged = |inexact: Vec<&'static str>| Message::Output {
+        device: Some(info("")),
+        sink: None,
+        inexact: Some(inexact),
+    };
+    assert_eq!(text(&judged(vec![])), "output: alsa:default; bit-perfect");
+    assert_eq!(
+        text(&judged(vec!["resampling", "EQ"])),
+        "output: alsa:default; not bit-perfect: resampling, EQ"
     );
 }

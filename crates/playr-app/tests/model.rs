@@ -4004,7 +4004,8 @@ fn device_names_the_output_or_says_it_is_unknown() {
         model.message(),
         Some(&Message::Output {
             device: None,
-            sink: None
+            sink: None,
+            inexact: None,
         })
     );
 }
@@ -4156,4 +4157,101 @@ fn toggle_all_selects_the_listed_rows_then_unselects_them() {
             .collect::<Vec<_>>(),
         ["/m/3.flac"]
     );
+}
+
+/// A track counts as played once, halfway through, in the library and in the
+/// rows that show it.
+#[test]
+fn a_play_is_counted_once_halfway() {
+    use playr_core::audio::State;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.wav");
+    common::tone(&file, 8000, 1.0, -12.0);
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let mut t = track(&file.to_string_lossy());
+    t.duration_ms = Some(1000);
+    db::upsert(&conn, &t).unwrap();
+    let mut model = Model::new(conn, common::fake_player().0, vec![t], Config::default());
+    let plays = |m: &Model| m.session().selection()[0].plays;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while plays(&model) == 0 {
+        assert!(Instant::now() < deadline, "no play counted");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        model.session().player().position() >= Duration::from_millis(500),
+        "not before halfway"
+    );
+    while model.session().player().status().state != State::Stopped {
+        assert!(Instant::now() < deadline, "not stopped");
+        model.refresh();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(plays(&model), 1);
+    assert!(model.session().selection()[0].played_at.is_some());
+    let conn = db::open(&dir.path().join("library.db")).unwrap();
+    let stored = query::by_path(&conn, &file.to_string_lossy())
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.plays, 1);
+}
+
+/// Picked rows are acted on together: added, enqueued, removed and moved.
+#[test]
+fn picked_rows_are_added_enqueued_removed_and_moved_together() {
+    let (mut model, _dir) = model();
+    let paths = |tracks: &[Track]| tracks.iter().map(|t| t.path.clone()).collect::<Vec<_>>();
+    // :pick toggles the cursor row and moves on; a range picks rows.
+    model.set_cursor(View::Library, Some(0));
+    model.run_command("pick");
+    assert_eq!(model.cursors().library, Some(1));
+    assert_eq!(model.message(), Some(&Message::Picked(1)));
+    model.run_command("pick 3..3");
+    model.perform(Action::Add);
+    assert_eq!(
+        paths(model.session().selection()),
+        ["/m/a.flac", "/m/c.flac"]
+    );
+    assert!(model.picks().library.is_empty(), "used up");
+
+    // Without picks, a acts on the cursor row as before.
+    model.set_cursor(View::Library, Some(1));
+    model.perform(Action::Add);
+    assert_eq!(model.session().selection().len(), 3);
+
+    // Moved and removed together, in the selection: a, c, b.
+    model.perform(Action::ShowView(View::Selection));
+    model.run_command("pick 2..3");
+    model.run_command("pick 3..3");
+    assert_eq!(model.message(), Some(&Message::Picked(1)), "unpicked");
+    model.run_command("pick 3..3");
+    model.perform(Action::MoveTrack(-1));
+    assert_eq!(
+        paths(model.session().selection()),
+        ["/m/c.flac", "/m/b.flac", "/m/a.flac"]
+    );
+    // The first cannot go up 5, so neither moves.
+    model.perform(Action::MoveTrack(-5));
+    assert_eq!(model.session().selection()[1].path, "/m/b.flac");
+    model.perform(Action::Remove);
+    assert_eq!(model.message(), Some(&Message::RemovedPicked(2)));
+    assert_eq!(paths(model.session().selection()), ["/m/a.flac"]);
+
+    // Enqueued together, in list order.
+    model.perform(Action::ShowView(View::Library));
+    model.run_command("pick all");
+    model.perform(Action::Enqueue(false));
+    assert_eq!(
+        model.message(),
+        Some(&Message::Core(Notice::Done(Outcome::Queued {
+            tracks: 3,
+            next: false
+        })))
+    );
+
+    // A new search drops the library's picks.
+    model.run_command("pick 1..1");
+    model.search_as_typed("monk".into());
+    assert!(model.picks().library.is_empty());
 }

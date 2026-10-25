@@ -46,6 +46,9 @@ pub enum Action {
     /// Select every track the library view lists, or unselect them all when
     /// all are selected.
     ToggleAll,
+    /// Pick rows of the library, selection or queue, for the next add,
+    /// enqueue, remove or move to act on together. See [`Pick`].
+    Pick(Pick),
     /// Queue the track under the cursor, or a playlist's tracks: after the
     /// tracks waiting, or before them when `true`.
     Enqueue(bool),
@@ -282,6 +285,19 @@ pub enum SlotOp {
     Use,
     /// Save the range into the slot, over what it holds.
     Save,
+    Clear,
+}
+
+/// Which rows [`Action::Pick`] picks, in the view shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pick {
+    /// The cursor row, or unpicks it; the cursor moves on a row.
+    Cursor,
+    /// Rows `from..=to`, from 0; unpicks them when all are picked already.
+    Rows(usize, usize),
+    /// Every row listed.
+    All,
+    /// None.
     Clear,
 }
 

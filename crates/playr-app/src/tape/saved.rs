@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use playr_looper::{Window, VOICES, WRITER};
 
 use super::{
-    model_name, Division, FxState, Layout, Source, TapeState, DELAY_MODELS, REVERB_MODELS,
+    model_name, Division, FxState, Layout, Shape, Source, Speed, TapeState, DELAY_MODELS, LFOS,
+    REVERB_MODELS, SLOTS,
 };
 
 /// The longest write loop a saved shape may ask for, in seconds: bounds what
@@ -127,6 +128,21 @@ impl SavedTape {
             fx.reverb_return,
             fx.print,
         );
+        // Each LFO's shape and speed; each routed slot's LFO, destination,
+        // voice or "-", and depth.
+        for (k, (shape, speed)) in s.lfos.iter().enumerate() {
+            let _ = match speed {
+                Speed::Hz(hz) => writeln!(text, "lfo {k} {} hz {hz}", shape.name()),
+                Speed::Sync(part) => writeln!(text, "lfo {k} {} sync {part}", shape.name()),
+            };
+        }
+        for (k, r) in s.routes.iter().enumerate() {
+            if let Some(r) = r {
+                let (dest, voice) = super::dest_name(r.dest);
+                let voice = voice.map_or("-".into(), |v| v.to_string());
+                let _ = writeln!(text, "route {k} {} {dest} {voice} {}", r.lfo, r.depth);
+            }
+        }
         // A lane folded or unfolded by hand, else "-"; then whose drawers are open.
         let folded = self
             .layout
@@ -216,6 +232,31 @@ impl SavedTape {
                         layout.folded.copy_from_slice(&f);
                         layout.drawer.copy_from_slice(&d);
                         layout.fx = x;
+                    }
+                }
+                ["lfo", k, shape, kind, v] => {
+                    let k = k.parse::<usize>().ok().filter(|k| *k < LFOS);
+                    let shape = Shape::ALL.into_iter().find(|s| s.name() == *shape);
+                    let speed = match (*kind, num(v)) {
+                        ("hz", Some(hz)) => Some(Speed::Hz(hz)),
+                        ("sync", Some(part)) if part > 0.0 => Some(Speed::Sync(part)),
+                        _ => None,
+                    };
+                    if let (Some(k), Some(shape), Some(speed)) = (k, shape, speed) {
+                        state.lfos[k] = (shape, speed);
+                    }
+                }
+                ["route", k, lfo, dest, voice, depth] => {
+                    let k = k.parse::<usize>().ok().filter(|k| *k < SLOTS);
+                    let lfo = lfo.parse::<usize>().ok().filter(|l| *l < LFOS);
+                    let voice = match *voice {
+                        "-" => Some(None),
+                        v => v.parse::<u8>().ok().map(Some),
+                    };
+                    let dest = voice.and_then(|v| super::dest_named(dest, v));
+                    let depth = num(depth).filter(|d| (-1.0..=1.0).contains(d));
+                    if let (Some(k), Some(lfo), Some(dest), Some(depth)) = (k, lfo, dest, depth) {
+                        state.routes[k] = Some(super::Route { lfo, dest, depth });
                     }
                 }
                 ["reads", i, "empty"] => {

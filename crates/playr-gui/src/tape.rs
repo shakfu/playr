@@ -38,6 +38,8 @@ const FADES: f32 = 12.0;
 /// voice 4's header keeps a third, with Write.
 const FOLDED: f32 = 46.0;
 const BUTTONS: f32 = 24.0;
+/// The modulation grid in the FX lane: 3 rows.
+const MOD: f32 = 3.0 * 26.0;
 /// Points along each drawn crossfade curve.
 const CURVE: usize = 16;
 
@@ -57,6 +59,11 @@ pub struct State {
     layout: Option<Layout>,
     /// Bounce records until stopped, not one pass.
     long: bool,
+    /// The FX lane shows the modulation, not the effects.
+    modulation: bool,
+    /// The FX lane's height as last drawn, with what it showed, so the
+    /// waveforms take what it leaves.
+    fx_height: Option<(f32, (bool, bool))>,
 }
 
 impl State {
@@ -143,7 +150,18 @@ pub fn show(model: &Model, ui: &mut egui::Ui, tab: &mut State) -> Vec<Action> {
         .map(|i| 1 + usize::from(layout.drawer[i]) * (1 + usize::from(i == WRITER)))
         .sum();
     // The FX lane: its header, and open, a row each for the delay and reverb.
-    let fx = BUTTONS + if layout.fx { 2.0 * ROW } else { 0.0 };
+    let shown = (layout.fx, tab.modulation);
+    let fx = match tab.fx_height {
+        Some((h, was)) if was == shown => h,
+        _ => {
+            BUTTONS
+                + match shown {
+                    (false, _) => 0.0,
+                    (true, false) => 2.0 * ROW,
+                    (true, true) => MOD,
+                }
+        }
+    };
     let spare = ui.available_height()
         - rows as f32 * ROW
         - (VOICES - open) as f32 * FOLDED
@@ -1373,12 +1391,12 @@ fn fx_lane(
     actions: &mut Vec<Action>,
 ) {
     let fx = &state.fx;
-    let mut set = |f| actions.push(Action::Tape(T::Fx(f)));
     let folded = !layout.fx;
+    let top = ui.cursor().top();
     lane(
         ui,
-        &mut (),
-        |ui, _| {
+        tab,
+        |ui, tab| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let tip = match folded {
@@ -1391,19 +1409,183 @@ fn fx_lane(
                     tab.layout = Some(layout);
                 }
                 ui.strong("FX");
+                let tip = "show the LFOs and what they move, in place of the effects";
+                if !folded && toggle(ui, tab.modulation, "Mod", "Modulation".into(), tip) {
+                    tab.modulation = !tab.modulation;
+                }
             });
         },
-        |ui, _| {
+        |ui, tab| {
             if folded {
                 let delay = model_name(&DELAY_MODELS, fx.delay_model);
                 let reverb = model_name(&REVERB_MODELS, fx.reverb_model);
+                let routes = state.routes.iter().flatten().count();
+                let routed = match routes {
+                    0 => String::new(),
+                    1 => ", 1 route".into(),
+                    n => format!(", {n} routes"),
+                };
                 ui.weak(format!(
-                    "delay {delay}, reverb {reverb}; sends in each voice's drawer"
+                    "delay {delay}, reverb {reverb}{routed}; sends in each voice's drawer"
                 ));
                 return;
             }
+            if tab.modulation {
+                return modulation(ui, state, actions);
+            }
             let why = |f| crate::fx::why(no_effect(state, e, C::Fx(f)));
+            let mut set = |f| actions.push(Action::Tape(T::Fx(f)));
             crate::fx::rows(ui, "tape", fx, &why, &mut set);
         },
     );
+    let height = ui.cursor().top() - top;
+    tab.fx_height = Some((height, (layout.fx, tab.modulation)));
 }
+
+/// The LFOs and the routes, which the FX lane shows under Mod, in the room
+/// the effects' two rows take: both LFOs on a row, then two routes a row.
+/// Each label's tooltip says what its row does.
+fn modulation(ui: &mut egui::Ui, state: &TapeState, actions: &mut Vec<Action>) {
+    use playr_app::fx::Division;
+    use playr_app::tape::{
+        dest_name, dest_named, lfo_name, speed_division, Dest, LfoSetting as L, Route, Shape,
+        Speed, FX_DESTS, LFO_HZ, VOICE_DESTS,
+    };
+    let names: Vec<&str> = VOICE_DESTS
+        .iter()
+        .map(|d| d.0)
+        .chain(FX_DESTS.map(|d| d.0))
+        .collect();
+    egui::Grid::new("tape mod")
+        .spacing([6.0, 2.0])
+        .show(ui, |ui| {
+            for (k, (shape, speed)) in state.lfos.iter().enumerate() {
+                let lfo = |l| Action::Tape(T::Lfo(k as u8, l));
+                ui.weak(format!("LFO {}", lfo_name(k)))
+                    .on_hover_text(LFO_TIP);
+                egui::ComboBox::from_id_salt(("lfo shape", k))
+                    .width(70.0)
+                    .selected_text(shape.name())
+                    .show_ui(ui, |ui| {
+                        for s in Shape::ALL {
+                            if ui.selectable_label(s == *shape, s.name()).clicked() {
+                                actions.push(lfo(L::Shape(s)));
+                            }
+                        }
+                    });
+                let division = speed_division(*speed);
+                egui::ComboBox::from_id_salt(("lfo sync", k))
+                    .width(50.0)
+                    .selected_text(division.map_or("Hz", Division::name))
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(division.is_none(), "Hz").clicked() {
+                            actions.push(lfo(L::Hz(1.0)));
+                        }
+                        for d in Division::ALL {
+                            if ui.selectable_label(division == Some(d), d.name()).clicked() {
+                                actions.push(lfo(L::Sync(d)));
+                            }
+                        }
+                    });
+                match speed {
+                    Speed::Hz(hz) => {
+                        let name = format!("LFO {} Hz", lfo_name(k));
+                        if let Some(hz) = log_field(ui, *hz, LFO_HZ.0..=LFO_HZ.1, 2, name, None) {
+                            actions.push(lfo(L::Hz(hz)));
+                        }
+                    }
+                    Speed::Sync(_) => {
+                        ui.weak("of 1");
+                    }
+                }
+                ui.label("");
+            }
+            ui.end_row();
+            for (k, route) in state.routes.iter().enumerate() {
+                let slot = k as u8 + 1;
+                let mut set = |r: Option<Route>| actions.push(Action::Tape(T::Route(slot, r)));
+                ui.weak(format!("Mod {slot}")).on_hover_text(ROUTE_TIP);
+                let current = route.map_or("off", |r| lfo_name(r.lfo));
+                egui::ComboBox::from_id_salt(("route lfo", k))
+                    .width(36.0)
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(route.is_none(), "off").clicked() {
+                            set(None);
+                        }
+                        for lfo in 0..state.lfos.len() {
+                            if ui
+                                .selectable_label(current == lfo_name(lfo), lfo_name(lfo))
+                                .clicked()
+                            {
+                                let r = route.unwrap_or(Route {
+                                    lfo,
+                                    dest: Dest::Level(0),
+                                    depth: 0.5,
+                                });
+                                set(Some(Route { lfo, ..r }));
+                            }
+                        }
+                    });
+                match *route {
+                    None => {
+                        for _ in 0..3 {
+                            ui.label("");
+                        }
+                    }
+                    Some(r) => {
+                        let (dest, voice) = dest_name(r.dest);
+                        egui::ComboBox::from_id_salt(("route dest", k))
+                            .width(70.0)
+                            .selected_text(dest)
+                            .show_ui(ui, |ui| {
+                                for name in &names {
+                                    if ui.selectable_label(*name == dest, *name).clicked() {
+                                        let to = dest_named(name, voice.or(Some(1)))
+                                            .or_else(|| dest_named(name, None));
+                                        if let Some(dest) = to {
+                                            set(Some(Route { dest, ..r }));
+                                        }
+                                    }
+                                }
+                            });
+                        match voice {
+                            Some(v) => {
+                                egui::ComboBox::from_id_salt(("route voice", k))
+                                    .width(24.0)
+                                    .selected_text(v.to_string())
+                                    .show_ui(ui, |ui| {
+                                        for n in 1..=VOICES as u8 {
+                                            if ui.selectable_label(n == v, n.to_string()).clicked()
+                                            {
+                                                if let Some(dest) = dest_named(dest, Some(n)) {
+                                                    set(Some(Route { dest, ..r }));
+                                                }
+                                            }
+                                        }
+                                    });
+                            }
+                            None => {
+                                ui.weak("fx");
+                            }
+                        }
+                        let name = format!("Mod {slot} depth");
+                        if let Some(depth) = field(ui, r.depth, -1.0..=1.0, name, None) {
+                            set(Some(Route { depth, ..r }));
+                        }
+                    }
+                }
+                if k % 2 == 1 {
+                    ui.end_row();
+                }
+            }
+        });
+}
+
+const LFO_TIP: &str = "a low-frequency oscillator the Mod slots route: its shape (sine, \
+    triangle, square, or hold, a new random value each cycle), and its speed, free in Hz or \
+    one cycle per part of voice 1's window, in phase with its head";
+
+const ROUTE_TIP: &str = "a route from an LFO to a setting, of a voice or of the effects, by \
+    a depth from -1 to 1. Rate, delay time and filters move by octaves, start by the window's \
+    length; gains dip from their setting";

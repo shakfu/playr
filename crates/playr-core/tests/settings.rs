@@ -417,7 +417,7 @@ fn columns_and_sort_are_lists_of_column_names() {
 
     assert_eq!(
         parse("columns = ['loudest']").unwrap_err()[0],
-        "line 1: unknown column loudest; choices: title, artist, album_artist, album, genre, disc, track, year, time, tempo, loudness, peak, path"
+        "line 1: unknown column loudest; choices: title, artist, album_artist, album, genre, disc, track, year, time, tempo, loudness, peak, path, added, played, plays"
     );
     assert_eq!(
         parse("columns = []").unwrap_err(),

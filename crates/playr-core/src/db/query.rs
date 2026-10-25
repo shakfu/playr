@@ -8,7 +8,10 @@ use crate::columns::{cell, Cell, Column, Measures};
 use rusqlite::{Connection, OptionalExtension, Row};
 
 const COLS: &str = "id, path, title, artist, album, album_artist, track_no, disc_no,
-                    year, genre, duration_ms, sample_rate, channels, bit_depth, mtime, size";
+                    year, genre, duration_ms, sample_rate, channels, bit_depth, mtime, size,
+                    added_at,
+                    (SELECT max(at) FROM plays p WHERE p.path = tracks.path),
+                    (SELECT count(*) FROM plays p WHERE p.path = tracks.path)";
 
 fn row_to_track(r: &Row) -> rusqlite::Result<Track> {
     Ok(Track {
@@ -28,14 +31,20 @@ fn row_to_track(r: &Row) -> rusqlite::Result<Track> {
         bit_depth: r.get(13)?,
         mtime: r.get(14)?,
         size: r.get(15)?,
+        added_at: r.get(16)?,
+        played_at: r.get(17)?,
+        plays: r.get(18)?,
     })
 }
 
-/// [`COLS`] and [`ORDER`] qualified, for the join with `analysis`, which has
-/// a `path`, an `mtime` and a `size` of its own.
+/// [`COLS`] and [`ORDER`] qualified, for a query that names `tracks` as `t`,
+/// such as the join with `analysis`, which has a `path`, an `mtime` and a
+/// `size` of its own.
 const COLS_T: &str = "t.id, t.path, t.title, t.artist, t.album, t.album_artist, t.track_no,
                       t.disc_no, t.year, t.genre, t.duration_ms, t.sample_rate, t.channels,
-                      t.bit_depth, t.mtime, t.size";
+                      t.bit_depth, t.mtime, t.size, t.added_at,
+                      (SELECT max(at) FROM plays p WHERE p.path = t.path),
+                      (SELECT count(*) FROM plays p WHERE p.path = t.path)";
 
 const ORDER_T: &str = "ORDER BY t.album_artist IS NULL, t.album_artist, t.artist, t.album,
                                 t.disc_no, t.track_no, t.title, t.path";
@@ -151,6 +160,56 @@ fn seconds(text: &str) -> Option<f64> {
     })
 }
 
+/// The span of seconds since the Unix epoch that one date names, with `now`
+/// the time it is: a UTC day, `2026-10-01`, or an instant counted back from
+/// now, `30d`, `2w`, `6m` or `1y`, where a month is 30 days and a year 365.
+fn date(text: &str, now: i64) -> Option<(i64, i64)> {
+    const DAY: i64 = 86_400;
+    if let Some(n) = text.len().checked_sub(1).and_then(|at| {
+        let unit = match &text[at..] {
+            "d" => DAY,
+            "w" => 7 * DAY,
+            "m" => 30 * DAY,
+            "y" => 365 * DAY,
+            _ => return None,
+        };
+        Some(text[..at].parse::<u32>().ok()? as i64 * unit)
+    }) {
+        return Some((now - n, now - n));
+    }
+    let mut parts = text.splitn(3, '-');
+    let y = parts.next()?.parse::<i64>().ok()?;
+    let m = parts
+        .next()?
+        .parse::<u32>()
+        .ok()
+        .filter(|m| (1..=12).contains(m))?;
+    let d = parts
+        .next()?
+        .parse::<u32>()
+        .ok()
+        .filter(|d| (1..=31).contains(d))?;
+    let start = crate::columns::days_from_civil(y, m, d) * DAY;
+    Some((start, start + DAY - 1))
+}
+
+/// The inclusive range of seconds a date term names: `lo..hi`, `lo..` or
+/// `..hi`, each a [`date`]. A bare day is that day; a bare `30d` is since
+/// then, as `30d..` is.
+fn dates(text: &str, now: i64) -> Option<(f64, f64)> {
+    let (lo, hi) = match text.split_once("..") {
+        Some(("", "")) => return None,
+        Some((lo, "")) => (date(lo.trim(), now)?.0, i64::MAX),
+        Some(("", hi)) => (i64::MIN, date(hi.trim(), now)?.1),
+        Some((lo, hi)) => (date(lo.trim(), now)?.0, date(hi.trim(), now)?.1),
+        None => match date(text.trim(), now)? {
+            (at, end) if at == end => (at, i64::MAX),
+            span => span,
+        },
+    };
+    Some((lo as f64, hi as f64))
+}
+
 /// How far either side of a bare value a column still matches: half the
 /// step the column is shown in, so `loudness:-14` matches what reads -14.0.
 fn near(column: Column) -> f64 {
@@ -202,6 +261,9 @@ impl Filter {
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case(text))
                 .map(|(_, is)| Filter::Is(*is)),
+            Field::Column(column) if column.date() => {
+                dates(text, super::now()).map(|(lo, hi)| Filter::Within(column, lo, hi))
+            }
             Field::Column(column) if column.numeric() => {
                 let value = |t: &str| match column {
                     Column::Time => seconds(t),
@@ -366,7 +428,7 @@ fn by_tempo(conn: &Connection, text: &str, fts: Option<&str>) -> Result<Vec<Trac
            LEFT JOIN tempo_fix f ON f.path = a.path
           WHERE a.version = ?5
             AND (COALESCE(a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?3 THEN a.bpm END)
-                   * COALESCE(f.factor, 1) BETWEEN ?1 AND ?2
+                   * {factor} BETWEEN ?1 AND ?2
                  OR CASE
                       WHEN a.bpm_tag IS NOT NULL THEN a.bpm_tag BETWEEN ?1 AND ?2
                       WHEN a.bpm_conf >= ?3 THEN a.bpm BETWEEN ?1 AND ?2
@@ -374,7 +436,8 @@ fn by_tempo(conn: &Connection, text: &str, fts: Option<&str>) -> Result<Vec<Trac
                       ELSE 0
                     END)
             {matching}
-          {ORDER_T}"
+          {ORDER_T}",
+        factor = *super::analysis::FACTOR,
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
@@ -542,7 +605,7 @@ pub fn save_playlist(conn: &mut Connection, name: &str, track_ids: &[i64]) -> Re
 /// Tracks of a playlist, in stored order.
 pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> Result<Vec<Track>> {
     let sql = format!(
-        "SELECT {COLS} FROM tracks t
+        "SELECT {COLS_T} FROM tracks t
          JOIN playlist_items i ON i.track_id = t.id
          WHERE i.playlist_id = ?1 ORDER BY i.position"
     );

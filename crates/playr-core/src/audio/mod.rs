@@ -210,9 +210,9 @@ pub enum Cmd {
     /// last, or not at all for zero. Not on a loop or a one-shot.
     SetFade(Duration),
     /// Overlap each track's last stretch this long with the next one's first,
-    /// or not at all for zero. Only where the two share a sample rate,
-    /// channels and output, and the track's length is known; elsewhere the
-    /// join stays gapless. It replaces `SetFade`'s fades at a join.
+    /// or not at all for zero, where the track's length is known. A next
+    /// track at another rate or channel count is converted to the stream's
+    /// plan, to its end. It replaces `SetFade`'s fades at a join.
     SetCrossfade(Duration),
     /// Stop once the track playing ends, or no longer. Ignored while
     /// stopped, and cleared once playback stops. See [`Status::stop_after`].
@@ -250,7 +250,11 @@ pub struct Status {
     pub duration: Option<Duration>,
     pub source: Option<Spec>,
     pub output_rate: u32,
+    /// The device's sample format while a stream is open.
+    pub output_format: Option<cpal::SampleFormat>,
     pub resampling: bool,
+    /// A fade or a crossfade is set, so track edges are scaled.
+    pub fading: bool,
     /// The most recent playback error, such as a file that could not be decoded.
     ///
     /// It is never cleared. The UI shows it when `error_seq` changes, which is
@@ -792,9 +796,13 @@ struct Incoming {
     stream: AudioStream,
     index: usize,
     duration: Option<Duration>,
-    /// Decoded and not yet mixed.
+    /// Decoded and not yet mixed: source samples, or with `conv`, output ones.
     buf: Vec<f32>,
-    /// Source frames of it mixed or carried so far.
+    /// Its own conversion to the stream's plan, for a track whose rate or
+    /// channels differ from the current one's. The two mix after conversion,
+    /// and it carries on converting the track once it is the current one.
+    conv: Option<Converter>,
+    /// Source frames of it mixed or carried so far; with `conv`, converted.
     decoded: u64,
     /// The stream has ended.
     done: bool,
@@ -2240,8 +2248,16 @@ impl Engine {
                 .conv
                 .as_ref()
                 .is_some_and(|c| c.continues(spec, plan, speed));
+        // Otherwise it is converted to the stream's plan, and resampled to its
+        // rate for the rest of the track, over the gap a new stream leaves.
+        let (mut buf, mut conv, mut decoded) = (first, None, 0);
         if !joins {
-            return;
+            let next_spec = next_stream.spec();
+            let mut own = Converter::new(next_spec, plan, speed);
+            let mut out = Vec::new();
+            own.push(&buf, &mut out);
+            decoded = (buf.len() / next_spec.channels.max(1) as usize) as u64;
+            (buf, conv) = (out, Some(own));
         }
         let duration = next_stream.duration();
         let n = duration.map_or(wanted, |d| wanted.min(at_rate(d) / 2));
@@ -2249,8 +2265,9 @@ impl Engine {
             stream: next_stream,
             index: next,
             duration,
-            buf: first,
-            decoded: 0,
+            buf,
+            conv,
+            decoded,
             done: false,
             start: len - n,
             frames: n.max(1),
@@ -2284,6 +2301,12 @@ impl Engine {
             return;
         };
         let mixed_frames = frames - before;
+        if inc.conv.is_some() {
+            let from = from + before as u64;
+            self.mix_converted(&mut inc, &chunk[before * channels..], from, outgoing);
+            self.incoming = Some(inc);
+            return;
+        }
         while inc.buf.len() < mixed_frames * channels && !inc.done {
             match inc.stream.next_chunk() {
                 Ok(Some(c)) => inc.buf.extend_from_slice(c),
@@ -2313,6 +2336,52 @@ impl Engine {
         }
     }
 
+    /// [`Engine::carry_crossfaded`] for an incoming track with its own
+    /// converter: `chunk`, from frame `from` of the outgoing track, is
+    /// converted first, and the curve runs over output frames.
+    fn mix_converted(&mut self, inc: &mut Incoming, chunk: &[f32], from: u64, outgoing: usize) {
+        let (Some(conv), Some(own)) = (self.conv.as_mut(), inc.conv.as_mut()) else {
+            return;
+        };
+        let src_channels = conv.src().channels.max(1) as usize;
+        let channels = self
+            .out
+            .as_ref()
+            .map_or(1, |o| o.plan.channels.max(1) as usize);
+        let in_channels = inc.stream.spec().channels.max(1) as usize;
+        let mut out = Vec::new();
+        conv.push(chunk, &mut out);
+        let n = out.len() / channels;
+        while inc.buf.len() < n * channels && !inc.done {
+            match inc.stream.next_chunk() {
+                Ok(Some(c)) => {
+                    inc.decoded += (c.len() / in_channels) as u64;
+                    own.push(c, &mut inc.buf);
+                }
+                _ => {
+                    inc.done = true;
+                    own.finish(&mut inc.buf);
+                }
+            }
+        }
+        let (g_out, g_in) = (self.gain_at(outgoing), self.gain_at(inc.index));
+        // The outgoing source frame each output frame came from, near enough.
+        let per = (chunk.len() / src_channels) as f32 / n.max(1) as f32;
+        for k in 0..n {
+            let at = from as f32 + k as f32 * per;
+            let into = (at - inc.start as f32).max(0.0);
+            let t = ((into + 0.5) / inc.frames as f32).min(1.0);
+            let angle = t * std::f32::consts::FRAC_PI_2;
+            let (a, b) = (angle.cos() * g_out, angle.sin() * g_in);
+            for c in 0..channels {
+                let incoming = inc.buf.get(k * channels + c).copied().unwrap_or(0.0);
+                out[k * channels + c] = out[k * channels + c] * a + incoming * b;
+            }
+        }
+        inc.buf.drain(..inc.buf.len().min(n * channels));
+        self.carry.extend_from_slice(&out);
+    }
+
     /// Places the mark where the incoming track starts to be heard: after
     /// what is converted so far, as a gapless join places it.
     fn mark_incoming(&mut self) {
@@ -2339,6 +2408,15 @@ impl Engine {
         self.stream = Some(inc.stream);
         self.crossfaded_in = true;
         self.decoded = inc.decoded;
+        if let Some(own) = inc.conv {
+            // The outgoing converter's tail is dropped, not finished: the
+            // curve was applied after it, so its last frames would be heard
+            // at full level. It holds at most the resampler's delay.
+            self.conv = Some(own);
+            let gain = self.gain_at(inc.index);
+            self.carry.extend(inc.buf.iter().map(|x| x * gain));
+            return;
+        }
         if !inc.buf.is_empty() {
             let channels = self
                 .conv
@@ -2649,7 +2727,9 @@ impl Engine {
             .map(|l| (l.start, l.end));
         s.source = self.conv.as_ref().map(Converter::src);
         s.output_rate = self.out.as_ref().map(|o| o.plan.rate).unwrap_or(0);
+        s.output_format = self.out.as_ref().map(|o| o.plan.format);
         s.resampling = self.conv.as_ref().is_some_and(Converter::resampling);
+        s.fading = !self.fade.is_zero() || !self.crossfade.is_zero();
         s.cents = self.cents;
         s.stop_after = self.stop_after;
         s.gain_db = match self.replaygain {

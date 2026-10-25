@@ -172,12 +172,16 @@ pub fn loudness_of(conn: &Connection, path: &str) -> Result<Option<(Histogram, f
 /// peak and the tempo to show, as [`bpm_of`] gives it.
 pub fn measures(conn: &Connection, library: &[Track]) -> Result<HashMap<String, Measures>> {
     let mut stmt = conn.prepare(
-        "SELECT a.path, a.mtime, a.size, a.version, a.loudness, a.peak,
-                COALESCE(e.bpm, a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?1 THEN a.bpm END)
-                  * COALESCE(f.factor, 1)
-           FROM analysis a LEFT JOIN tempo_fix f ON f.path = a.path
-           LEFT JOIN grid_edit e ON e.path = a.path
-          WHERE a.error IS NULL",
+        &format!(
+            "SELECT a.path, a.mtime, a.size, a.version, a.loudness, a.peak,
+                    COALESCE(e.bpm, a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?1 THEN a.bpm END)
+                      * {factor}
+               FROM analysis a LEFT JOIN tempo_fix f ON f.path = a.path
+               LEFT JOIN grid_edit e ON e.path = a.path
+               LEFT JOIN tracks t ON t.path = a.path
+              WHERE a.error IS NULL",
+            factor = *FACTOR
+        ),
     )?;
     let rows = stmt.query_map([tempo::MIN_CONFIDENCE], |r| {
         Ok((
@@ -232,13 +236,16 @@ pub fn grid_of(conn: &Connection, path: &str) -> Result<Option<tempo::Grid>> {
 /// `None` unless the row describes the file as the library knows it.
 pub fn bpm_of(conn: &Connection, path: &str) -> Result<Option<f32>> {
     conn.query_row(
-        "SELECT COALESCE(e.bpm, a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?2 THEN a.bpm END)
-                  * COALESCE(f.factor, 1)
-           FROM analysis a
-           LEFT JOIN tempo_fix f ON f.path = a.path
-           LEFT JOIN grid_edit e ON e.path = a.path
-           JOIN tracks t ON t.path = a.path AND t.mtime = a.mtime AND t.size = a.size
-          WHERE a.path = ?1 AND a.version = ?3",
+        &format!(
+            "SELECT COALESCE(e.bpm, a.grid_bpm, a.bpm_tag, CASE WHEN a.bpm_conf >= ?2 THEN a.bpm END)
+                      * {factor}
+               FROM analysis a
+               LEFT JOIN tempo_fix f ON f.path = a.path
+               LEFT JOIN grid_edit e ON e.path = a.path
+               JOIN tracks t ON t.path = a.path AND t.mtime = a.mtime AND t.size = a.size
+              WHERE a.path = ?1 AND a.version = ?3",
+            factor = *FACTOR
+        ),
         params![path, tempo::MIN_CONFIDENCE, crate::analysis::VERSION],
         |r| r.get(0),
     )
@@ -260,15 +267,62 @@ pub fn delete_album(conn: &Connection, key: &str) -> Result<()> {
     Ok(())
 }
 
-/// The correction made by hand to `path`'s tempo: 1 for none.
-pub fn tempo_fix(conn: &Connection, path: &str) -> Result<f32> {
-    conn.query_row(
-        "SELECT factor FROM tempo_fix WHERE path = ?1",
-        [path],
-        |r| r.get(0),
+/// Genres played above 170 BPM, as `GLOB` patterns over the lowercased
+/// genre tag. The tempo prior reads a pulse above 170 BPM at half.
+pub const FAST_GENRES: &[&str] = &[
+    "*drum*bass*",
+    "*dnb*",
+    "*d&b*",
+    "*jungle*",
+    "*footwork*",
+    "*juke*",
+    "*breakcore*",
+    "*hardcore*",
+    "*gabber*",
+    "*speedcore*",
+    "*neurofunk*",
+];
+
+/// The octave correction of a track's tempo, as SQL over `analysis a`,
+/// `tempo_fix f` and `tracks t`: the one made by hand, else 2 for a track
+/// with a genre in [`FAST_GENRES`], no BPM tag, a reading under 100 and the
+/// level above recorded, else 1.
+pub(crate) static FACTOR: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let fast: Vec<String> = FAST_GENRES
+        .iter()
+        .map(|g| format!("lower(t.genre) GLOB '{g}'"))
+        .collect();
+    format!(
+        "COALESCE(f.factor,
+           CASE WHEN a.bpm_tag IS NULL AND a.bpm_alt IS NOT NULL
+                     AND COALESCE(a.grid_bpm, a.bpm) < 100 AND ({})
+                THEN 2 END,
+           1)",
+        fast.join(" OR ")
     )
-    .optional()
-    .map(|f| f.unwrap_or(1.0))
+});
+
+/// The octave correction of `path`'s tempo, as [`FACTOR`] gives it: 1 for none.
+pub fn tempo_fix(conn: &Connection, path: &str) -> Result<f32> {
+    factor(conn, path, "f.factor")
+}
+
+/// The correction a fast genre tag gives `path`, with none made by hand.
+pub fn genre_fix(conn: &Connection, path: &str) -> Result<f32> {
+    factor(conn, path, "NULL")
+}
+
+/// [`FACTOR`] for `path`, with `by_hand` standing for the stored correction.
+fn factor(conn: &Connection, path: &str, by_hand: &str) -> Result<f32> {
+    let sql = format!(
+        "SELECT {} FROM (SELECT ?1 AS path) p
+           LEFT JOIN tracks t ON t.path = p.path
+           LEFT JOIN analysis a ON a.path = p.path AND a.mtime = t.mtime
+                               AND a.size = t.size AND a.version = ?2
+           LEFT JOIN tempo_fix f ON f.path = p.path",
+        FACTOR.replacen("f.factor", by_hand, 1)
+    );
+    conn.query_row(&sql, params![path, crate::analysis::VERSION], |r| r.get(0))
 }
 
 /// The grid set by hand for `path`, before any tempo correction.
@@ -298,9 +352,10 @@ pub fn set_grid_edit(conn: &Connection, path: &str, grid: Option<tempo::Grid>) -
     Ok(())
 }
 
-/// Stores `factor` as `path`'s tempo correction; 1 removes it.
+/// Stores `factor` as `path`'s tempo correction. The factor a fast genre
+/// tag gives, 1 for most tracks, removes it.
 pub fn set_tempo_fix(conn: &Connection, path: &str, factor: f32) -> Result<()> {
-    match factor == 1.0 {
+    match factor == genre_fix(conn, path)? {
         true => conn.execute("DELETE FROM tempo_fix WHERE path = ?1", [path])?,
         false => conn.execute(
             "INSERT OR REPLACE INTO tempo_fix (path, factor) VALUES (?1, ?2)",

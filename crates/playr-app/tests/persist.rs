@@ -251,3 +251,34 @@ fn nothing_is_stored_unless_named() {
         assert_eq!(db::state(&conn, key).unwrap(), None, "{key}");
     }
 }
+
+/// A saved tape keeps its LFOs and routes; a damaged row is left out.
+#[test]
+fn a_saved_tape_keeps_its_modulation() {
+    use playr_app::tape::{Dest, Route, Shape, Speed};
+    let rows = "lfo 0 triangle sync 0.25\nlfo 1 hold hz 3\n\
+        route 1 0 pan 2 0.5\nroute 3 1 delay-time - -0.3\n\
+        route 2 0 pan 9 0.5\nroute 0 0 level 1 4\nlfo 5 sine hz 1\n";
+    let tape = SavedTape::decode(&format!("{TAPE}{rows}")).unwrap();
+    let s = tape.state();
+    assert_eq!(s.lfos[0], (Shape::Triangle, Speed::Sync(0.25)));
+    assert_eq!(s.lfos[1], (Shape::Hold, Speed::Hz(3.0)));
+    assert_eq!(
+        s.routes,
+        [
+            None,
+            Some(Route {
+                lfo: 0,
+                dest: Dest::Pan(1),
+                depth: 0.5
+            }),
+            None,
+            Some(Route {
+                lfo: 1,
+                dest: Dest::DelayTime,
+                depth: -0.3
+            }),
+        ]
+    );
+    assert_eq!(SavedTape::decode(&tape.encode()), Some(tape));
+}

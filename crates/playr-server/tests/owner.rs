@@ -439,3 +439,29 @@ fn stepping_through_views_skips_the_ones_the_page_does_not_have() {
         ]
     );
 }
+
+/// Under `--tui` the terminal owns the model and drains the requests between
+/// its frames. The page reads a view it lacks, as the sampler, as the
+/// library, and a key from it moves the model there first.
+#[test]
+fn drain_runs_every_waiting_request_from_a_view_the_page_lacks() {
+    let (mut model, _dir) = library();
+    model.perform(Action::ShowView(View::Sampler));
+    assert_eq!(playr_server::web::screen(&model)["view"], "library");
+    let (send, received) = mpsc::channel();
+    let (down, first) = replied(|reply| Request::Key {
+        name: "j".into(),
+        reply,
+    });
+    send.send(down).unwrap();
+    send.send(Request::Seek(0.5)).unwrap();
+    send.send(Request::Seek(0.25)).unwrap();
+    send.send(Request::Perform(Action::ShowView(View::Queue)))
+        .unwrap();
+    owner::drain(&mut model, &received);
+    assert_eq!(first.recv().unwrap(), Ok(()));
+    assert_eq!(model.cursors().library, Some(1));
+    // The request held back while merging seeks still ran.
+    assert_eq!(model.view(), View::Queue);
+    assert!(received.try_recv().is_err());
+}

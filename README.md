@@ -10,7 +10,7 @@ None of the three contact external services or download any metadata and images.
 
 ## Features
 
-- Plays files, directories, playlists and searches, gapless where tracks share a sample rate, with a crossfade if asked
+- Plays files, directories, playlists and searches, gapless where tracks share a sample rate, with a crossfade between any two if asked
 - A library with search, saved searches, SQL, marks, analysis of loudness, tempo and file health, and ReplayGain
 - A sampler: zoom to single frames, set ranges, and slice by marks, beats or onsets into WAV kits for hardware samplers
 - A four-voice tape looper and two DJ decks with beat grids and a mixer

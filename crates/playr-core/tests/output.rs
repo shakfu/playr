@@ -90,3 +90,69 @@ fn nothing_usable_is_reported_as_no_plan() {
     );
     assert_eq!(got, None);
 }
+
+/// The integer formats give back every 16-bit value, and 24-bit values, as
+/// a decoder hands them over: divided by a power of two.
+#[test]
+fn integer_formats_return_integer_sources_exactly() {
+    use playr_core::audio::output::{to_i16, to_i24, to_i32};
+    for v in i16::MIN..=i16::MAX {
+        let s = f32::from(v) / 32_768.0;
+        assert_eq!(to_i16(s), v);
+        assert_eq!(to_i32(s), i32::from(v) << 16);
+    }
+    for v in (-8_388_608..8_388_608).step_by(997).chain([8_388_607]) {
+        let s = v as f32 / 8_388_608.0;
+        assert_eq!(to_i24(s), v);
+        assert_eq!(to_i32(s), v << 8);
+    }
+    // Full scale and beyond clip, and NaN is silence.
+    assert_eq!((to_i16(1.0), to_i16(-2.0)), (i16::MAX, i16::MIN));
+    assert_eq!(to_i24(1.5), 8_388_607);
+    assert_eq!(to_i32(1.0), i32::MAX);
+    assert_eq!(to_i16(f32::NAN), 0);
+}
+
+/// Bit-perfect needs a `hw:` device, no change to any sample, and a format
+/// at least as wide as the file.
+#[test]
+fn bit_perfect_names_what_changes_samples() {
+    use playr_core::audio::output::inexact;
+    use playr_core::audio::Status;
+    let status = Status {
+        output_format: Some(SampleFormat::I24),
+        ..Default::default()
+    };
+    let hw = "alsa:hw:CARD=DAC,DEV=0";
+    assert!(inexact(hw, &status, 1.0, [0.0; 3], Some(24), false).is_empty());
+    assert!(inexact("hw:2,0", &status, 1.0, [0.0; 3], None, false).is_empty());
+    assert_eq!(
+        inexact("alsa:default", &status, 1.0, [0.0; 3], Some(16), false),
+        ["the device is shared, so the system may convert"]
+    );
+    let changed = Status {
+        resampling: true,
+        gain_db: Some(-3.0),
+        fading: true,
+        output_format: Some(SampleFormat::I16),
+        ..Default::default()
+    };
+    assert_eq!(
+        inexact(hw, &changed, 0.5, [0.0, 2.0, 0.0], Some(24), true),
+        [
+            "resampling",
+            "ReplayGain",
+            "volume below full",
+            "EQ",
+            "fades",
+            "the tape or decks share the output",
+            "fewer bits than the file"
+        ]
+    );
+    // ReplayGain on at 0 dB changes nothing.
+    let zero = Status {
+        gain_db: Some(0.0),
+        ..status
+    };
+    assert!(inexact(hw, &zero, 1.0, [0.0; 3], Some(16), false).is_empty());
+}

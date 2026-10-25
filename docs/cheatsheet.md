@@ -110,6 +110,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:toggle`       | `a`   | select or unselect the track |
 | `:toggle [all]` |       | select every track listed, or unselect them all when all are |
 | `:search-clear` | `esc` | show the whole library again |
+| `:pick [all \| none \| N..M]` | `V` | pick rows to add or enqueue at once |
 
 ## Selection
 
@@ -118,6 +119,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:remove`        | `d` backspace delete    | remove the track from the selection |
 | `:move +N \| -N` | `J` `K`, shift up, down | move the track N places             |
 | `:clear`         | `c`                     | empty the selection; asks y/n       |
+| `:pick [all \| none \| N..M]` | `V` | pick rows to enqueue, remove or move |
 
 ## Queue
 
@@ -127,6 +129,7 @@ Terms combine, and each narrows the results; there is no OR or NOT. `:sql SELECT
 | `:move +N \| -N`    | `J` `K`, shift up, down | move the track N places          |
 | `:clear`            | `c`                     | empty the queue, played too; asks y/n |
 | `:add`              | `a`                     | add the track to the selection   |
+| `:pick [all \| none \| N..M]` | `V` | pick rows to add, remove or move |
 | `:save [NAME]`      | `s`                     | save the queue as a playlist     |
 
 ## Playlists

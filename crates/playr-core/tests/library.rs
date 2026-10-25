@@ -783,3 +783,54 @@ fn a_field_value_that_names_nothing_matches_nothing() {
         assert_eq!(titles(&conn, q).len(), 0, "{q}");
     }
 }
+
+/// A new row takes the time it was added; a rescan keeps it.
+#[test]
+fn a_track_keeps_the_time_it_was_first_added() {
+    let conn = db::open_memory().unwrap();
+    let mut t = track("/m/a.flac", "One", "A", "X");
+    t.added_at = Some(1_000);
+    db::upsert(&conn, &t).unwrap();
+    t.added_at = None;
+    t.title = Some("Two".into());
+    db::upsert(&conn, &t).unwrap();
+    assert_eq!(query::all(&conn).unwrap()[0].added_at, Some(1_000));
+    let fresh = track("/m/b.flac", "Three", "A", "X");
+    db::upsert(&conn, &fresh).unwrap();
+    let added = query::by_path(&conn, "/m/b.flac")
+        .unwrap()
+        .unwrap()
+        .added_at;
+    assert!(added.unwrap() >= db::now() - 5);
+}
+
+/// `added:` and `played:` take days and times counted back from now;
+/// `plays:` a count.
+#[test]
+fn dates_and_plays_are_search_fields() {
+    let conn = seeded();
+    let day = 86_400;
+    let now = db::now();
+    conn.execute("UPDATE tracks SET added_at = ?1", [now - 400 * day])
+        .unwrap();
+    // 2026-10-01 is day 20,727 of the epoch.
+    conn.execute(
+        "UPDATE tracks SET added_at = ?1 WHERE path = '/m/a.flac'",
+        [20_727 * day + 3600],
+    )
+    .unwrap();
+    db::record_play(&conn, "/m/b.flac", now - 10 * day).unwrap();
+    db::record_play(&conn, "/m/b.flac", now - 2 * day).unwrap();
+    db::record_play(&conn, "/m/c.mp3", now - 500 * day).unwrap();
+
+    assert_eq!(titles(&conn, "added:2026-10-01"), ["Waltz for Debby"]);
+    assert_eq!(titles(&conn, "added:2026-10-02").len(), 0);
+    assert_eq!(titles(&conn, "added:..1y").len(), 2);
+    assert_eq!(titles(&conn, "played:7d"), ["My Foolish Heart"]);
+    assert_eq!(titles(&conn, "played:..1y"), ["So What"]);
+    assert_eq!(titles(&conn, "played:soon").len(), 0);
+    assert_eq!(titles(&conn, "plays:2"), ["My Foolish Heart"]);
+    assert_eq!(titles(&conn, "plays:0"), ["Waltz for Debby"]);
+    let b = query::by_path(&conn, "/m/b.flac").unwrap().unwrap();
+    assert_eq!((b.plays, b.played_at), (2, Some(now - 2 * day)));
+}

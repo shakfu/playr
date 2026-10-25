@@ -3,9 +3,10 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use playr_dsp::fx::{BusSetting, Buses};
+use playr_dsp::fx::{BusSetting, Buses, DelayParam, ReverbParam, DELAY_DEFAULTS, REVERB_DEFAULTS};
 use playr_dsp::{clip, flush, one_pole, soft_clip, Interp};
 
+use crate::modulation::{self, Lfo, Offsets, Route, Shape, Speed, CONTROL, LFOS, SLOTS};
 use crate::{Error, COLUMNS, TAPE, VOICES};
 
 type Ramp = playr_dsp::Ramp<f32>;
@@ -86,6 +87,9 @@ struct Eq {
     q: f32,
     /// How much of the high-pass and the low-pass is heard.
     wet: [Ramp; 2],
+    /// Modulation: octaves added to each frequency, and dB to the gain.
+    hz_mod: [Ramp; 3],
+    gain_mod: Ramp,
     svf: [playr_dsp::Svf; 3],
     /// The bell's amplitude, 10^(dB/40); the gain less 1 it adds of the
     /// band; and the dB they are for.
@@ -102,6 +106,8 @@ impl Eq {
             gain: Ramp::new(0.0),
             q: DEFAULT_BELL_Q,
             wet: [Ramp::new(0.0); 2],
+            hz_mod: [Ramp::new(0.0); 3],
+            gain_mod: Ramp::new(0.0),
             svf: [playr_dsp::Svf::butterworth(); 3],
             a: 1.0,
             boost: 0.0,
@@ -123,8 +129,11 @@ impl Eq {
 
     /// Filters `x`, `channels` of it, in place.
     fn process(&mut self, x: &mut [f32; 2], channels: usize, sample_rate: u32) {
-        let hz = self.hz.each_mut().map(|r| r.next().exp2());
-        let gain = self.gain.next();
+        let mut hz = self.hz.each_mut().map(Ramp::next);
+        for (hz, m) in hz.iter_mut().zip(&mut self.hz_mod) {
+            *hz = (*hz + m.next()).exp2().max(FILTER_HZ.0);
+        }
+        let gain = (self.gain.next() + self.gain_mod.next()).clamp(-BELL_DB, BELL_DB);
         let wet = self.wet.each_mut().map(Ramp::next);
         if gain != self.boost_at {
             self.boost_at = gain;
@@ -468,6 +477,11 @@ pub enum Setting {
     /// The level, 0 to 0.99, below which the clip on what the write head
     /// records passes the signal unchanged.
     Knee(f32),
+    /// LFO `k`'s wave, and its speed.
+    LfoShape(usize, Shape),
+    LfoSpeed(usize, Speed),
+    /// What slot `k` routes, or nothing.
+    Route(usize, Option<Route>),
 }
 
 /// One read head, and a second while a wrap crossfades.
@@ -493,6 +507,13 @@ struct Voice {
     /// Brought to 0 before the loop the voice reads is replaced while
     /// playing, and back after, so the swap does not click.
     duck: Ramp,
+    /// Modulation: octaves on the rate, an amount added to the pan, and
+    /// factors on the level, the send and the two effect sends.
+    rate_mod: Ramp,
+    pan_mod: Ramp,
+    gain_mod: [Ramp; 4],
+    /// The window as last set, which modulating its start shifts from.
+    base: Window,
     solo: bool,
     mute: bool,
     ping: bool,
@@ -533,6 +554,10 @@ impl Voice {
             fx: [Ramp::new(0.0); 2],
             heard: Ramp::new(1.0),
             duck: Ramp::new(1.0),
+            rate_mod: Ramp::new(0.0),
+            pan_mod: Ramp::new(0.0),
+            gain_mod: [Ramp::new(1.0); 4],
+            base: Window::new(0, 0),
             solo: false,
             mute: false,
             ping: false,
@@ -565,6 +590,13 @@ impl Voice {
     }
 
     fn set_window(&mut self, w: Window, playing: bool, sample_rate: u32) {
+        self.base = w;
+        self.move_window(w, playing, sample_rate);
+    }
+
+    /// [`Voice::set_window`], keeping the window last set, as a modulated
+    /// start moves it.
+    fn move_window(&mut self, w: Window, playing: bool, sample_rate: u32) {
         if !playing {
             self.window = w;
             self.next = None;
@@ -613,11 +645,12 @@ impl Voice {
         if gate == 0.0 && !self.on {
             return false;
         }
-        let rate = self.rate.next();
+        let rate = (self.rate.next() * self.rate_mod.next().exp2()).clamp(-4.0, 4.0);
         let duck = self.duck.next();
-        let level = self.level.next() * gate * self.heard.next() * duck;
-        let pan = self.pan.next();
-        let sends = self.send.next() * gate * duck;
+        let [g_level, g_send, g_delay, g_reverb] = self.gain_mod.each_mut().map(Ramp::next);
+        let level = self.level.next() * g_level * gate * self.heard.next() * duck;
+        let pan = (self.pan.next() + self.pan_mod.next()).clamp(-1.0, 1.0);
+        let sends = self.send.next() * g_send * gate * duck;
         let wear = self.wear.next();
         let drive_d = self.drive.next();
         if wear != self.wear_at {
@@ -645,8 +678,8 @@ impl Voice {
 
         let [l, r] = pan_frame(s, lp.channels, pan);
         let heard = [l * level, r * level];
-        for (bus, amount) in buses.iter_mut().zip(&mut self.fx) {
-            let amount = amount.next();
+        for ((bus, amount), g) in buses.iter_mut().zip(&mut self.fx).zip([g_delay, g_reverb]) {
+            let amount = amount.next() * g;
             bus[0] += heard[0] * amount;
             bus[1] += heard[1] * amount;
         }
@@ -1071,6 +1104,26 @@ impl Writer {
     }
 }
 
+/// The delay settings modulation moves, in the order of `Tape::fx_base`.
+const DELAY_PARAMS: [DelayParam; 3] = [DelayParam::Time, DelayParam::Feedback, DelayParam::Tone];
+
+/// A new tape's delay time, feedback and tone and reverb damp.
+fn fx_defaults() -> [f32; 4] {
+    let delay = |p: DelayParam| {
+        DELAY_DEFAULTS
+            .iter()
+            .find(|d| d.0 == p)
+            .map_or(0.0, |d| d.1)
+    };
+    let damp = REVERB_DEFAULTS.iter().find(|d| d.0 == ReverbParam::Damp);
+    [
+        delay(DelayParam::Time),
+        delay(DelayParam::Feedback),
+        delay(DelayParam::Tone),
+        damp.map_or(0.0, |d| d.1),
+    ]
+}
+
 /// The loop, its voices and its write head. [`Tape::process`] is the whole
 /// signal path and is deterministic, so tests drive it directly.
 #[derive(Debug)]
@@ -1090,8 +1143,21 @@ pub struct Tape {
     /// How the voices' heads read between frames.
     interp: Interp,
     buses: Buses,
-    /// How much of the returns the write head records.
+    /// How much of the returns the write head records, and modulation's
+    /// factor on it.
     print: Ramp,
+    print_mod: Ramp,
+    lfos: [Lfo; LFOS],
+    routes: [Option<Route>; SLOTS],
+    /// Frames until the next control tick.
+    tick: usize,
+    /// A route was set at the last tick.
+    modulating: bool,
+    noise: u32,
+    /// The delay's time, feedback and tone and the reverb's damp as last
+    /// set, which modulation moves from; and which it moved last tick.
+    fx_base: [f32; 4],
+    fx_moved: [bool; 4],
 }
 
 impl Tape {
@@ -1112,6 +1178,14 @@ impl Tape {
             interp: Interp::default(),
             buses: Buses::new(sample_rate),
             print: Ramp::new(0.0),
+            print_mod: Ramp::new(1.0),
+            lfos: [Lfo::default(); LFOS],
+            routes: [None; SLOTS],
+            tick: 0,
+            modulating: false,
+            noise: 0x9E37_79B9,
+            fx_base: fx_defaults(),
+            fx_moved: [false; 4],
         }
     }
 
@@ -1379,7 +1453,23 @@ impl Tape {
             Setting::ReverbSend(i, v) if i < VOICES && finite(v) => {
                 self.voices[i].fx[1].set(v.clamp(0.0, 1.0), ramp)
             }
-            Setting::Fx(s) => self.buses.set(s, ramp),
+            Setting::Fx(s) => {
+                match s {
+                    BusSetting::Delay(p, v) => {
+                        if let Some(k) = DELAY_PARAMS.iter().position(|q| *q == p) {
+                            self.fx_base[k] = v;
+                        }
+                    }
+                    BusSetting::Reverb(ReverbParam::Damp, v) => self.fx_base[3] = v,
+                    _ => {}
+                }
+                self.buses.set(s, ramp)
+            }
+            Setting::LfoShape(k, shape) if k < LFOS => self.lfos[k].shape = shape,
+            Setting::LfoSpeed(k, speed) if k < LFOS => self.lfos[k].speed = speed,
+            Setting::Route(k, route) if k < SLOTS => {
+                self.routes[k] = route.filter(|r| r.lfo < LFOS && r.depth.is_finite())
+            }
             Setting::PrintFx(v) if finite(v) => self.print.set(v.clamp(0.0, 1.0), ramp),
             Setting::Bounce(on) if !on || (frames > 0 && !self.writer.window.is_empty()) => {
                 self.writer.set_bounce(on, self.smooth)
@@ -1405,6 +1495,11 @@ impl Tape {
         }
         let sr = self.sample_rate;
         for frame in out.as_chunks_mut::<2>().0 {
+            if self.tick == 0 {
+                self.modulate();
+                self.tick = CONTROL;
+            }
+            self.tick -= 1;
             let mut mix = [0.0; 2];
             let mut send = [0.0; 2];
             let mut buses = [[0.0; 2]; 2];
@@ -1420,7 +1515,7 @@ impl Tape {
             let wet = [d[0] + r[0], d[1] + r[1]];
             mix[0] += wet[0];
             mix[1] += wet[1];
-            let print = self.print.next();
+            let print = self.print.next() * self.print_mod.next();
             if print > 0.0 && wet != [0.0; 2] {
                 match self.lp.channels {
                     1 => send[0] += print * 0.5 * (wet[0] + wet[1]),
@@ -1437,6 +1532,88 @@ impl Tape {
                     .write(&mut self.lp, sr, edge, dc_r, send, sending, mix, smooth);
             }
             frame.copy_from_slice(&mix);
+        }
+    }
+
+    /// A control tick: runs the LFOs and sets where every modulated value
+    /// ramps to over the next [`CONTROL`] frames. With no routes, every
+    /// value is left as set.
+    fn modulate(&mut self) {
+        // Unrouted, the tick after the last route went sets everything back.
+        let routed = self.routes.iter().any(Option::is_some);
+        if !routed && !std::mem::take(&mut self.modulating) {
+            return;
+        }
+        self.modulating = routed;
+        let sr = self.sample_rate;
+        let v0 = &self.voices[0];
+        let synced = (!v0.window.is_empty())
+            .then(|| (v0.pos - v0.window.start as f64) / v0.window.len() as f64);
+        let mut at = [0.0; LFOS];
+        for (lfo, at) in self.lfos.iter_mut().zip(&mut at) {
+            *at = lfo.tick(sr, synced, &mut self.noise);
+        }
+        let mut o = Offsets::new();
+        for r in self.routes.iter().flatten() {
+            o.add(r.dest, r.depth, at[r.lfo]);
+        }
+        let n = CONTROL as u32;
+        for i in 0..VOICES {
+            let of = o.voice[i];
+            let frames = self.source(i).frames();
+            let v = &mut self.voices[i];
+            v.rate_mod.set(of[0] * modulation::RATE_OCTAVES, n);
+            v.pan_mod.set(of[2], n);
+            for (g, k) in v.gain_mod.iter_mut().zip([3, 4, 9, 10]) {
+                g.set(of[k], n);
+            }
+            for (m, k) in v.eq.hz_mod.iter_mut().zip([5, 6, 7]) {
+                m.set(of[k] * modulation::HZ_OCTAVES, n);
+            }
+            v.eq.gain_mod.set(of[8] * BELL_DB, n);
+            // The start moves by up to the window's length, the window whole.
+            let b = v.base;
+            if !b.is_empty() && frames >= b.len() {
+                let shift = (of[1] * b.len() as f32).round() as i64;
+                let start = (b.start as i64 + shift).clamp(0, (frames - b.len()) as i64) as usize;
+                let w = Window::new(start, start + b.len());
+                if w != v.next.unwrap_or(v.window) {
+                    v.move_window(w, self.playing, sr);
+                }
+            }
+        }
+        self.print_mod.set(o.fx[4], n);
+        // The effects only while routed, then back to their settings once.
+        let routed = |k: usize| {
+            let dests = [
+                modulation::Dest::DelayTime,
+                modulation::Dest::DelayFeedback,
+                modulation::Dest::DelayTone,
+                modulation::Dest::ReverbDamp,
+            ];
+            self.routes.iter().flatten().any(|r| r.dest == dests[k])
+        };
+        let routed: [bool; 4] = std::array::from_fn(routed);
+        for (k, routed) in routed.into_iter().enumerate() {
+            if !routed && !self.fx_moved[k] {
+                continue;
+            }
+            self.fx_moved[k] = routed;
+            let (base, m) = (self.fx_base[k], o.fx[k]);
+            let s = match k {
+                0 => BusSetting::Delay(
+                    DelayParam::Time,
+                    base * (m * modulation::RATE_OCTAVES).exp2(),
+                ),
+                1 => {
+                    BusSetting::Delay(DelayParam::Feedback, base + m * playr_dsp::fx::FEEDBACK_MAX)
+                }
+                2 => {
+                    BusSetting::Delay(DelayParam::Tone, base * (m * modulation::HZ_OCTAVES).exp2())
+                }
+                _ => BusSetting::Reverb(ReverbParam::Damp, base + m),
+            };
+            self.buses.set(s, n);
         }
     }
 

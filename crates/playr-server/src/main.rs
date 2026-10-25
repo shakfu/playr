@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use playr_app::config::{self, Config, Program};
 use playr_app::dispatch::Frontend;
 use playr_app::instance;
+use playr_app::message::Message;
 use playr_app::model::Model;
 use playr_core::audio::Player;
 use playr_core::db;
@@ -59,6 +60,11 @@ struct Cli {
     /// TouchOSC; the host may be a name, as ipad.local, resolved at startup
     #[arg(long, value_name = "HOST:PORT", value_parser = host_port)]
     osc_reply: Option<String>,
+
+    /// Show the terminal interface too, on the same playback; quitting it
+    /// stops the server
+    #[arg(long)]
+    tui: bool,
 }
 
 fn host_port(text: &str) -> Result<String, String> {
@@ -95,6 +101,10 @@ fn main() -> ExitCode {
 /// the model until it quits.
 fn run(cli: Cli) -> Result<(), Vec<String>> {
     let fail = |e: &dyn std::fmt::Display| vec![e.to_string()];
+    let terminal = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    if cli.tui && !terminal {
+        return Err(vec!["--tui needs a terminal: stdout is not one".into()]);
+    }
     let _instance = instance::claim().map_err(|e| vec![e])?;
     // Read first: `[server]` may hold the flags below.
     let config = match (&cli.settings, config::default_path()) {
@@ -155,7 +165,6 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
         timeout: http::TIMEOUT,
         answer_within: http::ANSWER_WITHIN,
     };
-    let terminal = std::io::IsTerminal::is_terminal(&std::io::stdout());
     let address = token::address(
         flags.listen,
         server.token.as_deref(),
@@ -173,11 +182,27 @@ fn run(cli: Cli) -> Result<(), Vec<String>> {
             eprintln!("playr-server: {e}");
         }
     });
-    owner::run(model, received, |model| {
+    let mut publish = |model: &Model| {
         latest.set(web::screen(model).to_string());
         if let Some(feedback) = &mut feedback {
             feedback.send(model);
         }
+    };
+    if !cli.tui {
+        owner::run(model, received, publish);
+        return Ok(());
+    }
+    let mut screen = ratatui::try_init().map_err(|e| fail(&format!("--tui: {e}")))?;
+    model.notify(Message::Serving(address.clone()));
+    let mut app = playr::ui::App::with_model(model);
+    app.set_colour(std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()));
+    ratatui::crossterm::style::force_color_output(true);
+    let result = app.run_with(&mut screen, owner::FRAME, |model| {
+        owner::drain(model, &received);
+        publish(model);
     });
-    Ok(())
+    ratatui::restore();
+    // The address scrolled away under the interface.
+    println!("playr-server {}: {address}", playr_app::VERSION);
+    result.map_err(|e| fail(&e))
 }

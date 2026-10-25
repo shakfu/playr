@@ -85,6 +85,7 @@ C = "mark-clear"
 
 # Keys for one view, which win there over the keys above.
 [keys.library]
+V = "pick"
 a = "toggle"
 A = "enqueue all"
 e = "enqueue"
@@ -92,6 +93,7 @@ E = "enqueue next"
 esc = "search-clear"
 
 [keys.selection]
+V = "pick"
 d = "remove"
 backspace = "remove"
 delete = "remove"
@@ -105,6 +107,7 @@ shift-up = "move -1"
 c = "clear"
 
 [keys.queue]
+V = "pick"
 a = "add"
 d = "remove"
 backspace = "remove"

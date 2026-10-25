@@ -790,6 +790,22 @@ impl Session {
     }
 
     /// Remembers `path` and `at` as where to take up next time, with the queue.
+    /// Records a play of `path` in the library, and in the rows that show it.
+    pub fn record_play(&mut self, path: &Path) {
+        let (path, at) = (path.to_string_lossy(), db::now());
+        if db::record_play(&self.conn, &path, at).is_err() {
+            return;
+        }
+        let rows = self.tracks.iter_mut();
+        for t in rows.chain(&mut self.selection).chain(&mut self.played) {
+            if t.path == path {
+                t.played_at = Some(at);
+                t.plays += 1;
+            }
+        }
+        self.revision += 1;
+    }
+
     pub fn remember(&self, path: &Path, at: Duration) {
         let _ = db::set_resume(&self.conn, path, at);
         self.remember_queue();
@@ -2247,7 +2263,7 @@ impl Session {
         let factor = match fix {
             TempoFix::Double => was * 2.0,
             TempoFix::Halve => was / 2.0,
-            TempoFix::Reset => 1.0,
+            TempoFix::Reset => db::analysis::genre_fix(&self.conn, key).unwrap_or(1.0),
         };
         if !(1.0 / MAX_TEMPO_FIX..=MAX_TEMPO_FIX).contains(&factor) {
             return Refusal::TempoFixLimit.into();

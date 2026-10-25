@@ -160,6 +160,8 @@ fn caf_and_matroska_rows_are_reread_once() {
         }
         conn.execute("DELETE FROM state WHERE key = 'reread_caf_mkv'", [])
             .unwrap();
+        conn.execute("DELETE FROM state WHERE key = 'reread_mkv_title'", [])
+            .unwrap();
     }
     let mtimes = |conn: &rusqlite::Connection| -> Vec<i64> {
         query::all(conn).unwrap().iter().map(|t| t.mtime).collect()
@@ -175,4 +177,33 @@ fn caf_and_matroska_rows_are_reread_once() {
     drop(conn);
     let conn = db::open(&path).unwrap();
     assert!(mtimes(&conn).iter().all(|&m| m == 5), "once only");
+}
+
+/// Matroska rows read before their titles were are read again, once, by a
+/// library that already reread its CAF and Matroska tags.
+#[test]
+fn matroska_rows_are_reread_for_their_titles() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    {
+        let conn = db::open(&path).unwrap();
+        for p in ["/m/a.mka", "/m/c.caf"] {
+            db::upsert(
+                &conn,
+                &Track {
+                    path: p.into(),
+                    mtime: 5,
+                    size: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        conn.execute("DELETE FROM state WHERE key = 'reread_mkv_title'", [])
+            .unwrap();
+    }
+    let conn = db::open(&path).unwrap();
+    let mut rows = query::all(&conn).unwrap();
+    rows.sort_by(|a, b| a.path.cmp(&b.path));
+    assert_eq!(rows.iter().map(|t| t.mtime).collect::<Vec<_>>(), [0, 5]);
 }

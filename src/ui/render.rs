@@ -589,8 +589,9 @@ fn fit(s: &str, width: usize) -> String {
     out
 }
 
-/// One track row. `playing` marks it `>`, `marked` (in the selection) `+`, and
-/// `cursor` gives it the cursor row's dimmed colours.
+/// One track row. `playing` marks it `>`, `mark` is `+` for a track in the
+/// selection or `*` for a picked row, and `cursor` gives it the cursor
+/// row's dimmed colours.
 #[allow(clippy::too_many_arguments)]
 fn track_line(
     p: &Palette,
@@ -598,7 +599,7 @@ fn track_line(
     measures: Measures,
     columns: &[(Column, usize)],
     playing: bool,
-    marked: bool,
+    mark: &'static str,
     cursor: bool,
     played: bool,
 ) -> ListItem<'static> {
@@ -608,7 +609,7 @@ fn track_line(
             if playing { ">" } else { " " },
             Style::default().fg(p.accent),
         ),
-        Span::styled(if marked { "+" } else { " " }, Style::default().fg(p.mark)),
+        Span::styled(mark, Style::default().fg(p.mark)),
     ];
     for (i, (column, width)) in columns.iter().enumerate() {
         if i > 0 {
@@ -685,6 +686,20 @@ fn draw_tracks(
     draw_rows(app, f, area, title, tracks, scroll, marked, playing, 0)
 }
 
+/// The mark a row of the view shown takes: `*` when picked, else `+` when
+/// `marked`.
+fn mark_of(app: &Screen<'_>, t: &Track, marked: bool) -> &'static str {
+    let picked = app
+        .picks
+        .and_then(|p| p.of(app.view))
+        .is_some_and(|p| p.contains(&t.path));
+    match (picked, marked) {
+        (true, _) => "*",
+        (false, true) => "+",
+        (false, false) => " ",
+    }
+}
+
 /// As [`draw_tracks`], with `playing` choosing the row marked as playing by
 /// its index as well as its track, and the first `played` rows dimmed.
 #[allow(clippy::too_many_arguments)]
@@ -718,7 +733,7 @@ fn draw_rows(
                 app.measures.get(&t.path).copied().unwrap_or_default(),
                 &widths,
                 playing(i, t),
-                marked(t),
+                mark_of(app, t, marked(t)),
                 selected == Some(i),
                 i < played,
             )

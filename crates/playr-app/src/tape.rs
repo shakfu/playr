@@ -20,6 +20,7 @@ mod saved;
 pub use crate::fx::{
     model_name, Division, FxField, FxSetting, FxState, DELAY_MODELS, REVERB_MODELS,
 };
+pub use playr_looper::modulation::{Dest, Route, Shape, Speed, LFOS, LFO_HZ, SLOTS};
 pub use saved::{Reads, SavedTape};
 
 /// How the Tape tab shows each lane: folded to its header and a strip, and
@@ -126,6 +127,88 @@ pub enum TapeAction {
     Fold(Option<u8>),
     /// Open or shut lane `n`'s drawer, from 1.
     Drawer(u8),
+    /// A setting of LFO `k`: 0, a, or 1, b.
+    Lfo(u8, LfoSetting),
+    /// What modulation slot `n`, from 1, routes, or nothing.
+    Route(u8, Option<Route>),
+}
+
+/// A setting of an LFO.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LfoSetting {
+    Shape(Shape),
+    Hz(f32),
+    /// One cycle per this part of voice 1's window.
+    Sync(Division),
+}
+
+/// A voice's destination, given the voice from 0.
+pub type VoiceDest = fn(usize) -> Dest;
+
+/// The names `:tape mod` gives destinations: a voice's, then the effects'.
+pub const VOICE_DESTS: [(&str, VoiceDest); 11] = [
+    ("rate", Dest::Rate),
+    ("start", Dest::Start),
+    ("pan", Dest::Pan),
+    ("level", Dest::Level),
+    ("send", Dest::Send),
+    ("hp", Dest::HighPass),
+    ("lp", Dest::LowPass),
+    ("bell", Dest::BellHz),
+    ("bell-gain", Dest::BellGain),
+    ("delay", Dest::DelaySend),
+    ("reverb", Dest::ReverbSend),
+];
+pub const FX_DESTS: [(&str, Dest); 5] = [
+    ("delay-time", Dest::DelayTime),
+    ("delay-feedback", Dest::DelayFeedback),
+    ("delay-tone", Dest::DelayTone),
+    ("reverb-damp", Dest::ReverbDamp),
+    ("print-fx", Dest::PrintFx),
+];
+
+/// `dest`'s name, and its voice from 1 for a voice's.
+pub fn dest_name(dest: Dest) -> (&'static str, Option<u8>) {
+    match dest.voice() {
+        Some(i) => {
+            let name = VOICE_DESTS
+                .iter()
+                .find(|(_, f)| f(i) == dest)
+                .map_or("", |d| d.0);
+            (name, Some(i as u8 + 1))
+        }
+        None => (
+            FX_DESTS.iter().find(|d| d.1 == dest).map_or("", |d| d.0),
+            None,
+        ),
+    }
+}
+
+/// The destination `name` names, with `voice` from 1 for a voice's.
+pub fn dest_named(name: &str, voice: Option<u8>) -> Option<Dest> {
+    match voice {
+        Some(n) if (1..=playr_looper::VOICES as u8).contains(&n) => VOICE_DESTS
+            .iter()
+            .find(|d| d.0 == name)
+            .map(|d| d.1(usize::from(n) - 1)),
+        Some(_) => None,
+        None => FX_DESTS.iter().find(|d| d.0 == name).map(|d| d.1),
+    }
+}
+
+/// An LFO's letter.
+pub fn lfo_name(k: usize) -> &'static str {
+    ["a", "b"].get(k).copied().unwrap_or("?")
+}
+
+/// The division a synced speed is a part of voice 1's window by.
+pub fn speed_division(speed: Speed) -> Option<Division> {
+    match speed {
+        Speed::Sync(part) => Division::ALL
+            .into_iter()
+            .find(|d| d.fraction() as f32 == part),
+        Speed::Hz(_) => None,
+    }
 }
 
 /// How long a bounce records.
@@ -392,6 +475,9 @@ pub struct TapeState {
     pub wear: f32,
     pub thin: f32,
     pub fx: FxState,
+    /// Each LFO's wave and speed, and what each slot routes.
+    pub lfos: [(Shape, Speed); LFOS],
+    pub routes: [Option<Route>; SLOTS],
 }
 
 impl TapeState {
@@ -432,6 +518,8 @@ impl TapeState {
             wear: 0.0,
             thin: 0.0,
             fx: FxState::default(),
+            lfos: [(Shape::default(), Speed::default()); LFOS],
+            routes: [None; SLOTS],
         }
     }
 
@@ -466,6 +554,10 @@ impl TapeState {
             Setting::ReverbSend(i, x) => self.voices[i].reverb = x,
             Setting::Fx(b) => self.fx.apply(b),
             Setting::PrintFx(x) => self.fx.print = x,
+            Setting::LfoShape(k, shape) if k < LFOS => self.lfos[k].0 = shape,
+            Setting::LfoSpeed(k, speed) if k < LFOS => self.lfos[k].1 = speed,
+            Setting::Route(k, route) if k < SLOTS => self.routes[k] = route,
+            Setting::LfoShape(..) | Setting::LfoSpeed(..) | Setting::Route(..) => {}
             // From the settings file, a take and the mixer, and a bounce, which
             // the looper's status reports: not the tape's settings.
             Setting::Knee(_) | Setting::Head(..) | Setting::Interp(_) | Setting::Bounce(_) => {}
@@ -1179,6 +1271,15 @@ impl Live {
         ]);
         settings.extend(s.fx.settings().map(Setting::Fx));
         settings.push(Setting::PrintFx(s.fx.print));
+        for (k, (shape, speed)) in s.lfos.iter().enumerate() {
+            settings.extend([Setting::LfoShape(k, *shape), Setting::LfoSpeed(k, *speed)]);
+        }
+        settings.extend(
+            s.routes
+                .iter()
+                .enumerate()
+                .map(|(k, r)| Setting::Route(k, *r)),
+        );
         self.state.fx.sync = s.fx.sync;
         if s.playing {
             settings.push(Setting::Play);
@@ -2065,6 +2166,12 @@ pub fn settings(action: TapeAction, e: Extent) -> Result<Vec<Setting>, TapeMessa
         TapeAction::Fx(FxSetting::Sync(_)) => return Ok(Vec::new()),
         TapeAction::Fx(FxSetting::Print(v)) => Setting::PrintFx(v),
         TapeAction::Fx(fx) => Setting::Fx(fx.bus().expect("a bus setting")),
+        TapeAction::Lfo(k, LfoSetting::Shape(shape)) => Setting::LfoShape(usize::from(k), shape),
+        TapeAction::Lfo(k, LfoSetting::Hz(hz)) => Setting::LfoSpeed(usize::from(k), Speed::Hz(hz)),
+        TapeAction::Lfo(k, LfoSetting::Sync(d)) => {
+            Setting::LfoSpeed(usize::from(k), Speed::Sync(d.fraction() as f32))
+        }
+        TapeAction::Route(n, route) => Setting::Route(usize::from(n).saturating_sub(1), route),
         TapeAction::Load(_)
         | TapeAction::Take
         | TapeAction::Reset

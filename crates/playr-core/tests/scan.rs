@@ -761,8 +761,9 @@ fn matroska_tags_and_length_are_read_without_lofty() {
             continue;
         }
         let t = scan::read_track(&path).unwrap();
-        // ffmpeg writes the title into the segment's Info, which Symphonia
-        // does not expose; the rest are tags.
+        // ffmpeg writes the title into the segment's Info, which playr reads
+        // itself; the rest are tags.
+        assert_eq!(t.title.as_deref(), Some("Peace Piece"), "{name}");
         assert_eq!(t.artist.as_deref(), Some("Bill Evans"), "{name}");
         assert_eq!(t.album.as_deref(), Some("Everybody Digs"), "{name}");
         assert_eq!(t.track_no, Some(7), "{name}");
@@ -770,6 +771,29 @@ fn matroska_tags_and_length_are_read_without_lofty() {
         let ms = t.duration_ms.expect("the segment's duration");
         assert!((ms - 3000).abs() < 50, "{name}: {ms} ms");
     }
+}
+
+/// A Matroska file without a segment title takes its track's name, which
+/// ffmpeg writes from a stream's title.
+#[test]
+fn matroska_title_falls_back_to_the_track_name() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.mka");
+    let ok = Command::new("ffmpeg")
+        .args(["-y", "-v", "error", "-f", "lavfi", "-i", "sine=duration=1"])
+        .args(["-c:a", "flac", "-metadata:s:a:0", "title=Blue in Green"])
+        .arg(&path)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        common::skip("PLAYR_REQUIRE_FFMPEG", "this ffmpeg cannot write MKA");
+        return;
+    }
+    let t = scan::read_track(&path).unwrap();
+    assert_eq!(t.title.as_deref(), Some("Blue in Green"));
 }
 
 /// Symphonia skips a CAF's `info` chunk, so playr reads it itself.
