@@ -22,7 +22,7 @@ The first load starts the tape from the default settings, with voices 2 to 4 emp
 
 ## The tab
 
-`6` or `:view tape` opens it. Its keys, under `[keys.tape]`: `space` plays the tape, `x` stops it, `l` loads the range, `t` takes over from the player, `r` resets the loop, `w` saves it and `R` records the mix.
+`7` or `:view tape` opens it. Its keys, under `[keys.tape]`: `space` plays the tape, `x` stops it, `l` loads the range, `t` takes over from the player, `r` resets the loop, `w` saves it and `R` records the mix.
 
 From top to bottom:
 

@@ -1553,7 +1553,7 @@ fn the_tape_dj_and_mix_views_have_numbers_tab_order_and_keys_of_their_own() {
     let (mut harness, _dir) = window();
     harness.run_steps(2);
     let view = |harness: &Harness<'_, Gui>| model(harness).view();
-    typing(&mut harness, "6");
+    typing(&mut harness, "7");
     assert_eq!(view(&harness), View::Tape);
     harness.get_by_label("Voice 1 waveform");
     // The tape's key, not the player's pause.
@@ -1564,13 +1564,13 @@ fn the_tape_dj_and_mix_views_have_numbers_tab_order_and_keys_of_their_own() {
     );
 
     // The DJ view moves through the library's rows.
-    typing(&mut harness, "7");
+    typing(&mut harness, "8");
     assert_eq!(view(&harness), View::Dj);
     let before = model(&harness).cursor(View::Library).unwrap_or(0);
     typing(&mut harness, "j");
     assert_eq!(model(&harness).cursor(View::Library), Some(before + 1));
 
-    typing(&mut harness, "8");
+    typing(&mut harness, "9");
     assert_eq!(view(&harness), View::Mix);
     harness.get_by_label("mute headphones");
     typing(&mut harness, "T");

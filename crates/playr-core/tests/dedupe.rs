@@ -89,9 +89,15 @@ fn forgetting_a_root_forgets_its_exclusions() {
     assert!(dedupe::excluded(&conn).unwrap().is_empty());
 }
 
+/// A row at `path`, absolute on this host when it starts with `/`: Windows
+/// wants a drive.
 fn row(path: &str) -> Track {
+    let path = match cfg!(windows) && path.starts_with('/') {
+        true => format!("C:{path}"),
+        false => path.to_string(),
+    };
     Track {
-        path: path.into(),
+        path,
         mtime: 1,
         size: 1,
         ..Default::default()

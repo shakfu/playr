@@ -4,6 +4,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Changed
+
+- The number keys follow tab order: `6` opens Loops, `7` Tape, `8` DJ and `9` Mix, where Loops was `9` and the rest one lower. Loops is the sixth tab, so in the terminal `6` refused with "no Tape view here" and in the window each number past `5` opened the tab after its position. Renumbering over moving Loops to the end of the tabs, which would still leave the terminal's sixth tab on `9`.
+
+### Fixed
+
+- Four tests failed on the Windows runner. Two in `tests/cli.rs` expected the settings path as `playr/settings.toml`, but playr prints it with Windows' `\`. Two in `dedupe.rs` used library paths like `/x/a.flac`, which have no drive and so are relative on Windows; they now get `C:` there, as in `paths.rs`.
+
 ## [0.20.0]
 
 ### Added
