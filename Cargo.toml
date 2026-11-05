@@ -21,7 +21,7 @@ playr-dj = { path = "crates/playr-dj", version = "0.20.0" }
 playr-dsp = { path = "crates/playr-dsp", version = "0.20.0" }
 cpal = "0.18.2"
 hound = "3.5"
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "hooks", "limits"] }
 walkdir = "2.5.0"
 rtrb = "0.4.0"
 # Media keys and the now-playing panel. `use_zbus` keeps Linux pure Rust:
