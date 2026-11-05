@@ -393,6 +393,14 @@ fn json(stream: &mut TcpStream, body: &Value) -> io::Result<()> {
 }
 
 /// Inline script and styles only, fetches to this server, and no framing.
+///
+/// `'unsafe-inline'` is acceptable here: the page is one bundled file,
+/// `PAGE`, compiled into the binary, with no third-party origin and no route
+/// that serves files or echoes request input into HTML. Inline script would
+/// only run an attacker's code if they could already change `PAGE`, and
+/// `default-src 'none'` with `connect-src 'self'` keeps anything injected from
+/// loading or sending elsewhere. Moving the script to a hashed or nonced
+/// `<script>` would tighten this further, at the cost of a build step.
 const PAGE_POLICY: &str = "default-src 'none'; script-src 'unsafe-inline'; \
     style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; \
     form-action 'none'; frame-ancestors 'none'";

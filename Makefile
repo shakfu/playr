@@ -5,7 +5,7 @@ UNAME := $(shell uname -s)
 EXE := $(if $(filter Windows_NT,$(OS)),.exe)
 DIAGRAMS := $(patsubst %.d2,%.svg,$(wildcard docs/media/*.d2))
 
-.PHONY: all build release debug test test-devices fmt clippy run gui app clean install install-dev diagrams icons touchosc touchosc-test page-test install-service faust
+.PHONY: all build release debug test test-devices fmt clippy audit run gui app clean install install-dev diagrams icons touchosc touchosc-test page-test install-service faust
 
 all: build
 
@@ -35,6 +35,11 @@ fmt:
 
 clippy:
 	@cargo clippy --workspace --all-targets -- -D warnings
+
+# Cargo.lock against the RustSec advisories, as the audit workflow runs it.
+# Needs cargo-audit: cargo install cargo-audit --locked
+audit:
+	@cargo audit
 
 run:
 	@cargo run --release

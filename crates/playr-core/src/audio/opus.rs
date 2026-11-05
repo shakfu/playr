@@ -137,10 +137,11 @@ pub struct OpusDecoder {
 
 impl OpusDecoder {
     pub fn try_new(params: &AudioCodecParameters, _opts: &AudioDecoderOptions) -> Result<Self> {
-        let channels = match params.channels.as_ref() {
-            Some(ch) => ch.count(),
+        let layout = match params.channels.as_ref() {
+            Some(ch) => ch.clone(),
             None => return unsupported_error("opus: channel layout is missing"),
         };
+        let channels = layout.count();
         if channels == 0 || channels > VORBIS_TO_WAVE.len() {
             return unsupported_error("opus: 1 to 8 channels are supported");
         }
@@ -166,7 +167,7 @@ impl OpusDecoder {
         };
 
         // Reuse the layout the demuxer reported rather than inventing one.
-        let spec = AudioSpec::new(OPUS_RATE, params.channels.clone().unwrap());
+        let spec = AudioSpec::new(OPUS_RATE, layout);
 
         let mut params = params.clone();
         params.sample_rate = Some(OPUS_RATE);
