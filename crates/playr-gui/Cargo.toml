@@ -27,7 +27,7 @@ playr-looper.workspace = true
 # Without `default_fonts`, whose two emoji fonts were 726 KB of the binary
 # for six symbols; `fonts::definitions` bundles what is drawn. The rest are
 # eframe's defaults.
-eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "links", "wayland", "web_screen_reader", "wgpu", "x11"] }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "links", "wayland", "web_screen_reader", "wgpu", "x11"] }
 # eframe's `winit/default`, which a dependent cannot name: client-side
 # decorations and Wayland loaded at run time.
 winit = "0.30.13"
