@@ -403,12 +403,17 @@ fn the_default_output_device_plays() {
 
     // The device's callback discards the buffer, well inside the timeout that
     // would reopen the device instead.
+    // The bound is measured, not the nominal sleep: a CI runner once slept
+    // 105 ms over 300 ms. 100 ms covers what the callback holds ahead.
+    let sought = Instant::now();
     player.send(Cmd::Seek(Duration::from_secs(3)));
     std::thread::sleep(Duration::from_millis(300));
     let pos = player.position();
+    let elapsed = sought.elapsed();
     assert!(
-        pos >= Duration::from_secs(3) && pos < Duration::from_millis(3400),
-        "position {pos:?} 300 ms after seeking to 3 s"
+        pos >= Duration::from_secs(3)
+            && pos < Duration::from_secs(3) + elapsed + Duration::from_millis(100),
+        "position {pos:?} {elapsed:?} after seeking to 3 s"
     );
 }
 
