@@ -201,7 +201,7 @@ fn with_config(dir: &Path, args: &[&str]) -> (bool, String) {
 fn bad_settings_stop_playr_before_it_starts_and_list_every_error() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("playr")).unwrap();
-    let default = dir.path().join("playr/settings.toml");
+    let default = dir.path().join("playr").join("settings.toml");
     std::fs::write(&default, "volume = 50\nfrob = 1\n[keys]\nd = 'remove'\n").unwrap();
 
     let (ok, stderr) = with_config(dir.path(), &[]);
@@ -238,7 +238,7 @@ fn bad_settings_stop_playr_before_it_starts_and_list_every_error() {
 fn a_command_that_does_not_play_warns_of_bad_settings_and_runs() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("playr")).unwrap();
-    let default = dir.path().join("playr/settings.toml");
+    let default = dir.path().join("playr").join("settings.toml");
     std::fs::write(&default, "frob = 1\n").unwrap();
     let warning = format!(
         "playr: warning: {}: line 1: unknown setting: frob",

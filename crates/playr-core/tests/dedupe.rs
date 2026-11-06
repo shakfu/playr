@@ -89,6 +89,15 @@ fn forgetting_a_root_forgets_its_exclusions() {
     assert!(dedupe::excluded(&conn).unwrap().is_empty());
 }
 
+/// `path` made absolute on this platform: `/x` is relative on Windows.
+fn abs(path: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{path}")
+    } else {
+        path.into()
+    }
+}
+
 fn row(path: &str) -> Track {
     Track {
         path: path.into(),
@@ -102,7 +111,7 @@ fn row(path: &str) -> Track {
 fn a_relative_row_merges_into_the_one_absolute_row_ending_with_it() {
     let mut conn = db::open_memory().unwrap();
     let rel = db::upsert(&conn, &row("./music/a.flac")).unwrap();
-    let abs = db::upsert(&conn, &row("/home/u/music/a.flac")).unwrap();
+    let abs = db::upsert(&conn, &row(&abs("/home/u/music/a.flac"))).unwrap();
     query::save_playlist(&mut conn, "p", &[rel]).unwrap();
 
     let fixed = dedupe::fix_relative(&conn).unwrap();
@@ -116,8 +125,8 @@ fn a_relative_row_merges_into_the_one_absolute_row_ending_with_it() {
 fn an_ambiguous_relative_row_is_left() {
     let conn = db::open_memory().unwrap();
     db::upsert(&conn, &row("a.flac")).unwrap();
-    db::upsert(&conn, &row("/x/a.flac")).unwrap();
-    db::upsert(&conn, &row("/y/a.flac")).unwrap();
+    db::upsert(&conn, &row(&abs("/x/a.flac"))).unwrap();
+    db::upsert(&conn, &row(&abs("/y/a.flac"))).unwrap();
     let fixed = dedupe::fix_relative(&conn).unwrap();
     assert_eq!((fixed.merged, fixed.resolved, fixed.left), (0, 0, 1));
     assert_eq!(query::count(&conn).unwrap(), 3);
