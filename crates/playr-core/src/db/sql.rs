@@ -89,7 +89,7 @@ const FUNCTIONS: &[&str] = &[
 /// on the library file `library`. The error is SQLite's, or a limit's, in
 /// words to show.
 pub fn paths(library: &Path, sql: &str) -> Result<Vec<PathBuf>, String> {
-    let conn = open(library).map_err(|e| e.to_string())?;
+    let mut conn = open(library).map_err(|e| e.to_string())?;
     let started = Instant::now();
     let _ = conn.progress_handler(1000, Some(move || started.elapsed() > TIME_LIMIT));
     let mut stmt = conn.prepare(sql).map_err(|e| words(e, started))?;
@@ -116,7 +116,7 @@ pub fn paths(library: &Path, sql: &str) -> Result<Vec<PathBuf>, String> {
 /// authorizer and limits in place.
 fn open(library: &Path) -> rusqlite::Result<Connection> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let conn = Connection::open_with_flags(library, flags)?;
+    let mut conn = Connection::open_with_flags(library, flags)?;
     // Temporary views are made in the connection's own temp schema, which a
     // read-only connection may still write. The names hide the tables of the
     // same name in `main`.
