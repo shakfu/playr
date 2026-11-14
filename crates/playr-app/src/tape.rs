@@ -1228,8 +1228,8 @@ impl Live {
             self.printed = true;
         }
         if self.extent.frames > 0 {
-            for i in 0..w {
-                if saved.reads[i] == Reads::Write {
+            for (i, r) in saved.reads.iter().enumerate().take(w) {
+                if *r == Reads::Write {
                     self.share(i)?;
                 }
             }
