@@ -237,7 +237,7 @@ pub trait Source: Send {
 
 - **Attaching.** A source is moved to the callback through a command ring, boxed on the sending thread. A detached source comes back through a return ring, to be dropped off the audio thread, as a loaded loop does now.
 
-- **The bus outlives the player's tracks.** Today `Engine::stop` drops the stream (`audio/mod.rs:1008`). The bus stays open while any source is attached, the player included while it plays.
+- **The bus outlives the player's tracks.** Today `Engine::stop` drops the stream (`audio/engine.rs`). The bus stays open while any source is attached, the player included while it plays.
 
 The signal path, per callback:
 
@@ -327,7 +327,7 @@ The Mixer dialog goes. The tab's label shows a mark while any strip is muted or 
 
 - **Device loss** now ends all three sources at once. Each engine already handles its own loss; the bus reports one loss to all.
 
-- **The engine loop** in `audio/mod.rs` decides when the stream opens, closes and reopens. The bus takes that over, so every reopen path (rate change, seek stall, device loss) changes. `tests/engine.rs` and `tests/render.rs` cover them now and must keep passing unchanged.
+- **The engine loop** in `audio/engine.rs` decides when the stream opens, closes and reopens. The bus takes that over, so every reopen path (rate change, seek stall, device loss) changes. `tests/engine.rs` and `tests/render.rs` cover them now and must keep passing unchanged.
 
 ### Tests
 

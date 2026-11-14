@@ -239,7 +239,7 @@ Loops have a library of their own, apart from the tracks. A loop is a span of a 
 
 Each loop keeps its tempo, beats, key and tags. Tags are the directories between the root and the file. Tempo comes from a BPM tag, a WAV `acid` chunk, the file name (`120bpm`), or else the length, as the power-of-2 beat count nearest 120 BPM; a guess is shown as `~120.0`. Key comes from the name (`Am`, `F#m`) or the `acid` chunk's root note. A file the `acid` chunk marks one-shot is left out. The loop slots, F1 to F8, are loops in this library; the tape's Save loop adds to it too.
 
-`9` or `:view loops` lists them. `/` searches names, tags and keys, with `bpm:120`, `bpm:118..124` and `key:Am`. Loops load from the Tape tab's lanes; in the terminal, `:load N` loads the loop under the cursor into voice N. `:beats N` sets its beats and tempo, `:key K` its key, and `d`, backspace or delete takes it out of the library, leaving the file. The design is in [`docs/dev/loop-library.md`](https://github.com/shakfu/playr/blob/main/docs/dev/loop-library.md).
+`6` or `:view loops` lists them. `/` searches names, tags and keys, with `bpm:120`, `bpm:118..124` and `key:Am`. Loops load from the Tape tab's lanes; in the terminal, `:load N` loads the loop under the cursor into voice N. `:beats N` sets its beats and tempo, `:key K` its key, and `d`, backspace or delete takes it out of the library, leaving the file. The design is in [`docs/dev/loop-library.md`](https://github.com/shakfu/playr/blob/main/docs/dev/loop-library.md).
 
 ### Analysis
 
@@ -327,7 +327,7 @@ These keys are the same in the terminal, the window and the web page, and any of
 
 | keys                     | action                                      |
 |--------------------------|---------------------------------------------|
-| `tab` shift-tab `1`-`9`  | next, previous view; `2` queue, `5` sampler, `9` loops; in the window, `6` tape, `7` DJ, `8` mix |
+| `tab` shift-tab `1`-`9`  | next, previous view; `2` queue, `5` sampler, `6` loops; in the window, `7` tape, `8` DJ, `9` mix |
 | `j` `k`, up/down         | move                                        |
 | `g` `G`, home/end        | jump to first or last                       |
 | page up/down             | move by ten                                 |
@@ -522,7 +522,7 @@ The waveform glyphs are the view's only characters outside ASCII. Marks are plac
 
 `:tape load` copies the sampler's range of the playing track into voice 1, or `:tape load N` copies loop slot N; each lane of the Tape tab loads any loop of the [loop library](#the-loop-library), or `:tape N loop ID`. Four voices play at once, each at its own rate and over its own window: a four-track looper. Voice 4's loop is the write loop: with Write on, a write head records every voice's send into it, with feedback, and voice 4 plays it back, so a reversed or half-speed print is heard and printed again. Voices 1 to 3 can play it too. With voice 4 empty, Write makes it silent, the length of the first loop in voices 1 to 3. The terminal has the commands; the window has a Tape tab with the same controls. [`docs/guide-tape.md`](guide-tape.md) explains the tab and how the voices and the write head work together.
 
-In the window, `6` opens the Tape view. Its keys are listed in [`docs/guide-tape.md`](guide-tape.md#the-tab).
+In the window, `7` opens the Tape view. Its keys are listed in [`docs/guide-tape.md`](guide-tape.md#the-tab).
 
 | command | does |
 |-|-|
@@ -565,7 +565,7 @@ The load also reads up to a second of the track before the range, the pre-roll, 
 
 Two decks play library tracks at once, each at its own rate. Each track gets a beat grid: its tempo and where a beat falls, from `playr analyze`. A deck loading a track never analysed analyses it first. With grids on both decks, sync matches one deck's tempo to the other's, at half, the same or double, and moves it into phase. A mixer blends the decks to one output. [`docs/guide-dj.md`](guide-dj.md) explains the tab and how to mix with it. The terminal has the commands; the window has a DJ tab with a waveform per deck, centred on the playhead and marked with the grid, and the same controls. A click or drag on a deck's overview, the strip under its waveform, seeks there. The tab lists the library, following the search field, with A and B on each row to load it onto a deck; a library or selection row's menu does the same. A deck shows the track's marks on both its waveforms, and a click near one on the overview lands on it. The grid's edits are under each deck's Grid menu, and A, Centre and B glide the crossfader to that point over 400 ms, as a double click on it glides it to the middle.
 
-In the window, `7` opens the DJ view. It lists the library, with search, and its keys are listed in [`docs/guide-dj.md`](guide-dj.md#the-tab).
+In the window, `8` opens the DJ view. It lists the library, with search, and its keys are listed in [`docs/guide-dj.md`](guide-dj.md#the-tab).
 
 | command | does |
 |-|-|
@@ -619,7 +619,7 @@ The master volume, `:volume` or the Volume slider, scales everything playr plays
 - A mute silences a source without stopping it: the decks stay in sync and the tape keeps writing. The tape's recording reads before its fader.
 - `:mix rec` records the master, everything playr plays, to a 32-bit float stereo WAV under the samples directory, `master/master.wav` and then `master-2/master-2.wav`, and adds it to the library once stopped. The cue is never in it. Overs above full scale are kept in the file, though the device clips them. While it records, a track at another rate is resampled rather than changing the output's rate.
 - `master` in `settings.toml` sets the master at start. `volume`, its name before the mixer, held a level, not a position. It is still read, and plays at the level it always did; a file setting both is an error.
-- In the window, the **Mix** tab has a strip for each: a fader, its level in dB, a meter after the fader, and a mute; the master's has Record and the law. The master's meter measures what the device is sent. `8` opens it; `P`, `T`, `D` and `H` mute the player, tape, decks and headphones, `r` records the master and `l` switches the law. The tab is marked `Mix *` while a strip is muted, or once the master has gone over full scale while the tab was hidden. The server plays only the player, so its page and OSC have the master and a mute, `/playr/mute`; `:mix` works from the page's command line.
+- In the window, the **Mix** tab has a strip for each: a fader, its level in dB, a meter after the fader, and a mute; the master's has Record and the law. The master's meter measures what the device is sent. `9` opens it; `P`, `T`, `D` and `H` mute the player, tape, decks and headphones, `r` records the master and `l` switches the law. The tab is marked `Mix *` while a strip is muted, or once the master has gone over full scale while the tab was hidden. The server plays only the player, so its page and OSC have the master and a mute, `/playr/mute`; `:mix` works from the page's command line.
 
 ### Varispeed
 

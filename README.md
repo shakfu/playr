@@ -103,7 +103,7 @@ In the library view, `j` and `k` move, `enter` plays from the row, and `/` searc
 - [docs/manual.md](docs/manual.md): every feature, key, command and setting
 - [docs/cheatsheet.md](docs/cheatsheet.md): every command on one page
 - Guides: [library](docs/guide-library.md), [sampler](docs/guide-sampler.md), [tape](docs/guide-tape.md), [DJ](docs/guide-dj.md), [server](docs/guide-server.md)
-- [CHANGELOG.md](CHANGELOG.md) and [TODO.md](TODO.md)
+- [CHANGELOG.md](CHANGELOG.md) (older releases in [CHANGELOG-archive.md](CHANGELOG-archive.md)) and [TODO.md](TODO.md)
 
 ## License
 

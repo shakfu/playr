@@ -1899,7 +1899,7 @@ fn loops_view_commands_parse_there_and_round_trip() {
     assert_eq!(l("play"), Ok(Action::Activate));
     assert!(parse("beats 8", Library).is_err());
     assert_eq!(
-        default_key("9", Library),
+        default_key("6", Library),
         Some(Action::ShowView(View::Loops))
     );
     // Loops load from the Tape tab's lanes, or with :load; no key loads.

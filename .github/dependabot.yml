@@ -1,0 +1,15 @@
+# Weekly pull requests for outdated Cargo dependencies and workflow actions.
+# Patch and minor Cargo updates come grouped in one pull request.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,6 +1,8 @@
 //! The playing track as clients name it, and the latest state sent to pages.
 
-use std::sync::{Condvar, Mutex};
+// A panic while holding the lock leaves a whole `(u64, String)`: each write
+// replaces it at once, so a poisoned lock's value is still sound to use.
+use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use playr_app::model::Model;
@@ -35,7 +37,7 @@ pub struct Latest {
 impl Latest {
     /// Stores `text`, waking readers only when it differs from what is stored.
     pub fn set(&self, text: String) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.1 != text {
             *state = (state.0 + 1, text);
             self.changed.notify_all();
@@ -45,11 +47,11 @@ impl Latest {
     /// The stored text and its number once it is newer than `seen`, or `None`
     /// after `timeout`.
     pub fn newer_than(&self, seen: u64, timeout: Duration) -> Option<(u64, String)> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let (state, _) = self
             .changed
             .wait_timeout_while(state, timeout, |s| s.0 <= seen)
-            .unwrap();
+            .unwrap_or_else(PoisonError::into_inner);
         (state.0 > seen).then(|| state.clone())
     }
 }
