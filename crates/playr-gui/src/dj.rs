@@ -559,23 +559,44 @@ fn channel(ui: &mut egui::Ui, model: &Model, side: Side, actions: &mut Vec<Actio
             ui.end_row();
             let (lo, hi) = (EQ_DB.0 as f32, EQ_DB.1 as f32);
             for (band, name, tip) in [
-                (Band::High, "High", "above 2.5 kHz, in dB; K kills it"),
-                (Band::Mid, "Mid", "246 Hz to 2.5 kHz, in dB; K kills it"),
-                (Band::Low, "Low", "below 246 Hz, in dB; K kills it"),
+                (
+                    Band::High,
+                    "High",
+                    "above 2.5 kHz, in dB; click the name to kill it",
+                ),
+                (
+                    Band::Mid,
+                    "Mid",
+                    "246 Hz to 2.5 kHz, in dB; click the name to kill it",
+                ),
+                (
+                    Band::Low,
+                    "Low",
+                    "below 246 Hz, in dB; click the name to kill it",
+                ),
             ] {
                 let b = band as usize;
-                ui.weak(name).on_hover_text(tip);
-                ui.horizontal(|ui| {
-                    let killed = state.kill[s][b];
-                    let label = format!("Deck {k} {} kill", name.to_lowercase());
-                    if toggle(ui, killed, "K", label, true) {
-                        actions.push(Action::Dj(D::Kill(side, band, !killed)));
-                    }
-                    let label = format!("Deck {k} {}", name.to_lowercase());
-                    if let Some(v) = slider(ui, state.eq[s][b], lo..=hi, label, true) {
-                        actions.push(Action::Dj(D::Eq(side, band, v)));
-                    }
+                // The band's name is its kill, so the slider lines up with the rest.
+                let killed = state.kill[s][b];
+                let label = format!("Deck {k} {} kill", name.to_lowercase());
+                let r = ui
+                    .add(egui::Button::selectable(killed, name))
+                    .on_hover_text(tip);
+                r.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::SelectableLabel,
+                        true,
+                        killed,
+                        &label,
+                    )
                 });
+                if r.clicked() {
+                    actions.push(Action::Dj(D::Kill(side, band, !killed)));
+                }
+                let label = format!("Deck {k} {}", name.to_lowercase());
+                if let Some(v) = slider(ui, state.eq[s][b], lo..=hi, label, true) {
+                    actions.push(Action::Dj(D::Eq(side, band, v)));
+                }
                 ui.end_row();
             }
             ui.weak("Filter")
