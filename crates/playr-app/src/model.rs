@@ -151,6 +151,9 @@ pub struct Snapshot {
     /// after their own faders, the master's as measured, then the headphone
     /// cue's after its fader, in dBFS, each held for [`PEAK_HOLD`].
     pub meters: [Option<f32>; 5],
+    /// Each DJ deck's peak before its channel fader, A then B, in dBFS,
+    /// held for [`PEAK_HOLD`].
+    pub deck_meters: [Option<f32>; 2],
     /// Marks in the playing track, as times into it, earliest first.
     pub marks: Vec<Duration>,
     /// Each mark's label, by the marks' order.
@@ -239,6 +242,8 @@ pub struct Model {
     peak_hold: Option<(f32, Instant)>,
     /// The mixer's meters, as `Snapshot::meters`, as magnitudes.
     meter_holds: [Option<(f32, Instant)>; 5],
+    /// The decks' meters, as `Snapshot::deck_meters`, as magnitudes.
+    deck_holds: [Option<(f32, Instant)>; 2],
     snapshot: Snapshot,
     /// The playing track's tempo, and which track it was read for. Read on
     /// each track change rather than every frame.
@@ -352,6 +357,7 @@ impl Model {
             picks: Picks::default(),
             peak_hold: None,
             meter_holds: [None; 5],
+            deck_holds: [None; 2],
             bpm: None,
             bpm_for: (None, 0),
             tape: crate::tape::Deck::new(
@@ -446,6 +452,14 @@ impl Model {
         for (held, reading) in self.meter_holds.iter_mut().zip(readings) {
             *held = hold_peak(*held, reading, now);
         }
+        for (held, side) in self
+            .deck_holds
+            .iter_mut()
+            .zip([crate::dj::Side::A, crate::dj::Side::B])
+        {
+            let reading = self.dj.status().map_or(0.0, |s| s.take_deck_peak(side));
+            *held = hold_peak(*held, reading, now);
+        }
         self.snapshot = Snapshot {
             status: player.status(),
             position: player.position(),
@@ -453,6 +467,7 @@ impl Model {
             loudness: player.loudness(),
             peak: self.peak_hold.map(|(p, _)| 20.0 * p.log10()),
             meters: self.meter_holds.map(|h| h.map(|(p, _)| 20.0 * p.log10())),
+            deck_meters: self.deck_holds.map(|h| h.map(|(p, _)| 20.0 * p.log10())),
             marks: Vec::new(),
             labels: Vec::new(),
             loops: Default::default(),

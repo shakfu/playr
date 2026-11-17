@@ -170,6 +170,7 @@ pub struct Status {
     decks: [DeckStatus; 2],
     peak: AtomicU32,
     cue_peak: AtomicU32,
+    deck_peaks: [AtomicU32; 2],
     xfade: AtomicU64,
 }
 
@@ -187,6 +188,12 @@ impl Status {
     /// resets it. Measured before the master volume.
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    }
+
+    /// The largest magnitude of `side` since the last call, which resets it.
+    /// Measured before its fader, so it reads with the fader down.
+    pub fn take_deck_peak(&self, side: Side) -> f32 {
+        f32::from_bits(self.deck_peaks[side.index()].swap(0, Ordering::Relaxed))
     }
 
     /// The largest magnitude of the cue since the last call, which resets
@@ -215,6 +222,7 @@ pub fn new(sample_rate: u32) -> (Engine, Handle) {
         decks: [DeckStatus::new(), DeckStatus::new()],
         peak: AtomicU32::new(0),
         cue_peak: AtomicU32::new(0),
+        deck_peaks: [AtomicU32::new(0), AtomicU32::new(0)],
         xfade: AtomicU64::new(0.5f64.to_bits()),
     });
     let engine = Engine {
@@ -273,6 +281,10 @@ impl Engine {
         self.status
             .cue_peak
             .fetch_max(cue.to_bits(), Ordering::Relaxed);
+        for side in [Side::A, Side::B] {
+            let peak = self.mixer.take_deck_peak(side);
+            self.status.deck_peaks[side.index()].fetch_max(peak.to_bits(), Ordering::Relaxed);
+        }
     }
 
     pub fn mixer(&self) -> &Mixer {

@@ -2169,6 +2169,8 @@ fn the_dj_tab_loads_from_its_library_fits_the_smallest_window_and_a_view_key_lea
         "Deck A delay send",
         "Deck B reverb send",
         "FX",
+        "Deck A meter",
+        "Deck B meter",
     ] {
         harness.get_by_label(label);
     }
@@ -2295,6 +2297,11 @@ fn the_dj_tab_loads_from_its_library_fits_the_smallest_window_and_a_view_key_lea
     harness.get_by_label("Deck A Play").click();
     harness.run_steps(1);
     run(&mut harness);
+    // The fixture is full scale, and the crossfader is over at B, so deck
+    // A is silent in the mix: its meter reads before the faders. B is empty.
+    let [a, b] = harness.state().model().snapshot().deck_meters;
+    assert!(a.is_some_and(|db| db > -1.0), "deck A meter: {a:?}");
+    assert!(b.is_none_or(|db| db < -60.0), "deck B meter: {b:?}");
     harness.get_by_label("Row 1 deck A").click();
     harness.run_steps(2);
     assert!(harness.state().model().decks().next(Side::A).is_some());

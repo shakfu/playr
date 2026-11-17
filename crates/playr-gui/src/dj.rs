@@ -553,6 +553,13 @@ fn channel(ui: &mut egui::Ui, model: &Model, side: Side, actions: &mut Vec<Actio
         if toggle(ui, muted, "Mute", format!("Deck {k} mute"), true) {
             actions.push(Action::Dj(D::Mute(side, !muted)));
         }
+        // In the header, so the strip is no taller.
+        let size = egui::vec2(ui.available_width().max(40.0), 6.0);
+        let held = model.snapshot().deck_meters[s];
+        widgets::peak_meter(ui, held, size, &format!("Deck {k} meter")).on_hover_text(
+            "the deck after its gain, EQ and filter, before its fader, \
+             so it reads with the fader down",
+        );
     });
     egui::Grid::new(format!("dj channel {k}"))
         .num_columns(2)
@@ -596,7 +603,14 @@ fn channel(ui: &mut egui::Ui, model: &Model, side: Side, actions: &mut Vec<Actio
                     true => egui::RichText::new(name),
                     false => egui::RichText::new(name).color(ui.visuals().weak_text_color()),
                 };
-                let r = widgets::toggle(ui, true, killed, text, &label).on_hover_text(tip);
+                // No side padding, so the name lines up with the plain labels.
+                let r = ui
+                    .scope(|ui| {
+                        ui.spacing_mut().button_padding.x = 0.0;
+                        widgets::toggle(ui, true, killed, text, &label)
+                    })
+                    .inner
+                    .on_hover_text(tip);
                 if r.clicked() {
                     actions.push(Action::Dj(D::Kill(side, band, !killed)));
                 }

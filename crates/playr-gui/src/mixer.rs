@@ -10,12 +10,10 @@ use playr_app::dispatch::Frontend;
 use playr_app::mix::{Law, Mix, MixAction, Strip};
 use playr_app::model::Model;
 
-use crate::palette::Palette;
+use crate::widgets;
 
 /// The faders' length, in points.
 const FADER: f32 = 150.0;
-/// The bottom of a meter, in dBFS.
-const FLOOR_DB: f32 = -60.0;
 
 /// The meter shown for `s`: its index in [`playr_app::model::Snapshot::meters`].
 fn meter_of(s: Strip) -> usize {
@@ -66,7 +64,8 @@ fn fader(ui: &mut egui::Ui, mix: &Mix, strip: Strip, held: Option<f32>, actions:
         if response.changed() {
             actions.push(Action::Mix(MixAction::Set(strip, p / 100.0)));
         }
-        meter(ui, held);
+        let name = format!("{} meter", capitalised(strip.name()));
+        _ = widgets::peak_meter(ui, held, egui::vec2(8.0, FADER), &name);
     });
     ui.label(capitalised(strip.name()));
     ui.monospace(match mix.law().gain(mix.level(strip)) {
@@ -91,27 +90,6 @@ fn capitalised(name: &str) -> String {
         .next()
         .map(|c| c.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
-}
-
-/// A vertical peak meter of `held` dBFS, from [`FLOOR_DB`] at the bottom to
-/// full scale at the top: green, yellow from -6 dB, red over full scale.
-fn meter(ui: &mut egui::Ui, held: Option<f32>) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, FADER), egui::Sense::hover());
-    let p = Palette::of(ui.visuals());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 1.0, ui.visuals().extreme_bg_color);
-    let Some(db) = held else {
-        return;
-    };
-    let fill = ((db - FLOOR_DB) / -FLOOR_DB).clamp(0.0, 1.0);
-    let top = rect.bottom() - rect.height() * fill;
-    let colour = match db {
-        d if d > 0.0 => p.red,
-        d if d > -6.0 => p.yellow,
-        _ => p.green,
-    };
-    let bar = egui::Rect::from_min_max(egui::pos2(rect.left(), top), rect.max);
-    painter.rect_filled(bar, 1.0, colour);
 }
 
 /// The master's recording, the file it goes to, the fader law, and how the

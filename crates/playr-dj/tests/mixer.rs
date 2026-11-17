@@ -719,3 +719,26 @@ fn a_fader_cut_leaves_the_echo_ringing() {
     run(&mut m, 10);
     assert!(rms(&block(&mut m)) > 0.01);
 }
+
+/// Each deck's peak is measured before its fader and the crossfader, so it
+/// reads with the channel pulled down; the other deck's is its own.
+#[test]
+fn a_deck_s_peak_reads_before_its_fader() {
+    let mut m = Mixer::new(SR);
+    let a: Vec<f32> = vec![0.2; SR as usize * 2];
+    let b: Vec<f32> = vec![0.3; SR as usize * 2];
+    m.load(Side::A, Box::new(Track::new(a, 2, None).unwrap()))
+        .unwrap();
+    m.load(Side::B, Box::new(Track::new(b, 2, None).unwrap()))
+        .unwrap();
+    m.set(Setting::Play(Side::A));
+    m.set(Setting::Level(Side::A, 0.0));
+    m.set(Setting::Xfade(1.0));
+    run(&mut m, SETTLE);
+    m.take_deck_peak(Side::A);
+    m.take_deck_peak(Side::B);
+    block(&mut m);
+    assert!((m.take_deck_peak(Side::A) - 0.2).abs() < 1e-6, "deck A");
+    assert_eq!(m.take_deck_peak(Side::B), 0.0, "deck B is stopped");
+    assert_eq!(m.take_deck_peak(Side::A), 0.0, "taking resets it");
+}

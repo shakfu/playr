@@ -24,13 +24,14 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
   - Menus show each entry's key.
   - The Playback menu ticks the fade, crossfade, sleep timer and stop-after settings in force, and adds a Mode submenu.
   - The playing title in a list is green.
+  - Each DJ channel has a peak meter in its header, before the channel fader and crossfader, so a deck's level can be matched with its fader down. In the header, over a row of its own, because a row pushed the track list's first row out of the smallest window.
   - Every toggle is plain text until lit. The sampler's Loop, Scrub, Snap and Fit, and the EQ's Bypass, were framed like action buttons. Plain text over frames, which would add about 15 frames to each DJ deck's rows.
   - Queue and Selection buttons are disabled on an empty list.
   - Empty DJ decks say how to load them.
   - Mix strips are capitalised and show "Mute" and "dB". Record, Law and Heads move after the strips.
   - DJ messages name decks "A" and "B", as the window does; commands inside them keep `:dj a`.
 
-  Library API: `Status::fade` and `Status::crossfade`, because `fading` could not tell a fade from a crossfade.
+  Library API: `Status::fade` and `Status::crossfade`, because `fading` could not tell a fade from a crossfade. `Mixer::take_deck_peak` and `dj::engine::Status::take_deck_peak`; `Snapshot::deck_meters`.
 
 ### Fixed
 

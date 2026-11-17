@@ -174,6 +174,8 @@ pub struct Mixer {
     peak: f32,
     /// The largest magnitude of the cue before the headphones, since taken.
     cue_peak: f32,
+    /// Each deck's largest magnitude before its fader, since taken.
+    deck_peaks: [f32; 2],
     knee: f32,
     /// Each deck's EQ bands, in dB, and whether each is killed.
     bands: [[(f64, bool); 3]; 2],
@@ -198,6 +200,7 @@ impl Mixer {
             headphones: Ramp::new(1.0),
             peak: 0.0,
             cue_peak: 0.0,
+            deck_peaks: [0.0; 2],
             knee: DEFAULT_KNEE,
             bands: [[(0.0, false); 3]; 2],
             cue_out: CueOut::default(),
@@ -239,6 +242,12 @@ impl Mixer {
     /// call, which resets it; 0 with no deck cued.
     pub fn take_cue_peak(&mut self) -> f32 {
         std::mem::take(&mut self.cue_peak)
+    }
+
+    /// The largest magnitude of `side` after its gain, EQ and filter and
+    /// before its fader, since the last call, which resets it.
+    pub fn take_deck_peak(&mut self, side: Side) -> f32 {
+        std::mem::take(&mut self.deck_peaks[side.index()])
     }
 
     fn smooth(&self) -> u32 {
@@ -705,6 +714,7 @@ impl Mixer {
             let mut buses = [[0.0f32; 2]; 2];
             for (i, d) in self.decks.iter_mut().enumerate() {
                 let s = d.next();
+                self.deck_peaks[i] = self.deck_peaks[i].max(s[0].abs()).max(s[1].abs());
                 if self.cue_bus.is_some_and(|c| c.index() == i) {
                     cue = s;
                 }
