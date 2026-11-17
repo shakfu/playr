@@ -312,8 +312,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
     overview(ui, &layout, &mut state.sought, &mut actions);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Track waveform"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, "Track waveform"));
     let pointer = response.interact_pointer_pos().or(response.hover_pos());
     let at = |pos: egui::Pos2| layout.time_at(pos.x - rect.left());
     // The end of a set range within reach of `p`, the nearer if both are.
@@ -773,7 +772,8 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
             }
         }
         let edges = model.session().slice_edges();
-        let combo = egui::ComboBox::from_label("Edges")
+        // A label of its own: `from_label` wraps both in a Label node over the box.
+        let combo = egui::ComboBox::from_id_salt("Edges")
             .width(60.0)
             .selected_text(edges.name())
             .show_ui(ui, |ui| {
@@ -787,10 +787,12 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                     }
                 }
             });
+        let label = ui.label("Edges");
+        let response = combo.response.labelled_by(label.id);
         if edges == Edges::Fade {
             let fades = model.session().fades();
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-            combo.response.on_hover_text(format!(
+            response.on_hover_text(format!(
                 "{} ms in, {} ms out",
                 ms(fades.fade_in),
                 ms(fades.fade_out)
@@ -833,8 +835,7 @@ fn tip(model: &Model, control: &Control) -> String {
 /// shorter word. Returns whether it was clicked.
 fn named(ui: &mut egui::Ui, model: &Model, text: &str, control: &Control) -> bool {
     let response = ui.button(text);
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, control.label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, control.label));
     response.on_hover_text(tip(model, control)).clicked()
 }
 
@@ -858,7 +859,7 @@ fn toggle(
 /// Names a drop-down that shows no label, for a screen reader and the tests.
 fn name_combo(response: &egui::Response, name: &str, chosen: &str) {
     response.widget_info(|| {
-        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, name);
+        let mut info = egui::WidgetInfo::labeled(egui::Role::ComboBox, true, name);
         info.current_text_value = Some(chosen.to_string());
         info
     });
@@ -894,14 +895,13 @@ fn loop_lane(
         let left = x_of(a).min(lane.right() - LANE);
         let band = egui::Rect::from_x_y_ranges(left..=x_of(b).max(left + LANE), lane.y_range());
         let playing = *saved == range;
-        let response = ui.interact(band, ui.id().with(("loop", slot)), egui::Sense::click());
+        let response = ui.interact(
+            band,
+            ui.scope_id().with(("loop", slot)),
+            egui::Sense::click(),
+        );
         response.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::WidgetType::Button,
-                true,
-                playing,
-                format!("Loop {slot}"),
-            )
+            egui::WidgetInfo::selected(egui::Role::Button, true, playing, format!("Loop {slot}"))
         });
         let visuals = ui.style().interact_selectable(&response, playing);
         ui.painter()
@@ -946,9 +946,8 @@ fn item(ui: &mut egui::Ui, model: &Model, control: &Control, enabled: bool, on: 
     }
     let response = ui.add_enabled(enabled, button);
     // Without the key, which the button's own name would include.
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, control.label)
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, control.label));
     response.clicked()
 }
 
@@ -1286,8 +1285,7 @@ fn overview(
 ) {
     let size = egui::vec2(ui.available_width(), OVERVIEW);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Track overview"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, "Track overview"));
     let frames = layout.peaks.frames.max(1);
     let x_of = |f: u64| rect.left() + f.min(frames) as f32 / frames as f32 * rect.width();
     match response.interact_pointer_pos() {

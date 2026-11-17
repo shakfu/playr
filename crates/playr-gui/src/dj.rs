@@ -123,7 +123,7 @@ fn waveform(ui: &mut egui::Ui, model: &Model, side: Side) -> Option<Action> {
     let size = egui::vec2(ui.available_width(), WAVE + OVERVIEW);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
     let name = format!("Deck {} waveform", letter(side));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, &name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, &name));
     let visuals = ui.visuals();
     let palette = Palette::of(visuals);
     let painter = ui.painter_at(rect);
@@ -307,7 +307,7 @@ fn button(ui: &mut egui::Ui, side: Side, label: &str, enabled: bool) -> Option<A
     let c = table(side).iter().find(|c| c.label == label)?;
     let name = format!("Deck {} {}", letter(side), c.label);
     let r = ui.add_enabled(enabled, egui::Button::new(c.label));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
     r.clicked().then(|| c.action.clone())
 }
 
@@ -323,7 +323,7 @@ fn held(
         enabled,
         egui::Button::new(text).sense(egui::Sense::click_and_drag()),
     );
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
     let down = r.is_pointer_button_down_on();
     (down, (down != was).then_some(down))
 }
@@ -352,7 +352,7 @@ fn slider(
                 );
                 let label = format!("{name} value");
                 field.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::DragValue, enabled, &label)
+                    egui::WidgetInfo::labeled(egui::Role::SpinButton, enabled, &label)
                 });
                 rail.changed() || field.changed()
             })
@@ -390,7 +390,7 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
             ui.weak("Next").on_hover_text("loads when the deck stops");
             let r = ui.small_button("x").on_hover_text("forget it");
             let name = format!("Deck {k} unqueue");
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
             if r.clicked() {
                 actions.push(Action::Dj(D::Unqueue(side)));
             }
@@ -460,7 +460,7 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
             let name = format!("Deck {k} hot cue {text}");
             let r = ui.add_enabled(on, egui::Button::selectable(at.is_some(), &text));
             r.widget_info(|| {
-                egui::WidgetInfo::selected(egui::WidgetType::Button, on, at.is_some(), &name)
+                egui::WidgetInfo::selected(egui::Role::Button, on, at.is_some(), &name)
             });
             if r.clicked() {
                 actions.push(Action::Dj(D::HotCue(side, n as u8 + 1)));
@@ -475,7 +475,7 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
         for (next, text) in [(false, "<"), (true, ">")] {
             let name = format!("Deck {k} mark {}", if next { "next" } else { "prev" });
             let r = ui.add_enabled(marked, egui::Button::new(text));
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, marked, &name));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, marked, &name));
             if r.clicked() {
                 actions.push(Action::Dj(D::Mark(side, next)));
             }
@@ -507,7 +507,7 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
             let text = format!("{beats:+}");
             let name = format!("Deck {k} jump {text}");
             let r = ui.add_enabled(timed, egui::Button::new(&text));
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, timed, &name));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, timed, &name));
             if r.clicked() {
                 actions.push(Action::Dj(D::Jump(side, beats)));
             }
@@ -525,7 +525,7 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
                         let name = format!("Deck {k} grid {text}");
                         let r = ui.button(text);
                         r.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &name)
                         });
                         if r.clicked() {
                             actions.push(Action::Dj(D::Grid(side, GridEdit::Offset(ms))));
@@ -538,7 +538,7 @@ fn deck(ui: &mut egui::Ui, model: &Model, side: Side, tab: &mut State, actions: 
         let name = format!("Deck {k} grid");
         menu.inner
             .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &name));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &name));
     });
 }
 
@@ -674,7 +674,7 @@ fn phase(ui: &mut egui::Ui, model: &Model, side: Side) {
     let size = egui::vec2(ui.available_width().min(METER.x), METER.y);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let name = format!("Deck {} phase", letter(side));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, &name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, &name));
     let visuals = ui.visuals();
     let palette = Palette::of(visuals);
     let painter = ui.painter_at(rect);
@@ -714,7 +714,7 @@ fn mixer(ui: &mut egui::Ui, model: &Model, tab: &mut State, actions: &mut Vec<Ac
         // A, Centre and B glide the crossfader there; the slider follows it.
         let glide = |ui: &mut egui::Ui, text: &str, name: &str| {
             let r = ui.button(text).on_hover_text("glide the crossfader here");
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
             r.clicked()
         };
         let to_a = glide(ui, "A", "Crossfader A");
@@ -842,12 +842,7 @@ fn browser(ui: &mut egui::Ui, model: &Model, actions: &mut Vec<Action>) -> Optio
                         let r = ui.add(egui::Button::selectable(loaded || next, text));
                         let name = format!("Row {} deck {k}", n + 1);
                         r.widget_info(|| {
-                            egui::WidgetInfo::selected(
-                                egui::WidgetType::Button,
-                                true,
-                                loaded,
-                                &name,
-                            )
+                            egui::WidgetInfo::selected(egui::Role::Button, true, loaded, &name)
                         });
                         let r = r.on_hover_text(match next {
                             true => "waits to load when the deck stops",

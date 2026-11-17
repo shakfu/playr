@@ -31,6 +31,18 @@ use playr_app::model::{DraftAnswer, Input, Model};
 use playr_app::{Theme, View};
 use playr_core::audio::State;
 
+/// Sets playr's fonts and spacing; call before the first frame.
+///
+/// Keeps egui 0.36's button padding and control height: 0.37's larger
+/// defaults overflow the tabs, which are laid out to fit 800 by 648.
+pub fn setup(ctx: &egui::Context) {
+    ctx.set_fonts(fonts::definitions());
+    ctx.all_styles_mut(|style| {
+        style.spacing.button_padding = egui::vec2(4.0, 1.0);
+        style.spacing.interact_size.y = 18.0;
+    });
+}
+
 /// Ids of the text fields, so keys go to a field that has focus and to the
 /// bindings otherwise.
 const SEARCH: &str = "search";
@@ -183,7 +195,7 @@ impl Gui {
         let named = ctx.memory(|m| m.focused()).is_some_and(|id| {
             [SEARCH, COMMAND, NAME]
                 .iter()
-                .any(|name| id == egui::Id::new(name))
+                .any(|name| id == egui::Id::unique(name))
         });
         let typing = named || ctx.text_edit_focused();
         let events = ctx.input(|i| i.events.clone());
@@ -427,7 +439,7 @@ impl Gui {
         // Read before the field, which takes the key.
         let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
         let field = egui::TextEdit::singleline(&mut self.search)
-            .id(egui::Id::new(SEARCH))
+            .id(egui::Id::unique(SEARCH))
             .desired_width(180.0);
         let response = ui.add(field);
         let label = ui.label("Search");
@@ -461,7 +473,7 @@ impl Gui {
         let Input::Command(mut line) = self.model.input().clone() else {
             return;
         };
-        let id = egui::Id::new(COMMAND);
+        let id = egui::Id::unique(COMMAND);
         let view = self.model.view();
         let extensions = self.model.session().convert_enabled();
         let names: Vec<String> = self
@@ -597,7 +609,7 @@ impl Gui {
     fn dialogs(&mut self, ctx: &egui::Context) {
         match self.model.input().clone() {
             Input::Confirm(question) => {
-                egui::Modal::new(egui::Id::new("confirm")).show(ctx, |ui| {
+                egui::Modal::new(egui::Id::unique("confirm")).show(ctx, |ui| {
                     ui.label(question.question());
                     ui.horizontal(|ui| {
                         if ui.button("Yes").clicked() {
@@ -610,7 +622,7 @@ impl Gui {
                 });
             }
             Input::Draft(tracks) => {
-                egui::Modal::new(egui::Id::new("draft")).show(ctx, |ui| {
+                egui::Modal::new(egui::Id::unique("draft")).show(ctx, |ui| {
                     ui.label(playr_app::message::draft_question(tracks));
                     ui.horizontal(|ui| {
                         for (label, answer) in [
@@ -731,9 +743,7 @@ impl Gui {
             .response
             .interact(egui::Sense::click())
             .on_hover_text("the last message; click for every message since playr started");
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Status line")
-        });
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Status line"));
         if response.clicked() {
             self.messages = true;
         }
@@ -805,10 +815,10 @@ impl Gui {
 
     /// A dialog collecting a playlist name, which saves or renames on enter.
     fn name_dialog(&mut self, ctx: &egui::Context, heading: &str) {
-        egui::Modal::new(egui::Id::new("name dialog")).show(ctx, |ui| {
+        egui::Modal::new(egui::Id::unique("name dialog")).show(ctx, |ui| {
             ui.label(heading);
             let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let field = egui::TextEdit::singleline(&mut self.name).id(egui::Id::new(NAME));
+            let field = egui::TextEdit::singleline(&mut self.name).id(egui::Id::unique(NAME));
             let response = ui.add(field);
             let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let (ok, cancel) = ui
@@ -883,7 +893,7 @@ fn items(ui: &mut egui::Ui, model: &Model, controls: &[Control], chosen: &mut Op
         let response = ui.add(button);
         // Without the key, which the button's own name would include.
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, control.label)
+            egui::WidgetInfo::selected(egui::Role::Button, true, on, control.label)
         });
         if response.clicked() {
             *chosen = Some(control.action.clone());
@@ -904,7 +914,7 @@ fn cursor_to_end(ctx: &egui::Context, id: egui::Id, chars: usize) {
 }
 
 fn focus(ctx: &egui::Context, name: &str) {
-    ctx.memory_mut(|m| m.request_focus(egui::Id::new(name)));
+    ctx.memory_mut(|m| m.request_focus(egui::Id::unique(name)));
 }
 
 /// A window that lists why playr could not start.

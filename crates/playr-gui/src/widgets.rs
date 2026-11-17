@@ -17,9 +17,7 @@ pub fn toggle(
     name: &str,
 ) -> egui::Response {
     let response = ui.add_enabled(enabled, egui::Button::selectable(on, text));
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, name)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, name));
     response
 }
 
@@ -33,8 +31,7 @@ pub fn peak_meter(
     name: &str,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, true, name));
     let p = Palette::of(ui.visuals());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 1.0, ui.visuals().extreme_bg_color);

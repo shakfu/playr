@@ -18,7 +18,7 @@ use playr_core::db::{self, query, Track};
 use playr_core::notice::{Notice, Outcome, Refusal};
 use playr_gui::Gui;
 
-/// A window of `size` over `model`, with the fonts main.rs sets.
+/// A window of `size` over `model`, with the fonts and spacing main.rs sets.
 fn open(size: egui::Vec2, model: Model) -> Harness<'static, Gui> {
     // The build's own step draws nothing, so the window's first frame has
     // the fonts, as in main.rs; a set_fonts after it would drop fallbacks.
@@ -26,7 +26,7 @@ fn open(size: egui::Vec2, model: Model) -> Harness<'static, Gui> {
     let mut harness = Harness::builder().with_size(size).build_ui_state(
         move |ui, gui: &mut Gui| match std::mem::replace(&mut built, true) {
             true => gui.show(ui),
-            false => ui.ctx().set_fonts(playr_gui::fonts::definitions()),
+            false => playr_gui::setup(ui.ctx()),
         },
         Gui::new(model),
     );
@@ -689,6 +689,7 @@ fn the_waveform_seeks_marks_and_zooms_under_the_mouse() {
         delta: egui::vec2(0.0, 100.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
     });
     harness.run_steps(3);
     assert!(model(&harness).sampler().zoom > 0, "the wheel did not zoom");
@@ -711,6 +712,7 @@ fn the_wheel_zooms_past_the_peaks_and_the_frames_are_read() {
             delta: egui::vec2(0.0, 100.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Wheel,
         });
         harness.run_steps(1);
     }
@@ -985,6 +987,7 @@ fn a_click_on_the_overview_seeks_and_the_slider_shows_the_zoom() {
         delta: egui::vec2(0.0, 100.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
     });
     harness.run_steps(3);
     let zoom = model(&harness).sampler().zoom;

@@ -262,7 +262,7 @@ impl Lanes<'_> {
         let size = egui::vec2(ui.available_width(), height);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         let name = format!("Voice {} waveform", i + 1);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, &name));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, &name));
         let visuals = ui.visuals();
         let palette = Palette::of(visuals);
         let (voice_colour, write_colour) = colours(palette);
@@ -357,11 +357,10 @@ impl Lanes<'_> {
         let rect = egui::Rect::from_min_size(wave.min, egui::vec2(wave.width(), BAND));
         let response = ui.interact(
             rect,
-            ui.id().with("write band"),
+            ui.scope_id().with("write band"),
             egui::Sense::click_and_drag(),
         );
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Write band"));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, "Write band"));
         let e = self.extents[WRITER];
         let w = self.state.write_window;
         drag(ui, &response, rect, Target::Write, w, e, tab, actions);
@@ -630,7 +629,7 @@ fn window(
             None => response.on_hover_text(tip),
         };
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, format!("{name} {end}"))
+            egui::WidgetInfo::labeled(egui::Role::SpinButton, true, format!("{name} {end}"))
         });
         response.changed()
     };
@@ -680,7 +679,7 @@ pub(crate) fn field(
                 .fixed_decimals(2),
         )
     });
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, true, &name));
     response.changed().then_some(v)
 }
 
@@ -697,7 +696,7 @@ pub(crate) fn ms(
     let response = dimmed(ui, idle, |ui| {
         ui.add(egui::DragValue::new(&mut v).range(0.0..=max))
     });
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, true, &name));
     response.changed().then_some(v)
 }
 
@@ -817,7 +816,7 @@ pub(crate) fn log_field(
                 }),
         )
     });
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, true, &name));
     response
         .changed()
         .then(|| l.exp2().clamp(*range.start(), *range.end()))
@@ -914,7 +913,7 @@ fn eq_curve(ui: &mut egui::Ui, state: &TapeState, e: Extent, i: usize) {
     let size = egui::vec2(HEAD - 8.0, EQ_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let name = format!("Voice {} EQ response", i + 1);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, &name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, &name));
     response.on_hover_text(
         "the EQ's gain across 20 Hz to 20 kHz, -18 to 18 dB; the line is 0 dB, the ticks 100 Hz, 1 kHz and 10 kHz",
     );
@@ -959,8 +958,7 @@ fn fold_toggle(ui: &mut egui::Ui, folded: bool, label: &str, tip: &str) -> bool 
     let size = egui::vec2(10.0, ui.spacing().interact_size.y);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let response = response.on_hover_text(tip);
-    response
-        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, !folded, label));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, !folded, label));
     let c = rect.center();
     let (a, b) = (2.0, 4.0);
     let points = match folded {
@@ -1017,9 +1015,7 @@ fn picker(
                     .hint_text("search: name, bpm:120, key:Am"),
             );
             let label = format!("Voice {n} loop search");
-            edit.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, &label)
-            });
+            edit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, &label));
             if opened {
                 edit.request_focus();
             }
@@ -1060,7 +1056,7 @@ fn picker(
     combo
         .response
         .on_hover_text(&shown)
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &label));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, &label));
     // Where the loop lies in its file, which tells apart loops of one track.
     if folded {
         return;
@@ -1096,9 +1092,7 @@ fn voice_controls(
         let mut on = v.on;
         let tick = ui.checkbox(&mut on, "").on_hover_text("plays the voice");
         let label = format!("{name} on");
-        tick.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, &label)
-        });
+        tick.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, &label));
         if tick.changed() {
             set(V::On(on));
         }
@@ -1153,7 +1147,7 @@ fn voice_controls(
                 .on_hover_text(tip)
                 .on_disabled_hover_text(tip);
             let label = format!("{name} {}", text.to_lowercase());
-            button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, has, &label));
+            button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, has, &label));
             if button.clicked() {
                 actions.push(Action::Tape(action));
             }
@@ -1322,7 +1316,7 @@ fn bounce_toggle(ui: &mut egui::Ui, bouncing: bool, long: &mut bool, actions: &m
             .response
             .on_hover_text("how long Bounce records")
             .widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, !bouncing, "Bounce length")
+                egui::WidgetInfo::labeled(egui::Role::ComboBox, !bouncing, "Bounce length")
             });
     });
 }
@@ -1338,9 +1332,7 @@ fn write_toggle(ui: &mut egui::Ui, state: &TapeState, e: Extent, actions: &mut V
             "records every voice's send into voice 4's loop; with voice 4 empty, the first Write makes it, silent, the length of the lowest lane's loop",
         ),
     };
-    tick.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, write, "Write on")
-    });
+    tick.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, write, "Write on"));
     if tick.changed() {
         actions.push(Action::Tape(T::Write(write)));
     }

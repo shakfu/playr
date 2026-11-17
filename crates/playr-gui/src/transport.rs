@@ -54,9 +54,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
                     );
                 }
                 size = response.rect.size();
-                response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
-                });
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
                 let tip = match keys::key_for(model, &control.action, model.view()) {
                     Some(key) => format!("{label} ({key})"),
                     None => label.to_string(),
@@ -127,7 +125,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
         // In semitones to a cent. A drag sends where it stops, holding its
         // value meanwhile: each change seeks the player again, which a drag
         // through every cent would stutter.
-        let held = ui.id().with("speed dragged");
+        let held = ui.scope_id().with("speed dragged");
         let mut semitones = ui
             .data(|d| d.get_temp::<f64>(held))
             .unwrap_or(f64::from(status.cents) / 100.0);
@@ -260,9 +258,8 @@ fn progress(
 ) -> Option<(Duration, bool)> {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, 14.0), egui::Sense::click_and_drag());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, "Position")
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, true, "Position"));
     let visuals = ui.visuals();
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 3.0, visuals.extreme_bg_color);
@@ -317,9 +314,8 @@ fn level_meter(ui: &mut egui::Ui, loudness: Option<f32>, peak: Option<f32>) {
     ui.weak("LUFS");
     ui.monospace(number(loudness));
     let (rect, response) = ui.allocate_exact_size(egui::vec2(160.0, 12.0), egui::Sense::hover());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, "Level")
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, true, "Level"));
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
     let x = |db: f32| rect.left() + rect.width() * meter::fraction(db);

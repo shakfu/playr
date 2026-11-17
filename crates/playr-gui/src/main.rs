@@ -73,7 +73,7 @@ fn main() -> eframe::Result {
                 options,
                 Box::new(move |cc| {
                     // Before the first frame: egui sets fonts at the next one.
-                    cc.egui_ctx.set_fonts(playr_gui::fonts::definitions());
+                    playr_gui::setup(&cc.egui_ctx);
                     let ctx = cc.egui_ctx.clone();
                     let mut model = Model::waking(
                         start.conn,
@@ -93,7 +93,7 @@ fn main() -> eframe::Result {
             "playr",
             options,
             Box::new(|cc| {
-                cc.egui_ctx.set_fonts(playr_gui::fonts::definitions());
+                playr_gui::setup(&cc.egui_ctx);
                 Ok(Box::new(Errors(errors)))
             }),
         ),

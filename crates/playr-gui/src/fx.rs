@@ -161,7 +161,7 @@ fn model_pick<M: Copy + PartialEq>(
             })
             .response
     });
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, name));
     picked
 }
 
@@ -187,7 +187,6 @@ fn sync_pick(
             })
             .response
     });
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Delay sync"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Delay sync"));
     picked
 }

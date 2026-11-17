@@ -3,7 +3,7 @@ name = "playr-gui"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
-# egui and eframe 0.36 need 1.95; the rest of the workspace builds on 1.89.
+# egui and eframe 0.37 need 1.95; the rest of the workspace builds on 1.89.
 rust-version = "1.95"
 license.workspace = true
 repository.workspace = true
@@ -27,13 +27,13 @@ playr-looper.workspace = true
 # Without `default_fonts`, whose two emoji fonts were 726 KB of the binary
 # for six symbols; `fonts::definitions` bundles what is drawn. The rest are
 # eframe's defaults.
-eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "links", "wayland", "web_screen_reader", "wgpu", "x11"] }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "links", "wayland", "web_screen_reader", "wgpu", "x11"] }
 # eframe's `winit/default`, which a dependent cannot name: client-side
 # decorations and Wayland loaded at run time.
 winit = "0.30.13"
 # Ubuntu Light and Hack, egui's own text fonts, without the emoji fonts.
-epaint_default_fonts = "0.36.2"
-egui_extras = "0.36.2"
+epaint_default_fonts = "0.37.0"
+egui_extras = "0.37.0"
 clap = { version = "4.6", features = ["derive"] }
 rusqlite.workspace = true
 rfd = "0.17"
@@ -44,7 +44,7 @@ skrifa = "0.44.0"
 
 [dev-dependencies]
 cpal.workspace = true
-egui_kittest = { version = "0.36.2", features = ["eframe"] }
+egui_kittest = { version = "0.37.0", features = ["eframe"] }
 hound.workspace = true
 rtrb.workspace = true
 tempfile.workspace = true

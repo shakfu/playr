@@ -76,8 +76,7 @@ fn fader(ui: &mut egui::Ui, mix: &Mix, strip: Strip, held: Option<f32>, actions:
     let response = ui.checkbox(&mut muted, "Mute");
     // The strip's name tells the five mutes apart for assistive technology.
     let name = format!("mute {}", strip.name());
-    response
-        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, muted, &name));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, muted, &name));
     if response.changed() {
         actions.push(Action::Mix(MixAction::Mute(strip, Some(muted))));
     }

@@ -395,7 +395,7 @@ mod tests {
         ]);
         let mut found = BTreeSet::new();
         for name in &fonts.families[&egui::FontFamily::Proportional] {
-            found.extend(covered(&fonts.font_data[name].font, 0, &want));
+            found.extend(covered((*fonts.font_data[name].font).as_ref(), 0, &want));
         }
         assert_eq!(found, want);
     }

@@ -170,7 +170,12 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                 if view == View::Library {
                     row.col(|ui| {
                         let mut ticked = selected.contains(t.path.as_str());
-                        if ui.checkbox(&mut ticked, "").changed() {
+                        let tick = ui.checkbox(&mut ticked, "");
+                        let name = format!("Select {}", t.display_title());
+                        tick.widget_info(|| {
+                            egui::WidgetInfo::selected(egui::Role::CheckBox, true, ticked, &name)
+                        });
+                        if tick.changed() {
                             result = Some((Some(i), Some(Action::Add)));
                         }
                     });
