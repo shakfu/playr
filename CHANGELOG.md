@@ -18,6 +18,20 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - Releases 0.1.0 to 0.11.0 move from `CHANGELOG.md` to `CHANGELOG-archive.md`.
 
+- GUI fixes from a UI review (`UI_REVIEW.md`):
+  - Transport labels now come before their controls. egui drew "Volume" after its slider, where it read as the speed slider's label.
+  - The View menu lists all nine views.
+  - Menus show each entry's key.
+  - The Playback menu ticks the fade, crossfade, sleep timer and stop-after settings in force, and adds a Mode submenu.
+  - The playing title in a list is green.
+  - Every toggle is plain text until lit. The sampler's Loop, Scrub, Snap and Fit, and the EQ's Bypass, were framed like action buttons. Plain text over frames, which would add about 15 frames to each DJ deck's rows.
+  - Queue and Selection buttons are disabled on an empty list.
+  - Empty DJ decks say how to load them.
+  - Mix strips are capitalised and show "Mute" and "dB". Record, Law and Heads move after the strips.
+  - DJ messages name decks "A" and "B", as the window does; commands inside them keep `:dj a`.
+
+  Library API: `Status::fade` and `Status::crossfade`, because `fading` could not tell a fade from a crossfade.
+
 ### Fixed
 
 - Four tests failed on the Windows runner. Two in `tests/cli.rs` expected the settings path as `playr/settings.toml`, but playr prints it with Windows' `\`. Two in `dedupe.rs` used library paths like `/x/a.flac`, which have no drive and so are relative on Windows; they now get `C:` there, as in `paths.rs`.

@@ -5,6 +5,7 @@
 mod common;
 
 use eframe::egui;
+use egui::accesskit::Toggled;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use playr_app::config::Config;
@@ -294,6 +295,92 @@ fn the_menu_bar_performs_its_items() {
     assert_eq!(model(&harness).input(), &Input::CommandHelp);
     harness.get_by_label(":scan DIR");
     harness.get_by_label(":rescan");
+}
+
+/// The menu entry `label`: below the tab of the same name.
+fn entry<'h>(harness: &'h Harness<'_, Gui>, label: &'h str) -> egui_kittest::Node<'h> {
+    harness
+        .query_all_by_label(label)
+        .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+        .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap_or_else(|| panic!("no menu entry {label}"))
+}
+
+#[test]
+fn the_view_menu_reaches_every_view_and_ticks_the_one_showing() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    harness.get_by_label("View").click();
+    harness.run_steps(2);
+    for label in ["Queue", "Tape", "DJ", "Mix"] {
+        let toggled = entry(&harness, label).accesskit_node().toggled();
+        assert_eq!(toggled, Some(Toggled::False), "{label}");
+    }
+    let toggled = entry(&harness, "Library").accesskit_node().toggled();
+    assert_eq!(toggled, Some(Toggled::True));
+    entry(&harness, "Mix").click();
+    harness.run_steps(2);
+    assert_eq!(model(&harness).view(), View::Mix);
+}
+
+#[test]
+fn the_playback_menu_ticks_the_settings_in_force() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    harness.get_by_label("Playback").click();
+    harness.run_steps(2);
+    let ticked = |harness: &Harness<'_, Gui>, label: &str| {
+        harness.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True)
+    };
+    assert!(ticked(&harness, "No fades"), "No fades");
+    assert!(
+        !ticked(&harness, "Fade tracks over 2 s"),
+        "Fade tracks over 2 s"
+    );
+    assert!(ticked(&harness, "No crossfade"), "No crossfade");
+    assert!(ticked(&harness, "Sleep timer off"), "Sleep timer off");
+    assert!(
+        !ticked(&harness, "Stop in 30 minutes"),
+        "Stop in 30 minutes"
+    );
+    harness.get_by_label("Stop in 30 minutes").click();
+    harness.run_steps(2);
+    assert!(model(&harness).snapshot().sleep.is_some());
+    harness.get_by_label("Playback").click();
+    harness.run_steps(2);
+    assert!(ticked(&harness, "Stop in 30 minutes"), "Stop in 30 minutes");
+    assert!(!ticked(&harness, "Sleep timer off"), "Sleep timer off");
+}
+
+#[test]
+fn an_empty_queue_disables_its_buttons_and_the_transport_labels_its_controls() {
+    let (mut harness, _dir) = window();
+    harness.run_steps(2);
+    harness.get_by_label("Queue 0").click();
+    harness.run_steps(2);
+    for label in ["Save as playlist", "Clear queue"] {
+        assert!(
+            harness.get_by_label(label).accesskit_node().is_disabled(),
+            "{label}"
+        );
+    }
+    // Each control is named by the label before it.
+    for (label, role) in [
+        ("Volume", egui::accesskit::Role::Slider),
+        ("Speed", egui::accesskit::Role::Slider),
+        ("Mode", egui::accesskit::Role::ComboBox),
+    ] {
+        let control = harness
+            .get_all_by_role(role)
+            .find(|n| n.accesskit_node().label().as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("no control labelled {label}"));
+        let text = control.accesskit_node().labelled_by().next().unwrap();
+        let text = text.bounding_box().unwrap();
+        assert!(
+            text.x1 as f32 <= control.rect().left(),
+            "{label} after its control"
+        );
+    }
 }
 
 #[test]
@@ -647,9 +734,14 @@ fn the_wheel_zooms_past_the_peaks_and_the_frames_are_read() {
 fn a_drag_sets_the_range_and_the_bar_slices_it() {
     let samples = tempfile::tempdir().unwrap();
     let (mut harness, _dir) = sampling(samples.path());
+    // A toggle, as in the other views, so it reports whether it is on.
+    let toggled =
+        |harness: &Harness<'_, Gui>| harness.get_by_label("Snap").accesskit_node().toggled();
+    assert_eq!(toggled(&harness), Some(Toggled::False));
     harness.get_by_label("Snap").click();
     harness.run_steps(2);
     assert!(model(&harness).sampler().snap);
+    assert_eq!(toggled(&harness), Some(Toggled::True));
 
     // A quarter to half along the 12 s track, near 3 s and 6 s at 8 kHz.
     let rect = harness.get_by_label("Track waveform").rect();
@@ -1473,7 +1565,7 @@ fn the_mix_tab_sets_faders_mutes_records_and_the_law() {
 
     // A press at a fader's bottom takes it to the bottom.
     let tape = harness
-        .query_all_by_label("tape")
+        .query_all_by_label("Tape fader")
         .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Slider)
         .map(|n| n.rect())
         .unwrap();
@@ -1524,11 +1616,11 @@ fn the_mix_tab_fits_the_smallest_window_and_a_view_key_leaves_it() {
     harness.get_by_label("Mix").click();
     harness.run_steps(2);
     for label in [
-        "master",
-        "player",
-        "tape",
-        "decks",
-        "headphones",
+        "Master fader",
+        "Player fader",
+        "Tape fader",
+        "Decks fader",
+        "Headphones fader",
         "mute headphones",
         "Record",
         "cubic",

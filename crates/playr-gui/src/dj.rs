@@ -14,6 +14,7 @@ use playr_app::tape::Pos;
 
 use crate::controls::{self, Control};
 use crate::palette::Palette;
+use crate::widgets;
 
 /// A zoomed waveform's height, and an overview's.
 const WAVE: f32 = 44.0;
@@ -131,6 +132,21 @@ fn waveform(ui: &mut egui::Ui, model: &Model, side: Side) -> Option<Action> {
     let (Some(loaded), Some(status), Some(rate)) =
         (decks.loaded(side), decks.status(), decks.rate())
     else {
+        let hint = match decks.loading(side) {
+            true => format!("Reading the track for deck {}", letter(side)),
+            false => format!(
+                "Deck {} is empty. A row's {} loads it.",
+                letter(side),
+                letter(side)
+            ),
+        };
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            hint,
+            egui::TextStyle::Body.resolve(ui.style()),
+            visuals.weak_text_color(),
+        );
         return None;
     };
     let s = status.deck(side);
@@ -348,11 +364,7 @@ fn slider(
 
 /// A toggle named `name` for assistive technology; whether it was clicked.
 fn toggle(ui: &mut egui::Ui, on: bool, text: &str, name: String, enabled: bool) -> bool {
-    let r = ui.add_enabled(enabled, egui::Button::selectable(on, text));
-    r.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, &name)
-    });
-    r.clicked()
+    widgets::toggle(ui, enabled, on, text, &name).clicked()
 }
 
 /// A deck's strip: its track and tempo, the transport, the rate, the phase
@@ -579,17 +591,12 @@ fn channel(ui: &mut egui::Ui, model: &Model, side: Side, actions: &mut Vec<Actio
                 // The band's name is its kill, so the slider lines up with the rest.
                 let killed = state.kill[s][b];
                 let label = format!("Deck {k} {} kill", name.to_lowercase());
-                let r = ui
-                    .add(egui::Button::selectable(killed, name))
-                    .on_hover_text(tip);
-                r.widget_info(|| {
-                    egui::WidgetInfo::selected(
-                        egui::WidgetType::SelectableLabel,
-                        true,
-                        killed,
-                        &label,
-                    )
-                });
+                // Dimmed while off, as the rows' other names are.
+                let text = match killed {
+                    true => egui::RichText::new(name),
+                    false => egui::RichText::new(name).color(ui.visuals().weak_text_color()),
+                };
+                let r = widgets::toggle(ui, true, killed, text, &label).on_hover_text(tip);
                 if r.clicked() {
                     actions.push(Action::Dj(D::Kill(side, band, !killed)));
                 }
@@ -717,15 +724,7 @@ fn mixer(ui: &mut egui::Ui, model: &Model, tab: &mut State, actions: &mut Vec<Ac
             actions.push(Action::Dj(D::Quantize(!state.quantize)));
         }
         // As Quantize, with what it does on hover.
-        let r = ui.add(egui::Button::selectable(state.strict, "Strict"));
-        r.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::WidgetType::SelectableLabel,
-                true,
-                state.strict,
-                "Strict",
-            )
-        });
+        let r = widgets::toggle(ui, true, state.strict, "Strict", "Strict");
         let r = r.on_hover_text(
             "on: a track picked for a playing deck waits until the deck stops; \
              off: it replaces the playing track at once",
@@ -733,10 +732,7 @@ fn mixer(ui: &mut egui::Ui, model: &Model, tab: &mut State, actions: &mut Vec<Ac
         if r.clicked() {
             actions.push(Action::Dj(D::Strict(!state.strict)));
         }
-        let r = ui.add(egui::Button::selectable(tab.fx, "FX"));
-        r.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, tab.fx, "FX")
-        });
+        let r = widgets::toggle(ui, true, tab.fx, "FX", "FX");
         if r.on_hover_text("the delay and the reverb the decks send to")
             .clicked()
         {

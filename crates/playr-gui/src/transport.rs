@@ -12,6 +12,7 @@ use playr_app::dispatch::Frontend;
 use crate::controls;
 use crate::keys;
 use crate::palette::Palette;
+use crate::widgets;
 use playr_app::message::{self, fmt_time};
 use playr_app::meter;
 use playr_app::model::{self, Model};
@@ -112,12 +113,14 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().slider_width = 90.0;
 
+        // Each label before its control: egui's own slider text goes after,
+        // where it reads as the next control's.
+        let label = ui.label("Volume");
         let mut volume = (snapshot.volume * 100.0).round();
         let slider = egui::Slider::new(&mut volume, 0.0..=100.0)
-            .text("Volume")
             .fixed_decimals(0)
             .suffix("%");
-        if ui.add(slider).changed() {
+        if ui.add(slider).labelled_by(label.id).changed() {
             actions.push(Action::SetVolume(volume / 100.0));
         }
 
@@ -128,12 +131,13 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
         let mut semitones = ui
             .data(|d| d.get_temp::<f64>(held))
             .unwrap_or(f64::from(status.cents) / 100.0);
-        let label = format!("{:.2}x", speed_at(status.cents));
+        ui.add_space(8.0);
+        let label = ui.label("Speed");
         let slider = egui::Slider::new(&mut semitones, -12.0..=12.0)
             .step_by(0.01)
-            .text(format!("Speed {label}"))
             .suffix(" st");
-        let response = ui.add(slider);
+        let response = ui.add(slider).labelled_by(label.id);
+        ui.weak(format!("{:.2}x", speed_at(status.cents)));
         match response.dragged() {
             true => ui.data_mut(|d| _ = d.insert_temp(held, semitones)),
             false => ui.data_mut(|d| d.remove::<f64>(held)),
@@ -148,7 +152,9 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
             actions.push(Action::SetSpeed(0));
         }
 
-        egui::ComboBox::from_label("Mode")
+        ui.add_space(8.0);
+        let label = ui.label("Mode");
+        let combo = egui::ComboBox::from_id_salt("mode")
             .selected_text(status.mode.name())
             .show_ui(ui, |ui| {
                 for (_, mode) in Mode::NAMES {
@@ -161,6 +167,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui) {
                     }
                 }
             });
+        combo.response.labelled_by(label.id);
 
         let button = ui.button("EQ");
         eq_popup(model, &button, &mut actions);
@@ -197,9 +204,14 @@ fn eq_popup(model: &Model, button: &egui::Response, actions: &mut Vec<Action>) {
                         Action::BypassEq => !flat || held,
                         _ => !flat,
                     };
-                    let button = egui::Button::new(control.label)
-                        .selected(control.action == Action::BypassEq && held);
-                    if ui.add_enabled(enabled, button).clicked() {
+                    // Flat acts once; Bypass holds, so it is a toggle.
+                    let response = match control.action {
+                        Action::BypassEq => {
+                            widgets::toggle(ui, enabled, held, control.label, control.label)
+                        }
+                        _ => ui.add_enabled(enabled, egui::Button::new(control.label)),
+                    };
+                    if response.clicked() {
                         actions.push(control.action.clone());
                     }
                 }
@@ -294,13 +306,16 @@ fn level_meter(ui: &mut egui::Ui, loudness: Option<f32>, peak: Option<f32>) {
         green, yellow, red, ..
     } = *Palette::of(ui.visuals());
     let number = |v: Option<f32>| v.map_or("--".to_string(), |v| format!("{v:.1}"));
-    let peak_text = egui::RichText::new(format!("pk {}", number(peak))).monospace();
+    // Numbers in monospace so they hold still; units in the text font.
+    let peak_text = egui::RichText::new(number(peak)).monospace();
     ui.label(if peak.is_some_and(meter::clipping) {
         peak_text.color(red)
     } else {
         peak_text
     });
-    ui.monospace(format!("{} LUFS", number(loudness)));
+    ui.weak("pk");
+    ui.weak("LUFS");
+    ui.monospace(number(loudness));
     let (rect, response) = ui.allocate_exact_size(egui::vec2(160.0, 12.0), egui::Sense::hover());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, "Level")

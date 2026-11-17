@@ -829,7 +829,10 @@ fn mix_text(mix: &crate::mix::Mix) -> String {
 
 fn dj_text(m: &crate::dj::DjMessage) -> String {
     use crate::dj::{DjAction, DjMessage};
-    let deck = |s: &crate::dj::Side| crate::command::side_name(*s);
+    // Capitals in prose, as the window labels the decks; the command's
+    // own letter after `:dj`.
+    let deck = |s: &crate::dj::Side| crate::command::side_name(*s).to_uppercase();
+    let token = |s: &crate::dj::Side| crate::command::side_name(*s);
     match m {
         DjMessage::Loading(s) => format!("reading the track for deck {}", deck(s)),
         DjMessage::Loaded {
@@ -848,12 +851,12 @@ fn dj_text(m: &crate::dj::DjMessage) -> String {
         DjMessage::NoGrid(s) => format!(
             "deck {} has no beat grid; :dj {} tap sets one",
             deck(s),
-            deck(s)
+            token(s)
         ),
         DjMessage::Done(DjAction::Play(s)) => format!("deck {} playing", deck(s)),
         DjMessage::Done(DjAction::Pause(s)) => format!("deck {} paused", deck(s)),
         DjMessage::Done(a) => command::line(&Action::Dj(*a), None),
-        DjMessage::Empty(s) => format!("deck {} is empty; :dj {} load first", deck(s), deck(s)),
+        DjMessage::Empty(s) => format!("deck {} is empty; :dj {} load first", deck(s), token(s)),
         DjMessage::NoTrack => "no track under the cursor to load".into(),
         DjMessage::Playing(s) => format!("deck {} is playing; pause it first", deck(s)),
         DjMessage::SpeedOutOfReach(cents) => format!(

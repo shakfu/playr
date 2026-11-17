@@ -16,6 +16,7 @@ use playr_app::View;
 use playr_core::columns::{self, SortKey};
 
 use crate::controls::{self, Control};
+use crate::palette::Palette;
 
 const ROW: f32 = 20.0;
 
@@ -35,27 +36,33 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
         View::Library if model.results().is_some() => controls::RESULTS_BAR,
         _ => &[],
     };
-    if !bar.is_empty() {
-        ui.horizontal(|ui| {
-            if let Some(p) = model
-                .session()
-                .editing()
-                .filter(|_| view == View::Selection)
-            {
-                ui.strong(format!("Editing \"{}\"", p.name));
-            }
-            for control in bar {
-                if ui.button(control.label).clicked() {
-                    result = Some((None, Some(control.action.clone())));
-                }
-            }
-        });
-    }
     let tracks = match view {
         View::Library => model.listed(),
         View::Queue => model.queue(),
         _ => model.session().selection(),
     };
+    if !bar.is_empty() {
+        ui.horizontal(|ui| {
+            let editing = model
+                .session()
+                .editing()
+                .filter(|_| view == View::Selection);
+            if let Some(p) = editing {
+                ui.strong(format!("Editing \"{}\"", p.name));
+            }
+            // An edited playlist may be saved empty; otherwise an empty list
+            // leaves the buttons nothing to act on.
+            let enabled = !tracks.is_empty() || editing.is_some();
+            for control in bar {
+                if ui
+                    .add_enabled(enabled, egui::Button::new(control.label))
+                    .clicked()
+                {
+                    result = Some((None, Some(control.action.clone())));
+                }
+            }
+        });
+    }
     if tracks.is_empty() {
         ui.weak(match (view, model.results()) {
             (View::Library, Some(_)) => "No matches. Esc in the search field clears it.",
@@ -182,7 +189,11 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
                             playr_core::columns::Column::Title => {
                                 let title = egui::RichText::new(text);
                                 match (is_playing, i < played) {
-                                    (true, _) => ui.label(title.strong()),
+                                    // Coloured as well: the cursor's fill outweighs bold text.
+                                    (true, _) => {
+                                        let green = Palette::of(ui.visuals()).green;
+                                        ui.label(title.strong().color(green))
+                                    }
                                     (false, true) => ui.weak(title),
                                     (false, false) => ui.label(title),
                                 };

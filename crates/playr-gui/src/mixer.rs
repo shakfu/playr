@@ -44,10 +44,9 @@ pub fn show(model: &Model, ui: &mut egui::Ui) -> Vec<Action> {
                         fader(ui, &mix, strip, held, &mut actions);
                     });
                 });
-                if strip == Strip::Master {
-                    ui.group(|ui| master(ui, &mix, recording.as_deref(), &mut actions));
-                }
             }
+            // After the channels, so master sits next to the strips it sums.
+            ui.group(|ui| master(ui, &mix, recording.as_deref(), &mut actions));
         });
     });
     actions
@@ -59,24 +58,39 @@ fn fader(ui: &mut egui::Ui, mix: &Mix, strip: Strip, held: Option<f32>, actions:
         let mut p = (mix.level(strip) * 100.0).round();
         let slider = egui::Slider::new(&mut p, 0.0..=100.0)
             .vertical()
-            .show_value(false)
-            .text(strip.name());
-        if ui.add(slider).changed() {
+            .show_value(false);
+        let response = ui.add(slider);
+        // Not the bare name, which the Tape and Mix tabs also carry.
+        let name = format!("{} fader", capitalised(strip.name()));
+        response.widget_info(|| egui::WidgetInfo::slider(true, f64::from(p), &name));
+        if response.changed() {
             actions.push(Action::Mix(MixAction::Set(strip, p / 100.0)));
         }
         meter(ui, held);
     });
+    ui.label(capitalised(strip.name()));
     ui.monospace(match mix.law().gain(mix.level(strip)) {
         0.0 => "off".to_string(),
         g => format!("{:.1} dB", 20.0 * g.log10()),
     });
     let mut muted = mix.muted(strip);
-    if ui
-        .checkbox(&mut muted, format!("mute {}", strip.name()))
-        .changed()
-    {
+    let response = ui.checkbox(&mut muted, "Mute");
+    // The strip's name tells the five mutes apart for assistive technology.
+    let name = format!("mute {}", strip.name());
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, muted, &name));
+    if response.changed() {
         actions.push(Action::Mix(MixAction::Mute(strip, Some(muted))));
     }
+}
+
+/// `name` with its first letter in capitals, as the window's headings are.
+fn capitalised(name: &str) -> String {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 /// A vertical peak meter of `held` dBFS, from [`FLOOR_DB`] at the bottom to
@@ -122,6 +136,8 @@ fn master(
         ui.add_space(8.0);
         ui.label("Law");
         for (name, law) in Law::NAMES {
+            // `db` is the settings' spelling; the unit is dB.
+            let name = if law == Law::Db { "dB" } else { name };
             if ui.selectable_label(mix.law() == law, name).clicked() && mix.law() != law {
                 actions.push(Action::Mix(MixAction::Law(Some(law))));
             }

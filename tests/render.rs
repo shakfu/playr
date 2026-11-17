@@ -371,6 +371,8 @@ fn now_playing_shows_title_position_and_source_format() {
             output_format: None,
             resampling: false,
             fading: false,
+            fade: Duration::ZERO,
+            crossfade: Duration::ZERO,
             error: None,
             error_seq: 0,
             cents: 0,

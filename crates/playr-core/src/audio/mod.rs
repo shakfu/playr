@@ -257,6 +257,10 @@ pub struct Status {
     pub resampling: bool,
     /// A fade or a crossfade is set, so track edges are scaled.
     pub fading: bool,
+    /// The fade at track edges; zero when off. See [`Cmd::SetFade`].
+    pub fade: Duration,
+    /// The overlap between tracks; zero when off. See [`Cmd::SetCrossfade`].
+    pub crossfade: Duration,
     /// The most recent playback error, such as a file that could not be decoded.
     ///
     /// It is never cleared. The UI shows it when `error_seq` changes, which is

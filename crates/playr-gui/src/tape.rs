@@ -19,6 +19,7 @@ use playr_looper::{Window, VOICES, WRITER};
 
 use crate::controls;
 use crate::palette::Palette;
+use crate::widgets;
 
 /// The header's width beside each lane; the write window's strip, a voice's
 /// waveform, and the band at its foot the crossfade curves take.
@@ -846,11 +847,9 @@ pub(crate) fn fields(
 /// A toggle named `name` for assistive technology, showing `text`; whether
 /// it was clicked.
 fn toggle(ui: &mut egui::Ui, on: bool, text: &str, name: String, tip: &str) -> bool {
-    let response = ui.selectable_label(on, text).on_hover_text(tip);
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, &name)
-    });
-    response.clicked()
+    widgets::toggle(ui, true, on, text, &name)
+        .on_hover_text(tip)
+        .clicked()
 }
 
 /// Adds a clickable control with `add`, dimmed when `idle` says it has no
@@ -1306,12 +1305,7 @@ fn bounce_toggle(ui: &mut egui::Ui, bouncing: bool, long: &mut bool, actions: &m
         (false, false) => "record one pass of the write window of the mix as heard, effects included, into voice 4's loop, over what it held",
         (false, true) => "record the mix as heard, effects included, until pressed again or for 5 minutes; it then replaces voice 4's loop",
     };
-    let r = ui
-        .add(egui::Button::selectable(bouncing, "Bounce"))
-        .on_hover_text(tip);
-    r.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, bouncing, "Bounce")
-    });
+    let r = widgets::toggle(ui, true, bouncing, "Bounce", "Bounce").on_hover_text(tip);
     if r.clicked() {
         let length = if *long { Bounce::Long } else { Bounce::Pass };
         actions.push(Action::Tape(T::Bounce((!bouncing).then_some(length))));

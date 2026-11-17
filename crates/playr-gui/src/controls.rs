@@ -44,10 +44,14 @@ pub const FILE_MENU: &[Control] = &[control("Quit", Action::Quit)];
 
 pub const VIEW_MENU: &[Control] = &[
     control("Library", Action::ShowView(View::Library)),
+    control("Queue", Action::ShowView(View::Queue)),
     control("Selection", Action::ShowView(View::Selection)),
     control("Playlists", Action::ShowView(View::Playlists)),
     control("Sampler", Action::ShowView(View::Sampler)),
     control("Loops", Action::ShowView(View::Loops)),
+    control("Tape", Action::ShowView(View::Tape)),
+    control("DJ", Action::ShowView(View::Dj)),
+    control("Mix", Action::ShowView(View::Mix)),
     control("Next view", Action::NextView),
     control("Search", Action::StartSearch),
     control("Clear search", Action::ClearSearch),

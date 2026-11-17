@@ -677,14 +677,14 @@ fn idle_tape_controls_say_why() {
 fn dj_messages_are_worded() {
     use playr_app::dj::{DjAction as D, DjMessage as M, Side::*};
     for (message, words) in [
-        (M::Loading(A), "reading the track for deck a"),
+        (M::Loading(A), "reading the track for deck A"),
         (
             M::Loaded {
                 side: B,
                 title: "Amen".into(),
                 bpm: Some(136.0),
             },
-            "deck b: Amen, 136.00 BPM",
+            "deck B: Amen, 136.00 BPM",
         ),
         (
             M::Loaded {
@@ -692,36 +692,36 @@ fn dj_messages_are_worded() {
                 title: "Drone".into(),
                 bpm: None,
             },
-            "deck a: Drone, no beat grid",
+            "deck A: Drone, no beat grid",
         ),
         (
             M::FindingGrid(A),
-            "deck a: analysing the track for its beat grid",
+            "deck A: analysing the track for its beat grid",
         ),
-        (M::NoGrid(B), "deck b has no beat grid; :dj b tap sets one"),
-        (M::Done(D::Play(A)), "deck a playing"),
-        (M::Done(D::Pause(B)), "deck b paused"),
+        (M::NoGrid(B), "deck B has no beat grid; :dj b tap sets one"),
+        (M::Done(D::Play(A)), "deck A playing"),
+        (M::Done(D::Pause(B)), "deck B paused"),
         (M::Done(D::Rate(B, 2.5)), "dj b rate 2.5"),
-        (M::Empty(A), "deck a is empty; :dj a load first"),
+        (M::Empty(A), "deck A is empty; :dj a load first"),
         (M::NoTrack, "no track under the cursor to load"),
-        (M::Playing(A), "deck a is playing; pause it first"),
+        (M::Playing(A), "deck A is playing; pause it first"),
         (
             M::OutOfReach(B),
-            "deck b cannot reach the other deck's tempo within 50%",
+            "deck B cannot reach the other deck's tempo within 50%",
         ),
-        (M::Tapped(B), "deck b: tap again on the beat"),
+        (M::Tapped(B), "deck B: tap again on the beat"),
         (
             M::NoCueChannels(2),
             "the output device has 2 channels; the cue on 3 and 4 needs 4",
         ),
         (M::Done(D::Loop(A, Some(4.0))), "dj a loop 4"),
-        (M::NoMark(A), "deck a: no mark that way"),
+        (M::NoMark(A), "deck A: no mark that way"),
         (
             M::Queued {
                 side: B,
                 title: "Amen".into(),
             },
-            "deck b: Amen loads when the deck stops",
+            "deck B: Amen loads when the deck stops",
         ),
         (
             M::Grid {
@@ -729,7 +729,7 @@ fn dj_messages_are_worded() {
                 bpm: 128.0,
                 t0: 0.1234,
             },
-            "deck a grid: 128.00 BPM, a beat at 0.123 s",
+            "deck A grid: 128.00 BPM, a beat at 0.123 s",
         ),
         (
             M::DeviceLost("gone".into()),
@@ -743,7 +743,7 @@ fn dj_messages_are_worded() {
             M::SpeedOutOfReach(-825),
             "a deck reaches +7 semitones at most; the player is at -8.25",
         ),
-        (M::Took(A), "deck a took over from the player"),
+        (M::Took(A), "deck A took over from the player"),
         (M::Failed("no device".into()), "dj: no device"),
     ] {
         assert_eq!(text(&Message::Dj(message)), words);

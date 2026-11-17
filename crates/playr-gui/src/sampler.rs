@@ -30,6 +30,7 @@ use playr_core::samples::{Cut, Edges};
 use crate::controls::{self, Control};
 use crate::keys;
 use crate::palette::Palette;
+use crate::widgets;
 
 /// Mouse wheel movement, in points, that makes one zoom step.
 const WHEEL_STEP: f32 = 40.0;
@@ -289,7 +290,7 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                     Action::Zoom(Zoom::In) => "+",
                     Action::Zoom(Zoom::Out) => "-",
                     Action::Zoom(Zoom::All) => "\u{2194}",
-                    _ => "info",
+                    _ => "Info",
                 };
                 // Right to left, so between `-` and `+`.
                 if control.action == Action::Zoom(Zoom::Out) {
@@ -602,26 +603,6 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
                 actions.push(control.action.clone());
             }
         }
-        // With no range, Loop loops the region around the playhead.
-        let mut looping = snapshot.status.looping.is_some();
-        if toggle(
-            ui,
-            model,
-            &mut looping,
-            "Loop",
-            "Loop range",
-            Action::Loop(None),
-        ) {
-            actions.push(Action::Loop(Some(looping)));
-        }
-        let scrub = egui::Button::new("Scrub").selected(state.scrub);
-        if ui
-            .add(scrub)
-            .on_hover_text("Drag across the waveform to hear it, then loop the range")
-            .clicked()
-        {
-            state.scrub ^= true;
-        }
         let empty = snapshot.loops.iter().position(Option::is_none);
         // Named for what it saves: a loop slot holds a range, looping or not.
         let label = match snapshot.status.looping {
@@ -638,7 +619,26 @@ pub fn show(model: &mut Model, ui: &mut egui::Ui, state: &mut State) -> Vec<Acti
         if let (true, Some(slot)) = (save.clicked(), empty) {
             actions.push(Action::LoopSlot(slot as u8 + 1, SlotOp::Save));
         }
+        // Toggles after actions.
         ui.separator();
+        // With no range, Loop loops the region around the playhead.
+        let mut looping = snapshot.status.looping.is_some();
+        if toggle(
+            ui,
+            model,
+            &mut looping,
+            "Loop",
+            "Loop range",
+            Action::Loop(None),
+        ) {
+            actions.push(Action::Loop(Some(looping)));
+        }
+        if widgets::toggle(ui, true, state.scrub, "Scrub", "Scrub")
+            .on_hover_text("Drag across the waveform to hear it, then loop the range")
+            .clicked()
+        {
+            state.scrub ^= true;
+        }
         let mut snap = sampler.snap;
         if toggle(
             ui,
@@ -848,9 +848,7 @@ fn toggle(
     name: &str,
     action: Action,
 ) -> bool {
-    // Framed, unlike `toggle_value`, so it reads as a button while off.
-    let clicked = ui
-        .add(egui::Button::new(label).selected(*on))
+    let clicked = widgets::toggle(ui, true, *on, label, label)
         .on_hover_text(with_key(model, name, &action))
         .clicked();
     *on ^= clicked;

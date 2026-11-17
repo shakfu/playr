@@ -16,6 +16,7 @@ mod sampler;
 mod tape;
 mod transport;
 mod views;
+mod widgets;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -297,11 +298,11 @@ impl Gui {
                         .map(|dir| Action::Prune(Some(dir)));
                 }
                 ui.separator();
-                items(ui, controls::FILE_MENU, &mut chosen);
+                items(ui, &self.model, controls::FILE_MENU, &mut chosen);
             });
             let theme = Action::Theme(self.model.theme());
             ui.menu_button("View", |ui| {
-                items(ui, controls::VIEW_MENU, &mut chosen);
+                items(ui, &self.model, controls::VIEW_MENU, &mut chosen);
                 ui.separator();
                 ui.menu_button("Theme", |ui| {
                     for control in controls::THEME_MENU {
@@ -333,7 +334,18 @@ impl Gui {
             });
             let replaygain = self.model.replaygain();
             ui.menu_button("Playback", |ui| {
-                items(ui, controls::PLAYBACK_MENU, &mut chosen);
+                items(ui, &self.model, controls::PLAYBACK_MENU, &mut chosen);
+                let mode = self.model.snapshot().status.mode;
+                ui.menu_button("Mode", |ui| {
+                    for (_, choice) in playr_core::audio::Mode::NAMES {
+                        if ui.radio(mode == choice, choice.name()).clicked() {
+                            if mode != choice {
+                                chosen = Some(Action::SetMode(choice));
+                            }
+                            ui.close();
+                        }
+                    }
+                });
                 ui.menu_button("ReplayGain", |ui| {
                     for (_, choice) in playr_core::gain::ReplayGain::NAMES {
                         if ui.radio(replaygain == choice, choice.name()).clicked() {
@@ -345,7 +357,7 @@ impl Gui {
                     }
                 });
                 ui.separator();
-                items(ui, controls::MARKS, &mut chosen);
+                items(ui, &self.model, controls::MARKS, &mut chosen);
             });
             ui.menu_button("Sampler", |ui| {
                 if let Some(action) = sampler::menu(&self.model, ui) {
@@ -353,7 +365,7 @@ impl Gui {
                 }
             });
             ui.menu_button("Help", |ui| {
-                items(ui, controls::HELP_MENU, &mut chosen);
+                items(ui, &self.model, controls::HELP_MENU, &mut chosen);
                 ui.separator();
                 if ui.button("About playr").clicked() {
                     self.about = true;
@@ -850,10 +862,30 @@ impl eframe::App for Gui {
     }
 }
 
-/// Buttons for `controls`, in a menu or a row. The one clicked sets `chosen`.
-fn items(ui: &mut egui::Ui, controls: &[Control], chosen: &mut Option<Action>) {
+/// Menu entries for `controls`, with their keys, ticked where the action is
+/// the current setting. The one clicked sets `chosen`.
+fn items(ui: &mut egui::Ui, model: &Model, controls: &[Control], chosen: &mut Option<Action>) {
+    let snapshot = model.snapshot();
+    let status = &snapshot.status;
     for control in controls {
-        if ui.button(control.label).clicked() {
+        let on = match &control.action {
+            Action::ShowView(view) => model.view() == *view,
+            Action::StopAfter => status.stop_after,
+            Action::StopIn(after) => after.is_some() == snapshot.sleep.is_some(),
+            Action::Fade(d) => status.fade == *d,
+            Action::Crossfade(d) => status.crossfade == *d,
+            _ => false,
+        };
+        let mut button = egui::Button::selectable(on, control.label);
+        if let Some(key) = keys::key_for(model, &control.action, model.view()) {
+            button = button.shortcut_text(key.to_string());
+        }
+        let response = ui.add(button);
+        // Without the key, which the button's own name would include.
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, control.label)
+        });
+        if response.clicked() {
             *chosen = Some(control.action.clone());
             ui.close();
         }

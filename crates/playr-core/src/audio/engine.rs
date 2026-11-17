@@ -1609,6 +1609,8 @@ impl Engine {
         s.output_format = self.out.as_ref().map(|o| o.plan.format);
         s.resampling = self.conv.as_ref().is_some_and(Converter::resampling);
         s.fading = !self.fade.is_zero() || !self.crossfade.is_zero();
+        s.fade = self.fade;
+        s.crossfade = self.crossfade;
         s.cents = self.cents;
         s.stop_after = self.stop_after;
         s.gain_db = match self.replaygain {
