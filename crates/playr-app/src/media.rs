@@ -184,5 +184,7 @@ pub fn action(event: MediaControlEvent, playing: bool) -> Option<Action> {
         MediaControlEvent::SetVolume(v) => Some(Action::SetVolume(v as f32)),
         // Opening a URI and raising a window are not playr's to do.
         MediaControlEvent::OpenUri(_) | MediaControlEvent::Raise => None,
+        // SetShuffle is opt-in and unrequested; later variants are unknown.
+        _ => None,
     }
 }

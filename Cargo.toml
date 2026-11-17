@@ -26,7 +26,7 @@ walkdir = "2.5.0"
 rtrb = "0.4.0"
 # Media keys and the now-playing panel. `use_zbus` keeps Linux pure Rust:
 # the default `dbus` feature links libdbus-1, which nothing else here needs.
-souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
+souvlaki = { version = "0.9.3", default-features = false, features = ["use_zbus"] }
 tempfile = "3"
 toml = { version = "1.1", default-features = false, features = ["parse", "preserve_order"] }
 

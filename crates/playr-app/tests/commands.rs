@@ -1427,6 +1427,8 @@ fn a_panel_request_becomes_the_action_playr_has_for_it() {
     // Opening a URI and raising a window are not playr's to do.
     assert_eq!(action(E::OpenUri("http://example.com".into()), true), None);
     assert_eq!(action(E::Raise, true), None);
+    // A boolean shuffle does not map onto playr's four-way mode.
+    assert_eq!(action(E::SetShuffle(true), true), None);
 }
 
 #[test]
