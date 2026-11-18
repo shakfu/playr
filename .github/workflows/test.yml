@@ -87,7 +87,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: astral-sh/setup-uv@v10.3.3
 
       - name: Install Chromium
         run: uv run --with playwright==1.62.0 playwright install --with-deps chromium

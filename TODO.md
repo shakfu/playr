@@ -14,6 +14,10 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ## Critical
 
+### Recording
+
+- [ ] **WAV recording past 4 GiB.** `audio/record.rs` writes through hound, whose RIFF sizes are u32. 32-bit stereo passes 4 GiB after 3h06m at 48 kHz, 46 min at 192 kHz. Release writes a wrapped header; debug panics in the writer thread, so `alive` never drops and `finished()` never returns. Stop or roll over before 4 GiB, or write RF64; lower `alive` from a drop guard. Also in `record.rs`: the writer reads `slots() == 0` before `is_abandoned()`, so frames pushed between the two are lost; after a writer error the bus keeps its record producer, and a later Record frees the old one on the audio thread. From the 0.18.0 review.
+
 ## High
 
 ### Desktop window
@@ -30,11 +34,19 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Playback
 
+- [ ] **Resampler latency missing from output marks.** `halt`, `wrap` and `stage_from` count `written + carry`, not the frames `Resample` still holds: up to 1252 output frames (26 ms) at 44.1 to 48 kHz, 2302 (48 ms) at 0.5x (measured). Under varispeed or on a resampled device a one-shot's tail lands after `pause_at`, so the fade-out is cut and the pause clicks; loop wraps and gapless changes are reported early by the same amount. Expose the held latency from `Resample` and add it to the mark. Test with a fake backend that offers only 48 kHz. From the 0.18.0 review.
+
+- [ ] **ReplayGain peak of 0 or NaN removes the cap.** `gain.rs:85` caps at `f32::INFINITY` for a tagged peak that is not positive, so `+40 dB` with peak `0` or `nan` plays 100x and hard-clips. Off by default. Treat such a peak as unknown (cap 1.0) and clamp the gain. From the 0.18.0 review.
+
 ### Sampler
 
 - [ ] **Which samplers read the `smpl` loop.** A range cut whole while it loops carries its loop in a `smpl` chunk since 2026-10-04, in frames, like the cue points. No device or sampler has read one yet; "Which devices read `smpl` loops" in `docs/dev/hardware_samplers.md` stays open. `docs/dev/device_tests.md` has the test, M8; run it.
 
 ### Library
+
+- [ ] **Library cursor kept by index across reloads.** `Event::Scanned`, `Event::Pruned`, analysis re-sorts and `Confirm::ForgetRoot` replace the track list, but `cursors.library` is neither re-anchored nor clamped. After a rescan adds an album that sorts earlier, Enter plays, or the DJ view loads, a different track. Anchor by path after every reload, as `SetSort` does, then clamp. From the 0.18.0 review.
+
+- [ ] **Analysis panics are not contained.** `analysis::run`'s scoped workers have no `catch_unwind`, so one panicking file fails the run before `update_albums`, stays pending, and panics again on every later `:analyze`; album loudness stops updating. Catch per file and store `Analysis::failed`. `Session::spawn` (`session/jobs.rs`) also has no catch, so a panic in plan, write, export, convert, `sql` or open sends no event and leaves the frontend pending. Whether Symphonia panics on malformed input is inference. From the 0.18.0 review.
 
 - [ ] **Group by album or artist.** `columns` and `sort` order the library by any column, and `added`, `played` and `plays` by history, but there is no grouping. It needs a new view in three frontends, and `Frontend` assumes one cursor row per view. `:filter album|artist` is the first step: it searches for the row's album or artist. A buyer of music thinks in releases (decision 2), which argues for grouping (inference about users).
 
@@ -48,9 +60,19 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Interface
 
+- [ ] **Terminal sampler panics on short terminals.** `render.rs:298` sets `rows` to `inner.height - 2`, which is 0 for an inner height of 1 or 2, and `braille_rows` then underflows `dots - 1`; the guard at `:294` catches only 0. Braille is the default display, so a 3-5 row tmux split panics while a track plays. No render test is below 30 columns. Return early on `rows == 0` or `width == 0`, and add a size-sweep test. From the 0.18.0 review.
+
+- [ ] **The window clones the measures map each frame.** `views.rs:108`: `model.measures_map().clone()`, one entry per analysed track, on every frame of Library, Selection or Queue: 12.6 ms at 50k entries against a 33 ms frame (measured). `dj.rs` already borrows. Also the spectrogram image is rebuilt and uploaded each frame, about 1.3 MB at 800x400 (inference); cache it. From the 0.18.0 review.
+
+- [ ] **Window controls unreachable by Tab.** Tab is bound to `view next` and the window cancels egui's focus step, so the Forget buttons, the Columns checkboxes and modal buttons are mouse-only. Options: Tab moves focus while a window or modal is open, or Ctrl+Tab cycles views in the window only, which breaks key parity with the terminal. The routing of keys by input state is also duplicated in `src/ui/mod.rs` and `playr-gui/src/lib.rs`; one `Model` method would serve both. From the 0.18.0 review.
+
 - [ ] **System fonts on Windows.** The window draws other scripts with system fonts, tested on macOS and Linux. The Windows list of files is untried there. Right-to-left text may show out of order: egui 0.36 has no bidi algorithm (inference).
 
 ### Server
+
+- [ ] **The page can start an unbounded recording.** `web.rs:99` allows `Mix(_)`, which includes `MixAction::Record`: 32-bit float WAV at 1.4 GB/h, enough to fill a Pi's SD card. Add `Mix(MixAction::Record) => false` ahead of it, with a case in the allow-list test. From the 0.18.0 review.
+
+- [ ] **OSC flood.** `playr-server/src/main.rs:158` queues requests on an unbounded `mpsc::channel()`. OSC is unauthenticated, a bundle expands to about 70 messages, and each runs a full `refresh`, so memory grows and HTTP commands time out (inference). Use a bounded `sync_channel` with `try_send`, or coalesce. Also, the 32 connection slots are taken before the Host or token check and held up to 10 s, so one LAN host can hold them all: cap per peer IP and shorten the head deadline. From the 0.18.0 review.
 
 - [ ] **Tried on a Raspberry Pi.** The arm64 archive's glibc requirement, the ALSA default device from `~/.asoundrc`, the systemd user service with lingering, and the CPU cost of resampling are unchecked on a Pi. `docs/guide-server.md` assumes them.
 
@@ -124,7 +146,31 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 - [ ] **A DJ tab.** Two decks with beat matching, scoped in `docs/dev/dj-engine.md`. DJing is outside the primary user of decision 2, so a decision comes first. Of its build steps, the grid (2) and the x2 and /2 correction are built; next is step 1, a `playr-dsp` crate holding the looper's read head, ramps and filters, which both would share.
 
-- [ ] **Unmaintained dependencies.** `cargo audit` finds no vulnerabilities, but warns that `derivative`, `instant` and `ttf-parser`, pulled in by egui, are unmaintained. Recheck after each egui upgrade. **upstream**.
+- [ ] **Unmaintained dependencies.** `cargo audit` finds no vulnerabilities, but warns that `ttf-parser`, pulled in by winit, is unmaintained. Recheck after each egui upgrade. **upstream**.
+
+- [ ] **CI gates test less than they claim.** The msrv job checks only `playr`, `playr-core` and `playr-app` on 1.89, though its comment says every crate but `playr-gui`; `playr-gui`'s 1.95 is never checked. `--no-default-features` is never built, so `opus_reports_cleanly_when_the_feature_is_off` never runs. The release `check` job runs `make test` on Linux only, and a tag does not wait for test.yml on macOS or Windows; call test.yml with `workflow_call`. `--locked` is missing from test.yml and the Makefile. From the 0.18.0 review.
+
+- [ ] **Release supply chain.** Actions are pinned by tag, `dtolnay/rust-toolchain@stable` by branch; pin by SHA. Release assets carry only a `SHA256SUMS` from the same workflow: add provenance (`actions/attest-build-provenance`) or a signature. The ffmpeg and nfpm downloads are not checksummed. No `rust-toolchain.toml`, so a new clippy lint can fail `-D warnings` with no code change. From the 0.18.0 review.
+
+- [ ] **Smaller findings, not rechecked since 0.18.0.** From the review of 2026-10-11; each needs checking against the current code first:
+
+  - U16 output truncates (`output.rs:161`); I16 now rounds. Pause and resume are hard cuts mid-waveform.
+  - A mid-stream channel-count change may swap L/R under resampling (`decode.rs`; inference).
+  - `update_albums` opens a DEFERRED transaction; under WAL a concurrent commit fails it with `SQLITE_BUSY_SNAPSHOT`. Use `TransactionBehavior::Immediate`.
+  - `export_marks` writes `<stem><suffix>` with `fs::write`, so two tracks sharing a stem overwrite each other's file.
+  - `forget_root` maps any DB error to `NotARoot`; `check_forget` refuses during a scan but not an analysis.
+  - Cue sheets keep the `\\?\` prefix on Windows and emit `TRACK 100` and above; `file:///C:/` M3U URLs read as `/C:/...` on Windows.
+  - An unwritable lock file leaves playr running unlocked with no warning (`instance.rs`).
+  - History joins on `\n` and does not strip newlines on push (`persist.rs`).
+  - `save_values` marks values saved even when `Session::set_state` failed.
+  - The Origin check is skipped when Origin is absent; under `--open` that allows `text/plain` form CSRF (inference). Require a custom header on POST.
+  - `playr_token` is visible to other services on the same host, since cookies are not isolated by port. Document it.
+  - `playr-server.service` listens on `0.0.0.0:8080` with no sandboxing directives.
+  - The window's system font fallback can load symbol or emoji faces (Apple Symbols, `seguisym.ttf`, `fc-match`'s first pick).
+  - `unsafe impl Sync for SyncDecoder` (`opus.rs:105`) relies on opus 0.4's current `&self` methods under a caret requirement; pin `=0.4.x` or use a `Mutex`.
+  - `docs/architecture.md` says "current as of 0.12.0"; README.md:7 says `playr` and `playr-gui` have no network code, though both link zbus on Linux and the window opens a browser.
+  - Fixed sleeps that may flake on loaded runners: `playr-core/tests/engine.rs`, `playr-app/tests/model.rs`, `playr-core/tests/modes.rs`.
+  - `Model::drain_events` is about 250 lines over six subsystems; split it per subsystem, as `tape::poll` and `dj::poll` are.
 
 - [ ] **A playback snapshot in the core.** `Model` in `playr-app` assembles position, levels, marks and the held peak; a frontend that skips `playr-app`, such as a Tauri backend, would repeat it. A `Session::playback()` would serve both. See `docs/architecture.md`.
 

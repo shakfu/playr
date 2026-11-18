@@ -6,7 +6,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Added
 
-- An `audit` workflow checks `Cargo.lock` against the RustSec advisories weekly and whenever a manifest or the lock changes, failing on a vulnerability; `make audit` runs the same. Dependabot proposes Cargo and workflow-action updates weekly.
+- An `audit` workflow checks `Cargo.lock` against the RustSec advisories weekly and whenever a manifest or the lock changes, failing on a vulnerability; `make audit` runs the same.
 
 ### Changed
 
