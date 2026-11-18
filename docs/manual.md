@@ -120,7 +120,11 @@ Only one runs at a time: while one is running, the others, `playr scan` and `pla
 
 | | `playr` | `playr-gui` | `playr-server` |
 |-|-|-|-|
-| library, selection and playlists views | yes | yes | yes |
+| library, queue, selection and playlists views | yes | yes | yes |
+| loops view | yes | yes | no |
+| tape, DJ and mix views | no | yes | no |
+| `:tape` and `:dj` | yes | yes | no |
+| `:mix` | yes | yes | yes |
 | keys, `:` commands, `?` and `:help` | yes | yes | yes |
 | search, marks, playlists, themes | yes | yes | yes |
 | playback modes, varispeed, volume, level meter | yes | yes | yes |
@@ -138,7 +142,7 @@ Only one runs at a time: while one is running, the others, `playr scan` and `pla
 
 \* Not on Windows, where the panel attaches to a window and the terminal has none.
 
-The page reaches playr over a network, so it refuses the sampler, any command naming a path, `:map` and quitting. [docs/dev/server.md](dev/server.md) holds the allow list.
+The page reaches playr over a network, so it refuses the sampler, loops, tape, DJ and mix views, `:tape` and `:dj`, any command naming a path, `:map` and quitting. [docs/dev/server.md](dev/server.md) holds the allow list.
 
 ## Use
 
