@@ -294,10 +294,15 @@ pub fn text(message: &Message) -> String {
         Message::MasterStopping => "finishing the master's recording".into(),
         Message::MasterRecorded(r) => {
             let secs = r.frames as f64 / f64::from(r.rate.max(1));
-            let done = format!(
-                "recorded the master: {secs:.2} s to {}",
-                home_as_tilde(&r.path)
-            );
+            let first = r
+                .paths
+                .first()
+                .map(|p| home_as_tilde(p))
+                .unwrap_or_default();
+            let done = match r.paths.len() {
+                0 | 1 => format!("recorded the master: {secs:.2} s to {first}"),
+                n => format!("recorded the master: {secs:.2} s to {first} in {n} parts"),
+            };
             match r.dropped {
                 0 => done,
                 n => format!("{done}; {n} blocks lost, the disk was too slow"),
@@ -791,16 +796,17 @@ fn tape_text(m: &crate::tape::TapeMessage) -> String {
         TapeMessage::Saved(path) => format!("saved the tape to {}", home_as_tilde(path)),
         TapeMessage::Recording(path) => format!("recording the tape to {}", home_as_tilde(path)),
         TapeMessage::Recorded {
-            path,
+            paths,
             frames,
             rate,
             dropped,
         } => {
-            let done = format!(
-                "recorded {:.2} s to {}",
-                secs(*frames as f64, *rate),
-                home_as_tilde(path)
-            );
+            let secs = secs(*frames as f64, *rate);
+            let first = paths.first().map(|p| home_as_tilde(p)).unwrap_or_default();
+            let done = match paths.len() {
+                0 | 1 => format!("recorded {secs:.2} s to {first}"),
+                n => format!("recorded {secs:.2} s to {first} in {n} parts"),
+            };
             match dropped {
                 0 => done,
                 n => format!("{done}; {n} blocks lost, the disk was too slow"),

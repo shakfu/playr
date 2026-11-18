@@ -442,8 +442,9 @@ fn silent_like(shape: Option<&Loop>) -> Result<Loop, Error> {
 /// A recording of the mix that has finished.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recording {
-    pub path: PathBuf,
-    /// Stereo frames written.
+    /// The files written, in order; more than one past [`PART_BYTES`].
+    pub paths: Vec<PathBuf>,
+    /// Stereo frames written, over all the files.
     pub frames: u64,
     /// Blocks lost because the writer fell behind.
     pub dropped: u64,
@@ -451,12 +452,14 @@ pub struct Recording {
 
 /// The writer thread, which returns the ring's consumer when it finishes.
 struct Recorder {
-    path: PathBuf,
     /// The `record_acks` count the callback reaches once it has stopped
     /// recording; `u64::MAX` until a stop is asked for.
     stop_at: Arc<AtomicU64>,
-    thread: JoinHandle<(Consumer<f32>, Result<u64, hound::Error>)>,
+    thread: JoinHandle<(Consumer<f32>, Result<Written, Error>)>,
 }
+
+/// The files a recording wrote, and its stereo frames.
+type Written = (Vec<PathBuf>, u64);
 
 /// Controls a [`Looper`] from outside the audio thread.
 pub struct Handle {
@@ -612,13 +615,7 @@ impl Handle {
         if let Ok(chunk) = ring.read_chunk(ring.slots()) {
             chunk.commit_all();
         }
-        let spec = hound::WavSpec {
-            channels: 2,
-            sample_rate: self.sample_rate,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        };
-        let wav = match hound::WavWriter::create(path, spec) {
+        let wav = match Parts::create(path, self.sample_rate, PART_BYTES / 4) {
             Ok(w) => w,
             Err(e) => {
                 self.record = Some(ring);
@@ -633,13 +630,16 @@ impl Handle {
         let stop_at = Arc::new(AtomicU64::new(u64::MAX));
         let thread = {
             let (stop_at, status) = (stop_at.clone(), self.status.clone());
-            std::thread::spawn(move || write(ring, wav, &stop_at, &status))
+            std::thread::spawn(move || {
+                let mut ring = ring;
+                // Caught, so the ring comes back and the tape can record again.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    write(&mut ring, wav, &stop_at, &status)
+                }));
+                (ring, result.unwrap_or(Err(Error::Writer)))
+            })
         };
-        self.recorder = Some(Recorder {
-            path: path.to_owned(),
-            stop_at,
-            thread,
-        });
+        self.recorder = Some(Recorder { stop_at, thread });
         Ok(())
     }
 
@@ -662,11 +662,12 @@ impl Handle {
 
     fn finish(&mut self, r: Recorder) -> Result<Recording, Error> {
         r.stop_at.store(self.record_sent, Ordering::Release);
-        let (ring, frames) = r.thread.join().map_err(|_| Error::Writer)?;
+        let (ring, written) = r.thread.join().map_err(|_| Error::Writer)?;
         self.record = Some(ring);
+        let (paths, frames) = written?;
         Ok(Recording {
-            path: r.path,
-            frames: frames.map_err(Error::Wav)?,
+            paths,
+            frames,
             dropped: self.status.dropped(),
         })
     }
@@ -687,11 +688,11 @@ impl Drop for Handle {
 /// keeps it draining, so the callback does not count drops, and is returned
 /// at the end.
 fn write(
-    mut ring: Consumer<f32>,
-    mut wav: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    ring: &mut Consumer<f32>,
+    mut wav: Parts,
     stop_at: &AtomicU64,
     status: &Status,
-) -> (Consumer<f32>, Result<u64, hound::Error>) {
+) -> Result<Written, Error> {
     let mut samples = 0u64;
     let mut err = None;
     let mut stopping: Option<Instant> = None;
@@ -708,7 +709,7 @@ fn write(
         if let Ok(chunk) = ring.read_chunk(n) {
             for s in chunk {
                 if err.is_none() {
-                    match wav.write_sample(s) {
+                    match wav.push(s) {
                         Ok(()) => samples += 1,
                         Err(e) => err = Some(e),
                     }
@@ -720,9 +721,95 @@ fn write(
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let result = match err {
-        Some(e) => Err(e),
-        None => wav.finalize().map(|()| samples / 2),
+    match err {
+        Some(e) => Err(Error::Wav(e)),
+        None => Ok((wav.finish().map_err(Error::Wav)?, samples / 2)),
+    }
+}
+
+/// Sample bytes in one file: a WAV's sizes are u32, so a recording past
+/// this goes on in `<stem>-part2.wav` and so on. 4 GiB less 1 MiB, room for
+/// the header, and a whole number of stereo frames.
+pub const PART_BYTES: u64 = 0xFFF0_0000;
+
+type Wav = hound::WavWriter<std::io::BufWriter<std::fs::File>>;
+
+/// A 32-bit float stereo WAV that goes on in a new file every `part` samples.
+struct Parts {
+    wav: Wav,
+    paths: Vec<PathBuf>,
+    rate: u32,
+    part: u64,
+    written: u64,
+}
+
+impl Parts {
+    fn create(path: &Path, rate: u32, part: u64) -> Result<Parts, hound::Error> {
+        Ok(Parts {
+            wav: wav(path, rate)?,
+            paths: vec![path.to_owned()],
+            rate,
+            part,
+            written: 0,
+        })
+    }
+
+    fn push(&mut self, s: f32) -> Result<(), hound::Error> {
+        if self.written == self.part {
+            let stem = self.paths[0]
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let next =
+                self.paths[0].with_file_name(format!("{stem}-part{}.wav", self.paths.len() + 1));
+            let done = std::mem::replace(&mut self.wav, wav(&next, self.rate)?);
+            self.paths.push(next);
+            self.written = 0;
+            done.finalize()?;
+        }
+        self.wav.write_sample(s)?;
+        self.written += 1;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Vec<PathBuf>, hound::Error> {
+        self.wav.finalize()?;
+        Ok(self.paths)
+    }
+}
+
+fn wav(path: &Path, rate: u32) -> Result<Wav, hound::Error> {
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
     };
-    (ring, result)
+    hound::WavWriter::create(path, spec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recording_past_a_part_goes_on_in_the_next_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mix.wav");
+        let mut parts = Parts::create(&path, 8000, 6).unwrap();
+        for i in 0..14 {
+            parts.push(i as f32).unwrap();
+        }
+        let paths = parts.finish().unwrap();
+        assert_eq!(
+            paths,
+            ["mix.wav", "mix-part2.wav", "mix-part3.wav"].map(|n| dir.path().join(n))
+        );
+        let all: Vec<f32> = paths
+            .iter()
+            .flat_map(|p| hound::WavReader::open(p).unwrap().into_samples::<f32>())
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(all, (0..14).map(|i| i as f32).collect::<Vec<_>>());
+    }
 }

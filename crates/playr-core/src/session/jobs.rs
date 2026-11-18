@@ -520,11 +520,18 @@ impl Session {
     }
 
     /// The master's recording, once its file is written: after a stop, or
-    /// when the output closed under it. A file written is added to the library.
+    /// when the output closed under it. The files written are added to the library.
     pub fn master_done(&mut self) -> Option<Result<crate::audio::record::Recorded, String>> {
-        let done = self.master.as_ref()?.finished()?;
+        let master = self.master.as_ref()?;
+        let done = master.finished()?;
+        if done.is_err() {
+            master.stop();
+        }
         self.master = None;
-        Some(done.and_then(|r| self.add_to_library(&r.path).map(|()| r)))
+        Some(done.and_then(|r| {
+            r.paths.iter().try_for_each(|p| self.add_to_library(p))?;
+            Ok(r)
+        }))
     }
 
     /// Adds the audio file at `path` to the library, as a scan would, without

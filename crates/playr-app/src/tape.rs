@@ -292,7 +292,8 @@ pub enum TapeMessage {
     Saved(PathBuf),
     Recording(PathBuf),
     Recorded {
-        path: PathBuf,
+        /// The files written; more than one past `playr_looper::PART_BYTES`.
+        paths: Vec<PathBuf>,
         frames: u64,
         rate: u32,
         dropped: u64,
@@ -573,8 +574,8 @@ impl TapeState {
 /// What [`Deck::poll`] found.
 enum Found {
     Note(TapeMessage),
-    /// A file written, to add to the library.
-    Wrote(TapeMessage, PathBuf),
+    /// Files written, to add to the library.
+    Wrote(TapeMessage, Vec<PathBuf>),
     /// A loop written, to add to the loop library, with the beats it holds.
     WroteLoop(TapeMessage, PathBuf, Option<u32>),
 }
@@ -1475,12 +1476,12 @@ fn stop_recording(live: &mut Live) -> Option<Found> {
     Some(match live.handle.stop_recording() {
         Ok(r) => Found::Wrote(
             TapeMessage::Recorded {
-                path: r.path.clone(),
+                paths: r.paths.clone(),
                 frames: r.frames,
                 rate: live.extent.rate,
                 dropped: r.dropped,
             },
-            r.path,
+            r.paths,
         ),
         Err(e) => Found::Note(TapeMessage::Failed(e.to_string())),
     })

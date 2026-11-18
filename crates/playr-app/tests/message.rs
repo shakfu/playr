@@ -624,7 +624,7 @@ fn tape_messages_are_worded() {
         ),
         (
             T::Recorded {
-                path: file.clone(),
+                paths: vec![file.clone()],
                 frames: 88_200,
                 rate: 44_100,
                 dropped: 0,
@@ -633,7 +633,16 @@ fn tape_messages_are_worded() {
         ),
         (
             T::Recorded {
-                path: file,
+                paths: vec![file.clone(), file.with_file_name("song-tape-mix-part2.wav")],
+                frames: 88_200,
+                rate: 44_100,
+                dropped: 0,
+            },
+            "recorded 2.00 s to ~/samples/song-tape/song-tape-mix.wav in 2 parts".into(),
+        ),
+        (
+            T::Recorded {
+                paths: vec![file],
                 frames: 88_200,
                 rate: 44_100,
                 dropped: 3,
@@ -773,7 +782,7 @@ fn mix_messages_are_worded() {
         "finishing the master's recording"
     );
     let mut done = playr_core::audio::record::Recorded {
-        path,
+        paths: vec![path.clone()],
         frames: 66_150,
         rate: 44_100,
         dropped: 0,
@@ -784,8 +793,14 @@ fn mix_messages_are_worded() {
     );
     done.dropped = 3;
     assert_eq!(
-        text(&Message::MasterRecorded(done)),
+        text(&Message::MasterRecorded(done.clone())),
         "recorded the master: 1.50 s to ~/samples/master/master.wav; 3 blocks lost, the disk was too slow"
+    );
+    done.dropped = 0;
+    done.paths.push(path.with_file_name("master-part2.wav"));
+    assert_eq!(
+        text(&Message::MasterRecorded(done)),
+        "recorded the master: 1.50 s to ~/samples/master/master.wav in 2 parts"
     );
     assert_eq!(
         text(&Message::MasterFailed("no room".into())),

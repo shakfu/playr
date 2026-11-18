@@ -14,10 +14,6 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ## Critical
 
-### Recording
-
-- [ ] **WAV recording past 4 GiB.** `audio/record.rs` writes through hound, whose RIFF sizes are u32. 32-bit stereo passes 4 GiB after 3h06m at 48 kHz, 46 min at 192 kHz. Release writes a wrapped header; debug panics in the writer thread, so `alive` never drops and `finished()` never returns. Stop or roll over before 4 GiB, or write RF64; lower `alive` from a drop guard. Also in `record.rs`: the writer reads `slots() == 0` before `is_abandoned()`, so frames pushed between the two are lost; after a writer error the bus keeps its record producer, and a later Record frees the old one on the audio thread. From the 0.18.0 review.
-
 ## High
 
 ### Desktop window

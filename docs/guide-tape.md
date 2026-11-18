@@ -239,7 +239,7 @@ Press Bounce again to stop early. `:tape bounce`, `:tape bounce long` and `:tape
 
 - **Save loop** writes the write loop as it now is, only the range, without the rolls: `samples/<track>-tape/<track>-tape-loop.wav`, named after voice 4's loop, or voice 1's when Write made it.
 
-- **Record** starts recording what you hear; pressing it again stops and writes `-mix.wav` beside it. If the disk falls behind, dropped blocks are counted and reported.
+- **Record** starts recording what you hear; pressing it again stops and writes `-mix.wav` beside it, going on in `-mix-part2.wav` past 4 GiB. If the disk falls behind, dropped blocks are counted and reported.
 
 Both are 32-bit float WAV, in a new directory each time. The loop is added to the loop library, with the beats of the loop it came from; the recording is added to the library. A saved loop can be loaded, sliced or looped again.
 

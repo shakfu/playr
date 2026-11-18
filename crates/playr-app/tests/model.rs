@@ -3858,7 +3858,7 @@ fn the_master_is_recorded_into_the_library_and_metered() {
     let Some(Message::MasterRecorded(done)) = m.message() else {
         unreachable!("waited for it")
     };
-    assert!(done.frames > 0 && done.path == path);
+    assert!(done.frames > 0 && done.paths == [path.clone()]);
     let canonical = path.canonicalize().unwrap();
     assert!(
         m.session()

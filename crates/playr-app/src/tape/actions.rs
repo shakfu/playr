@@ -22,7 +22,10 @@ pub fn poll(f: &mut impl Frontend) {
 fn report(f: &mut impl Frontend, found: Found) {
     match found {
         Found::Note(m) => f.notify(m.into()),
-        Found::Wrote(m, path) => match f.session_mut().add_to_library(&path) {
+        Found::Wrote(m, paths) => match paths
+            .iter()
+            .try_for_each(|p| f.session_mut().add_to_library(p))
+        {
             Ok(()) => f.notify(m.into()),
             Err(e) => f.notify(TapeMessage::Failed(e).into()),
         },
@@ -466,6 +469,13 @@ fn end_long(f: &mut impl Frontend) {
     };
     let rate = live.handle.sample_rate();
     let src = match live.handle.stop_recording() {
+        // Voice 4 loads one file.
+        Ok(r) if r.paths.len() > 1 => {
+            r.paths.iter().for_each(|p| _ = std::fs::remove_file(p));
+            return f.notify(
+                TapeMessage::Failed("the bounce passed 4 GiB, too long for a loop".into()).into(),
+            );
+        }
         Ok(r) if r.frames > 0 => Source {
             name: live.name.clone(),
             path: path.clone(),

@@ -45,6 +45,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ### Fixed
 
+- A master or tape recording past 4 GiB, 3h06m at 48 kHz, goes on in `master-part2.wav` or `<tape>-mix-part2.wav` and so on, each a whole WAV, with no frame lost between them. A WAV's sizes are u32: a release build wrote a wrapped header, and a debug build panicked in the writer, so the recording never finished. Parts over RF64, which Symphonia 0.6 cannot read, so playr could not play or add its own recording. A bounce until stopped that long is refused, as voice 4 loads one file. Also, for the master: the last frames pushed before a stop could be left unwritten, and after a writer error the buffer was freed on the audio thread. For the tape, a writer panic no longer leaves it unable to record again. Library API: `Recorded::paths` replaces `Recorded::path`, `Recording::paths` replaces `Recording::path`, and `TapeMessage::Recorded::paths` replaces its `path`; `record::PART_BYTES`, `playr_looper::PART_BYTES`.
+
 - Four tests failed on the Windows runner. Two in `tests/cli.rs` expected the settings path as `playr/settings.toml`, but playr prints it with Windows' `\`. Two in `dedupe.rs` used library paths like `/x/a.flac`, which have no drive and so are relative on Windows; they now get `C:` there, as in `paths.rs`.
 
 ## [0.20.0]

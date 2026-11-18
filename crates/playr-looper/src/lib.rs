@@ -16,7 +16,7 @@ mod tape;
 
 use std::path::Path;
 
-pub use looper::{new, Cmd, Handle, Looper, Recording, Returned, Status};
+pub use looper::{new, Cmd, Handle, Looper, Recording, Returned, Status, PART_BYTES};
 pub use playr_dsp::fx::{
     BusSetting, DelayModel, DelayParam, ReverbModel, ReverbParam, DECAY_SECONDS, DELAY_DEFAULTS,
     DELAY_MIN, DELAY_SECONDS, FEEDBACK_MAX, REVERB_DEFAULTS, TONE_HZ,

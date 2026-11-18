@@ -743,10 +743,10 @@ fn the_tape_loads_the_range_and_saves_the_loop_and_the_mix_to_the_library() {
     // Recording stops on its own when the callback does not acknowledge it;
     // the manual tape here never does.
     tape(&mut f, T::Record);
-    let Some(Message::Tape(M::Recorded { path, frames, .. })) = last(&f).cloned() else {
+    let Some(Message::Tape(M::Recorded { paths, frames, .. })) = last(&f).cloned() else {
         panic!("{:?}", last(&f));
     };
-    assert_eq!(path, mix);
+    assert_eq!(paths, std::slice::from_ref(&mix));
 
     let wav = |p: &std::path::Path| {
         let r = hound::WavReader::open(p).unwrap();
