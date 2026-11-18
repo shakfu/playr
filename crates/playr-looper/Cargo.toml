@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "A three-voice tape looper that rewrites its own loop, for playr"
 keywords = ["audio", "looper", "tape", "sampler"]
 categories = ["multimedia::audio"]

@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "playr without a screen, controlled from a web page and OSC"
 keywords = ["music", "audio", "player", "osc"]
 categories = ["multimedia::audio"]

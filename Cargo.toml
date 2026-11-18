@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/playr-core", "crates/playr-app", "crates/playr-gui", "crates/playr-server", "crates/playr-looper", "crates/playr-dj", "crates/playr-dsp"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.20.0"
@@ -8,7 +9,6 @@ edition = "2021"
 rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/shakfu/playr"
-homepage = "https://github.com/shakfu/playr"
 
 # Versions shared by more than one crate, so the crates cannot drift apart.
 [workspace.dependencies]
@@ -38,12 +38,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "A local terminal music player with a sampler, a tape looper and two DJ decks; contacts no service or cloud"
 readme = "README.md"
 keywords = ["music", "player", "tui", "audio", "flac"]
 categories = ["multimedia::audio", "command-line-utilities"]
-exclude = ["docs/dev/"]
+exclude = ["docs/dev/", "vendor/"]
 
 [features]
 default = ["opus"]
@@ -127,3 +126,7 @@ opt-level = 3
 [profile.dist]
 inherits = "release"
 lto = true
+
+# souvlaki's block 0.1.6, fixed for a future-incompat lint; see vendor/block.
+[patch.crates-io]
+block = { path = "vendor/block" }

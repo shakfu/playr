@@ -1,0 +1,10 @@
+# block 0.1.6 from crates.io, with `Class` made an empty struct so rustc's
+# future-incompat lint (rust-lang/rust#74840) passes. Only souvlaki uses it;
+# drop this once souvlaki moves to block2.
+[package]
+name = "block"
+version = "0.1.6"
+authors = ["Steven Sheldon"]
+description = "Rust interface for Apple's C language extension of blocks."
+repository = "http://github.com/SSheldon/rust-block"
+license = "MIT"

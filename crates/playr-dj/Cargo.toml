@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "Two beat-matched decks and a mixer with a split headphone cue, for playr"
 keywords = ["audio", "dj", "beatmatching", "mixer"]
 categories = ["multimedia::audio"]

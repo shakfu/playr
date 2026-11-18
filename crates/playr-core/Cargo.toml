@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "playr's audio engine, library, scanner and sample export, with no interface"
 keywords = ["music", "audio", "player", "flac"]
 categories = ["multimedia::audio"]
