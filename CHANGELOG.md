@@ -4,6 +4,10 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Changed
+
+- The release workflow no longer publishes to crates.io. Crates are published by hand, so the job had no token and failed on the 0.21.0 tag.
+
 ## [0.21.0]
 
 ### Added
