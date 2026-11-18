@@ -41,6 +41,10 @@ fn braille_draws_each_dot_column_between_its_extremes() {
     let rows = braille_rows(&[(-1.0, 1.0), (1.0, 1.0)], 1);
     // Left column all dots (1,2,3,7), right column top dot (4).
     assert_eq!(rows, ["\u{284f}"]);
+    assert!(
+        braille_rows(&[(-1.0, 1.0)], 0).is_empty(),
+        "no rows to draw"
+    );
 
     // Two rows, eight dot rows, with no row exactly at 0. A quiet column from
     // -0.1 to 0.1 spans the two middle dot rows: the bottom dot of the top cell

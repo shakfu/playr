@@ -292,7 +292,7 @@ impl Engine {
     /// Returns the decoder to `l`'s start, and marks the output frame where
     /// the device reaches it, so the position jumps back as it is heard.
     pub(super) fn wrap(&mut self, l: Loop) {
-        let (Some(stream), Some(conv), Some(out)) =
+        let (Some(stream), Some(conv), Some(_)) =
             (self.stream.as_mut(), self.conv.as_ref(), self.out.as_ref())
         else {
             return;
@@ -305,7 +305,7 @@ impl Engine {
         }
         self.decoded = l.start;
         let duration = stream.duration();
-        let heard = self.written + (self.carry.len() / out.plan.channels.max(1) as usize) as u64;
+        let heard = self.heard();
         let output_rate = self.shared.position_rate.load(Ordering::Relaxed) as f64;
         let offset = (at.as_secs_f64() * output_rate) as u64;
         self.push_mark(heard, l.index, duration, offset);
@@ -319,15 +319,20 @@ impl Engine {
     /// start, so playing on afterwards continues the track from there.
     pub(super) fn halt(&mut self, l: Loop) {
         self.looping = None;
-        let (Some(stream), Some(conv), Some(out)) =
-            (self.stream.as_mut(), self.conv.as_ref(), self.out.as_ref())
-        else {
+        let (Some(_), Some(conv), Some(out)) = (&self.stream, &self.conv, &self.out) else {
             return;
         };
-        let rate = conv.src().rate.max(1);
-        let at = Duration::from_secs_f64(l.end as f64 / rate as f64);
-        let heard = self.written + (self.carry.len() / out.plan.channels.max(1) as usize) as u64;
+        let (src, plan, speed) = (conv.src(), out.plan, self.speed());
+        // Nothing past the range is fed, so what the resampler holds of the
+        // range's end would never come out: it comes out now, before the pause.
+        self.finish_track();
+        self.conv = Some(Converter::new(src, plan, speed));
+        let at = Duration::from_secs_f64(l.end as f64 / src.rate.max(1) as f64);
+        let heard = self.heard();
         self.pause_at = Some(heard);
+        let Some(stream) = self.stream.as_mut() else {
+            return;
+        };
         if stream.seek(at).is_err() {
             return;
         }

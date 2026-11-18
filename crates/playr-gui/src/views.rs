@@ -105,7 +105,7 @@ pub fn tracks(model: &Model, ui: &mut egui::Ui, view: View, scroll: Option<usize
     ui.style_mut().interaction.selectable_labels = false;
     let shown = model.columns().to_vec();
     let sort = model.session().sort().to_vec();
-    let measures = model.measures_map().clone();
+    let measures = model.measures_map();
     let mut table = TableBuilder::new(ui)
         .id_salt(view.title())
         .striped(true)

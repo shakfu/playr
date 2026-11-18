@@ -519,7 +519,11 @@ pub fn run(
                 if i >= todo.len() || stop.load(Ordering::Relaxed) {
                     return;
                 }
-                let a = analyse(Path::new(&todo[i].path));
+                // Caught per file, so one bad file neither ends the run before
+                // the albums are worked out nor stays pending to panic again.
+                let path = Path::new(&todo[i].path);
+                let a = std::panic::catch_unwind(|| analyse(path))
+                    .unwrap_or_else(|_| Analysis::failed("the analysis panicked".into()));
                 if tx.send((i, a)).is_err() {
                     return;
                 }

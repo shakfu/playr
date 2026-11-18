@@ -78,6 +78,9 @@ pub fn envelope_rows(columns: &[(f32, f32)], height: usize) -> Vec<Vec<Cell>> {
 /// Rows, top first, drawing `extents`, (min, max) pairs from -1 to 1, as dot
 /// columns two to a cell around the centre of `height` rows.
 pub fn braille_rows(extents: &[(f32, f32)], height: usize) -> Vec<String> {
+    if height == 0 {
+        return Vec::new();
+    }
     let dots = 4 * height;
     // Dot row 0 is the top; +1 maps to the top row and -1 to the bottom.
     let row_of = |v: f32| ((1.0 - v.clamp(-1.0, 1.0)) / 2.0 * (dots - 1) as f32).round() as usize;

@@ -412,7 +412,9 @@ impl Session {
     pub fn snap_mark(&mut self, from: u64, sensitivity: f32) -> Result<JobId, Refusal> {
         let (track, rate) = self.playing_track()?;
         Ok(self.spawn(move |job| {
-            let result = crate::samples::nearest_onset(&track, rate, from, sensitivity);
+            let result = caught("onset search", || {
+                crate::samples::nearest_onset(&track, rate, from, sensitivity)
+            });
             Some(Event::Snapped {
                 job,
                 track,

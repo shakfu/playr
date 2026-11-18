@@ -34,7 +34,7 @@ impl Session {
             let held = stamp.and_then(|s| cache.lock().ok()?.get(&track, s));
             let result = match held {
                 Some(peaks) => Ok(peaks),
-                None => match Peaks::read(&track, &cancel) {
+                None => match caught("peaks read", || Peaks::read(&track, &cancel)) {
                     Ok(Some(peaks)) => {
                         let peaks = Arc::new(peaks);
                         if let (Some(s), Ok(mut c)) = (stamp, cache.lock()) {
@@ -87,7 +87,10 @@ impl Session {
     /// for a view too close for its peaks. Finishes with [`Event::Detail`].
     pub fn read_detail(&mut self, track: PathBuf, rate: u32, start: u64, end: u64) -> JobId {
         self.spawn(move |job| {
-            let result = crate::wave::Detail::read(&track, rate, start, end).map(Arc::new);
+            let result = caught("waveform read", || {
+                crate::wave::Detail::read(&track, rate, start, end)
+            })
+            .map(Arc::new);
             Some(Event::Detail { job, track, result })
         })
     }
@@ -122,10 +125,11 @@ impl Session {
     pub(super) fn plan_job(&mut self, job: Job) -> JobId {
         let audio = self.onset_audio.clone();
         self.spawn(move |id| {
-            let result = samples::plan_with(&job, &audio).map(|spans| Plan {
-                job: job.clone(),
-                spans,
-            });
+            let result =
+                caught("slice plan", || samples::plan_with(&job, &audio)).map(|spans| Plan {
+                    job: job.clone(),
+                    spans,
+                });
             Some(Event::Planned {
                 job: id,
                 track: job.path,
@@ -139,7 +143,7 @@ impl Session {
         self.spawn(move |job| {
             Some(Event::Exported {
                 job,
-                result: samples::write(&plan.job, &plan.spans),
+                result: caught("export", || samples::write(&plan.job, &plan.spans)),
             })
         })
     }
@@ -151,7 +155,7 @@ impl Session {
         Ok(self.spawn(move |job| {
             Some(Event::Exported {
                 job,
-                result: samples::export(&work),
+                result: caught("export", || samples::export(&work)),
             })
         }))
     }
@@ -173,8 +177,9 @@ impl Session {
             return Err(Refusal::NoKit(dir));
         }
         Ok(self.spawn(move |job| {
-            let result =
-                crate::convertwithmoss::convert(&program, &samples::kit_path(&dir), &format);
+            let result = caught("conversion", || {
+                crate::convertwithmoss::convert(&program, &samples::kit_path(&dir), &format)
+            });
             Some(Event::Converted { job, result })
         }))
     }
@@ -645,15 +650,19 @@ impl Session {
     pub fn open(&mut self, paths: Vec<PathBuf>) -> JobId {
         let library = self.library.clone().filter(|_| self.has_library_file());
         self.spawn(move |job| {
-            let conn = library.and_then(|p| db::open(&p).ok());
-            let known = |key: &str| {
-                conn.as_ref()
-                    .and_then(|c| query::by_path(c, key).ok().flatten())
-            };
-            Some(Event::Opened {
-                job,
-                playable: scan::playable(&paths, known),
-            })
+            let opened = caught("open", || {
+                let conn = library.and_then(|p| db::open(&p).ok());
+                let known = |key: &str| {
+                    conn.as_ref()
+                        .and_then(|c| query::by_path(c, key).ok().flatten())
+                };
+                Ok(scan::playable(&paths, known))
+            });
+            let playable = opened.unwrap_or_else(|e| scan::Playable {
+                tracks: Vec::new(),
+                problems: vec![e],
+            });
+            Some(Event::Opened { job, playable })
         })
     }
 

@@ -235,3 +235,31 @@ fn normal_speed_is_unchanged() {
     );
     assert_clean_tone(&out[5_000 * 2..35_000 * 2], 44100, 2, 440.0);
 }
+
+/// What the resampler holds is what a flush still emits: every frame pushed
+/// comes out as `ratio` frames in all.
+#[test]
+fn held_counts_the_output_still_to_come() {
+    for (from, to, speed) in [
+        (44_100, 48_000, 1.0),
+        (48_000, 48_000, 0.5),
+        (48_000, 44_100, 2.0),
+    ] {
+        let mut r = Resample::new(from, to, 2, speed).unwrap();
+        let mut out = Vec::new();
+        let input = sine(from, 440.0, 5_000);
+        for chunk in input.chunks(2 * 700) {
+            r.push(chunk, &mut out);
+        }
+        let want = (5_000.0 * to as f64 / (from as f64 * speed)).round() as u64;
+        assert!(r.held() > 0, "{from} to {to} at {speed}x");
+        assert_eq!(
+            (out.len() / 2) as u64 + r.held(),
+            want,
+            "{from} to {to} at {speed}x"
+        );
+        r.flush(&mut out);
+        assert_eq!((out.len() / 2) as u64, want);
+        assert_eq!(r.held(), 0);
+    }
+}

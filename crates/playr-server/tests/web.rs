@@ -63,6 +63,7 @@ fn the_page_may_do_what_the_window_does_but_the_sampler_and_paths() {
         Rescan,
         ShowRoots,
         Prune(None),
+        Mix(playr_app::mix::MixAction::Show),
     ] {
         assert!(allowed(&action), "{action:?}");
     }
@@ -76,6 +77,7 @@ fn the_page_may_do_what_the_window_does_but_the_sampler_and_paths() {
         Slice(playr_app::action::Slicing::Marks),
         WriteSlices,
         Loop(None),
+        Mix(playr_app::mix::MixAction::Record),
     ] {
         assert!(!allowed(&action), "{action:?}");
     }

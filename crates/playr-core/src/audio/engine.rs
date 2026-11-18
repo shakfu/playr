@@ -1345,7 +1345,7 @@ impl Engine {
                 self.finish_track();
                 self.conv = Some(Converter::new(spec, plan, speed));
             }
-            self.push_mark(self.written, next, duration, 0);
+            self.push_mark(self.heard(), next, duration, 0);
             self.stream = Some(stream);
             self.crossfaded_in = false;
             self.decoded = (first.len() / spec.channels.max(1) as usize) as u64;
@@ -1532,6 +1532,17 @@ impl Engine {
     fn publish_marks(&self) {
         self.pending
             .set(self.marks.iter().skip(1).map(|&(at, _, _, off)| (at, off)));
+    }
+
+    /// The output frame the device reaches once it has played everything
+    /// decoded so far: pushed, carried, and still in the resampler.
+    fn heard(&self) -> u64 {
+        let channels = self
+            .out
+            .as_ref()
+            .map_or(1, |o| o.plan.channels.max(1) as usize);
+        let held = self.conv.as_ref().map_or(0, Converter::held);
+        self.written + (self.carry.len() / channels) as u64 + held
     }
 
     /// Adds a mark the device reaches at output frame `at`.

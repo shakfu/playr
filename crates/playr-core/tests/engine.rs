@@ -900,6 +900,39 @@ fn a_one_shot_range_plays_through_once_and_pauses_at_its_end() {
     );
 }
 
+/// Under varispeed the resampler holds up to a chunk of the range's end,
+/// which the pause used to cut off.
+#[test]
+fn a_resampled_one_shot_range_is_heard_to_its_end_before_the_pause() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("count.wav");
+    counting(&file, 24_000);
+    let (player, control) = fake_player();
+    player.send(Cmd::CentsBy(-1200));
+    player.send(Cmd::Play(vec![file], 0));
+    wait_for(&player, |s| s.state == State::Playing && s.resampling);
+
+    player.send(Cmd::PlayOnce(8_000, 12_000, (0, 0)));
+    wait_for(&player, |s| s.state == State::Paused);
+    let seen = heard(&control, 0);
+    let entered = seen
+        .iter()
+        .rposition(|&v| (8_000..8_010).contains(&v))
+        .expect("never entered the range");
+    // At 0.5x the 4,000 frames of the range are 8,000 heard; the filter rings
+    // at its cut ends, so the peak is no measure of where it stopped.
+    let run = &seen[entered..];
+    assert!(
+        run.iter().any(|&v| v >= 11_990),
+        "never reached the range's end"
+    );
+    assert!(
+        (7_900..=8_100).contains(&run.len()),
+        "{} frames of the range heard, not 8,000",
+        run.len()
+    );
+}
+
 #[test]
 fn resume_plays_from_any_state_and_never_pauses() {
     let (player, _control) = fake_player();

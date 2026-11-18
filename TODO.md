@@ -30,19 +30,11 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Playback
 
-- [ ] **Resampler latency missing from output marks.** `halt`, `wrap` and `stage_from` count `written + carry`, not the frames `Resample` still holds: up to 1252 output frames (26 ms) at 44.1 to 48 kHz, 2302 (48 ms) at 0.5x (measured). Under varispeed or on a resampled device a one-shot's tail lands after `pause_at`, so the fade-out is cut and the pause clicks; loop wraps and gapless changes are reported early by the same amount. Expose the held latency from `Resample` and add it to the mark. Test with a fake backend that offers only 48 kHz. From the 0.18.0 review.
-
-- [ ] **ReplayGain peak of 0 or NaN removes the cap.** `gain.rs:85` caps at `f32::INFINITY` for a tagged peak that is not positive, so `+40 dB` with peak `0` or `nan` plays 100x and hard-clips. Off by default. Treat such a peak as unknown (cap 1.0) and clamp the gain. From the 0.18.0 review.
-
 ### Sampler
 
 - [ ] **Which samplers read the `smpl` loop.** A range cut whole while it loops carries its loop in a `smpl` chunk since 2026-10-04, in frames, like the cue points. No device or sampler has read one yet; "Which devices read `smpl` loops" in `docs/dev/hardware_samplers.md` stays open. `docs/dev/device_tests.md` has the test, M8; run it.
 
 ### Library
-
-- [ ] **Library cursor kept by index across reloads.** `Event::Scanned`, `Event::Pruned`, analysis re-sorts and `Confirm::ForgetRoot` replace the track list, but `cursors.library` is neither re-anchored nor clamped. After a rescan adds an album that sorts earlier, Enter plays, or the DJ view loads, a different track. Anchor by path after every reload, as `SetSort` does, then clamp. From the 0.18.0 review.
-
-- [ ] **Analysis panics are not contained.** `analysis::run`'s scoped workers have no `catch_unwind`, so one panicking file fails the run before `update_albums`, stays pending, and panics again on every later `:analyze`; album loudness stops updating. Catch per file and store `Analysis::failed`. `Session::spawn` (`session/jobs.rs`) also has no catch, so a panic in plan, write, export, convert, `sql` or open sends no event and leaves the frontend pending. Whether Symphonia panics on malformed input is inference. From the 0.18.0 review.
 
 - [ ] **Group by album or artist.** `columns` and `sort` order the library by any column, and `added`, `played` and `plays` by history, but there is no grouping. It needs a new view in three frontends, and `Frontend` assumes one cursor row per view. `:filter album|artist` is the first step: it searches for the row's album or artist. A buyer of music thinks in releases (decision 2), which argues for grouping (inference about users).
 
@@ -56,17 +48,13 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 
 ### Interface
 
-- [ ] **Terminal sampler panics on short terminals.** `render.rs:298` sets `rows` to `inner.height - 2`, which is 0 for an inner height of 1 or 2, and `braille_rows` then underflows `dots - 1`; the guard at `:294` catches only 0. Braille is the default display, so a 3-5 row tmux split panics while a track plays. No render test is below 30 columns. Return early on `rows == 0` or `width == 0`, and add a size-sweep test. From the 0.18.0 review.
-
-- [ ] **The window clones the measures map each frame.** `views.rs:108`: `model.measures_map().clone()`, one entry per analysed track, on every frame of Library, Selection or Queue: 12.6 ms at 50k entries against a 33 ms frame (measured). `dj.rs` already borrows. Also the spectrogram image is rebuilt and uploaded each frame, about 1.3 MB at 800x400 (inference); cache it. From the 0.18.0 review.
+- [ ] **The window rebuilds the spectrogram each frame.** `sampler.rs`'s `spectrogram` refills and uploads its texture on every frame, about 1.3 MB at 800x400 (inference). Cache it, keyed on the view's span, the region and the theme; the view scrolls with playback, so measure the gain first. From the 0.18.0 review.
 
 - [ ] **Window controls unreachable by Tab.** Tab is bound to `view next` and the window cancels egui's focus step, so the Forget buttons, the Columns checkboxes and modal buttons are mouse-only. Options: Tab moves focus while a window or modal is open, or Ctrl+Tab cycles views in the window only, which breaks key parity with the terminal. The routing of keys by input state is also duplicated in `src/ui/mod.rs` and `playr-gui/src/lib.rs`; one `Model` method would serve both. From the 0.18.0 review.
 
 - [ ] **System fonts on Windows.** The window draws other scripts with system fonts, tested on macOS and Linux. The Windows list of files is untried there. Right-to-left text may show out of order: egui 0.36 has no bidi algorithm (inference).
 
 ### Server
-
-- [ ] **The page can start an unbounded recording.** `web.rs:99` allows `Mix(_)`, which includes `MixAction::Record`: 32-bit float WAV at 1.4 GB/h, enough to fill a Pi's SD card. Add `Mix(MixAction::Record) => false` ahead of it, with a case in the allow-list test. From the 0.18.0 review.
 
 - [ ] **OSC flood.** `playr-server/src/main.rs:158` queues requests on an unbounded `mpsc::channel()`. OSC is unauthenticated, a bundle expands to about 70 messages, and each runs a full `refresh`, so memory grows and HTTP commands time out (inference). Use a bounded `sync_channel` with `try_send`, or coalesce. Also, the 32 connection slots are taken before the Host or token check and held up to 10 s, so one LAN host can hold them all: cap per peer IP and shorten the head deadline. From the 0.18.0 review.
 

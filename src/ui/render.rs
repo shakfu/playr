@@ -291,11 +291,13 @@ fn draw_sampler(app: &Screen<'_>, f: &mut Frame, area: Rect) -> (u32, Option<sam
     let block = list_block(p, &title);
     let inner = block.inner(area);
     f.render_widget(block, area);
-    if inner.height == 0 {
-        return (zoom, scale);
-    }
     let width = inner.width as usize;
     let rows = inner.height.saturating_sub(2) as usize;
+    // The axis indexes columns from 0: a narrow pane, such as a tmux split,
+    // has none. A short one keeps the axis and detail and loses the waveform.
+    if inner.height == 0 || width == 0 {
+        return (zoom, scale);
+    }
 
     let playhead = layout.playhead();
     // Where a column is: under the playhead, in the region, or outside it.

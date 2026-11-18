@@ -28,7 +28,8 @@ pub const VIEWS: [View; 4] = [View::Library, View::Queue, View::Selection, View:
 
 /// Whether the page may perform `action`. Not quitting, which would stop the
 /// server; not a path from the page, which could name any file; not changing
-/// the keys, which the page reads once; and nothing of the sampler or tape.
+/// the keys, which the page reads once; not recording, which fills the
+/// server's disk; and nothing of the sampler or tape.
 /// `:rescan` is allowed: it only covers directories already recorded by a scan.
 ///
 /// Every variant is named, so a new action does not compile until it is
@@ -86,6 +87,8 @@ pub fn allowed(action: &Action) -> bool {
         | Interp(_) => false,
         // The page draws no message list.
         ShowMessages => false,
+        // An unbounded file on the server's disk, such as a Pi's SD card.
+        Mix(playr_app::mix::MixAction::Record) => false,
         Filter(_) | ToggleAll | Pick(_) => true,
         Help | CommandHelp | ShowView(_) | NextView | PrevView | Cursor(_) | CursorFirst
         | CursorLast | StartSearch | Search(_) | ClearSearch | StartCommand | Activate | Add

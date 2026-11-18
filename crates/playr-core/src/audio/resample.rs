@@ -114,6 +114,14 @@ impl Resample {
         self.frames_out = self.frames_out.min(want);
     }
 
+    /// Output frames still to come from the input pushed so far: the input
+    /// short of a chunk, and the filter's delay. [`Resample::flush`] emits them.
+    pub fn held(&self) -> u64 {
+        let frames_in = self.frames_in + (self.pending.len() / self.channels) as u64;
+        let want = (frames_in as f64 * self.inner.resample_ratio()).round() as u64;
+        want.saturating_sub(self.frames_out)
+    }
+
     /// Resamples one chunk into `sink`, returning the frames emitted.
     fn run(&mut self, need: usize, partial: Option<usize>, sink: &mut Vec<f32>) -> usize {
         // Split the borrow: `process_into_buffer` needs `&mut inner` alongside

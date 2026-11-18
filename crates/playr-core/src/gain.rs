@@ -19,6 +19,9 @@ pub const REFERENCE_LUFS: f32 = -18.0;
 /// decoder applies, so the tag's value stands on its own here.
 const R128_LUFS: f32 = -23.0;
 
+/// The most a gain boosts, in dB: a track at -42 LUFS reaches the reference.
+pub const MAX_BOOST_DB: f32 = 24.0;
+
 /// Which gain applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReplayGain {
@@ -77,15 +80,18 @@ impl Gain {
     }
 
     /// The factor to multiply samples by. It is capped so the peak stays at
-    /// or below full scale; with no peak known, it never boosts.
+    /// or below full scale, and at [`MAX_BOOST_DB`]; with no peak known, or
+    /// a peak of 0 or NaN, it never boosts.
     pub fn linear(self) -> f32 {
-        let factor = 10f32.powf(self.db / 20.0);
-        let cap = match self.peak {
-            Some(p) if p > 0.0 => 1.0 / p,
-            Some(_) => f32::INFINITY,
-            None => 1.0,
+        let db = match self.db.is_nan() {
+            true => 0.0,
+            false => self.db.min(MAX_BOOST_DB),
         };
-        factor.min(cap)
+        let cap = match self.peak {
+            Some(p) if p > 0.0 && p.is_finite() => 1.0 / p,
+            _ => 1.0,
+        };
+        10f32.powf(db / 20.0).min(cap)
     }
 }
 

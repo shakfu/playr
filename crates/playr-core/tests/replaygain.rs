@@ -25,6 +25,20 @@ fn a_gain_is_capped_at_its_peak() {
 }
 
 #[test]
+fn a_peak_of_zero_or_nan_counts_as_unknown_and_boosts_are_bounded() {
+    let g = |db, peak| Gain { db, peak }.linear();
+    for peak in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(g(40.0, Some(peak)), 1.0, "{peak}");
+    }
+    // A silent track's analysis: infinite gain, peak 0.
+    assert_eq!(Gain::for_loudness(f32::NEG_INFINITY, 0.0).linear(), 1.0);
+    assert_eq!(g(f32::NAN, Some(0.5)), 1.0);
+    // A real but tiny peak allows no more than the most boost.
+    let most = 10f32.powf(playr_core::gain::MAX_BOOST_DB / 20.0);
+    assert!((g(80.0, Some(1e-6)) - most).abs() < 1e-3);
+}
+
+#[test]
 fn a_gain_brings_loudness_to_minus_18() {
     let g = Gain::for_loudness(-9.0, 0.9);
     assert_eq!(g.db, -9.0);

@@ -491,7 +491,7 @@ impl Session {
             return Err(Refusal::NoLibraryFile);
         };
         Ok(self.spawn(move |job| {
-            let result = db::sql::paths(&library, &statement);
+            let result = caught("query", || db::sql::paths(&library, &statement));
             Some(Event::Sql { job, result })
         }))
     }

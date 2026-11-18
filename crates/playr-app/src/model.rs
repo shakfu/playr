@@ -176,6 +176,9 @@ pub struct Model {
     /// Search results; when set, the library view shows these instead.
     results: Option<Vec<Track>>,
     cursors: Cursors,
+    /// The tracks' revision and the path under the library cursor when last
+    /// seen, so a reload keeps the cursor on its track.
+    library_anchor: (u64, Option<String>),
 
     /// Rows for the list the player is playing from.
     playing: Vec<Track>,
@@ -323,6 +326,7 @@ impl Model {
             views: &View::TERMINAL,
             results: None,
             cursors: Cursors::default(),
+            library_anchor: (0, None),
             playing: Vec::new(),
             queue: Vec::new(),
             queue_playing: false,
@@ -416,6 +420,7 @@ impl Model {
     /// Samples the player for the next frame, and takes in what the engine and
     /// background work have sent since the last one.
     pub fn refresh(&mut self) {
+        self.anchor_library();
         if self.session.sleep_due() {
             self.notify(Message::Slept);
         }
@@ -505,14 +510,36 @@ impl Model {
         }
         self.publish_media();
         self.follow_wave(current.as_ref());
+        self.anchor_library();
     }
 
     /// Does `action`. Keys, `:` commands and controls all arrive here.
     pub fn perform(&mut self, action: Action) {
+        self.anchor_library();
         self.follow_player();
         dispatch::dispatch(action, self);
         // An action that plays changes the player's list; show its rows at once.
         self.follow_player();
+        self.anchor_library();
+    }
+
+    /// After the tracks change, as a scan, prune or analysis does, moves the
+    /// library cursor to the track it was on, or keeps it in range.
+    /// Search results are a list of their own, which a reload leaves alone.
+    fn anchor_library(&mut self) {
+        let revision = self.session.revision();
+        if revision != self.library_anchor.0 && self.results.is_none() {
+            let tracks = self.session.tracks();
+            let row = self
+                .library_anchor
+                .1
+                .as_ref()
+                .and_then(|p| tracks.iter().position(|t| t.path == *p));
+            let last = tracks.len().checked_sub(1);
+            self.cursors.library = row.or(self.cursors.library.zip(last).map(|(r, l)| r.min(l)));
+        }
+        let under = self.cursors.library.and_then(|r| self.listed().get(r));
+        self.library_anchor = (revision, under.map(|t| t.path.clone()));
     }
 
     /// Answers the open question: the action it asked about is done on yes,
@@ -522,7 +549,9 @@ impl Model {
             return;
         };
         if yes {
+            self.anchor_library();
             dispatch::confirmed(question, self);
+            self.anchor_library();
         } else {
             self.notify(Message::Cancelled);
         }

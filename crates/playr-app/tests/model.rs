@@ -820,6 +820,43 @@ fn scan_and_wait(model: &mut Model, songs: &Path) {
 }
 
 #[test]
+fn a_rescan_keeps_the_library_cursor_on_its_track() {
+    let dir = tempfile::tempdir().unwrap();
+    let songs = dir.path().join("music");
+    music(&songs);
+    let mut model = model_in(dir.path(), true);
+    scan_and_wait(&mut model, &songs);
+    model.perform(Action::Cursor(2));
+    let under = |m: &Model| {
+        let row = m.cursors().library.unwrap();
+        m.session().tracks()[row].path.clone()
+    };
+    let c = under(&model);
+    assert!(c.ends_with("c.wav"), "{c}");
+
+    // Tracks that sort before it move it down two rows.
+    let early = dir.path().join("aaa");
+    std::fs::create_dir_all(&early).unwrap();
+    for name in ["x.wav", "y.wav"] {
+        common::silence(&early.join(name), 8000, 0.05);
+    }
+    scan_and_wait(&mut model, &early);
+    assert_eq!(model.session().tracks().len(), 5);
+    assert_eq!(under(&model), c, "the cursor stayed on its row number");
+
+    // Its track and the one before it gone, the cursor stays in range.
+    for name in ["b.wav", "c.wav"] {
+        std::fs::remove_file(songs.join(name)).unwrap();
+    }
+    model.perform(Action::Scan(songs.clone()));
+    refresh_until(&mut model, |m| {
+        matches!(m, Message::Core(Notice::Done(Outcome::Pruned { .. })))
+    });
+    assert_eq!(model.session().tracks().len(), 3);
+    assert_eq!(model.cursors().library, Some(2));
+}
+
+#[test]
 fn a_scan_that_finds_missing_files_asks_to_prune() {
     let dir = tempfile::tempdir().unwrap();
     let songs = dir.path().join("music");

@@ -47,6 +47,20 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - A master or tape recording past 4 GiB, 3h06m at 48 kHz, goes on in `master-part2.wav` or `<tape>-mix-part2.wav` and so on, each a whole WAV, with no frame lost between them. A WAV's sizes are u32: a release build wrote a wrapped header, and a debug build panicked in the writer, so the recording never finished. Parts over RF64, which Symphonia 0.6 cannot read, so playr could not play or add its own recording. A bounce until stopped that long is refused, as voice 4 loads one file. Also, for the master: the last frames pushed before a stop could be left unwritten, and after a writer error the buffer was freed on the audio thread. For the tape, a writer panic no longer leaves it unable to record again. Library API: `Recorded::paths` replaces `Recorded::path`, `Recording::paths` replaces `Recording::path`, and `TapeMessage::Recorded::paths` replaces its `path`; `record::PART_BYTES`, `playr_looper::PART_BYTES`.
 
+- Under resampling or varispeed, a one-shot range was cut short by what the resampler still held, up to 1,024 source frames, so its fade-out was lost and the pause clicked; loop returns and gapless track changes were reported early by the same amount. The resampler now reports what it holds, and a one-shot flushes it before the pause.
+
+- A ReplayGain peak tag of 0 or NaN removed the clipping cap, so `+40 dB` played 100x. Such a peak now counts as unknown, and no gain boosts more than 24 dB. Library API: `gain::MAX_BOOST_DB`.
+
+- After a scan, prune or analysis reloaded the library, the cursor kept its row number, so Enter could play another track. It now stays on its track, or in range if the track went.
+
+- A panic analysing one file failed the whole run before album loudness was worked out, and the file stayed pending to panic again. It is now recorded as a failed analysis. Panics in a query, onset search, waveform read, slice plan, export, conversion or open now report an error rather than leaving the frontend waiting.
+
+- The terminal's sampler panicked in a pane of 4 rows or fewer, or 2 columns or fewer, such as a tmux split.
+
+- The window no longer copies the analysis map of every track on each frame of the library, selection and queue: 12.6 ms a frame at 50,000 tracks.
+
+- The page and OSC can no longer start a master recording, which writes to the server's disk without bound.
+
 - Four tests failed on the Windows runner. Two in `tests/cli.rs` expected the settings path as `playr/settings.toml`, but playr prints it with Windows' `\`. Two in `dedupe.rs` used library paths like `/x/a.flac`, which have no drive and so are relative on Windows; they now get `C:` there, as in `paths.rs`.
 
 ## [0.20.0]

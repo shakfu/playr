@@ -54,6 +54,14 @@ impl Converter {
         !self.finished && self.src == src && self.plan == plan && self.speed == speed
     }
 
+    /// Output frames of what was pushed that the resampler still holds.
+    pub fn held(&self) -> u64 {
+        match (&self.resampler, self.finished) {
+            (Some(r), false) => r.held(),
+            _ => 0,
+        }
+    }
+
     /// Converts interleaved source samples and appends them to `sink`.
     pub fn push(&mut self, decoded: &[f32], sink: &mut Vec<f32>) {
         let (src_ch, dst_ch) = (self.src.channels as usize, self.plan.channels as usize);

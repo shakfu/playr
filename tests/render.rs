@@ -2257,3 +2257,28 @@ fn the_loops_view_lists_each_loop_under_its_headings() {
         .join("\n")
         .contains("No loops match"));
 }
+
+#[test]
+fn the_sampler_draws_at_every_small_size() {
+    use playr_app::sampler::Display;
+    let paused = sampling(
+        "/m/t.wav",
+        Duration::from_secs(1),
+        &[Duration::from_secs(2)],
+    );
+    for display in [
+        Display::Envelope,
+        Display::Decibels,
+        Display::Braille,
+        Display::Spectrogram,
+    ] {
+        for width in [1, 2, 5, 20, 40] {
+            for height in 1..=12 {
+                Case::new(View::Sampler, &paused)
+                    .sampler(sampler_with("/m/t.wav", display))
+                    .size(width, height)
+                    .buffer();
+            }
+        }
+    }
+}
