@@ -11,9 +11,17 @@ None of the three contact external services or download any metadata and images.
 ## Features
 
 - Plays files, directories, playlists and searches, gapless where tracks share a sample rate, with a crossfade between any two if asked
-- A library with search, saved searches, SQL, marks, analysis of loudness, tempo and file health, and ReplayGain
+
+- A library with search, saved searches, SQL, marks, play history, analysis of loudness, tempo and file health, and ReplayGain
+
+- A separate loop library, searched by tempo, key and tag
+
 - A sampler: zoom to single frames, set ranges, and slice by marks, beats or onsets into WAV kits for hardware samplers
-- A four-voice tape looper and two DJ decks with beat grids and a mixer
+
+- A four-voice tape looper and two DJ decks with beat grids and a mixer; their views are in the window, and the terminal drives them with `:tape`, `:dj` and `:mix`
+
+- Varispeed, a three-band EQ, and `:device` to confirm bit-perfect output
+
 - Three programs over one core: a terminal app, a desktop window, and a server driven from a web page or OSC
 
 [docs/manual.md](docs/manual.md) describes all of it.
@@ -101,9 +109,12 @@ In the library view, `j` and `k` move, `enter` plays from the row, and `/` searc
 ## Documentation
 
 - [docs/manual.md](docs/manual.md): every feature, key, command and setting
+
 - [docs/cheatsheet.md](docs/cheatsheet.md): every command on one page
+
 - Guides: [library](docs/guide-library.md), [sampler](docs/guide-sampler.md), [tape](docs/guide-tape.md), [DJ](docs/guide-dj.md), [server](docs/guide-server.md)
-- [CHANGELOG.md](CHANGELOG.md) (older releases in [CHANGELOG-archive.md](CHANGELOG-archive.md)) and [TODO.md](TODO.md)
+
+- [CHANGELOG.md](CHANGELOG.md) and [TODO.md](TODO.md)
 
 ## License
 

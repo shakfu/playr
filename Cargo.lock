@@ -3646,7 +3646,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "playr"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3666,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "playr-app"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "cpal",
  "hound",
@@ -3682,7 +3682,7 @@ dependencies = [
 
 [[package]]
 name = "playr-core"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "cpal",
  "hound",
@@ -3701,7 +3701,7 @@ dependencies = [
 
 [[package]]
 name = "playr-dj"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "playr-dsp",
  "rtrb",
@@ -3709,11 +3709,11 @@ dependencies = [
 
 [[package]]
 name = "playr-dsp"
-version = "0.20.0"
+version = "0.21.0"
 
 [[package]]
 name = "playr-gui"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "clap",
  "cpal",
@@ -3738,7 +3738,7 @@ dependencies = [
 
 [[package]]
 name = "playr-looper"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "hound",
  "playr-dsp",
@@ -3748,7 +3748,7 @@ dependencies = [
 
 [[package]]
 name = "playr-server"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "clap",
  "cpal",

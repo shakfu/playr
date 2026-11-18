@@ -155,21 +155,37 @@ An item citing "decision N" refers to [docs/dev/decisions.md](docs/dev/decisions
 - [ ] **Smaller findings, not rechecked since 0.18.0.** From the review of 2026-10-11; each needs checking against the current code first:
 
   - U16 output truncates (`output.rs:161`); I16 now rounds. Pause and resume are hard cuts mid-waveform.
+
   - A mid-stream channel-count change may swap L/R under resampling (`decode.rs`; inference).
+
   - `update_albums` opens a DEFERRED transaction; under WAL a concurrent commit fails it with `SQLITE_BUSY_SNAPSHOT`. Use `TransactionBehavior::Immediate`.
+
   - `export_marks` writes `<stem><suffix>` with `fs::write`, so two tracks sharing a stem overwrite each other's file.
+
   - `forget_root` maps any DB error to `NotARoot`; `check_forget` refuses during a scan but not an analysis.
+
   - Cue sheets keep the `\\?\` prefix on Windows and emit `TRACK 100` and above; `file:///C:/` M3U URLs read as `/C:/...` on Windows.
+
   - An unwritable lock file leaves playr running unlocked with no warning (`instance.rs`).
+
   - History joins on `\n` and does not strip newlines on push (`persist.rs`).
+
   - `save_values` marks values saved even when `Session::set_state` failed.
+
   - The Origin check is skipped when Origin is absent; under `--open` that allows `text/plain` form CSRF (inference). Require a custom header on POST.
+
   - `playr_token` is visible to other services on the same host, since cookies are not isolated by port. Document it.
+
   - `playr-server.service` listens on `0.0.0.0:8080` with no sandboxing directives.
+
   - The window's system font fallback can load symbol or emoji faces (Apple Symbols, `seguisym.ttf`, `fc-match`'s first pick).
+
   - `unsafe impl Sync for SyncDecoder` (`opus.rs:105`) relies on opus 0.4's current `&self` methods under a caret requirement; pin `=0.4.x` or use a `Mutex`.
+
   - `docs/architecture.md` says "current as of 0.12.0"; README.md:7 says `playr` and `playr-gui` have no network code, though both link zbus on Linux and the window opens a browser.
+
   - Fixed sleeps that may flake on loaded runners: `playr-core/tests/engine.rs`, `playr-app/tests/model.rs`, `playr-core/tests/modes.rs`.
+
   - `Model::drain_events` is about 250 lines over six subsystems; split it per subsystem, as `tape::poll` and `dj::poll` are.
 
 - [ ] **A playback snapshot in the core.** `Model` in `playr-app` assembles position, levels, marks and the held peak; a frontend that skips `playr-app`, such as a Tauri backend, would repeat it. A `Session::playback()` would serve both. See `docs/architecture.md`.

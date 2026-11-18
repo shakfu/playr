@@ -80,7 +80,7 @@ Everything about playr past installing it, which [README.md](../README.md) cover
 
 **Interface**
 
-- Five views: library, queue, selection, playlists, and a sampler showing the playing track's waveform or spectrogram; the web page has all but the sampler. The window adds three more: tape, DJ and mix
+- Six views: library, queue, selection, playlists, a sampler showing the playing track's waveform or spectrogram, and loops; the web page has the first four. The window adds three more: tape, DJ and mix
 
 - Dark and light themes; the terminal takes its colours from its own theme, and honours `NO_COLOR`
 

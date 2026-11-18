@@ -4,6 +4,8 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.21.0]
+
 ### Added
 
 - An `audit` workflow checks `Cargo.lock` against the RustSec advisories weekly and whenever a manifest or the lock changes, failing on a vulnerability; `make audit` runs the same.
@@ -16,19 +18,27 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - A malformed Opus stream with no channel layout cannot reach an `unwrap` in the decoder's setup: the layout is checked once and reused. `playr-server` no longer panics on a poisoned lock around the state sent to pages, whose value each write replaces whole.
 
-- Releases 0.1.0 to 0.11.0 move from `CHANGELOG.md` to `CHANGELOG-archive.md`.
-
 - GUI fixes from a UI review (`UI_REVIEW.md`):
   - Transport labels now come before their controls. egui drew "Volume" after its slider, where it read as the speed slider's label.
+
   - The View menu lists all nine views.
+
   - Menus show each entry's key.
+
   - The Playback menu ticks the fade, crossfade, sleep timer and stop-after settings in force, and adds a Mode submenu.
+
   - The playing title in a list is green.
+
   - Each DJ channel has a peak meter in its header, before the channel fader and crossfader, so a deck's level can be matched with its fader down. In the header, over a row of its own, because a row pushed the track list's first row out of the smallest window.
+
   - Every toggle is plain text until lit. The sampler's Loop, Scrub, Snap and Fit, and the EQ's Bypass, were framed like action buttons. Plain text over frames, which would add about 15 frames to each DJ deck's rows.
+
   - Queue and Selection buttons are disabled on an empty list.
+
   - Empty DJ decks say how to load them.
+
   - Mix strips are capitalised and show "Mute" and "dB". Record, Law and Heads move after the strips.
+
   - DJ messages name decks "A" and "B", as the window does; commands inside them keep `:dj a`.
 
   Library API: `Status::fade` and `Status::crossfade`, because `fading` could not tell a fade from a crossfade. `Mixer::take_deck_peak` and `dj::engine::Status::take_deck_peak`; `Snapshot::deck_meters`.
@@ -139,13 +149,13 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - A delay and a reverb on the tape, each a send bus shared by the four voices. The sends are taken after Level, Mute and Solo, so a muted voice has no echo; the write head's Send stays before them. Print FX records the returns into the write loop. The controls are in a foldable FX lane above voice 4, the sends in each voice's drawer. Each effect has several models to compare by ear before the ones that sound worse are removed: delay Clean, Ping-pong and Tape (wow, flutter, saturation); reverb Freeverb, Zita, JP and Plate. Delay Sync sets the time to a part of voice 1's window, since most loops carry no tempo. Clean and Freeverb are ported from softcut-fx; the rest are Faust, compiled to Rust by `make faust` and committed, so builds do not need Faust. Faust code runs a frame at a time, measured at under 0.14% of a core over block processing. A bus that hears nothing for 1 s after its tail falls below -120 dB is skipped, so a tape without sends plays bit-exact. Measurements and Faust workarounds are in `docs/dev/fx-buses.md`. Library API: `playr_dsp::fx`, `playr_dsp::faust`; `Setting::DelaySend`, `ReverbSend`, `Fx`, `PrintFx`; `TapeAction::Fx`, `Control::Fx`, `VoiceSetting::Delay`, `Reverb`, `Layout::fx`, `Idle::NoFxSend`, `Idle::Model`; `Confirm::ResumeTape` holds a `Box<SavedTape>`.
 
-  ```
+  ```text
   :tape 1 delay 0.5    :tape delay model tape    :tape delay sync 3/16    :tape reverb decay 4    :tape print-fx 0.5
   ```
 
 - A delay and a reverb on the DJ decks, the tape's, shared by both decks. Each channel strip sends to them, and FX by the crossfader opens their fields. A deck sends as it reaches the main mix, after its fader, the crossfader and mute, over before the crossfader: a deck crossfaded out but cued, fader up, would otherwise reach the main mix through the reverb. A fader cut leaves the tail. The returns skip the headphone cue. Delay Sync is a part of a bar of 4 beats of the deck heard most, and follows its tempo. The buses moved into `playr-dsp` so both engines share them. Library API: `playr_dsp::fx::Buses`, `BusSetting`; `playr_dj::Setting::DelaySend`, `ReverbSend`, `Fx`; `DjAction::DelaySend`, `ReverbSend`, `Fx`, `DjState::sends`, `fx`, `Decks::fx_idle`; `playr_app::fx` holds `FxSetting`, `FxState`, `Division` and `FxField`.
 
-  ```
+  ```text
   :dj a delay 0.5    :dj delay model tape    :dj delay sync 1/4    :dj reverb decay 3
   ```
 
@@ -163,7 +173,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - A loop library, apart from the tracks. A loop is a span of a file: a precut loop file, the loop its `smpl` chunk names, or a track's loop slot. `playr loops scan DIR` indexes a directory of loops; `playr loops roots`, `rm` and `prune` manage the directories. Each loop has tempo, beats, key and tags, from a BPM tag, a WAV `acid` chunk, the file name, or else the length, guessed and shown as `~120.0`. A file the `acid` chunk marks one-shot is left out. The Loops view, `9` in both frontends, lists and searches them (`bpm:118..124`, `key:Am`), with From and To, where each lies in its file; `:load N` loads one into voice N, `:beats N` and `:key K` correct it, `:remove` drops it and keeps the file. A reference into the file over a copy: a slot keeps the track either side for crossfades, and no audio is duplicated. Apple Loops metadata is not read; it is in `TODO.md`. Design in `docs/dev/loop-library.md`. Library API: `db::loops`, `loops` in `playr-core`; `Session::loop_list`, `search_loops`, `library_loop`, `add_loop_file`, `remove_loop`, `set_loop_beats`, `set_loop_key`; `View::Loops`, `Action::LoopLib`, `LoopAction`, `playr_app::loops`.
 
-  ```
+  ```text
   playr loops scan ~/samples/loops    :view loops    /bpm:120 drums    :beats 8
   ```
 
@@ -173,13 +183,13 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - Mark labels and export. `:label TEXT` labels the selected mark, `:label -` clears it, and `:label` opens the command line on its label; the window offers Label... on a mark's menu and draws each label beside its mark. A label moves with its mark. `:mark-export audacity` writes the playing track's marks as an Audacity label track, `samples/NAME-labels.txt`; `:mark-export cue` writes a cue sheet, `samples/NAME.cue`, a track at each mark titled by its label. Both are under Sampler, Edit too. The library's `marks` table gains a `label` column, added on open; the schema version stays, so an older playr still opens the library. `:sql`'s `marks` view has `label`. Audacity labels and cue sheets over SFZ: they carry the marks as they are, while slices already reach samplers through the export's `.sfz`. Library API: `labels` module with `MarkFile`, `audacity` and `cue`; `Session::label_mark`, `labels_for` and `export_marks`; `query::labels` and `set_label`; `Action::Label`, `StartLabel` and `ExportMarks`; `Outcome::Labelled` and `MarksExported`; `Snapshot::labels`, `Layout::labels`, `with_labels` and `label_at`.
 
-  ```
+  ```text
   :label big break    :label -    :mark-export audacity    :mark-export cue
   ```
 
 - Fine varispeed. `:speed +50c` moves the speed in cents, a hundredth of a semitone, and `:speed 1.25` takes semitones to a hundredth. `:tempo 128` on an analysed track sets the speed that plays it at 128 BPM, to the nearest cent: 112 cents from 120 BPM, which plays at 128.01. A semitone is 5.9%, so whole steps moved 120 BPM to 113.3 or 127.1 with nothing between. The resampler already took any ratio. The window's speed slider moves in cents and sets the speed where a drag stops, since each change seeks the player again. The status bar shows `(+1.12 st)`. OSC's `/playr/speed` stays in whole semitones, so a TouchOSC layout keeps working. Library API: `Action::SpeedBy` and `SetSpeed` count cents; `Cmd::CentsBy` and `SetCents` replace `SpeedBy` and `SetSpeed`, `Status::cents` replaces `semitones`, `speed_at` and `MAX_CENTS` replace `speed_for` and `MAX_SEMITONES`; `Action::Tempo`, `Message::TempoOutOfReach`, `message::semitones`.
 
-  ```
+  ```text
   :speed +50c        :speed =-1.5        :tempo 128
   ```
 
@@ -205,7 +215,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - Each tape voice's filter is now an EQ: a high-pass, a low-pass and a peaking bell with gain and Q, in series after Drive, all in Hz and dB, in the lane's drawer. The one filter could cut highs or lows, not both, so overlapping loops could not be carved to a band, and its 0-to-1 cutoff gave no frequency to aim at. With the drawer open, the lane's header draws the EQ's response curve, computed from the filters' transfer functions rather than measured, so it is exact and costs no audio. Commands: `:tape V hp HZ|off`, `lp HZ|off`, `bell HZ`, `bell-gain DB`, `bell-q Q`; `:tape V filter` is gone and says what replaced it. Library API: `Setting::HighPass`, `LowPass`, `BellHz`, `BellGain`, `BellQ`, `EqShape`, `eq_db`, `FILTER_HZ`, `BELL_DB`, `BELL_Q`, `Svf::set_q`, `Idle::Flat`; `Setting::Cutoff`, `Setting::Filter` and `Filter` are gone.
 
-  ```
+  ```text
   :tape 2 hp 120    :tape 2 lp 6000    :tape 2 bell 800    :tape 2 bell-gain -6    :tape 2 bell-q 4
   ```
 
@@ -247,7 +257,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - A mixer. The master volume now scales the tape as well as the player and the decks, and each of the three has a fader and a mute. The DJ headphone cue has its own fader, which the master leaves alone; before, the master scaled it. The player's volume ramps across each audio callback rather than stepping at its start. The decks' level meter now reads the main mix before the master, as the player's and the tape's do. The tape's recording ignores the faders. The window's Mix tab has a strip each for the player, the tape, the decks, the headphones and the master: a fader, its level in dB, a meter after the fader and a mute, with Record and the law on the master's. The transport's EQ button opens a popup, titled "player EQ", in place of its dialog. The server plays only the player, so its page gains a mute beside the volume, and OSC `/playr/mute`. Library API: `playr_app::mix`, `Action::Mix`, `Frontend::mix`, `Model::mixer`, `Message::Mix` and `FaderLaw`, `Persist::Mix`; `Handle::set_volume` and `Cmd::Volume` in `playr-looper`; `Setting::Headphones` and `Mixer::take_peak` in `playr-dj`. The design is in `docs/dev/mixer.md`.
 
-  ```
+  ```text
   :mix                        :mix tape 80          :mix decks -10
   :mix player mute [on|off]   :mix headphones 70    :mix law [db|cubic]
   ```
@@ -258,7 +268,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - Two DJ decks. Each plays a library track at its own varispeed rate (fader ranges +/-8, 16 and 50%, a held nudge of 4%), with a CDJ-style cue. Sync follows the other deck's tempo at half, the same or double, moves into phase with it, and holds it there with a rate trim of up to 5%; quantize starts play, cue, hot cues, jumps and seeks in phase. The mixer has a trim, a 3-band isolator EQ with kills, a one-knob filter, a mute and a channel fader per deck, a crossfader with a constant-power and a sharp curve, and a headphone cue, split across one stereo output or on channels 3 and 4 of a 4-channel device. Each track's beat grid comes from `playr analyze`, a track never analysed is analysed on load, and grid edits are kept with the track. The decks play on their own output stream, as the tape does, and pause the player. The volume slider is their master volume. Take, or `:dj a take`, moves the track the player is playing onto a deck and continues it from the player's position, at its speed and ReplayGain, and the player pauses. The terminal has the commands and the window a DJ tab; the server has neither. On click tracks the beats stay within 1 frame of each other 5 minutes after sync.
 
-  ```
+  ```text
   :dj a load            the cursor row onto deck A
   :dj a take            the player's track, from where it is
   :dj a play|pause|cue  :dj a cue down|up     :dj b sync [off]
@@ -280,7 +290,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - A tape looper over the sampler's range. Three voices read one loop, each at its own rate (-4 to 4, negative in reverse), over its own window, with its own level, pan, crossfade, rate slew, drive, filter, and a low-pass on what it sends; a voice can turn at its window's edges instead of wrapping, and can be soloed. A write head records the sends back into the loop with feedback, a darkening low-pass and a thinning high-pass of its own, so each pass changes the loop. The load keeps up to a second of the track either side of the range as pre-roll and post-roll, so a crossfade fades into the audio that followed the window and the loop repeats exactly one window long. While the write window is the range, the write head writes the rolls as the range's continuation, so they keep the loop's level and carry its sends; frozen rolls played the track at full level at every wrap once feedback had faded the loop. On a stereo loop, pan folds the far channel into the near one rather than dropping it. The loop or the mix saves as a 32-bit float WAV under `samples/<track>-tape/` and is added to the library. It plays on its own output stream, on the player's device, and pauses the player. The terminal has the commands; the window adds a Tape tab with the waveform, the windows and heads, the selected voice's window dragged on the waveform by its edges or whole, and a strip of controls per voice and one for the write head. The server has neither. Library API: the new crate `playr-looper`, with `Loop::with_range`, `Setting` (including `VoiceWear`, `Ping`, `Slew`, `Drive`, `Cutoff`, `Filter`, `Solo` and `Thin`), `Filter`, `crossfade`, `fade_frames`, `DEFAULT_SLEW_MS` and `MAX_SLEW_MS`; `Action::Tape`, `playr_app::tape` with `no_effect`, `message::idle_text`, `Frontend::tape`, `Model::deck`, `Session::add_to_library`; `samples::read_frames`, `unused_dir` and `name_for` are public; `Handle::recording`, `Deck::device_events`. If the device goes away, the tape closes, finishing a recording under way; a load opens it again.
 
-  ```
+  ```text
   :tape load [N]        the range, or loop slot N, of the playing track
   :tape play|stop|reset|save|rec
   :tape 2 rate -0.5     :tape 3 window 25% 75%     :tape 2 send 0.6
@@ -418,7 +428,7 @@ Notable changes to playr. Format follows [Keep a Changelog](https://keepachangel
 
 - `:convert FORMAT` turns the slices last written into another sampler's format, by running [ConvertWithMoss](https://github.com/git-moss/ConvertWithMoss): `:convert sf2` writes `amen/sf2` inside the export. Each export now holds an `.sfz` file that puts its slices on keys from C1, which samplers that read SFZ load as it is and ConvertWithMoss takes as its source. playr writes SFZ and leaves the other formats to ConvertWithMoss, which already keeps over 40 current, over writing each itself. It is an extension, the first: it runs a program that is not playr's, so it is off until `convert-with-moss.enable = true` under `[extensions]` in `settings.toml`, and until then `:convert` is left out of `:help`, Tab completion, the window's menu and the command line's errors, and no prefix finds it. ConvertWithMoss is run from its installer's path or `convert-with-moss.path`, never from `PATH`; while it is not there, `:convert` is refused with that path and the window's entry is disabled. The window has it under Sampler, Slice, Convert to; the server's page may not run it. Library API: `convertwithmoss::convert`, `convertwithmoss::FORMATS`, `samples::kit_path`, `Session::convert`, `Session::convert_enabled`, `Session::can_convert`, `Session::exported`, `settings::ConvertWithMoss`, `Command::extension`, `command::parse_typed`, `Event::Converted`, `Action::Convert`. `docs/dev/hardware_samplers.md` has the formats tried.
 
-- Each export also holds its audio as one file with the slice points in it, for samplers that slice a file instead of loading a kit: `sliced/amen.wav`, with a cue point at each slice's start in a `cue ` chunk, and, with `slice_ot_file = true` in `settings.toml`, `sliced/amen.ot` beside it for the Octatrack, for up to 64 slices. The `.ot` file is off by default, as few users have an Octatrack. The `.ot` file is byte for byte what ot_utils 0.1.5 writes for the same slices, and ffprobe, sox and Python's `wave` read the WAV; neither has been loaded on a device. A cue point holds a frame, as common writers store it; one reference says bytes, and `docs/dev/hardware_samplers.md` records the question. Library API: `sliced::cue_chunk`, `sliced::append_cue`, `sliced::ot_file`, `samples::sliced_dir`.
+- Each export also holds its audio as one file with the slice points in it, for samplers that slice a file instead of loading a kit: `sliced/amen.wav`, with a cue point at each slice's start in a `cue` chunk, and, with `slice_ot_file = true` in `settings.toml`, `sliced/amen.ot` beside it for the Octatrack, for up to 64 slices. The `.ot` file is off by default, as few users have an Octatrack. The `.ot` file is byte for byte what ot_utils 0.1.5 writes for the same slices, and ffprobe, sox and Python's `wave` read the WAV; neither has been loaded on a device. A cue point holds a frame, as common writers store it; one reference says bytes, and `docs/dev/hardware_samplers.md` records the question. Library API: `sliced::cue_chunk`, `sliced::append_cue`, `sliced::ot_file`, `samples::sliced_dir`.
 
 ### Changed
 
